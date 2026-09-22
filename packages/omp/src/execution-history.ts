@@ -16,6 +16,25 @@
  * order with every payload preserved verbatim, and
  * `exportExecutionHostHistory` serializes that history as canonical evidence.
  *
+ * Decoding policy — verified schemas or honest diagnosis, never guesswork:
+ *
+ * - Only the **two types that have a producer** are decoded, and only under the
+ *   producer's own `version: 1` schema, mirrored field for field from
+ *   `extensions/phase2-orchestration.ts` (`isPhase2Record`) and
+ *   `extensions/model-handoff.ts` (`isHandoffRecord`). A record that violates
+ *   that guard — a missing workflow, an unknown kind, an unknown action, a
+ *   non-string operation id — produces no advisory view and is diagnosed.
+ * - The other three names have **no producer anywhere** in this repository's
+ *   source or history (their literals are normative upstream only), and no
+ *   historical payload generation of any of the five is verifiable. Such a
+ *   payload is retained as raw evidence and diagnosed
+ *   (`payload-generation-unverified`); this module never guesses a legacy
+ *   schema, and therefore never guesses an identity from one.
+ * - A payload that is not admissible to the canonical form is still retained
+ *   in full (`payload` keeps the native value as read); it simply has no digest
+ *   (`payloadHash: null` — a digest is never fabricated) and the export refuses
+ *   explicitly instead of silently dropping it.
+ *
  * What this module deliberately is **not**:
  *
  * - **Not an authority.** It produces no session reference, no `ExecutionBinding`
@@ -26,9 +45,9 @@
  *   is readable history only.
  * - **Not a repair path.** A recognized hidden entry this module cannot decode is
  *   diagnosed (`diagnostics`) and its payload is left exactly as read. Nothing is
- *   guessed: an entry with no declared session identity is never attributed to a
- *   session by adjacency, recency or path, and an unrelated `customType` stays
- *   unrelated rather than being reported as a hidden type.
+ *   guessed: an entry with no verified identity is never attributed to a session
+ *   by adjacency, recency or path, and an unrelated `customType` stays unrelated
+ *   rather than being reported as a hidden type.
  * - **Not an IO surface.** No file, no host facade, no global state: the entries
  *   come from the caller's own session ledger and the export is returned as a
  *   string. The caller (H2) owns writing any evidence file.
@@ -38,9 +57,8 @@
  * the advisory view while a consumer that reports coverage reads the preserved
  * bytes' digest. An identity field the view does not name — a legacy launch
  * reservation's own launch id, for instance — is never dropped: it survives
- * verbatim inside `payload` and inside `payloadHash`, and the export keeps it
- * byte-for-byte. The serialized export is canonical evidence; it is never an
- * `ExecutionBinding` and carries no credential.
+ * verbatim inside `payload`. The serialized export is canonical evidence; it is
+ * never an `ExecutionBinding` and carries no credential.
  */
 import { createHash } from "node:crypto";
 import { serializeExecutionValue } from "@mstar-harness/engine";
@@ -63,20 +81,33 @@ export const EXECUTION_HOST_HISTORY_TYPES = [
 
 export type ExecutionHostHistoryType = (typeof EXECUTION_HOST_HISTORY_TYPES)[number];
 
-/**
- * The closed `mstar:phase2` decision kinds — the restore parser's own set, so a
- * recognized phase-2 entry that declares an unknown kind is diagnosed instead of
- * being read as some other record.
- */
-const PHASE2_KINDS = ["bind", "checkpoint", "reminder", "user-turn"] as const;
+/** The only payload schema generation any producer writes today. */
+const VERIFIED_GENERATION = 1;
 
 /**
- * The closed model-handoff states: the two non-terminal ones (`pending`,
+ * Closed mirror of the phase-2 restore guard's own sets
+ * (`extensions/phase2-orchestration.ts`): decision kinds, checkpoint reasons
+ * and checkpoint decisions.
+ */
+const PHASE2_KINDS = ["bind", "checkpoint", "reminder", "user-turn"] as const;
+const CHECKPOINT_REASONS = [
+  "before-wait",
+  "result-settled",
+  "dependency-changed",
+  "ownership-changed",
+  "capacity-changed",
+] as const;
+const CHECKPOINT_DECISIONS = ["dispatched", "wait", "blocked"] as const;
+
+/**
+ * Closed mirror of the model-handoff restore guard's own sets
+ * (`extensions/model-handoff.ts`): the two non-terminal states (`pending`,
  * `attempting`) plus the four terminal ones (`handed_off`, `cancelled`,
- * `failed`, `uncertain`). `cancelled` is what makes a handoff one-shot: the
- * record itself says the switch must not fire again.
+ * `failed`, `uncertain`), and the two actions. `cancelled` is what makes a
+ * handoff one-shot: the record itself says the switch must not fire again.
  */
 const HANDOFF_STATES = ["pending", "attempting", "handed_off", "cancelled", "failed", "uncertain"] as const;
+const HANDOFF_ACTIONS = ["arm", "handoff"] as const;
 
 /** Payload fields that name an old session path — retained as provenance only, never authority. */
 const PROVENANCE_PATH_FIELDS = ["coordinatorSessionPath"] as const;
@@ -89,27 +120,23 @@ const PROVENANCE_PATH_FIELDS = ["coordinatorSessionPath"] as const;
 export type ExecutionHostHistoryProvenance = Readonly<{ field: string; path: string }>;
 
 /**
- * The decoded advisory view of one recognized hidden entry. Everything here is
+ * The decoded advisory view of one **verified** hidden entry. Everything here is
  * derived from the payload's own declared fields — never from ledger position,
  * timestamps or another entry — and it is advisory evidence, not authority.
  */
 export type ExecutionHostHistoryView = Readonly<{
-  /**
-   * The payload's own schema generation: its `version` when it is a positive
-   * safe integer, or `0` for a legacy unversioned payload. A payload carrying
-   * any other generation counter keeps it verbatim in `payload`.
-   */
-  generation: number;
-  /** The payload's declared `kind` field, verbatim. */
+  /** The verified schema generation this view was decoded under. */
+  generation: typeof VERIFIED_GENERATION;
+  /** The payload's declared `kind` field, verbatim (phase-2 decision records). */
   declaredKind: string | null;
-  /** The payload's declared `action` field, verbatim (e.g. the handoff `arm` / `handoff`). */
+  /** The payload's declared `action` field, verbatim (the handoff `arm` / `handoff`). */
   declaredAction: string | null;
   /** The payload's declared `state` field, verbatim; for `mstar:model-handoff` this is the one-shot handoff state. */
   declaredState: string | null;
-  workflowId: string | null;
+  workflowId: string;
   /** Accepted checkpoint identity (`observationKey`), the restore parser's dedup and latch key. */
   checkpointId: string | null;
-  /** Declared operation identity (`operationId`), e.g. a launch reservation or handoff attempt id. */
+  /** Declared operation identity (`operationId`), e.g. a handoff attempt id. */
   operationId: string | null;
   /** The payload's own dedup identity: `operationId` when declared, otherwise `checkpointId`. */
   dedupKey: string | null;
@@ -124,17 +151,19 @@ export type ExecutionHostHistoryView = Readonly<{
  *
  * `index` is the entry's zero-based position in the scanned ledger, so the
  * records array preserves native order without re-sorting or renumbering.
- * `payload` is the native payload exactly as read (or `null` when it was not
- * admissible to the canonical form — see `payload-unsupported`); `view` is the
- * advisory decode and is `null` whenever the entry produced a diagnostic.
+ * `payload` is the native payload exactly as read — always, even when it is not
+ * admissible to the canonical form. `view` is the advisory decode and is `null`
+ * whenever the entry produced a diagnostic; `sessionId` is published only for a
+ * decoded record. A diagnosed entry therefore publishes no derived fact at all,
+ * while its declared fields stay visible verbatim in `payload`.
  */
 export type ExecutionHostHistoryRecord = Readonly<{
   index: number;
   entryId: string | null;
   type: ExecutionHostHistoryType;
-  /** The session identity the payload declares for itself, or `null` when it declares none. Never inferred. */
+  /** The declared session identity of a decoded record; `null` when the entry was retained but not decoded. */
   sessionId: string | null;
-  /** Lowercase sha256 hex over the canonical form of `payload`, or `null` when the payload was not admissible. */
+  /** Lowercase sha256 hex over the canonical form of `payload`, or `null` when the payload is not admissible. Never fabricated. */
   payloadHash: string | null;
   payload: unknown;
   view: ExecutionHostHistoryView | null;
@@ -146,10 +175,11 @@ export type ExecutionHostHistoryDiagnosticCode =
   | "entry-id-missing"
   | "payload-not-object"
   | "payload-unsupported"
-  | "payload-version-invalid"
+  | "payload-generation-unverified"
+  | "payload-record-invalid"
   | "payload-kind-invalid"
   | "payload-state-invalid"
-  | "session-identity-missing";
+  | "payload-action-invalid";
 
 export type ExecutionHostHistoryDiagnostic = Readonly<{
   index: number;
@@ -173,6 +203,26 @@ export type ExecutionHostHistory = Readonly<{
   diagnostics: readonly ExecutionHostHistoryDiagnostic[];
 }>;
 
+/**
+ * Raised when a history cannot be exported canonically — at least one retained
+ * payload is not admissible to the canonical form. The export refuses instead
+ * of dropping or rewriting that evidence, and no digest is fabricated for it.
+ */
+export class ExecutionHostHistoryExportRefusal extends Error {
+  /** Entry ids (or `#index` for an entry with no id) of the reader-marked inadmissible records. */
+  readonly entryIds: readonly string[];
+
+  constructor(entryIds: readonly string[], detail: string) {
+    const named = entryIds.length === 0 ? "no reader-marked record" : entryIds.join(", ");
+    super(
+      `the host history cannot be exported canonically: ${entryIds.length} record payload(s) are not admissible (${named}); ` +
+        `the raw payloads stay inspectable on the records (${detail})`,
+    );
+    this.name = "ExecutionHostHistoryExportRefusal";
+    this.entryIds = entryIds;
+  }
+}
+
 /* ------------------------------------------------------------------------- *
  * Decoding
  * ------------------------------------------------------------------------- */
@@ -181,44 +231,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
 function topLevelString(payload: Record<string, unknown>, field: string): string | null {
   const value = payload[field];
   return typeof value === "string" && value !== "" ? value : null;
 }
 
-function nestedString(payload: Record<string, unknown>, parent: string, field: string): string | null {
-  const owner = payload[parent];
-  return isPlainObject(owner) ? topLevelString(owner, field) : null;
-}
-
-/**
- * The session identity a payload declares for itself. The current generations
- * name it `hostSessionId` (`mstar:phase2`) or `binding.sessionId`
- * (`mstar:model-handoff`); the legacy field name is read last. A payload that
- * declares none stays unattributed — this reader never derives a session from
- * the ledger's order, its neighbours or a recorded path.
- */
-function declaredSessionId(payload: Record<string, unknown>): string | null {
-  return (
-    topLevelString(payload, "hostSessionId") ??
-    nestedString(payload, "binding", "sessionId") ??
-    topLevelString(payload, "sessionId")
-  );
-}
-
-function declaredWorkflowId(payload: Record<string, unknown>): string | null {
-  return topLevelString(payload, "workflowId") ?? nestedString(payload, "binding", "workflowId");
-}
-
-/** `0` for a legacy unversioned payload, the payload's `version` when it is a positive safe integer, else `null`. */
-function declaredGeneration(payload: Record<string, unknown>): number | null {
-  const value = payload.version;
-  if (value === undefined) return 0;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
-}
-
 function describeValue(value: unknown): string {
   if (value === null) return "null";
+  if (value === undefined) return "undefined";
   if (Array.isArray(value)) return "an array";
   return `a ${typeof value}`;
 }
@@ -237,69 +261,185 @@ function admitPayload(payload: unknown): PayloadAdmission {
 
 type Note = (code: ExecutionHostHistoryDiagnosticCode, message: string) => void;
 
-/** The identity and advisory view decoded from one record payload. */
-type DecodedPayload = Readonly<{ sessionId: string | null; view: ExecutionHostHistoryView }>;
+/** Why one record payload was rejected, with the diagnostic code that reports it. */
+type RecordRefusal = Readonly<{ refused: true; code: ExecutionHostHistoryDiagnosticCode; message: string }>;
 
-function decodePayload(
-  type: ExecutionHostHistoryType,
-  payload: Record<string, unknown>,
-  note: Note,
-): DecodedPayload {
-  const sessionId = declaredSessionId(payload);
-  if (sessionId === null) {
-    note(
-      "session-identity-missing",
-      "the payload declares no session identity (hostSessionId, binding.sessionId or the legacy sessionId field), so this entry is never attributed to a session by inference",
-    );
+/** One payload that satisfied its producer's guard, with the identity it declares. */
+type VerifiedRecord = Readonly<{ refused: false; sessionId: string; workflowId: string }>;
+
+/**
+ * Mirror of the phase-2 restore guard (`isPhase2Record`): `version` is checked by
+ * the caller; here are the required session/workflow fields and the
+ * kind-specific ones.
+ */
+function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | VerifiedRecord {
+  const hostSessionId = payload.hostSessionId;
+  const workflowId = payload.workflowId;
+  if (!isNonEmptyString(hostSessionId) || !isNonEmptyString(workflowId)) {
+    return {
+      refused: true,
+      code: "payload-record-invalid",
+      message: "a mstar:phase2 record requires non-empty hostSessionId and workflowId",
+    };
   }
-
-  const generation = declaredGeneration(payload);
-  if (generation === null) {
-    note(
-      "payload-version-invalid",
-      `the declared version ${JSON.stringify(payload.version)} is not a positive safe integer`,
-    );
+  switch (payload.kind) {
+    case "bind":
+      if (
+        !isNonEmptyString(payload.coordinatorSessionPath) ||
+        !isNonEmptyString(payload.coordinatorSessionId) ||
+        !isNonEmptyString(payload.harnessRoot)
+      ) {
+        return {
+          refused: true,
+          code: "payload-record-invalid",
+          message: "a mstar:phase2 bind record requires non-empty coordinatorSessionPath, coordinatorSessionId and harnessRoot",
+        };
+      }
+      return { refused: false, sessionId: hostSessionId, workflowId };
+    case "checkpoint":
+      if (!(CHECKPOINT_REASONS as readonly unknown[]).includes(payload.reason)) {
+        return {
+          refused: true,
+          code: "payload-record-invalid",
+          message: `a mstar:phase2 checkpoint record requires a reason of ${CHECKPOINT_REASONS.join("|")}, received ${JSON.stringify(payload.reason)}`,
+        };
+      }
+      if (!(CHECKPOINT_DECISIONS as readonly unknown[]).includes(payload.decision)) {
+        return {
+          refused: true,
+          code: "payload-record-invalid",
+          message: `a mstar:phase2 checkpoint record requires a decision of ${CHECKPOINT_DECISIONS.join("|")}, received ${JSON.stringify(payload.decision)}`,
+        };
+      }
+      if (typeof payload.note !== "string") {
+        return {
+          refused: true,
+          code: "payload-record-invalid",
+          message: `a mstar:phase2 checkpoint record requires a string note, received ${describeValue(payload.note)}`,
+        };
+      }
+      if (payload.observationKey !== null && !isNonEmptyString(payload.observationKey)) {
+        return {
+          refused: true,
+          code: "payload-record-invalid",
+          message: `a mstar:phase2 checkpoint record requires observationKey to be null or a non-empty string, received ${describeValue(payload.observationKey)}`,
+        };
+      }
+      return { refused: false, sessionId: hostSessionId, workflowId };
+    case "reminder":
+      return isNonEmptyString(payload.observationKey)
+        ? { refused: false, sessionId: hostSessionId, workflowId }
+        : {
+            refused: true,
+            code: "payload-record-invalid",
+            message: "a mstar:phase2 reminder record requires a non-empty observationKey",
+          };
+    case "user-turn":
+      return { refused: false, sessionId: hostSessionId, workflowId };
+    default:
+      return {
+        refused: true,
+        code: "payload-kind-invalid",
+        message: `a mstar:phase2 record requires a kind of ${PHASE2_KINDS.join("|")}, received ${JSON.stringify(payload.kind)}`,
+      };
   }
+}
 
-  const declaredKind = topLevelString(payload, "kind");
-  if (type === "mstar:phase2" && (declaredKind === null || !(PHASE2_KINDS as readonly string[]).includes(declaredKind))) {
-    note(
-      "payload-kind-invalid",
-      `a ${type} payload must declare one of ${PHASE2_KINDS.join("|")}, received ${JSON.stringify(payload.kind)}`,
-    );
+/** Mirror of the model-handoff restore guard (`isHandoffRecord`): `version` is checked by the caller. */
+function checkHandoffRecord(payload: Record<string, unknown>): RecordRefusal | VerifiedRecord {
+  const binding = payload.binding;
+  if (!isPlainObject(binding) || !isNonEmptyString(binding.sessionId) || typeof binding.workflowId !== "string") {
+    return {
+      refused: true,
+      code: "payload-record-invalid",
+      message: "a mstar:model-handoff record requires an object binding with a non-empty sessionId and a string workflowId",
+    };
   }
-
-  const declaredState = topLevelString(payload, "state");
-  if (type === "mstar:model-handoff" && (declaredState === null || !(HANDOFF_STATES as readonly string[]).includes(declaredState))) {
-    note(
-      "payload-state-invalid",
-      `a ${type} payload must declare one of ${HANDOFF_STATES.join("|")}, received ${JSON.stringify(payload.state)}`,
-    );
+  if (!(HANDOFF_STATES as readonly unknown[]).includes(payload.state)) {
+    return {
+      refused: true,
+      code: "payload-state-invalid",
+      message: `a mstar:model-handoff record requires a state of ${HANDOFF_STATES.join("|")}, received ${JSON.stringify(payload.state)}`,
+    };
   }
+  if (!(HANDOFF_ACTIONS as readonly unknown[]).includes(payload.action)) {
+    return {
+      refused: true,
+      code: "payload-action-invalid",
+      message: `a mstar:model-handoff record requires an action of ${HANDOFF_ACTIONS.join("|")}, received ${JSON.stringify(payload.action)}`,
+    };
+  }
+  if (typeof payload.operationId !== "string") {
+    return {
+      refused: true,
+      code: "payload-record-invalid",
+      message: `a mstar:model-handoff record requires a string operationId, received ${describeValue(payload.operationId)}`,
+    };
+  }
+  for (const field of ["baselineModelChangeId", "observedModel", "reason"] as const) {
+    const value = payload[field];
+    if (value !== null && typeof value !== "string") {
+      return {
+        refused: true,
+        code: "payload-record-invalid",
+        message: `a mstar:model-handoff record requires ${field} to be null or a string, received ${describeValue(value)}`,
+      };
+    }
+  }
+  return { refused: false, sessionId: binding.sessionId, workflowId: binding.workflowId };
+}
 
+function buildView(payload: Record<string, unknown>, workflowId: string): ExecutionHostHistoryView {
   const checkpointId = topLevelString(payload, "observationKey");
   const operationId = topLevelString(payload, "operationId");
+  const declaredState = topLevelString(payload, "state");
   const provenance: ExecutionHostHistoryProvenance[] = [];
   for (const field of PROVENANCE_PATH_FIELDS) {
     const path = topLevelString(payload, field);
     if (path !== null) provenance.push({ field, path });
   }
-
   return {
-    sessionId,
-    view: {
-      generation: generation ?? 0,
-      declaredKind,
-      declaredAction: topLevelString(payload, "action"),
-      declaredState,
-      workflowId: declaredWorkflowId(payload),
-      checkpointId,
-      operationId,
-      dedupKey: operationId ?? checkpointId,
-      cancelled: declaredState === "cancelled" || payload.cancelled === true,
-      provenance,
-    },
+    generation: VERIFIED_GENERATION,
+    declaredKind: topLevelString(payload, "kind"),
+    declaredAction: topLevelString(payload, "action"),
+    declaredState,
+    workflowId,
+    checkpointId,
+    operationId,
+    dedupKey: operationId ?? checkpointId,
+    cancelled: declaredState === "cancelled" || payload.cancelled === true,
+    provenance,
   };
+}
+
+/** One decoded record: its declared identity plus the advisory view. */
+type DecodedRecord = Readonly<{ sessionId: string; view: ExecutionHostHistoryView }>;
+
+function decodeVerifiedRecord(
+  type: ExecutionHostHistoryType,
+  payload: Record<string, unknown>,
+  note: Note,
+): DecodedRecord | null {
+  if (type !== "mstar:phase2" && type !== "mstar:model-handoff") {
+    note(
+      "payload-generation-unverified",
+      `no producer or historical schema exists for ${type} in this repository, so its payload is retained as raw evidence only — a legacy schema is never guessed`,
+    );
+    return null;
+  }
+  if (payload.version !== VERIFIED_GENERATION) {
+    note(
+      "payload-generation-unverified",
+      `the payload declares version ${JSON.stringify(payload.version)}, and the verified schema for ${type} is version ${VERIFIED_GENERATION}; the payload is retained as raw evidence only`,
+    );
+    return null;
+  }
+  const check = type === "mstar:phase2" ? checkPhase2Record(payload) : checkHandoffRecord(payload);
+  if (check.refused) {
+    note(check.code, check.message);
+    return null;
+  }
+  return { sessionId: check.sessionId, view: buildView(payload, check.workflowId) };
 }
 
 function decodeEntry(
@@ -328,28 +468,27 @@ function decodeEntry(
     note("payload-unsupported", `the payload was not admitted to the canonical form: ${admission.refusal ?? "unknown cause"}`);
   }
 
-  // A payload that was not admitted retains nothing derived from it: no
-  // identity, no view. An identity without its evidence would be a guess.
   const payloadIsRecord = isPlainObject(payload);
-  const admitted = admission.hash !== null;
-  const decoded = admitted && payloadIsRecord ? decodePayload(type, payload, note) : null;
-  if (admitted && !payloadIsRecord) {
+  if (admission.hash !== null && !payloadIsRecord) {
     note("payload-not-object", `the payload is ${describeValue(payload)}, not a record object`);
   }
+  // A diagnosed entry publishes no derived fact at all — no identity, no view.
+  // The payload itself stays retained verbatim, so the evidence is never lost.
+  const decoded = admission.hash !== null && payloadIsRecord ? decodeVerifiedRecord(type, payload, note) : null;
+  const published = decoded !== null && notes.length === 0 ? decoded : null;
 
   for (const pending of notes) {
     diagnostics.push({ index, type, entryId, code: pending.code, message: pending.message });
   }
-  const malformed = notes.length > 0;
 
   return {
     index,
     entryId,
     type,
-    sessionId: decoded === null ? null : decoded.sessionId,
+    sessionId: published === null ? null : published.sessionId,
     payloadHash: admission.hash,
-    payload: admitted ? payload : null,
-    view: malformed || decoded === null ? null : decoded.view,
+    payload,
+    view: published === null ? null : published.view,
   };
 }
 
@@ -361,12 +500,12 @@ function decodeEntry(
  * Read the hidden history out of one session ledger.
  *
  * Entries are classified by the exact `customType` literal, and only the five
- * frozen hidden types are reported; every payload is preserved verbatim and
- * every recognized entry keeps its native position. Legacy and current payload
- * generations are both decoded — an unversioned payload is generation `0`, a
- * `version: 1` payload is generation `1` — and nothing is renamed, rewritten or
- * promoted. Entries that cannot be decoded are retained and diagnosed; they are
- * never guessed into a session, a binding or another type.
+ * frozen hidden types are reported; every payload is preserved in full and
+ * every recognized entry keeps its native position. A record is decoded only
+ * when its producer's own `version: 1` guard accepts it and its payload is
+ * admissible to the canonical form; every other recognized entry is retained
+ * as raw evidence and diagnosed. Nothing is renamed, rewritten, promoted or
+ * inferred — an undecoded entry publishes no session identity.
  */
 export function readExecutionHostHistory(entries: readonly unknown[]): ExecutionHostHistory {
   const records: ExecutionHostHistoryRecord[] = [];
@@ -392,9 +531,17 @@ export function readExecutionHostHistory(entries: readonly unknown[]): Execution
  * evidence, not authority: it contains no `ExecutionBinding`, no session
  * reference and no credential, and reading it back never binds a session.
  *
- * Total for any history returned by `readExecutionHostHistory`; a hand-built
- * history must itself be admissible to the canonical form.
+ * A history that holds a payload the canonical form cannot admit is **refused**
+ * (`ExecutionHostHistoryExportRefusal`) rather than exported with that evidence
+ * dropped or rewritten — the raw payload stays inspectable on its record.
  */
 export function exportExecutionHostHistory(history: ExecutionHostHistory): string {
-  return serializeExecutionValue(history);
+  try {
+    return serializeExecutionValue(history);
+  } catch (error) {
+    const entryIds = history.records
+      .filter((record) => record.payloadHash === null)
+      .map((record) => record.entryId ?? `#${record.index}`);
+    throw new ExecutionHostHistoryExportRefusal(entryIds, error instanceof Error ? error.message : String(error));
+  }
 }

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   EXECUTION_HOST_HISTORY_TYPES,
+  ExecutionHostHistoryExportRefusal,
   exportExecutionHostHistory,
   readExecutionHostHistory,
   type ExecutionHostHistory,
@@ -20,7 +21,22 @@ function viewOf(history: ExecutionHostHistory, index: number): ExecutionHostHist
   return view;
 }
 
-/** The current-generation phase-2 binding payload: a real session identity plus a legacy session path. */
+/** One single-entry read, for the guard-mirror tables. */
+function readOne(type: string, data: unknown): ExecutionHostHistory {
+  return readExecutionHostHistory([customEntry("g1", type, data)]);
+}
+
+/** The refusal one export raised, or `null` when it exported. */
+function refusalOf(history: ExecutionHostHistory): unknown {
+  try {
+    exportExecutionHostHistory(history);
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** A current-generation phase-2 binding payload: a real session identity plus a legacy session path. */
 const BIND_PAYLOAD = {
   version: 1,
   kind: "bind",
@@ -30,6 +46,30 @@ const BIND_PAYLOAD = {
   coordinatorSessionId: "envelope-1",
   harnessRoot: "/harness",
 } as const;
+
+const CHECKPOINT_PAYLOAD = {
+  version: 1,
+  kind: "checkpoint",
+  hostSessionId: "sess-a",
+  workflowId: "wf-1",
+  reason: "before-wait",
+  decision: "wait",
+  note: "n",
+  observationKey: "obs-7",
+} as const;
+
+const HANDOFF_PAYLOAD = {
+  version: 1,
+  binding: { sessionId: "sess-a", workflowId: "wf-1" },
+  state: "cancelled",
+  action: "handoff",
+  operationId: "op-9",
+  baselineModelChangeId: "mc-1",
+  observedModel: null,
+  reason: null,
+} as const;
+
+const PENDING_HANDOFF_PAYLOAD = { ...HANDOFF_PAYLOAD, state: "pending", action: "arm", operationId: "op-10" } as const;
 
 /* ------------------------------------------------------------- the inventory */
 
@@ -43,20 +83,39 @@ test("the hidden inventory is exactly the five contract types, in contract order
   ]);
 });
 
-test("each frozen literal survives classification and export unchanged", () => {
-  const entries = [
-    customEntry("t1", "mstar:phase2", { version: 1, kind: "reminder", hostSessionId: "s", observationKey: "o" }),
+test("every frozen literal is recognized; only the produced generation is decoded", () => {
+  const history = readExecutionHostHistory([
+    customEntry("t1", "mstar:phase2", {
+      version: 1,
+      kind: "reminder",
+      hostSessionId: "s",
+      workflowId: "w",
+      observationKey: "o",
+    }),
     customEntry("t2", "mstar:phase2-continuation", { sessionId: "s" }),
-    customEntry("t3", "mstar:phase2-checkpoint", { sessionId: "s" }),
-    customEntry("t4", "mstar:phase2-launch-reservation", { sessionId: "s", operationId: "l" }),
-    customEntry("t5", "mstar:model-handoff", { version: 1, binding: { sessionId: "s" }, state: "pending" }),
-  ];
-  const history = readExecutionHostHistory(entries);
+    customEntry("t3", "mstar:phase2-checkpoint", { sessionId: "s", observationKey: "o" }),
+    customEntry("t4", "mstar:phase2-launch-reservation", { sessionId: "s", operationId: "l", launchId: "L-3" }),
+    customEntry("t5", "mstar:model-handoff", PENDING_HANDOFF_PAYLOAD),
+  ]);
+
   expect(history.records.map((record) => record.type)).toEqual([...EXECUTION_HOST_HISTORY_TYPES]);
-  expect(history.diagnostics).toEqual([]);
+  // No producer or historical schema exists for the three producer-less names,
+  // so their payloads are retained raw and diagnosed instead of guessed.
+  expect(history.diagnostics.map((diagnostic) => [diagnostic.index, diagnostic.code])).toEqual([
+    [1, "payload-generation-unverified"],
+    [2, "payload-generation-unverified"],
+    [3, "payload-generation-unverified"],
+  ]);
+  for (const index of [1, 2, 3]) {
+    expect(history.records[index]!.view).toBeNull();
+    expect(history.records[index]!.sessionId).toBeNull();
+    expect(history.records[index]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+  }
 
   const text = exportExecutionHostHistory(history);
   for (const type of EXECUTION_HOST_HISTORY_TYPES) expect(text).toContain(`"type":"${type}"`);
+  // A declared launch id the view does not name survives verbatim in the evidence.
+  expect(text).toContain('"launchId":"L-3"');
 });
 
 /* ----------------------------------------------------- order and identity --- */
@@ -68,13 +127,7 @@ test("recognized entries keep native order and identity; unrelated entries stay 
     customEntry("e3", "mstar:phase2-checkpoint", { sessionId: "sess-a", observationKey: "obs-7" }),
     customEntry("e4", "mstar:notice", { title: "a visible notice is not a hidden type" }),
     { id: "e5", type: "message", role: "user", text: "hello" },
-    customEntry("e6", "mstar:model-handoff", {
-      version: 1,
-      binding: { sessionId: "sess-a", workflowId: "wf-1" },
-      state: "cancelled",
-      action: "handoff",
-      operationId: "op-9",
-    }),
+    customEntry("e6", "mstar:model-handoff", HANDOFF_PAYLOAD),
   ];
 
   const history = readExecutionHostHistory(entries);
@@ -83,29 +136,27 @@ test("recognized entries keep native order and identity; unrelated entries stay 
     [2, "e3", "mstar:phase2-checkpoint"],
     [5, "e6", "mstar:model-handoff"],
   ]);
-  expect(history.diagnostics).toEqual([]);
-  expect(exportExecutionHostHistory(history)).not.toContain("mstar:notice");
-  expect(exportExecutionHostHistory(history)).not.toContain("hello");
+  expect(history.diagnostics.map((diagnostic) => [diagnostic.index, diagnostic.code])).toEqual([
+    [2, "payload-generation-unverified"],
+  ]);
+  expect(history.records[0]!.sessionId).toBe("sess-a");
+  expect(history.records[2]!.sessionId).toBe("sess-a");
+  expect(history.records[1]!.sessionId).toBeNull();
+
+  const text = exportExecutionHostHistory(history);
+  expect(text).not.toContain("mstar:notice");
+  expect(text).not.toContain("hello");
 });
 
 test("export replay preserves order, identity and payloads byte-for-byte", () => {
-  const entries = [
+  const history = readExecutionHostHistory([
     customEntry("e1", "mstar:phase2", BIND_PAYLOAD),
-    customEntry("e2", "mstar:model-handoff", {
-      version: 1,
-      binding: { sessionId: "sess-a", workflowId: "wf-1" },
-      state: "cancelled",
-      action: "handoff",
-      operationId: "op-9",
-      baselineModelChangeId: "mc-1",
-      observedModel: null,
-      reason: null,
-    }),
-  ];
-  const history = readExecutionHostHistory(entries);
+    customEntry("e2", "mstar:model-handoff", HANDOFF_PAYLOAD),
+  ]);
   const text = exportExecutionHostHistory(history);
   expect(text.endsWith("\n")).toBe(true);
   expect(text).toContain('"document":"execution-host-history"');
+  expect(history.diagnostics).toEqual([]);
 
   const replayed = JSON.parse(text) as ExecutionHostHistory;
   expect(exportExecutionHostHistory(replayed)).toBe(text);
@@ -146,152 +197,169 @@ test("a stale coordinator path is provenance only and never becomes a session id
 
 /* ------------------------------------------------ generations and identity --- */
 
-test("legacy and current payload generations decode without renaming or rewriting", () => {
-  const legacyData = { sessionId: "sess-legacy", generation: 4, note: "old continuation record" };
-  const currentData = {
-    version: 1,
-    kind: "checkpoint",
-    hostSessionId: "sess-cur",
+test("an unverified generation keeps raw evidence and is never decoded by guesswork", () => {
+  const legacy = { sessionId: "sess-legacy", generation: 4, note: "old continuation record" };
+  const future = {
+    version: 2,
+    kind: "bind",
+    hostSessionId: "sess-future",
     workflowId: "wf-2",
-    reason: "before-wait",
-    decision: "wait",
-    note: "n",
-    observationKey: "obs-2",
+    coordinatorSessionPath: "/p",
+    coordinatorSessionId: "e",
+    harnessRoot: "/h",
   };
-  const entries = [
-    customEntry("l1", "mstar:phase2-continuation", legacyData),
-    customEntry("c1", "mstar:phase2", currentData),
-  ];
-  const history = readExecutionHostHistory(entries);
+  const history = readExecutionHostHistory([
+    customEntry("l1", "mstar:phase2-continuation", legacy),
+    customEntry("l2", "mstar:phase2", future),
+  ]);
 
-  expect(history.diagnostics).toEqual([]);
-  expect(history.records.map((record) => record.type)).toEqual(["mstar:phase2-continuation", "mstar:phase2"]);
-  expect(viewOf(history, 0).generation).toBe(0);
-  expect(viewOf(history, 1).generation).toBe(1);
-  expect(history.records[0]!.payload).toEqual(legacyData);
-  expect(history.records[1]!.payload).toEqual(currentData);
-  // The legacy payload's own generation counter stays verbatim in the evidence.
-  expect(history.records[0]!.payload).toMatchObject({ generation: 4 });
-  expect(exportExecutionHostHistory(history)).toContain('"type":"mstar:phase2-continuation"');
+  expect(history.diagnostics.map((diagnostic) => [diagnostic.index, diagnostic.code])).toEqual([
+    [0, "payload-generation-unverified"],
+    [1, "payload-generation-unverified"],
+  ]);
+  const retained: ReadonlyArray<Readonly<{ index: number; data: unknown }>> = [
+    { index: 0, data: legacy },
+    { index: 1, data: future },
+  ];
+  for (const { index, data } of retained) {
+    expect(history.records[index]!.view).toBeNull();
+    expect(history.records[index]!.sessionId).toBeNull();
+    expect(history.records[index]!.payload).toEqual(data);
+    expect(history.records[index]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+  }
+  // The unverified generation is never named as one the reader decoded.
+  expect(history.records[0]!.payload).toMatchObject({ sessionId: "sess-legacy", generation: 4 });
+  expect(exportExecutionHostHistory(history)).toContain('"version":2');
 });
 
-test("checkpoint, launch and handoff identity, dedup, cancellation and one-shot state are preserved", () => {
+test("checkpoint identity, dedup, cancellation and one-shot handoff state are preserved", () => {
   const history = readExecutionHostHistory([
-    customEntry("k1", "mstar:phase2", { version: 1, kind: "checkpoint", hostSessionId: "s", observationKey: "obs-7" }),
-    customEntry("k2", "mstar:phase2-launch-reservation", { sessionId: "s", operationId: "launch-3", launchId: "L-3" }),
-    customEntry("k3", "mstar:model-handoff", {
-      version: 1,
-      binding: { sessionId: "s" },
-      state: "cancelled",
-      action: "handoff",
-      operationId: "handoff-9",
-    }),
-    customEntry("k4", "mstar:model-handoff", {
-      version: 1,
-      binding: { sessionId: "s" },
-      state: "pending",
-      action: "arm",
-      operationId: "handoff-10",
-      baselineModelChangeId: "mc-2",
-    }),
+    customEntry("k1", "mstar:phase2", CHECKPOINT_PAYLOAD),
+    customEntry("k2", "mstar:phase2", { version: 1, kind: "user-turn", hostSessionId: "sess-a", workflowId: "wf-1" }),
+    customEntry("k3", "mstar:model-handoff", HANDOFF_PAYLOAD),
+    customEntry("k4", "mstar:model-handoff", PENDING_HANDOFF_PAYLOAD),
   ]);
 
   expect(history.diagnostics).toEqual([]);
+  expect(viewOf(history, 0).generation).toBe(1);
+  expect(viewOf(history, 0).workflowId).toBe("wf-1");
   expect(viewOf(history, 0).checkpointId).toBe("obs-7");
   expect(viewOf(history, 0).dedupKey).toBe("obs-7");
-  expect(viewOf(history, 1).operationId).toBe("launch-3");
-  expect(viewOf(history, 1).dedupKey).toBe("launch-3");
-  expect(history.records[1]!.payload).toMatchObject({ launchId: "L-3" });
-  expect(exportExecutionHostHistory(history)).toContain('"launchId":"L-3"');
+  expect(viewOf(history, 1).declaredKind).toBe("user-turn");
+  expect(viewOf(history, 1).dedupKey).toBeNull();
   expect(viewOf(history, 2).declaredState).toBe("cancelled");
+  expect(viewOf(history, 2).declaredAction).toBe("handoff");
   expect(viewOf(history, 2).cancelled).toBe(true);
-  expect(viewOf(history, 2).dedupKey).toBe("handoff-9");
+  expect(viewOf(history, 2).dedupKey).toBe("op-9");
   expect(viewOf(history, 3).declaredState).toBe("pending");
   expect(viewOf(history, 3).declaredAction).toBe("arm");
   expect(viewOf(history, 3).cancelled).toBe(false);
-  expect(history.records[3]!.payload).toMatchObject({ baselineModelChangeId: "mc-2" });
+  expect(history.records[3]!.payload).toMatchObject({ baselineModelChangeId: "mc-1" });
+});
+
+/* ----------------------------------------------------- guard mirror tables --- */
+
+test("the phase-2 restore guard is mirrored: a record the producer rejects gets no view", () => {
+  const cases: ReadonlyArray<Readonly<{ data: Record<string, unknown>; code: string }>> = [
+    { data: { version: 1, kind: "bind", hostSessionId: "s" }, code: "payload-record-invalid" },
+    { data: { version: 1, kind: "bind", hostSessionId: "s", workflowId: "w" }, code: "payload-record-invalid" },
+    { data: { ...BIND_PAYLOAD, coordinatorSessionId: "" }, code: "payload-record-invalid" },
+    { data: { ...CHECKPOINT_PAYLOAD, reason: "sometimes" }, code: "payload-record-invalid" },
+    { data: { ...CHECKPOINT_PAYLOAD, decision: "maybe" }, code: "payload-record-invalid" },
+    { data: { ...CHECKPOINT_PAYLOAD, note: 7 }, code: "payload-record-invalid" },
+    { data: { ...CHECKPOINT_PAYLOAD, observationKey: "" }, code: "payload-record-invalid" },
+    { data: { version: 1, kind: "reminder", hostSessionId: "s", workflowId: "w" }, code: "payload-record-invalid" },
+    { data: { ...BIND_PAYLOAD, kind: "resume" }, code: "payload-kind-invalid" },
+  ];
+
+  for (const { data, code } of cases) {
+    const history = readOne("mstar:phase2", data);
+    expect(history.records).toHaveLength(1);
+    expect(history.records[0]!.view).toBeNull();
+    expect(history.records[0]!.sessionId).toBeNull();
+    expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([code]);
+    expect(history.records[0]!.payload).toEqual(data);
+    expect(exportExecutionHostHistory(history)).toContain(`"code":"${code}"`);
+  }
+});
+
+test("the model-handoff restore guard is mirrored: a record the producer rejects gets no view", () => {
+  const cases: ReadonlyArray<Readonly<{ data: Record<string, unknown>; code: string }>> = [
+    { data: { ...HANDOFF_PAYLOAD, binding: { sessionId: "s" } }, code: "payload-record-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, binding: "none" }, code: "payload-record-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, binding: { sessionId: "", workflowId: "w" } }, code: "payload-record-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, state: "armed" }, code: "payload-state-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, action: "switch" }, code: "payload-action-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, operationId: 7 }, code: "payload-record-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, observedModel: 7 }, code: "payload-record-invalid" },
+    { data: { ...HANDOFF_PAYLOAD, reason: 7 }, code: "payload-record-invalid" },
+  ];
+
+  for (const { data, code } of cases) {
+    const history = readOne("mstar:model-handoff", data);
+    expect(history.records).toHaveLength(1);
+    expect(history.records[0]!.view).toBeNull();
+    expect(history.records[0]!.sessionId).toBeNull();
+    expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([code]);
+    expect(history.records[0]!.payload).toEqual(data);
+  }
 });
 
 /* --------------------------------------------------- malformed diagnostics --- */
 
 test("malformed recognized entries are diagnosed and retained, never guessed", () => {
-  const cases: ReadonlyArray<
-    Readonly<{ entry: Readonly<Record<string, unknown>>; code: string; sessionId: string | null }>
-  > = [
-    {
-      entry: customEntry("m1", "mstar:phase2", "phase2"),
-      code: "payload-not-object",
-      sessionId: null,
-    },
-    {
-      entry: customEntry("m2", "mstar:phase2", { version: 1, kind: "bind" }),
-      code: "session-identity-missing",
-      sessionId: null,
-    },
-    {
-      entry: customEntry("m3", "mstar:phase2", { version: 1, kind: "resume", hostSessionId: "s" }),
-      code: "payload-kind-invalid",
-      sessionId: "s",
-    },
-    {
-      entry: customEntry("m4", "mstar:model-handoff", { version: 1, binding: { sessionId: "s" }, state: "armed" }),
-      code: "payload-state-invalid",
-      sessionId: "s",
-    },
-    {
-      entry: customEntry("m5", "mstar:phase2", { version: 2.5, kind: "bind", hostSessionId: "s" }),
-      code: "payload-version-invalid",
-      sessionId: "s",
-    },
-    {
-      entry: customEntry("", "mstar:phase2", { version: 1, kind: "bind", hostSessionId: "s" }),
-      code: "entry-id-missing",
-      sessionId: "s",
-    },
-    {
-      entry: customEntry("m7", "mstar:phase2", { version: 1, kind: "bind", hostSessionId: "s", extra: undefined }),
-      code: "payload-unsupported",
-      sessionId: null,
-    },
-    {
-      entry: { id: "m8", type: "message", customType: "mstar:phase2", data: { version: 1, kind: "bind", hostSessionId: "s" } },
-      code: "entry-shape",
-      sessionId: "s",
-    },
+  const entries: ReadonlyArray<Readonly<{ entry: Readonly<Record<string, unknown>>; code: string }>> = [
+    { entry: customEntry("m1", "mstar:phase2", "phase2"), code: "payload-not-object" },
+    { entry: customEntry("", "mstar:phase2", BIND_PAYLOAD), code: "entry-id-missing" },
+    { entry: { id: "m3", type: "message", customType: "mstar:phase2", data: BIND_PAYLOAD }, code: "entry-shape" },
+    { entry: customEntry("m4", "mstar:phase2", { ...BIND_PAYLOAD, extra: undefined }), code: "payload-unsupported" },
   ];
 
-  for (const { entry, code, sessionId } of cases) {
+  for (const { entry, code } of entries) {
     const history = readExecutionHostHistory([entry]);
     expect(history.records).toHaveLength(1);
     expect(history.records[0]!.view).toBeNull();
+    expect(history.records[0]!.sessionId).toBeNull();
     expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([code]);
-    expect(history.diagnostics[0]!.index).toBe(0);
     expect(history.diagnostics[0]!.type).toBe(entry.customType);
-    // The record's session identity is only ever the payload's own declared id —
-    // and a payload that was never admitted yields none at all.
-    expect(history.records[0]!.sessionId).toBe(sessionId);
-    // The evidence survives either as the exact payload or as an explicit
-    // canonical refusal — never as a silently dropped record.
-    if (code === "payload-unsupported") {
-      expect(history.records[0]!.payloadHash).toBeNull();
-      expect(history.records[0]!.payload).toBeNull();
-    } else {
-      expect(history.records[0]!.payload).toEqual(entry.data);
-      expect(history.records[0]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
-    }
-    // Export stays total and keeps the diagnosis readable.
-    expect(exportExecutionHostHistory(history)).toContain(`"code":"${code}"`);
+    // Raw evidence is retained in full, whatever the diagnosis.
+    expect(history.records[0]!.payload).toEqual(entry.data);
+    if (code === "payload-unsupported") expect(history.records[0]!.payloadHash).toBeNull();
+    else expect(history.records[0]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   }
 });
 
-test("a recognized entry without a declared identity is never attributed by adjacency", () => {
+test("a payload the canonical form rejects is kept raw and the export refuses", () => {
+  const data = { ...BIND_PAYLOAD, extra: undefined };
+  const history = readExecutionHostHistory([customEntry("r1", "mstar:phase2", data)]);
+  const record = history.records[0]!;
+
+  // The very same value is retained — not a copy, not a null, and no digest is
+  // fabricated for a payload the canonical form refused.
+  expect(record.payload).toBe(data);
+  expect(record.payloadHash).toBeNull();
+  expect(record.view).toBeNull();
+  expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["payload-unsupported"]);
+  expect(history.diagnostics[0]!.message).toContain("canonical");
+
+  const refusal = refusalOf(history);
+  expect(refusal).toBeInstanceOf(ExecutionHostHistoryExportRefusal);
+  if (!(refusal instanceof ExecutionHostHistoryExportRefusal)) throw new Error("the export did not refuse");
+  expect(refusal.entryIds).toEqual(["r1"]);
+  expect(refusal.message).toContain("r1");
+});
+
+test("an undecoded entry is never attributed to a session by adjacency", () => {
   const history = readExecutionHostHistory([
-    customEntry("n1", "mstar:phase2-checkpoint", { observationKey: "obs-1" }),
-    customEntry("n2", "mstar:phase2", { version: 1, kind: "bind", hostSessionId: "sess-a", workflowId: "wf-1" }),
+    customEntry("n1", "mstar:phase2-launch-reservation", { hostSessionId: "sess-a", operationId: "launch-3" }),
+    customEntry("n2", "mstar:phase2", BIND_PAYLOAD),
   ]);
 
   expect(history.records[0]!.sessionId).toBeNull();
-  expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["session-identity-missing"]);
+  expect(history.records[0]!.payload).toMatchObject({ hostSessionId: "sess-a" });
+  expect(history.diagnostics.map((diagnostic) => [diagnostic.index, diagnostic.code])).toEqual([
+    [0, "payload-generation-unverified"],
+  ]);
   expect(history.records[1]!.sessionId).toBe("sess-a");
 });
 
@@ -311,6 +379,7 @@ test("payload digests and exports are independent of payload key order", () => {
     }),
   ]);
 
+  expect(ordered.diagnostics).toEqual([]);
   expect(ordered.records[0]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   expect(shuffled.records[0]!.payloadHash).toBe(ordered.records[0]!.payloadHash);
   expect(exportExecutionHostHistory(shuffled)).toBe(exportExecutionHostHistory(ordered));
