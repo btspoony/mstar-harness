@@ -942,3 +942,35 @@ describe('engine-status snapshot store — workflow session bindings (D4 control
     })
   })
 })
+describe('engine-status snapshot store — execution binding adoption', () => {
+  it('persists the authority witness separately from derived emissions and rejects stale shapes', () => {
+    const harness = freshHarnessDir()
+    const canonical = {
+      version: 1 as const,
+      harnessRoot: harness,
+      session: { storeId: 'store-a', epoch: 4, workflowId: 'wf-a', role: 'coordinator' as const, sessionId: 'session-a', planId: null },
+    }
+    expect(updateWorkflowSessionBinding(harness, 'session-a', '/workspace', {
+      selectedWorkflowId: 'wf-a',
+      executionBinding: canonical,
+      excludedBeforeSeq: 9,
+    })).toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'session-a', '/workspace')).toEqual({
+      kind: 'ok',
+      binding: {
+        cwd: '/workspace',
+        selectedWorkflowId: 'wf-a',
+        executionBinding: canonical,
+        excludedBeforeSeq: 9,
+      },
+    })
+    expect(updateWorkflowSessionBinding(harness, 'session-a', '/workspace', {
+      executionBinding: { version: 1, harnessRoot: harness, session: { ...canonical.session, epoch: 0 } },
+      excludedBeforeSeq: 9,
+    })).toEqual({ kind: 'degraded', reason: 'invalid-execution-binding' })
+    expect(readWorkflowSessionBinding(harness, 'session-a', '/workspace')).toMatchObject({
+      kind: 'ok',
+      binding: { executionBinding: { storeId: 'store-a', epoch: 4, workflowId: 'wf-a' } },
+    })
+  })
+})
