@@ -15,7 +15,7 @@
  * `bun test packages/engine/src/store-activation.test.ts --test-name-pattern 'activation|retirement|backup'`.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -28,6 +28,9 @@ import {
   assertAuthorityCurrent,
   backupStore,
   currentAuthorityHandle,
+  freezeRetainedBodies,
+  readRetainedBodyInventory,
+  retainedInventoryPath,
   retireStoreSources,
   StoreActivationError,
   type ActivationAttestation,
@@ -764,5 +767,126 @@ describe("store backup", () => {
     } finally {
       stagedRow.close();
     }
+  });
+});
+
+describe("retained bodies", () => {
+  /** One workflow's accepted bodies, in the released shapes. */
+  function plantBodies(harness: string): { notes: string; chunk: string; selection: string } {
+    const notes = join(harness, "workflows", "wf-retained", "notes.jsonl");
+    const chunk = join(harness, "workflows", "wf-retained", "agent-flow-history", "chunk-000001.jsonl");
+    const selection = join(harness, "snapshots", "engine-status.json");
+    write(harness, join("workflows", "wf-retained", "notes.jsonl"), '{"kind":"note","ts":"2026-09-01","text":"retained"}');
+    write(harness, join("workflows", "wf-retained", "agent-flow.jsonl"), '{"v":1,"ts":1,"kind":"dispatch"}');
+    write(harness, join("workflows", "wf-retained", "agent-flow-ids.jsonl"), '{"id":"evt-1","d":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}');
+    write(harness, join("workflows", "wf-retained", "workflow-ledger-cursors.json"), '{"v":2,"cursors":{"s-1":{"next":2}}}');
+    write(harness, join("workflows", "wf-retained", "omp-launches.json"), '{"version":1,"workflow_id":"wf-retained","intents":[]}');
+    write(harness, join("workflows", "wf-retained", "agent-flow-history", "chunk-000001.jsonl"), '{"v":1,"ts":0,"kind":"chunk"}');
+    write(harness, join("snapshots", "engine-status.json"), '{"sv":1,"entries":{},"bindings":{}}');
+    return { notes, chunk, selection };
+  }
+
+  test("retained bodies: a recovery point freezes the accepted ledgers with their record checkpoints", async () => {
+    const fixture = await stagedFixture("retained-bodies-freeze-");
+    const bodies = plantBodies(fixture.harness);
+    const before = readFileSync(bodies.notes);
+
+    const receipt = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "retained.db") });
+    const retained = receipt.retained!;
+    expect(retained.version).toBe(1);
+    expect(retained.protocol).toBe("retained-body-inventory-v1");
+    expect(retained.storeId).toBe(receipt.storeId);
+    expect(retained.epoch).toBe(receipt.epoch);
+    expect(retained.revision).toBe(receipt.revision);
+    expect(retained.bodies.map((body) => body.path)).toEqual([
+      "snapshots/engine-status.json",
+      "workflows/wf-retained/agent-flow-history/chunk-000001.jsonl",
+      "workflows/wf-retained/agent-flow-ids.jsonl",
+      "workflows/wf-retained/agent-flow.jsonl",
+      "workflows/wf-retained/notes.jsonl",
+      "workflows/wf-retained/omp-launches.json",
+      "workflows/wf-retained/workflow-ledger-cursors.json",
+    ]);
+    const notes = retained.bodies.find((body) => body.path.endsWith("notes.jsonl"))!;
+    // §5's record identity: the LF-terminated lines, hashed without the LF.
+    expect(notes.records).toEqual([sha256Of('{"kind":"note","ts":"2026-09-01","text":"retained"}')]);
+    expect(notes.partial).toBeNull();
+    expect(notes.bytes).toBe(before.length);
+    expect(notes.sha256).toBe(sha256Of(before.toString("utf8")));
+    expect(notes.selection).toBe(false);
+    expect(retained.bodies.find((body) => body.path === "snapshots/engine-status.json")!.selection).toBe(true);
+    // The inventory is a function of the bytes, not of the run.
+    expect(
+      freezeRetainedBodies(fixture.context, { storeId: receipt.storeId, epoch: receipt.epoch, revision: receipt.revision }),
+    ).toEqual(retained);
+    // It is recorded beside the copy, and reads back equal.
+    expect(existsSync(retainedInventoryPath(receipt.backupPath))).toBe(true);
+    expect(await readRetainedBodyInventory(receipt.backupPath)).toEqual(retained);
+    // Every body is byte-identical after the freeze.
+    expect(readFileSync(bodies.notes)).toEqual(before);
+  });
+
+  test("retained bodies: an unfinished compaction journal refuses the freeze before any byte is written", async () => {
+    const fixture = await stagedFixture("retained-bodies-compaction-");
+    plantBodies(fixture.harness);
+    write(fixture.harness, join("workflows", "wf-retained", "agent-flow-compaction.json"), '{"version":1,"lines":1}');
+    const target = join(fixture.harness, "archived", "backups", "compaction.db");
+
+    const refusal = await refusalOf("store.activation-stale", () => backupStore(fixture.context, { out: target }));
+    expect(refusal.message).toContain("agent-flow-compaction.json");
+    expect(refusal.message).toContain("IN FLIGHT");
+    // Nothing was written: no image, no inventory document, and no body moved.
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(retainedInventoryPath(target))).toBe(false);
+  });
+
+  test("retained bodies: a forged inventory and a non-regular body each refuse", async () => {
+    const fixture = await stagedFixture("retained-bodies-forged-");
+    const bodies = plantBodies(fixture.harness);
+    const receipt = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "forged.db") });
+
+    // A document missing a declared field is refused by the field it lacks —
+    // the validator reads every fact before it trusts any of them.
+    writeFileSync(retainedInventoryPath(receipt.backupPath), '{"version":1,"protocol":"retained-body-inventory-v1","storeId":"other"}\n');
+    const incomplete = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
+    expect(incomplete.message).toContain("carries no digest");
+    // A document that declares every field but whose contents do not hash to
+    // the digest it carries is refused as a forged inventory.
+    writeFileSync(
+      retainedInventoryPath(receipt.backupPath),
+      `${JSON.stringify({ ...receipt.retained!, digest: "f".repeat(64) })}\n`,
+    );
+    const forged = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
+    expect(forged.message).toContain("does not describe the bodies it claims");
+    // A document of another generation is refused by name.
+    writeFileSync(retainedInventoryPath(receipt.backupPath), `${JSON.stringify({ ...receipt.retained!, version: 2 })}\n`);
+    const generation = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
+    expect(generation.message).toContain("version 2");
+    // …and a missing one is not a recovery record at all.
+    rmSync(retainedInventoryPath(receipt.backupPath), { force: true });
+    const missing = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
+    expect(missing.message).toContain("records no retained-body inventory");
+
+    // A body that is a symlink is not a retained accepted body: the freeze
+    // refuses rather than following the link out of the root.
+    rmSync(bodies.notes, { force: true });
+    const elsewhere = join(fixture.harness, "elsewhere.jsonl");
+    write(fixture.harness, "elsewhere.jsonl", '{"kind":"note","ts":"2026-09-01","text":"elsewhere"}');
+    mkdirSync(dirname(bodies.notes), { recursive: true });
+    symlinkSync(elsewhere, bodies.notes);
+    const symlinked = await refusalOf("store.activation-stale", async () =>
+      freezeRetainedBodies(fixture.context, { storeId: receipt.storeId, epoch: receipt.epoch, revision: receipt.revision }),
+    );
+    expect(symlinked.message).toContain("not a regular file");
+
+    // A workflow dir that is itself a symlink refuses too: the retained set
+    // cannot be enumerated through a link.
+    rmSync(bodies.notes, { force: true });
+    mkdirSync(join(fixture.harness, "elsewhere-dir"), { recursive: true });
+    symlinkSync(join(fixture.harness, "elsewhere-dir"), join(fixture.harness, "workflows", "wf-linked"));
+    const linked = await refusalOf("store.activation-stale", async () =>
+      freezeRetainedBodies(fixture.context, { storeId: receipt.storeId, epoch: receipt.epoch, revision: receipt.revision }),
+    );
+    expect(linked.message).toContain("symlink");
   });
 });
