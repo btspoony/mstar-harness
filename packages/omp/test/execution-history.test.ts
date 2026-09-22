@@ -340,6 +340,14 @@ test("a v2 bind with a malformed executionBinding is refused and its payload kep
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, workflowId: "" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "dev" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, planId: 3 } } },
+    // The engine's cross-field pairing (`assertRefShape`): a coordinator never
+    // carries a plan id, and a plan-pm always carries a non-empty one. A payload
+    // whose declared pairing the engine could never accept is not a verified
+    // binding — it is retained as history like every other malformed shape.
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "plan-1" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: null } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: "" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 0 } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: -3 } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 1.5 } } },

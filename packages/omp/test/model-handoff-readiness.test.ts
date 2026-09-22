@@ -1526,6 +1526,30 @@ describe("E1 explicit binding on the ACTIVE route", () => {
     );
     expect(planScoped).toMatchObject({ ok: false, code: "not-coordinator" });
 
+    // The engine's cross-field pairing is part of the binding SHAPE this arm
+    // admits (`assertRefShape`): a coordinator never carries a plan id and a
+    // plan-pm always carries a non-empty one. Either impossible pairing is
+    // refused as a binding the engine could never accept — it never reaches the
+    // seat comparison.
+    const coordinatorWithPlan = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, role: "coordinator", planId: f.planId } }),
+      "reserve",
+    );
+    expect(coordinatorWithPlan).toMatchObject({ ok: false, code: "not-coordinator" });
+    const planPmWithoutPlan = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: null } }),
+      "reserve",
+    );
+    expect(planPmWithoutPlan).toMatchObject({ ok: false, code: "not-coordinator" });
+    const planPmWithEmptyPlan = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: "" } }),
+      "reserve",
+    );
+    expect(planPmWithEmptyPlan).toMatchObject({ ok: false, code: "not-coordinator" });
+
     // Another workflow's binding.
     const otherWorkflow = await reserveHandoffBinding(
       activeBindingInput(`${f.workflowId}-other`),

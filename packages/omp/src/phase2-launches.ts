@@ -132,6 +132,18 @@ export type LaunchIntent = Readonly<{
  * the document. It is provenance, never authority — the current authority is
  * always the DB binding the call resumed, and an owner change keeps every
  * unresolved intent occupied instead of handing the journal over silently.
+ *
+ * **Deliberately not an admission input** (review finding S-1): the block is
+ * decoded for shape and rewritten from the CURRENT authority on every write
+ * (`ownerFromAuthority`), and nothing admits, occupies or discharges an intent by
+ * comparing it — occupancy is decided from the DB plan views plus the workflow's
+ * current coordinator (`intentReachedStop`), so a stale or foreign owner can
+ * neither widen the cap nor drop a reservation. It cannot be a takeover channel
+ * either: only a caller that resumed its own active binding AND is the workflow's
+ * current coordinator can write this journal at all, and a write records the
+ * owner it actually is. Treating the stored block as an admission fact would
+ * invent a second ownership truth — the exact fallback the execution contract
+ * forbids.
  */
 type JournalOwner = { storeId: string; epoch: number; sessionId: string; workflowId: string };
 

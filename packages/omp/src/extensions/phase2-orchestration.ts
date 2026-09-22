@@ -294,14 +294,22 @@ function engineCodeOf(error: unknown, fallback: string): string {
   return typeof code === "string" && code.includes(".") ? code : fallback;
 }
 
-/** Structural guard for the §3.1 binding value a record persists. */
+/**
+ * Structural guard for the §3.1 binding value a record persists. Its rules are
+ * the engine's own reference shape (`execution-session.ts` `assertRefShape`),
+ * including the **cross-field** role pairing — a `coordinator` reference carries
+ * a null plan id and a `plan-pm` reference a non-empty one — so an "ACTIVE"
+ * binding this guard admits is one the engine could actually accept; a record
+ * whose declared pairing is impossible is history, not a binding.
+ */
 function isExecutionBinding(value: unknown): value is ExecutionBinding {
   if (!isPlainObject(value) || value.version !== 1 || !isNonEmptyString(value.harnessRoot)) return false;
   const session = value.session;
   if (!isPlainObject(session)) return false;
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) return false;
+  if (session.role === "coordinator" && session.planId !== null) return false;
+  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return false;
   if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
-  if (session.planId !== null && typeof session.planId !== "string") return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
 }
 

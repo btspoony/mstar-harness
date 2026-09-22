@@ -326,9 +326,11 @@ type VerifiedRecord = Readonly<{
  * Shape-only admission of the `executionBinding` a v2 `bind` declares: an object
  * with `version: 1`, a non-empty `harnessRoot`, and a `session` object whose
  * `storeId` / `sessionId` / `workflowId` are non-empty strings, whose `role` is
- * `coordinator | plan-pm`, whose `planId` is `null | string` and whose `epoch` is
- * a positive safe integer. Returns the declared shape, or `null` when any of
- * those is violated.
+ * `coordinator | plan-pm`, whose `planId` is `null | string` **paired with that
+ * role** (a coordinator carries a null plan id and a plan-pm a non-empty one —
+ * the engine's own `assertRefShape` rule, so an admitted value is one the engine
+ * could accept) and whose `epoch` is a positive safe integer. Returns the
+ * declared shape, or `null` when any of those is violated.
  *
  * Nothing beyond that shape is examined: no store id, epoch or session value is
  * interpreted, resolved, compared or projected — a well-formed reference that
@@ -342,8 +344,9 @@ function readExecutionBindingShape(value: unknown): ExecutionHostHistoryExecutio
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) {
     return null;
   }
+  if (session.role === "coordinator" && session.planId !== null) return null;
+  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return null;
   if (session.role !== "coordinator" && session.role !== "plan-pm") return null;
-  if (session.planId !== null && typeof session.planId !== "string") return null;
   if (typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return null;
   return {
     harnessRoot: value.harnessRoot,

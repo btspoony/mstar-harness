@@ -29,6 +29,7 @@ import {
   HOST_INVENTORY_VERSION,
   buildExecutionHostInventory,
   exportExecutionHostInventory,
+  historyExportBodyDigest,
   historyExportDigest,
   inventoryDigest,
 } from "../src/execution-host-inventory";
@@ -125,6 +126,25 @@ describe("execution host inventory — one session, one workflow, one export", (
     expect(JSON.parse(envelope)).toEqual(inventory);
     // The envelope digest covers the delivered bytes (framing LF included).
     expect(inventoryDigest(inventory)).toBe(createHash("sha256").update(envelope, "utf8").digest("hex"));
+  });
+
+  test("the digest removes exactly one terminal LF and never trims a body that lacks it", () => {
+    const sha256Of = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+    // A body without a terminal LF keeps EVERY byte: the rule removes at most the
+    // one framing byte, so an unserialized/alternate body can never lose content.
+    expect(historyExportBodyDigest("{}")).toBe(sha256Of("{}"));
+    expect(historyExportBodyDigest("{}")).not.toBe(sha256Of("{"));
+
+    // One terminal LF is framing and is removed; two leave exactly one — this is
+    // a bounded byte rule, not a whitespace trim.
+    expect(historyExportBodyDigest("{}\n")).toBe(sha256Of("{}"));
+    expect(historyExportBodyDigest("{}\n\n")).toBe(sha256Of("{}\n"));
+    expect(historyExportBodyDigest("{} ")).toBe(sha256Of("{} "));
+
+    // The document-level entry point is that same rule over H1's exact bytes.
+    const document = readExecutionHostHistory([phase2Bind()]);
+    expect(historyExportDigest(document)).toBe(historyExportBodyDigest(exportExecutionHostHistory(document)));
   });
 
   test("an undecodable hidden entry is retained with its digest and diagnosed, never guessed", () => {

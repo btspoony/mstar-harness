@@ -860,6 +860,38 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
     expect(textOfExtension(result)).toContain("checkpoint recorded");
   });
 
+  test("a v2 bind whose declared pairing the engine could never accept is never adopted", async () => {
+    const fixture = makeFixture("phase2-binding-pairing");
+    const coordinator = await seedActiveAuthority(fixture, "iteration");
+    const goodBinding = { version: 1, harnessRoot: realpathSync(fixture.harness), session: coordinator };
+    // The engine's cross-field rule (`execution-session.ts` `assertRefShape`): a
+    // coordinator carries a null plan id and a plan-pm a non-empty one. A record
+    // declaring either impossible pairing is history, not a binding — the
+    // restore guard admits it exactly as it admits any other malformed shape.
+    const impossiblePairings = [
+      { ...goodBinding, session: { ...coordinator, role: "coordinator", planId: PLAN_ID } },
+      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: null } },
+      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: "" } },
+    ];
+    for (const executionBinding of impossiblePairings) {
+      const host = extensionHost({
+        factory: phase2Orchestration,
+        cwd: fixture.main,
+        sessionId: SESSION_ID,
+        entries: [
+          {
+            type: "custom",
+            customType: PHASE2_CUSTOM_TYPE,
+            data: { version: 2, kind: "bind", workflowId: WORKFLOW_ID, hostSessionId: SESSION_ID, executionBinding },
+          } as unknown as SessionEntry,
+        ],
+      });
+      const state = derivePhase2State(host.entries, SESSION_ID);
+      expect(state.binding).toBeNull();
+      expect(state.legacy).toBeNull();
+    }
+  });
+
   test("a LEGACY envelope binding on an ACTIVE root still refuses not-ready, and never reads the retired documents", async () => {
     const fixture = makeFixture("phase2-checkpoint-legacy-record");
     await seedActiveAuthority(fixture);
