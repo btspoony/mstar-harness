@@ -2946,6 +2946,43 @@ describe("model handoff on the ACTIVE route", () => {
     expect(fired.details.mstarModelHandoff?.integrationHead).toBe(git(["rev-parse", "HEAD"], repo.integration));
   }, 120_000);
 
+  test("the retired register and snapshot never decide an ACTIVE-route start (S3 order)", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const state = await seedActiveHandoffAuthority(repo, session.getSessionId());
+
+    // The retired file evidence a route-blind classifier would have used: the
+    // register names a DIFFERENT workflow (so the file arm's classifier says
+    // `reserve`) while a leftover snapshot for THIS workflow sits at its derived
+    // path (so the file arm's reservation would refuse `already-bound`). The
+    // ACTIVE route must consult neither: it asks the engine's route first and
+    // then answers from the DB workflow/coordinator view.
+    writeRegister(repo.harness, ["legacy-sibling-iteration"]);
+    mkdirSync(join(repo.harness, "workflows", state.workflowId), { recursive: true });
+    writeJson(join(repo.harness, "workflows", state.workflowId, "snapshot.json"), {
+      schema_version: 1,
+      id: state.workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16T00:00:00.000Z",
+      plans: [],
+    });
+
+    const armed = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(armed)).toBe("armed");
+    expect(harness.attempts).toEqual(["probe/slow-model"]);
+    expect(harness.records()[0]?.binding.executionBinding?.session).toMatchObject({
+      workflowId: state.workflowId,
+      sessionId: session.getSessionId(),
+      role: "coordinator",
+      planId: null,
+    });
+  }, 120_000);
+
   test("a session that is not the workflow's DB coordinator refuses the start without any model action", async () => {
     const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
