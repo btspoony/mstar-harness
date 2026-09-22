@@ -748,7 +748,23 @@ type DiscoveryLedger = {
   witnesses: ExecutionSourceWitness[];
   /** (`${root}:${path}`) → the file the witness bytes were read from. */
   witnessPaths: Map<string, string>;
+  /**
+   * (`${root}:${path}`) → the digest those bytes were first recorded with. Every
+   * encounter recomputes the digest from the file (never a cached value); this
+   * map exists only to refuse a key that two different byte-sets would claim, so
+   * a coverage row can never bind a stale path to a fresh digest.
+   */
+  witnessSha: Map<string, string>;
 };
+
+/** The shared refusal for one witness key claimed by two different byte-sets. */
+function conflictingWitnessKey(key: string, recorded: string, recomputed: string): never {
+  throw conflict(
+    `two discovered files claim the witness ${key} with different bytes (recorded ${recorded}, recomputed from the file ${recomputed}). ` +
+      `A witness key names ONE byte-set under its configured root, and every digest is recomputed from the bytes - never served from a ` +
+      `cached path or value. Nothing was staged.`,
+  );
+}
 
 /** One discovered file, recorded once per witness key. */
 function recordWitness(
@@ -760,13 +776,19 @@ function recordWitness(
 ): CoverageWitness {
   const witness = coverageWitnessOf(rootName, rootDir, path, `the ${kind} source`);
   const key = coverageWitnessKey(witness.root, witness.path);
-  const prior = ledger.witnessPaths.get(key);
-  if (prior === undefined) {
+  const priorPath = ledger.witnessPaths.get(key);
+  const priorSha = ledger.witnessSha.get(key);
+  if (priorSha !== undefined && priorSha !== witness.sha256) conflictingWitnessKey(key, priorSha, witness.sha256);
+  if (priorPath === undefined) {
     ledger.witnessPaths.set(key, path);
-    ledger.witnesses.push({ path, sha256: witness.sha256, kind });
+    ledger.witnessSha.set(key, witness.sha256);
+    // The inventory records the CANONICAL spelling of every witnessed file, so
+    // the manifest is byte-stable whichever way a caller spelled the path it
+    // named (a lexical or Git-resolved root answer the same directory twice).
+    ledger.witnesses.push({ path: canonicalPath(path), sha256: witness.sha256, kind });
     return witness;
   }
-  if (canonicalPath(prior) !== canonicalPath(path)) {
+  if (canonicalPath(priorPath) !== canonicalPath(path)) {
     throw conflict(`two discovered files claim the witness ${key}; a witness path names ONE file under ONE configured root.`);
   }
   return witness;
@@ -1371,9 +1393,16 @@ function consumerTreeEntries(input: {
         }
         const bytes = readSourceBytes(resolved, `${what} link ${rel}`, `${what} link ${rel} resolves to a missing file`);
         const key = coverageWitnessKey(rootName, witnessPath);
+        // The digest is RECOMPUTED from the resolved bytes on every encounter
+        // (exactly as the producer this mirrors does, with no cache): a key
+        // already recorded with different bytes refuses instead of silently
+        // keeping the earlier path or value.
         const sha256 = sha256Of(bytes);
+        const priorSha = ledger.witnessSha.get(key);
+        if (priorSha !== undefined && priorSha !== sha256) conflictingWitnessKey(key, priorSha, sha256);
         if (!ledger.witnessPaths.has(key)) {
           ledger.witnessPaths.set(key, resolved);
+          ledger.witnessSha.set(key, sha256);
           ledger.witnesses.push({ path: resolved, sha256, kind: "deferred" });
         }
         entries.push({ path: rel, kind: "symlink", sha256, linkTarget: relative(treeAbs, resolved).split(/[\\/]+/).join("/") });
@@ -1709,7 +1738,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     );
   }
 
-  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map() };
+  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map(), witnessSha: new Map() };
   const deferred: ExecutionDeferredSurface[] = [];
   const workflows: DiscoveredWorkflow[] = [];
   const owners: DiscoveredOwner[] = [];

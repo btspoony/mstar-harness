@@ -720,7 +720,12 @@ describe("execution-preview", () => {
     expect(manifest.root).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.storeId).toBe((footprint.storeMeta as { store_id: string }).store_id);
     expect(manifest.epoch).toBe((footprint.storeMeta as { authority_epoch: number }).authority_epoch);
-    expect(manifest.schemaVersion).toBe(4);
+    // The manifest pins the store's OWN schema generation: assert it against the
+    // live store rather than a literal that a new append-only migration would
+    // silently outdate.
+    expect(manifest.schemaVersion).toBe(
+      rawGet<{ v: number }>(fixture.dbPath, "select max(version) as v from schema_version")!.v,
+    );
     expect(manifest.catalogRevision).toBe((footprint.storeMeta as { catalog_revision: number }).catalog_revision);
     expect(manifest.pendingCatalogOperations).toEqual([]);
     expect(manifest.sources.map((witness) => witness.kind)).toEqual([
@@ -1033,9 +1038,12 @@ describe("execution-preview", () => {
       // exactly when the surface is blocked.
       expect(surface.paths.length > 0, surface.surface).toBe(surface.disposition === "blocked");
     }
+    // Discovery order: the harness-level status file is witnessed after the
+    // workflow dirs, and the per-workflow retained ledgers are witnessed when
+    // their §4.1 rows are built.
     expect(manifest.sources.filter((witness) => witness.kind === "deferred").map((witness) => witness.path)).toEqual([
-      canonicalPath(join(fixture.workflowDir, "notes.jsonl")),
       canonicalPath(join(fixture.harness, "snapshots", "engine-status.json")),
+      canonicalPath(join(fixture.workflowDir, "notes.jsonl")),
     ]);
   });
 
