@@ -792,9 +792,36 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       coordinatorSessionId: "native-session-a",
       coordinatorEpoch: 3,
     });
-    expect(result.text).toContain("no coordinator (recovery with priorSessionId null");
+    expect(result.text).toContain("coordinator session native-session-a");
     expect(JSON.stringify(result)).not.toContain("sessions/");
     expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
+  });
+
+  test("an unowned workflow reports the explicit null-holder path instead of inventing a coordinator", async () => {
+    const engine = fakeAuthority({
+      read: async () =>
+        ({
+          data: {
+            root: { version: 2, updated_at: "2026-09-16", workflows: [] },
+            workflows: [
+              {
+                workflowToken: WORKFLOW_TOKEN,
+                planTokens: {},
+                state: { id: "wf-a", status: "running", phase: "phase-2-execute" },
+                plans: [],
+                coordinator: null,
+                integrationLease: null,
+              },
+            ],
+          },
+          token: WORKFLOW_TOKEN,
+          storeId: STORE_ID,
+          epoch: 3,
+        }) as unknown as ExecutionRead<ExecutionState | ExecutionPlanView>,
+    });
+    const result = await showCoordinatorRecovery({ operation: "show-recovery", workflowId: "wf-a" }, FACTS, undefined as never, engine.deps);
+    expect(result.details).toMatchObject({ coordinatorSessionId: null, coordinatorEpoch: null });
+    expect(result.text).toContain("no coordinator (recovery with priorSessionId null");
   });
 
   test("a stale, foreign or copied reference surfaces the engine's own refusal code", async () => {

@@ -131,7 +131,17 @@ describe("execution host inventory — one session, one workflow, one export", (
     expect(retained?.payloadHash).not.toBeNull();
     expect(retained?.view).toBeNull();
     expect(retained?.sessionId).toBeNull();
-    expect(inventory.export.document.diagnostics.map((entry) => entry.code)).toEqual(["payload-generation-unverified"]);
+    // The diagnosis is asserted per ENTRY: this producer does not own H1's
+    // generation policy for the active bind shape, so a record H1 happens to
+    // retain raw is not this case's subject.
+    expect(inventory.export.document.diagnostics.filter((entry) => entry.entryId === "entry-continuation").map((entry) => entry.code)).toEqual([
+      "payload-generation-unverified",
+    ]);
+    // Whatever H1's decode verdict, the evidence itself is never touched: the
+    // producer carries the record through verbatim.
+    const carriedBind = inventory.export.document.records.find((record) => record.entryId === "entry-bind");
+    expect(carriedBind?.payload).toEqual(phase2Bind().data);
+    expect(inventory.export.document.records.map((record) => record.entryId)).toEqual(["entry-bind", "entry-continuation"]);
     // The document is still exportable: an honest diagnosis is not a refusal.
     expect(() => exportExecutionHostInventory(inventory)).not.toThrow();
   });
