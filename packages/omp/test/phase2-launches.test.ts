@@ -489,10 +489,17 @@ function journalIntents(fixture: Fixture): Array<Record<string, unknown>> {
   return readJson(fixture.journalPath).intents as Array<Record<string, unknown>>;
 }
 
-/** The plan's authoritative view, read fresh from the DB (the snapshot is retired). */
-async function planViewOf(fixture: Fixture, planId: string): Promise<ExecutionPlanView> {
-  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId });
-  if (!("workflows" in read.data)) throw new Error(`the authority read of ${planId} returned the whole state`);
+/**
+ * The plan's authoritative view, read fresh from the DB (the snapshot is
+ * retired). The read is WORKFLOW-scoped on purpose: a `{workflowId, planId}`
+ * read answers the bare plan view, while the plan-row collection projected here
+ * lives in the workflow view's own `plans` array.
+ */
+async function planViewOf(fixture: Fixture, planId: PlanId): Promise<ExecutionPlanView> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
+  if (!("workflows" in read.data)) {
+    throw new Error(`the authority read of ${WORKFLOW_ID} returned no workflow view, so the plan row of ${planId} cannot be read`);
+  }
   const view = read.data.workflows[0]?.plans.find((entry) => entry.plan.id === planId);
   if (view === undefined) throw new Error(`the authority holds no plan row ${planId}`);
   return view;
