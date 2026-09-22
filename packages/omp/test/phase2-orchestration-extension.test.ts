@@ -61,7 +61,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -1289,10 +1289,17 @@ describe("phase2 host adapter", () => {
 
     // (b) A session sitting in an extra primary's feature checkout is outside
     // the engine's coordinator residency, so it cannot claim the observation.
+    // The foreign checkout must still RESOLVE the control harness: a linked
+    // worktree is its own git top-level, so the upward probe from it never
+    // reaches the main checkout's `.mstar`. The pointer below keeps this case on
+    // the residency rule (a foreign cwd), not on harness discovery — the
+    // refusal asserted is the scope verdict, never "no harness here".
+    const foreignCheckout = fixture.worktrees["plan-b"]!;
+    symlinkSync(join(fixture.root, ".mstar"), join(foreignCheckout, ".mstar"));
     const foreign = await createHarness({
-      sessionManager: newSession(fixture.worktrees["plan-b"]!),
+      sessionManager: newSession(foreignCheckout),
       jobs,
-      cwd: fixture.worktrees["plan-b"]!,
+      cwd: foreignCheckout,
     });
     const foreignRefusal = await foreign.runTool(bindParams());
     expect(codeOf(foreignRefusal)).toBe("phase2.scope-mismatch");
