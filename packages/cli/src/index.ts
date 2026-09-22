@@ -2609,7 +2609,13 @@ iterationCommand
             ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
           },
         };
-        const active = readActiveRegistrationFlags(options, "iteration register");
+        // Only the fields this helper reads are projected: `--row` is a
+        // repeatable array the registration owns, not part of the active
+        // transport flag set.
+        const active = readActiveRegistrationFlags(
+          { expect: options.expect, operation: options.operation },
+          "iteration register",
+        );
         if (active !== null) {
           setArtifactStore(createFsStore(harnessDir));
           const identity = requireExecutionIdentity(

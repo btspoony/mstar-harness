@@ -359,7 +359,7 @@ function workflowTransitions(): ReadonlyArray<{
       description: "Record the lifecycle's execution policy (the same policy shape the snapshot validator owns)",
       options: [["--file <path>", "Absolute path of the execution-policy JSON payload"]],
       operation: (options) => {
-        const policy = requireJsonFile(options.file, "--file", "workflow execution-policy", "policy-json-path");
+        const policy = requireJsonFile(optionalFlag(options, "file"), "--file", "workflow execution-policy", "policy-json-path");
         // The engine's `assertWorkflowOperationShape` owns the policy shape.
         return { kind: "execution-policy", policy: policy as ExecutionPolicyOperation["policy"] };
       },
