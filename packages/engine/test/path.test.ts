@@ -37,6 +37,7 @@ import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
   emitGitignoreSnippet,
+  hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -1012,59 +1013,44 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     expect(emitGitignoreSnippet()).toBe(`${CANONICAL_SNIPPET}${CANONICAL_SNIPPET_AGENTS}`);
   });
 
-  test("validateGitignore passes when .gitignore contains the .mstar/ set (kind undetected → either set accepted)", () => {
+  test("validateGitignore succeeds as author-declared for a declaration of either root (kind undetected)", () => {
     const root = tmpRoot("path-gi-ok-");
     try {
       writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET}\nnode_modules\n`);
-      const result = validateGitignore(root);
-      expect(result.ok).toBe(true);
-      expect(result.code).toBe("gitignore.ok");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+      const mstar = validateGitignore(root);
+      expect(mstar.ok).toBe(true);
+      expect(mstar.code).toBe("gitignore.author-declared");
 
-  test("validateGitignore passes when .gitignore contains only the legacy .agents/ set", () => {
-    const root = tmpRoot("path-gi-agents-ok-");
-    try {
       writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET_AGENTS}\nnode_modules\n`);
-      const result = validateGitignore(root);
-      expect(result.ok).toBe(true);
-      expect(result.code).toBe("gitignore.ok");
+      const agents = validateGitignore(root);
+      expect(agents.ok).toBe(true);
+      expect(agents.code).toBe("gitignore.author-declared");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("validateGitignore requires the .mstar/ set when a .mstar harness is detected", () => {
+  test("validateGitignore accepts a legacy .agents/ declaration for a detected .mstar harness", () => {
     const root = tmpRoot("path-gi-mstar-kind-");
     try {
       mkdirSync(join(root, ".mstar"));
-      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET);
-      expect(validateGitignore(root).ok).toBe(true);
- // The .agents/ set alone does NOT fence a .mstar harness.
       writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET_AGENTS);
       const result = validateGitignore(root);
-      expect(result.ok).toBe(false);
-      expect(result.code).toBe("gitignore.missing-entries");
-      expect(result.message).toContain(".mstar/ set");
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("gitignore.author-declared");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("validateGitignore requires the .agents/ set when a legacy .agents harness is detected", () => {
+  test("validateGitignore accepts a .mstar/ declaration for a detected legacy .agents harness", () => {
     const root = tmpRoot("path-gi-agents-kind-");
     try {
       mkdirSync(join(root, ".agents"));
-      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET_AGENTS);
-      expect(validateGitignore(root).ok).toBe(true);
- // The .mstar/ set alone does NOT fence a legacy .agents harness.
       writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET);
       const result = validateGitignore(root);
-      expect(result.ok).toBe(false);
-      expect(result.code).toBe("gitignore.missing-entries");
-      expect(result.message).toContain(".agents/ set");
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("gitignore.author-declared");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1082,22 +1068,72 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     }
   });
 
-  test("validateGitignore fails and lists the missing entries when no complete set is present", () => {
-    const root = tmpRoot("path-gi-partial-");
+  test("validateGitignore refuses an undeclared file and lists the canonical entries it lacks", () => {
+    const root = tmpRoot("path-gi-undeclared-");
     try {
       writeFileSync(
         join(root, ".gitignore"),
-        "# Morning Star harness (.mstar/)\n.mstar/**\n!.mstar/AGENTS.md\n",
+        "# Morning Star harness (.mstar/)\nnode_modules\ndist/\n.mstarc\n",
       );
       const result = validateGitignore(root);
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
- // Unknown kind — reports the set needing the fewest additions (.mstar/ here).
-      expect(result.message).toContain("!.mstar/knowledge/");
-      expect(result.message).toContain("!.mstar/knowledge/**");
-      expect(result.message).toContain("!.mstar/specs/");
-      expect(result.message).toContain("!.mstar/specs/**");
       expect(result.severity).toBe("medium");
+      // Unknown kind — the diagnostic reports the default .mstar/ set.
+      expect(result.message).toContain(".mstar/**");
+      expect(result.message).toContain("!.mstar/knowledge/");
+      expect(result.message).toContain("!.mstar/specs/**");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("harness root declaration (compass D25: ^!?/?\\.(?:mstar|agents)(?:/|$))", () => {
+  test("recognizes harness-root rules of both layouts, with or without a leading slash", () => {
+    for (const line of [".mstar", ".mstar/", ".mstar/**", "/.mstar/", ".mstar/plans/", ".agents", ".agents/", ".agents/**", "/.agents/"]) {
+      expect(hasHarnessRootDeclaration(line)).toBe(true);
+    }
+  });
+
+  test("recognizes negations of either root", () => {
+    for (const line of ["!.mstar/specs/", "!.mstar/specs/**", "!/.mstar/", "!.agents/knowledge/**"]) {
+      expect(hasHarnessRootDeclaration(line)).toBe(true);
+    }
+  });
+
+  test("recognizes a partial declaration — canonical completion is intentionally suppressed", () => {
+    expect(hasHarnessRootDeclaration(".mstar/**\n")).toBe(true);
+    expect(hasHarnessRootDeclaration("!.mstar/specs/\n")).toBe(true);
+    expect(hasHarnessRootDeclaration(".agents/knowledge/**\n")).toBe(true);
+  });
+
+  test("recognizes a declaration among unrelated rules, blank lines and CRLF (trimmed for recognition only)", () => {
+    expect(hasHarnessRootDeclaration("node_modules\r\n\r\n  .mstar/plans/  \r\ndist/\r\n")).toBe(true);
+  });
+
+  test("excludes comments, blank content and comment-only files", () => {
+    expect(hasHarnessRootDeclaration("")).toBe(false);
+    expect(hasHarnessRootDeclaration("\n \r\n\t\n")).toBe(false);
+    expect(hasHarnessRootDeclaration("# Morning Star harness (.mstar/)\n# .mstarc\n")).toBe(false);
+  });
+
+  test("excludes `.mstarc` alone and unrelated paths", () => {
+    expect(hasHarnessRootDeclaration(".mstarc\n")).toBe(false);
+    expect(hasHarnessRootDeclaration(".mstarc\nnode_modules\ndist/\n*.log\n")).toBe(false);
+    expect(hasHarnessRootDeclaration(".mstarish/\n.mstar-plans/\nagents/\n.agentsx/\n")).toBe(false);
+  });
+
+  test("declared-file validation is read-only (authored bytes and the directory stay untouched)", () => {
+    const root = tmpRoot("path-decl-readonly-");
+    try {
+      const authored = "# mine\r\nnode_modules\r\n.mstar/**\r\ndist/\r\n.mstar/**\r\n!.mstar/specs/**";
+      writeFileSync(join(root, ".gitignore"), authored);
+      const result = validateGitignore(root);
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("gitignore.author-declared");
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
+      expect(readdirSync(root)).toEqual([".gitignore"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -57,6 +57,7 @@ export {
   canonicalizeNearestExisting,
   detectHarnessKind,
   emitGitignoreSnippet,
+  hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
