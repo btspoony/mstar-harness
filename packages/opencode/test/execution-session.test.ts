@@ -32,7 +32,7 @@ import {
   ExecutionError,
   initializeExecutionAuthority,
   initializeStore,
-  prepareExecutionPlan,
+  mutateExecutionPlan,
   readExecutionAuthority,
   registerCatalogEntity,
   serializeExecutionValue,
@@ -193,7 +193,7 @@ async function seedBoundPlanSession(
     workflowId: planScope.workflowId,
     planId: planScope.planId,
   });
-  await prepareExecutionPlan(coordinatorContext, {
+  await mutateExecutionPlan(coordinatorContext, {
     operationId: "prepare-plan",
     session: coordinatorRef,
     expected: beforePrepare.token,
