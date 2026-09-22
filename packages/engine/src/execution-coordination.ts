@@ -1952,7 +1952,8 @@ export async function completeExecutionPlan(
       assertReportOnlyCompletionEvidence(committed, planId, "complete");
       assertAcceptedReviewDecision(handoff, planId, "complete");
       assertHandoffQaGate(handoff, sealed, planId, "complete");
-      assertPlanOwnedWrite(witness, "complete");
+      assertPreparedFresh(sealed.assignment_path, sealed);
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     } else if (isStandaloneDevelopmentWorkflow(committed)) {
       assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
       assertAcceptedReviewDecision(handoff, planId, "complete");
