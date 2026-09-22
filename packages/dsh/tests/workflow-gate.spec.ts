@@ -750,14 +750,16 @@ function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
  * installed Session surface (`header.id` / `seq` / `eventAt`, no `.events`).
  */
 function parentSession(id: string, cwd: string): {
-  header: { id: string; cwd: string }
+  header: { id: string; cwd: string; createdAt: number }
   log: unknown[]
   readonly seq: number
   eventAt(seq: number): unknown
 } {
   const log: unknown[] = []
   return {
-    header: { id, cwd },
+    // The real SessionHeader requires `createdAt` (the consumer's native
+    // incarnation input), so the fixture carries one too.
+    header: { id, cwd, createdAt: 1_700_000_000_000 },
     log,
     get seq(): number { return log.length },
     eventAt(seq: number): unknown { return log[seq] },
