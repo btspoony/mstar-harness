@@ -205,13 +205,30 @@ const SURFACE_DISPOSITIONS: Readonly<Record<ExecutionSurface, readonly Dispositi
  * `scripts/execution-consumer-manifest.ts`). A row whose manifest declares any
  * other id or capability refuses.
  */
-const CONSUMER_SURFACES: Readonly<Record<string, { consumer: string; capability: "writer" | "read-only" | "decision-only" }>> = {
-  "cli-writer": { consumer: "cli", capability: "writer" },
-  "engine-cli-package": { consumer: "engine", capability: "writer" },
-  "dsh-package": { consumer: "dsh", capability: "writer" },
-  "omp-package": { consumer: "omp", capability: "writer" },
-  "opencode-plugin": { consumer: "opencode", capability: "decision-only" },
-  "zcode-hook": { consumer: "zcode", capability: "writer" },
+const R1_CONSUMER_CAPABILITY: Readonly<Record<string, "writer" | "read-only" | "decision-only">> = {
+  engine: "writer",
+  cli: "writer",
+  dsh: "writer",
+  omp: "writer",
+  opencode: "decision-only",
+  zcode: "writer",
+};
+
+/**
+ * The R1 consumers each manifest surface covers. A single-consumer surface names
+ * its one consumer; `copied-instructions` covers the corpus the consumers that
+ * actually bundle it declare (R1 gives copies to DSh, OMP and OpenCode), so its
+ * branch validates the real `copiedInstructions` records instead of an arbitrary
+ * writer.
+ */
+const SURFACE_CONSUMERS: Readonly<Record<string, readonly string[]>> = {
+  "cli-writer": ["cli"],
+  "engine-cli-package": ["engine"],
+  "dsh-package": ["dsh"],
+  "omp-package": ["omp"],
+  "opencode-plugin": ["opencode"],
+  "zcode-hook": ["zcode"],
+  "copied-instructions": ["dsh", "omp", "opencode"],
 };
 
 const COVERAGE_ROOTS: readonly Root[] = ["control", "sdd", "host", "package"];
@@ -1170,18 +1187,19 @@ function expectConsumerManifest(context: RowContext, witness: CoverageWitness): 
  * declared capability must be the one R1 declares for this surface.
  */
 function consumerCodec(context: RowContext): unknown {
-  const expected = CONSUMER_SURFACES[context.surface];
-  if (expected === undefined) refuse(`${context.label} is not an R1 consumer surface.`);
+  const allowed = SURFACE_CONSUMERS[context.surface];
+  if (allowed === undefined) refuse(`${context.label} is not an R1 consumer surface.`);
   if (context.evidence.length !== 1) {
     refuse(`${context.label} carries ${context.evidence.length} evidence document(s); a consumer surface carries exactly one R1 producer manifest.`);
   }
   const manifest = expectConsumerManifest(context, context.evidence[0]);
-  if (manifest.id !== expected.consumer) {
-    refuse(`${context.label} carries the manifest of consumer ${manifest.id}; this surface covers ${expected.consumer}, and a manifest is never reused.`);
+  if (!allowed.includes(manifest.id)) {
+    refuse(`${context.label} carries the manifest of consumer ${manifest.id}; this surface covers ${allowed.join(", ")}, and a manifest is never reused.`);
   }
-  if (manifest.capability !== expected.capability) {
+  const requiredCapability = R1_CONSUMER_CAPABILITY[manifest.id];
+  if (manifest.capability !== requiredCapability) {
     refuse(
-      `${context.label} declares capability ${manifest.capability} while R1 declares ${expected.capability} for consumer ${expected.consumer}; a consumer ` +
+      `${context.label} declares capability ${manifest.capability} while R1 declares ${requiredCapability} for consumer ${manifest.id}; a consumer ` +
         `receipt cannot relabel the authority it provides.`,
     );
   }
