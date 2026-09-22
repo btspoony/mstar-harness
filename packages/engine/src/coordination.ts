@@ -5022,6 +5022,7 @@ async function classifyReconcile(
       plan_id: planId,
     });
   }
+  if (handoff.state === "completed") {
     if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
       assertStandaloneCompletedReplay(context, scope, handoff);
       assertReportOnlyCompletionEvidence(context, planId, "reconcile");
@@ -5042,6 +5043,7 @@ async function classifyReconcile(
     const head = gitRead(repository, ["rev-parse", integration.target_branch]);
     assertRecordedResult(repository, planId, integration, handoff.source_sha, head);
     return { outcome: "already-completed", apply: () => null };
+  }
   if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
