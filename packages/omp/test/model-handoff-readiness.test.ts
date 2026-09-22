@@ -1633,6 +1633,12 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
 
   test("a FILE binding on the ACTIVE root keeps the unchanged not-ready refusal", async () => {
     const f = await buildActiveFixture();
+    // A COMPLETE pre-activation binding and checkpoint: the derived snapshot and
+    // compass paths, and the coordinator envelope path the FILE arm requires
+    // (`coordinatorSessionPath` is only optional for an ACTIVE binding). A
+    // partial fixture would be refused by the shape checks and would never reach
+    // the route verdict this case is about.
+    const envelopePath = join(f.harness, "workflows", f.workflowId, "sessions", `${f.sessionId}.json`);
     const fileBinding: HandoffBinding = {
       sessionId: f.sessionId,
       workflowId: f.workflowId,
@@ -1640,11 +1646,50 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
       harnessRoot: f.harness,
       snapshotPath: join(f.harness, "workflows", f.workflowId, "snapshot.json"),
       compassPath: f.compassPath,
+      executionBinding: null,
     };
-    const readiness = await inspectPhase1Readiness(fileBinding, f.input);
+    const fileInput: Phase1CompletionInput = { ...f.input, coordinatorSessionPath: envelopePath };
+
+    // The retired documents a FILE answer would have come from really exist (a
+    // valid register row, the workflow's own snapshot and this session's
+    // coordinator envelope), so the refusal below cannot be attributed to their
+    // absence: it is the ACTIVE authority that owns the route.
+    writeJson(join(f.harness, "status.json"), {
+      version: 2,
+      updated_at: "2026-09-16",
+      workflows: [{ id: f.workflowId, type: "iteration", started_at: "2026-09-16", dir: `workflows/${f.workflowId}` }],
+    });
+    mkdirSync(join(f.harness, "workflows", f.workflowId, "sessions"), { recursive: true });
+    writeJson(join(f.harness, "workflows", f.workflowId, "snapshot.json"), {
+      schema_version: 1,
+      id: f.workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16T00:00:00.000Z",
+      compass_ref: `iterations/${f.workflowId}/delivery-compass.md`,
+      branch: { base: "main", integration: f.integrationBranch, target: "main" },
+      integration_worktree_path: f.integration,
+      plans: [{ id: f.planId, title: f.planId, file: f.planPath, status: "Todo" }],
+      coordination: {
+        coordinator: { session_id: f.sessionId, session_file: envelopePath, bound_at: "2026-09-16T00:00:00.000Z" },
+      },
+    });
+    writeJson(envelopePath, {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: f.sessionId,
+      workflow_id: f.workflowId,
+      harness_root: f.harness,
+    });
+
+    const readiness = await inspectPhase1Readiness(fileBinding, fileInput);
     expect(readiness.ready).toBe(false);
     if (readiness.ready) throw new Error("a file binding must refuse under an ACTIVE authority");
     expect([...readiness.codes]).toEqual(["execution.consumer-not-ready"]);
+    // No file-route identity check ran at all: the verdict carries no diagnostic,
+    // so the route verdict and a file-identity refusal are never conflated.
     expect(detailsOf(readiness)).toEqual([]);
   }, 120_000);
 });
