@@ -20,9 +20,10 @@
  *   lease represented rather than adopted, and a stable replay per verb; a
  *   staged manifest returns to legacy through `abort` with every source byte
  *   preserved.
- * - `refusals`: a missing coverage / attestation / loss confirmation and a
- *   reviewed inventory that does not match the manifest each refuse without
- *   writing authority; an unknown flag is exit 2.
+ * - `refusals`: a missing coverage / inventory / recovery-point receipt /
+ *   operation / operator / attestation / reason / loss confirmation, a coverage
+ *   set of another manifest, a malformed loss preview and an unknown flag each
+ *   refuse without writing authority.
  * - `recovery`: restore-preview inventories the recovery point and reports the
  *   authority rows that point predates as the loss (an `execution` domain
  *   difference at minimum, under the canonical digest), and restore replaces
@@ -712,6 +713,10 @@ describe("mstar store execution \u2014 the operator family over populated input"
     expectUsageRefusal(runCli(foreignArgs, fixture), "apply", "coverage");
     // A missing recovery point: the reviewed manifest alone never authorizes a write.
     expectUsageRefusal(runCli(withoutFlag(applyArgs, "--backup"), fixture), "apply", "--backup");
+    // Every mutating verb also requires the operation id (its replay key) and the
+    // accountable operator; neither is ever inferred.
+    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--operation"), fixture), "apply", "--operation");
+    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--operator"), fixture), "apply", "--operator");
     // Missing --attestation at the barrier.
     expectUsageRefusal(
       runCli(withoutFlag(activateFamily(fixture, reviewed, attestationPath, "refusal-activate"), "--attestation"), fixture),
@@ -757,6 +762,30 @@ describe("mstar store execution \u2014 the operator family over populated input"
       ], fixture),
       "restore",
       "--accept-loss-digest",
+    );
+    // A malformed loss digest in the preview document is the SAME usage class as
+    // a malformed --accept-loss-digest, decided before any engine IO.
+    const malformedPreview = join(fixture.root, "refusal-malformed-preview.json");
+    writeJson(malformedPreview, { lossDigest: "not-a-digest" });
+    expectUsageRefusal(
+      runCli([
+        "store",
+        "execution",
+        "restore",
+        "--preview",
+        malformedPreview,
+        "--accept-loss-digest",
+        "b".repeat(64),
+        "--operator",
+        OPERATOR,
+        "--authorization",
+        "cli C6 test",
+        "--harness",
+        fixture.harnessDir,
+        "--json",
+      ], fixture),
+      "restore",
+      "--preview",
     );
     // Coverage without the inventory it needs, and an unknown flag.
     expectUsageRefusal(

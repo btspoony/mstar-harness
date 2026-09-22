@@ -369,7 +369,16 @@ function requireAttestation(options: ExecutionMigrateOptions, verb: string): Act
   return attestation as unknown as ActivationAttestation;
 }
 
-/** The loss preview `restore` acts on, verbatim as `restore-preview --out` wrote it. */
+/** §7/§8 the canonical loss digest shape: the same rule for the preview's own digest and the approval. */
+const LOSS_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * The loss preview `restore` acts on, verbatim as `restore-preview --out` wrote
+ * it. Its own `lossDigest` is checked with the SAME rule as the operator's
+ * `--accept-loss-digest`, so a malformed document is a usage refusal here
+ * instead of reaching the engine's loss gate as a domain refusal: the two flags
+ * of one boundary must not disagree about what a digest is.
+ */
 function requireRecoveryPreview(options: ExecutionMigrateOptions, verb: string): ExecutionRecoveryPreview {
   const preview = requireJsonObject(
     stringFlag(options, "preview"),
@@ -379,8 +388,11 @@ function requireRecoveryPreview(options: ExecutionMigrateOptions, verb: string):
     "`restore-preview --out` writes that preview",
   );
   const lossDigest = preview["lossDigest"];
-  if (typeof lossDigest !== "string" || lossDigest.trim() === "") {
-    usage(`${verb}: --preview carries no loss digest; it is not the document \`restore-preview\` produced`);
+  if (typeof lossDigest !== "string" || !LOSS_DIGEST_PATTERN.test(lossDigest)) {
+    usage(
+      `${verb}: --preview carries no canonical loss digest; it is not the document \`restore-preview\` produced (its own \`lossDigest\` is that ` +
+        "inventory's 64-hex digest)",
+    );
   }
   return preview as unknown as ExecutionRecoveryPreview;
 }
@@ -388,7 +400,7 @@ function requireRecoveryPreview(options: ExecutionMigrateOptions, verb: string):
 /** §7/§8 the loss the operator accepted: the exact digest, with no default yes. */
 function requireLossDigest(options: ExecutionMigrateOptions, verb: string): string {
   const value = requireFlagValue(stringFlag(options, "acceptLossDigest"), "--accept-loss-digest", verb, "approved-loss-digest");
-  if (!/^[0-9a-f]{64}$/.test(value)) {
+  if (!LOSS_DIGEST_PATTERN.test(value)) {
     usage(
       `${verb}: --accept-loss-digest must be the exact 64-hex lossDigest of the preview the operator read; a prefix, a hash of something else ` +
         "and a plain acknowledgement are none of them an approval",
