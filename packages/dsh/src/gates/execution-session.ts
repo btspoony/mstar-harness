@@ -6,7 +6,6 @@ import {
   serializeExecutionValue,
   type ExecutionBinding,
   type ExecutionCaller,
-  type ExecutionSessionRef,
 } from '@mstar-harness/engine'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
@@ -96,8 +95,14 @@ export function runExecutionCommand(argv: readonly string[], env: NodeJS.Process
 }
 
 async function handleExecutionCommand(invocation: CommandInvocation, resolver: HarnessResolver): Promise<CommandResult> {
-  const request = parseExecutionRequest(invocation.rawInput.trim())
   const facts = nativeFacts(invocation)
+  // Fail closed before ANY operation (and before the harness probe): a known
+  // leaf/subagent seat may never adopt, clear or launch an execution, so it can
+  // never obtain a writer seat or hand a coordinator identity to a child.
+  if (facts.leaf) {
+    throw new Error('known leaf sessions cannot adopt, clear, or launch execution')
+  }
+  const request = parseExecutionRequest(invocation.rawInput.trim())
   const harnessDir = resolver.forWorkspace(facts.cwd)
   if (harnessDir === null) throw new Error('execution harness is unavailable for this native session')
   if (request.operation === 'clear') {
