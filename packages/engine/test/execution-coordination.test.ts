@@ -2639,11 +2639,12 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# rewritten after the replay preflight\n");
     });
     try {
+      const token = await planTokenOf(fixture, OWN_PLAN);
       const refusal = await refusalOf(() =>
         planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only-digests", {
           kind: "reconcile",
           handoffId,
-        }, await planTokenOf(fixture, OWN_PLAN)),
+        }, token),
       );
       expect(refusal.code).toBe("coordination.evidence-stale");
       expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(state);
