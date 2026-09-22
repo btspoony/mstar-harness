@@ -265,7 +265,17 @@ export type ExecutionMigrationInput = {
   context: StoreContext;
   operationId: string;
   operator: string;
-  inventoryPath: string;
+  /**
+   * §4.2 the explicit operator inventory. When it is named, discovery reads
+   * ONLY that document for the host/package/injector roots and their evidence.
+   * When it is absent, the discovery scope is the CONTROL ROOT ALONE (`sdd`,
+   * `host` and `package` roots do not exist for that manifest, and the host
+   * session / SDD / consumer / injector / recovery rows are absent BY DECLARED
+   * SCOPE) - the scope is recorded in the hashed manifest as a null
+   * `inventoryPath`, so an absence is never a silent guess and a later
+   * activation under any other inventory refuses on the manifest hash.
+   */
+  inventoryPath?: string;
 };
 
 /** §6: one source byte witness the manifest is reviewed against. */
@@ -302,9 +312,10 @@ export type ExecutionManifestSurface = Readonly<{
 /** §4.2 the canonical configured roots every witness path is relative to. */
 export type ExecutionMigrationRoots = Readonly<{
   control: string;
-  sdd: string;
-  host: string;
-  package: string;
+  /** Present only when the explicit inventory named that root (a null scope has none). */
+  sdd?: string;
+  host?: string;
+  package?: string;
 }>;
 
 /** §4.2 one explicit host-session evidence pointer: one export per declared `(host, sessionId)`. */
@@ -365,6 +376,12 @@ export type ExecutionManifest = {
   root: string;
   /** The canonical configured roots every surface witness path is relative to. */
   roots: ExecutionMigrationRoots;
+  /**
+   * §4.2 the discovery scope this manifest was reviewed under: the explicit
+   * inventory path, or `null` for a control-root-only scope. It is part of the
+   * content hash, so an absence is a declared fact rather than a guess.
+   */
+  inventoryPath: string | null;
   sources: ExecutionSourceWitness[];
   /** Digest of the core content the import writes: root bytes, snapshot bytes, sealed inputs. */
   coreHash: string;
@@ -508,12 +525,12 @@ function resolveMigrationInput(input: ExecutionMigrationInput | undefined, verb:
     );
   }
   assertOperationId(input.operationId);
-  if (!isNonEmptyString(input.inventoryPath) || input.inventoryPath.trim() === "") {
+  if (input.inventoryPath !== undefined && (!isNonEmptyString(input.inventoryPath) || input.inventoryPath.trim() === "")) {
     throw new ExecutionError(
       "execution.scope-mismatch",
-      `${verb} requires the explicit inventory path (a nonblank string): the host/package/injector roots and the per-workflow ` +
-        `native-session evidence are named by that document, and the migration never scans a home directory or a credentials store ` +
-        `for them.`,
+      `${verb} was handed a blank inventory path. The inventory names the host/package/injector roots and the per-workflow ` +
+        `native-session evidence, and a blank path is neither a named document nor an explicit "control root only" scope; the ` +
+        `migration never scans a home directory or a credentials store.`,
     );
   }
   if (!isNonEmptyString(input.operator) || input.operator.trim() === "") {
@@ -656,8 +673,8 @@ type DiscoveredSources = {
   roots: ExecutionMigrationRoots;
   rootPath: string;
   rootDoc: StatusV2Doc;
-  inventoryPath: string;
-  inventory: ExecutionMigrationInventory;
+  inventoryPath: string | null;
+  inventory: ExecutionMigrationInventory | null;
   workflows: DiscoveredWorkflow[];
   witnesses: ExecutionSourceWitness[];
   deferred: ExecutionDeferredSurface[];
@@ -771,7 +788,7 @@ function configuredRootOf(roots: ExecutionMigrationRoots, path: string, what: st
   let best: { root: CoverageWitness["root"]; dir: string } | null = null;
   for (const rootName of ROOT_ORDER) {
     const dir = roots[rootName];
-    if (!isPathWithin(dir, path)) continue;
+    if (dir === undefined || !isPathWithin(dir, path)) continue;
     if (best !== null && canonicalPath(best.dir).length === canonicalPath(dir).length) {
       throw conflict(
         `${what} at ${path} lies under two equally specific configured roots (${best.root} and ${rootName}); a witness belongs to ` +
@@ -782,7 +799,8 @@ function configuredRootOf(roots: ExecutionMigrationRoots, path: string, what: st
   }
   if (best === null) {
     throw conflict(
-      `${what} at ${path} lies under none of the configured roots (${ROOT_ORDER.map((name) => `${name}=${roots[name]}`).join(", ")}); ` +
+      `${what} at ${path} lies under none of the configured roots ` +
+        `(${ROOT_ORDER.filter((name) => roots[name] !== undefined).map((name) => `${name}=${roots[name]}`).join(", ") || "control only"}); ` +
         `an inventory path is never accepted from outside the roots the manifest pins.`,
     );
   }
@@ -1241,7 +1259,7 @@ function readConsumerDeclaration(input: { path: string; consumerId: string; what
   if (document.consumers.length !== 1) {
     throw conflict(
       `${what} carries ${document.consumers.length} consumer entries while the coverage row decodes exactly ONE. This is a cross-package encoding conflict ` +
-        `between the aggregate repository producer artifact and the reviewed per-consumer substrate: C3 reports it and stages nothing — it never selects, ` +
+        `between the aggregate repository producer artifact and the reviewed per-consumer substrate: C3 reports it and stages nothing - it never selects, ` +
         `reduces, reformats or rewrites a producer artifact to fit the decoder.`,
     );
   }
@@ -1255,7 +1273,7 @@ function readConsumerDeclaration(input: { path: string; consumerId: string; what
   }
   if (serializeExecutionValue(document) !== text) {
     throw conflict(
-      `${what} is not canonical §3.1 JSON with one terminal LF, so the reviewed consumer substrate cannot decode it (the repository producer serializes with ` +
+      `${what} is not canonical section 3.1 JSON with one terminal LF, so the reviewed consumer substrate cannot decode it (the repository producer serializes with ` +
         `two-space indentation). This is a cross-package encoding conflict reported to the producers, never resolved by rewriting the artifact here; ` +
         `nothing was staged.`,
     );
@@ -1400,7 +1418,7 @@ function consumerDiscoveryProof(input: {
       return witness;
     });
 
-  const trees: ConsumerDiscoveryProof["trees"] = [];
+  const trees: Array<ConsumerDiscoveryProof["trees"][number]> = [];
   const addTrees = (treeRoots: readonly string[], kind: "source" | "generated"): void => {
     for (const treeRoot of treeRoots) {
       const entries = consumerTreeEntries({
@@ -1425,7 +1443,7 @@ function consumerDiscoveryProof(input: {
   addTrees(declaration.sourceTrees, "source");
   addTrees(declaration.generatedTrees, "generated");
 
-  const copies: ConsumerDiscoveryProof["copies"] = [];
+  const copies: Array<ConsumerDiscoveryProof["copies"][number]> = [];
   for (const copy of declaration.copies) {
     const sourceEntries = consumerTreeEntries({
       ledger,
@@ -1637,7 +1655,7 @@ function rowLabel(surface: ExecutionSurface, workflowId: string | null): string 
  * byte witnesses, the §4.1 per-row source assignment and the core digest.
  * Writes nothing, reads no home directory and touches no credentials.
  */
-function discoverExecutionSources(context: StoreContext, input: { inventoryPath: string }): DiscoveredSources {
+function discoverExecutionSources(context: StoreContext, input: { inventoryPath: string | null }): DiscoveredSources {
   const root = controlRootOf(context);
   const rootPath = join(root, "status.json");
   if (!existsSync(rootPath)) {
@@ -1663,18 +1681,25 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
   const doc = rootDoc as StatusV2Doc;
 
   const inventoryPath = input.inventoryPath;
-  const { inventory, bytes: inventoryBytes } = readInventoryFile(inventoryPath);
-  const roots: ExecutionMigrationRoots = {
-    control: root,
-    sdd: canonicalPath(inventory.roots.sdd),
-    host: canonicalPath(inventory.roots.host),
-    package: canonicalPath(inventory.roots.package),
-  };
-  const distinct = new Set(ROOT_ORDER.map((name) => canonicalPath(roots[name])));
-  if (distinct.size !== ROOT_ORDER.length) {
+  const declared = inventoryPath === null ? null : readInventoryFile(inventoryPath);
+  const inventory: ExecutionMigrationInventory | null = declared === null ? null : declared.inventory;
+  const inventoryBytes: Buffer | null = declared === null ? null : declared.bytes;
+  const roots: ExecutionMigrationRoots =
+    declared === null
+      ? { control: root }
+      : {
+          control: root,
+          sdd: canonicalPath(declared.inventory.roots.sdd),
+          host: canonicalPath(declared.inventory.roots.host),
+          package: canonicalPath(declared.inventory.roots.package),
+        };
+  const presentRoots = ROOT_ORDER.filter((name) => roots[name] !== undefined);
+  const distinct = new Set(presentRoots.map((name) => canonicalPath(roots[name] as string)));
+  if (distinct.size !== presentRoots.length) {
     throw conflict(
-      `the configured roots are not distinct directories (${ROOT_ORDER.map((name) => `${name}=${roots[name]}`).join(", ")}); a witness ` +
-        `path would belong to more than one root, and a root is never an alias of another.`,
+      `the configured roots are not distinct directories ` +
+        `(${presentRoots.map((name) => `${name}=${roots[name]}`).join(", ")}); a witness path would belong to more than one root, ` +
+        `and a root is never an alias of another.`,
     );
   }
 
@@ -1771,15 +1796,17 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     deferred.push(deferredSurface(ENGINE_STATUS_SURFACE, []));
   }
 
-  const inventoryWitness = witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
-  if (inventoryWitness.sha256 !== sha256Of(inventoryBytes)) {
-    throw conflict(`the inventory ${inventoryPath} changed while it was read; nothing was staged.`);
+  if (inventoryPath !== null && inventoryBytes !== null) {
+    const inventoryWitness = witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
+    if (inventoryWitness.sha256 !== sha256Of(inventoryBytes)) {
+      throw conflict(`the inventory ${inventoryPath} changed while it was read; nothing was staged.`);
+    }
   }
 
   // ── the explicit host-session inventory (§4.2) ────────────────────────────
   const hiddenRows = new Map<string, { sessions: Array<{ host: "omp"; sessionId: string; source: CoverageWitness }>; attestation: CoverageWitness | null }>();
   const seenHostSessions = new Set<string>();
-  for (const declaration of inventory.hostSessions) {
+  for (const declaration of inventory?.hostSessions ?? []) {
     if (!seenIds.has(declaration.workflowId)) {
       throw conflict(
         `the inventory declares the ${declaration.host} native session ${declaration.sessionId} for workflow ` +
@@ -1811,7 +1838,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
 
   // ── the explicit SDD evidence inventory (§4.1 sdd-evidence) ───────────────
   const sddRows = new Map<string, CoverageWitness[]>();
-  for (const declaration of inventory.sddEvidence) {
+  for (const declaration of inventory?.sddEvidence ?? []) {
     if (!seenIds.has(declaration.workflowId)) {
       throw conflict(`the inventory declares SDD evidence for workflow ${declaration.workflowId}, which no discovered workflow owns.`);
     }
@@ -1821,7 +1848,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
 
   // ── the explicit consumer manifests (§4.1 consumer-v1 surfaces) ───────────
   const consumerRows = new Map<ExecutionSurface, { sources: CoverageWitness[]; proof: ConsumerDiscoveryProof; evidence: CoverageWitness }>();
-  for (const declaration of inventory.consumers) {
+  for (const declaration of inventory?.consumers ?? []) {
     if (!CONSUMER_SURFACES.includes(declaration.surface)) {
       throw conflict(`${inventoryPath} names ${declaration.surface} as a consumer surface; only the R1 consumer surfaces carry a consumer-v1 manifest.`);
     }
@@ -1829,15 +1856,19 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
       throw conflict(`${inventoryPath} names two consumer manifests for ${declaration.surface}; one surface covers one declared consumer.`);
     }
     const what = `the ${declaration.surface} consumer manifest`;
+    const packageRoot = roots.package;
+    if (packageRoot === undefined) {
+      throw conflict(`${what} was declared without a configured package root; a consumer closure is relative to the root the manifest pins.`);
+    }
     const evidence = witnessForPath(ledger, roots, declaration.path, what, "evidence");
     const parsed = readConsumerDeclaration({ path: declaration.path, consumerId: declaration.consumerId, what });
-    const { proof, sources } = consumerDiscoveryProof({ ledger, packageRoot: roots.package, declaration: parsed, what });
+    const { proof, sources } = consumerDiscoveryProof({ ledger, packageRoot, declaration: parsed, what });
     consumerRows.set(declaration.surface, { sources, proof, evidence });
   }
 
   // ── the explicit injected-store inventory (§4.2 retained ArtifactStore) ───
   let injectorRow: { sources: CoverageWitness[]; evidence: CoverageWitness } | null = null;
-  if (inventory.injectors.length > 0) {
+  if ((inventory?.injectors.length ?? 0) > 0 && inventory !== null) {
     if (inventory.injectorInventory === null) {
       throw conflict(
         `${inventoryPath} lists ${inventory.injectors.length} deployed injector module(s) but names no ` +
@@ -1850,7 +1881,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     const evidence = witnessForPath(ledger, roots, inventory.injectorInventory, "the injector inventory document", "evidence");
     verifyInjectorInventory(inventory.injectorInventory, modules, "the injector inventory document");
     injectorRow = { sources: modules, evidence };
-  } else if (inventory.injectorInventory !== null) {
+  } else if (inventory !== null && inventory.injectorInventory !== null) {
     // An explicitly EMPTY deployment inventory is discovery-absent evidence: it
     // is pinned as a witness, but it never fabricates a populated retained row.
     pinnedExtras.push(witnessForPath(ledger, roots, inventory.injectorInventory, "the empty injector inventory document", "evidence"));
@@ -1858,7 +1889,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
 
   // ── the explicit recovery point (§4.1 backup-recovery) ────────────────────
   let backupRow: { sources: CoverageWitness[]; evidence: CoverageWitness } | null = null;
-  if (inventory.backup !== null) {
+  if (inventory !== null && inventory.backup !== null) {
     const image = witnessForPath(ledger, roots, inventory.backup.image, "the backup image", "deferred");
     const evidence = witnessForPath(ledger, roots, inventory.backup.inventory, "the recovery inventory document", "evidence");
     verifyRecoveryInventory(inventory.backup.inventory, image, "the recovery inventory document");
@@ -2140,6 +2171,12 @@ export async function collectExecutionCoverage(input: ExecutionMigrationCoverage
   if (canonicalPath(input.inventoryPath) !== canonicalPath(resolved.inventoryPath)) {
     throw conflict("the coverage request carries two different inventory paths; one request names one discovery.");
   }
+  if (resolved.inventoryPath === undefined) {
+    throw conflict(
+      "coverage collection requires the explicit inventory path: a manifest reviewed under a control-root-only scope has no non-control " +
+        "evidence to collect, and re-previewing with the inventory is the only way to cover those surfaces.",
+    );
+  }
   const discovered = discoverExecutionSources(resolved.context, { inventoryPath: resolved.inventoryPath });
   return coverageFromDiscovery({ discovered, manifest, manifestHash: executionManifestHash(manifest) }).set;
 }
@@ -2185,6 +2222,7 @@ function catalogRevisionOf(db: StoreDb): number {
  */
 export async function previewExecutionMigration(input: ExecutionMigrationInput): Promise<ExecutionManifest> {
   const { context, inventoryPath } = resolveMigrationInput(input, "preview");
+  const inventory = inventoryPath ?? null;
   const handle = await openStore(context, "read");
   try {
     const execution = handle.execution;
@@ -2209,7 +2247,7 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
           `resolved with the legacy reconcile while JSON still owns execution (\u00a77); nothing was staged.`,
       );
     }
-    const discovered = discoverExecutionSources(context, { inventoryPath });
+    const discovered = discoverExecutionSources(context, { inventoryPath: inventory });
     // §7 the pin half of the inventory: the frozen selections and any committed
     // catalog binding must agree, checked here so a disagreement is a preview
     // verdict rather than a surprise at apply time.
@@ -2221,6 +2259,7 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
       schemaVersion: handle.schemaVersion,
       root: discovered.root,
       roots: discovered.roots,
+      inventoryPath: discovered.inventoryPath,
       sources: discovered.witnesses,
       coreHash: discovered.coreHash,
       deferred: discovered.deferred,
@@ -2713,6 +2752,7 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
  */
 export async function applyExecutionMigration(input: ExecutionMigrationApplyInput): Promise<ExecutionMigrationReceipt> {
   const { context, inventoryPath } = resolveMigrationInput(input, "apply");
+  const inventory = inventoryPath ?? null;
   const manifest = requireReviewedManifest(input.manifest, input.manifestHash, context);
   // §6 item 2: the recovery point is re-verified against the reviewed authority
   // and the bytes it names BEFORE any lock is taken or any byte is written.
@@ -2727,7 +2767,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
   // runs again inside the transaction and every witness is compared against the
   // reviewed manifest, so a register that changed between the two cannot reach
   // the rows.
-  const prelock = discoverExecutionSources(context, { inventoryPath });
+  const prelock = discoverExecutionSources(context, { inventoryPath: inventory });
   const workflowLocks = [...prelock.workflows]
     .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
     .map((workflow) => join(workflow.dir, WORKFLOW_SNAPSHOT_FILE));
@@ -2738,7 +2778,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
       () =>
         withAllLocks(workflowLocks, () =>
           withExecutionTransaction(context, (tx) => {
-            const discovered = discoverExecutionSources(context, { inventoryPath });
+            const discovered = discoverExecutionSources(context, { inventoryPath: inventory });
             // §7: a non-committed catalog operation blocks staging outright —
             // the shared rule below compares the reviewed claim, but a journal
             // that is genuinely pending refuses whatever the manifest claims.
@@ -3308,6 +3348,7 @@ export async function activateExecutionMigration(
   input: ExecutionMigrationActivationInput,
 ): Promise<ExecutionMigrationReceipt> {
   const { context, operator, inventoryPath } = resolveMigrationInput(input, "activate");
+  const inventory = inventoryPath ?? null;
   const manifestId = requireManifestRef(input.manifestId, "activate", "manifestId");
   const manifestHash = requireManifestRef(input.manifestHash, "activate", "manifestHash");
   if (!isNonEmptyString(input.coverageDigest) || !/^[0-9a-f]{64}$/.test(input.coverageDigest)) {
@@ -3349,7 +3390,7 @@ export async function activateExecutionMigration(
   }
   requireCurrentManifest(known, "activation");
 
-  const prelock = discoverExecutionSources(context, { inventoryPath });
+  const prelock = discoverExecutionSources(context, { inventoryPath: inventory });
   const workflowLocks = [...prelock.workflows]
     .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
     .map((workflow) => join(workflow.dir, WORKFLOW_SNAPSHOT_FILE));
@@ -3416,7 +3457,7 @@ export async function activateExecutionMigration(
                   `resolved with the legacy reconcile while JSON still owns execution (\u00a77); nothing was activated.`,
               );
             }
-            const discovered = discoverExecutionSources(context, { inventoryPath });
+            const discovered = discoverExecutionSources(context, { inventoryPath: inventory });
             assertReviewedManifestHolds({
               manifest,
               discovered,
