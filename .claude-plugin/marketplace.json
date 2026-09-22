@@ -11,7 +11,7 @@
       "version": "3.11.2",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "displayName": "Morning Star Harness",
-      "displayName_i18n": { "zh-CN": "启明星工作流" },
+      "displayName_i18n": { "zh-CN": "晨星工作流" },
       "icon": "https://raw.githubusercontent.com/btspoony/mstar-harness/main/assets/icon.png",
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
       "category": "Productivity"
