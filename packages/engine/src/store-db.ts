@@ -900,6 +900,11 @@ create table execution_migrations(
 );
 `;
 
+/** Next append-only execution schema change: coverage is optional during staging. */
+export const MIGRATION_5_SQL = `
+alter table execution_migrations add column coverage_json text;
+`;
+
 export type Migration = { version: number; name: string; sql: string };
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
@@ -908,6 +913,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
+  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
 ];
 
 /** Execution tables created by migration 4 — the executable form of §2.2. */
@@ -1399,6 +1405,44 @@ export function assertExecutionFileReadAllowed(context: StoreContext): void {
     `The execution authority of ${probe.dbPath} is ACTIVE \u2014 this legacy file reader would serve ` +
       `retired root/snapshot JSON as authority. Nothing was read: consume the execution DB adapter instead.`,
   );
+}
+/**
+ * Execute a synchronous read-only callback against the current execution
+ * authority. This is the guard used immediately before file-native commits:
+ * it reuses the probe's inode-stable read connection and never opens a second
+ * asynchronous driver path.
+ */
+export function withExecutionReadGuard<T>(
+  context: StoreContext,
+  body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
+): T {
+  const probe = probeExecutionAuthority(context);
+  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
+  if (probe.state !== "active") {
+    throw new StoreError(
+      "execution.consumer-not-ready",
+      "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
+    );
+  }
+  const db = probeConnectionFor(probe.dbPath);
+  if (db === null) {
+    throw new StoreError("store.not-initialized", "The execution store disappeared before the read-only assertion.");
+  }
+  const store = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get() as
+    | { store_id?: unknown; authority_epoch?: unknown }
+    | undefined;
+  const execution = db.prepare("select authority_state from execution_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (
+    store === undefined ||
+    typeof store.store_id !== "string" ||
+    typeof store.authority_epoch !== "number" ||
+    execution?.authority_state !== "active"
+  ) {
+    throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
+  }
+  return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
 
 export type StoreHandle = {

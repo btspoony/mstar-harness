@@ -641,7 +641,13 @@ function assertLeaseOwnership(
   if (sessionRow === undefined) {
     throw corrupt(
       `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ` +
-        `${planId} has no active session of that identity`,
+        `${planId} has no session of that identity`,
+    );
+  }
+  if (sessionRow.state !== "active") {
+    throw corrupt(
+      `${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ` +
+        `${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`,
     );
   }
   if (sessionRow.epoch !== ownerEpoch) {
@@ -758,8 +764,9 @@ function readWorkflowView(
   }
 
   const sessions = db
-    .prepare("select role, session_id, plan_id, epoch from execution_sessions where workflow_id = ? and state = 'active'")
+    .prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?")
     .all(workflowId) as Array<Record<string, unknown>>;
+  const activeSessions = sessions.filter((entry) => entry.state === "active");
   const leases = db
     .prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?")
     .all(workflowId) as Array<Record<string, unknown>>;
@@ -767,7 +774,7 @@ function readWorkflowView(
     .prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?")
     .all(workflowId) as Array<Record<string, unknown>>;
   const integrationRow = readIntegrationLeaseRow(db, workflowId);
-  const coordinatorRow = sessions.find((row) => row.role === "coordinator");
+  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
   const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
 
   const planRows = db
@@ -833,7 +840,7 @@ function readWorkflowView(
     // difference this authority has: the bound plan session lives in
     // `execution_sessions`, never in the block, so `handoff`'s "requires a bound
     // plan session" half is checked against the plan's own session row here.
-    const sessionRow = sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const sessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState as PlanRow),
@@ -3109,5 +3116,43 @@ export async function readExecutionPlan(
   return withExecutionReadTransaction(context, (tx) => {
     const witness = readExecutionPlanWitness(tx, read);
     return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
+}
+
+/**
+ * Read one active session row without changing its revision.
+ */
+export async function readExecutionSession(
+  context: ExecutionContext,
+  session: ExecutionSessionRef,
+): Promise<ExecutionRead<ExecutionSessionRef>> {
+  if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
+    throw invalidInput("an execution session reference needs a store id and positive safe epoch");
+  }
+  if (
+    session.workflowId !== context.caller.workflowId ||
+    session.role !== context.caller.role ||
+    session.sessionId !== context.caller.sessionId ||
+    session.planId !== context.caller.planId
+  ) {
+    throw new CoordinationError(
+      "coordination.session-mismatch",
+      "the trusted caller does not independently match the supplied execution session reference",
+    );
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, session.storeId, session.epoch);
+    const live = liveSession(tx, {
+      workflowId: session.workflowId,
+      role: session.role,
+      sessionId: session.sessionId,
+      planId: session.planId,
+    });
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+    };
   });
 }
