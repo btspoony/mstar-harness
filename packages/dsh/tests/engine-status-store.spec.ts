@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  ENGINE_STATUS_MAINTENANCE_REASON,
   ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
   ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS,
   ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS,
@@ -32,7 +33,7 @@ import {
   updateWorkflowSessionBinding,
   writeEngineStatusSnapshot,
 } from '../src/engine-status-store.ts'
-import { WORKFLOW_LEDGER_LOCKDIR } from '../src/gates/agent-flow.ts'
+import { EXECUTION_MAINTENANCE_LOCKDIR, WORKFLOW_LEDGER_LOCKDIR } from '../src/gates/agent-flow.ts'
 
 const dirs: string[] = []
 
@@ -971,6 +972,46 @@ describe('engine-status snapshot store — execution binding adoption', () => {
     expect(readWorkflowSessionBinding(harness, 'session-a', '/workspace')).toMatchObject({
       kind: 'ok',
       binding: { executionBinding: canonical },
+    })
+  })
+})
+
+describe('engine-status snapshot store — execution maintenance exclusion', () => {
+  it('refuses both writes while the §4.3 maintenance key is held, and writes once it is released', () => {
+    const harness = freshHarnessDir()
+    const lockDir = join(harness, EXECUTION_MAINTENANCE_LOCKDIR)
+    mkdirSync(lockDir, { recursive: true })
+    try {
+      expect(writeEngineStatusSnapshot(harness, {
+        sessionId: 'ses_a',
+        cwd: '/proj',
+        turn: 1,
+        payload: payload(1),
+      })).toEqual({ kind: 'degraded', reason: ENGINE_STATUS_MAINTENANCE_REASON })
+      expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+        selectedWorkflowId: 'wf-a',
+        excludedBeforeSeq: 0,
+      })).toEqual({ kind: 'degraded', reason: ENGINE_STATUS_MAINTENANCE_REASON })
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true })
+    }
+    // No store was created inside the window — a refused write is not a
+    // partially written one ...
+    expect(existsSync(engineStatusSnapshotPath(harness))).toBe(false)
+    // ... and the very same calls succeed once the exclusion is released.
+    expect(writeEngineStatusSnapshot(harness, {
+      sessionId: 'ses_a',
+      cwd: '/proj',
+      turn: 1,
+      payload: payload(1),
+    }).kind).toBe('written')
+    expect(updateWorkflowSessionBinding(harness, 'ses_a', '/proj', {
+      selectedWorkflowId: 'wf-a',
+      excludedBeforeSeq: 0,
+    })).toEqual({ kind: 'written' })
+    expect(readWorkflowSessionBinding(harness, 'ses_a', '/proj')).toEqual({
+      kind: 'ok',
+      binding: { cwd: '/proj', selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 },
     })
   })
 })

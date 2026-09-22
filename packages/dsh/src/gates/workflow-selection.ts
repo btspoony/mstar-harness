@@ -666,8 +666,38 @@ export function clearExecutionBinding(harnessDir: string, sessionId: string, cwd
 }
 
 /**
+ * The canonical directory of one workflow's ledger target — the F-207
+ * boundary, in this order for a reason: `existsSync` rejects an absent dir, a
+ * dangling symlink and an unreadable parent WITHOUT throwing; the
+ * symlink-FOLLOWING `statSync` then rejects a non-directory (a symlink to a
+ * file is not a workflow dir); `realpathSync` runs LAST so only a verified
+ * directory is canonicalized — the ledger, its identity index and its cursor
+ * must live under ONE spelling of the dir, and a removal or replacement racing
+ * between the checks throws into the caller's refusal rather than yielding a
+ * path that never existed.
+ * @param root - the resolved `{WORKFLOW_DIR}`.
+ * @param workflowId - the selected lifecycle id (the dir's basename).
+ * @returns the canonical absolute dir, or `null` when it is not a real dir.
+ */
+function ledgerTargetDir(root: string, workflowId: string): string | null {
+  const dir = join(root, workflowId)
+  if (!existsSync(dir)) return null
+  try {
+    if (!statSync(dir).isDirectory()) return null
+    return realpathSync(dir)
+  } catch {
+    return null
+  }
+}
+
+/**
  * Resolve the explicit target consumed by the workflow ledger. Active targets
- * require a canonical C1 binding and a current SQL session row.
+ * require a canonical C1 binding AND a current SQL session row; the legacy
+ * route is served only when the source read says the pre-activation files are
+ * authoritative. This resolver is the single selection point of the ledger's
+ * explicit route, but it does NOT make resolve→append atomic: F2 holds the
+ * maintenance exclusion around its own append, this call runs outside it, so an
+ * activation may still complete between the two (recorded residual seam §4.3).
  */
 export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
   if (sessionId === '' || cwd === '') return null
@@ -680,18 +710,15 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
   const hint: SessionHint = { sessionId, cwd, ...(selected === undefined ? {} : { selectedWorkflowId: selected }) }
   const source = await readExecutionWorkflowSource({ harnessDir }, hint)
   if (source.kind === 'unavailable' || source.kind === 'error') return null
+  const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir })
   if (source.kind === 'files') {
     if (executionBinding !== undefined && executionBinding !== null) return null
     const legacy = resolveActiveWorkflow(harnessDir, hint)
     if (legacy.kind !== 'active') return null
-    const targetDir = join(resolveWorkflowDir(harnessDir, { harnessDir }), legacy.workflowId)
-    if (!existsSync(targetDir)) return null
-    try {
-      if (!statSync(targetDir).isDirectory()) return null
-      return { workflowId: legacy.workflowId, workflowDir: realpathSync(targetDir), sessionId, source: 'legacy', epoch: null }
-    } catch {
-      return null
-    }
+    const targetDir = ledgerTargetDir(workflowRoot, legacy.workflowId)
+    return targetDir === null
+      ? null
+      : { workflowId: legacy.workflowId, workflowDir: targetDir, sessionId, source: 'legacy', epoch: null }
   }
   if (executionBinding === undefined || executionBinding === null) return null
   if (executionBinding.harnessRoot !== harnessDir ||
@@ -710,14 +737,10 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
   } catch {
     return null
   }
-  const targetDir = join(resolveWorkflowDir(harnessDir, { harnessDir }), source.workflowId)
-  if (!existsSync(targetDir)) return null
-  try {
-    if (!statSync(targetDir).isDirectory()) return null
-    return { workflowId: source.workflowId, workflowDir: realpathSync(targetDir), sessionId, source: 'execution', epoch: source.epoch }
-  } catch {
-    return null
-  }
+  const targetDir = ledgerTargetDir(workflowRoot, source.workflowId)
+  return targetDir === null
+    ? null
+    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, source: 'execution', epoch: source.epoch }
 }
 
 /** The plan rows of one materialized snapshot ([] when the doc has no plans

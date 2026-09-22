@@ -81,7 +81,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { withWorkflowDirLock } from './gates/agent-flow.ts'
+import { EXECUTION_MAINTENANCE_LOCKDIR, withExecutionMaintenanceLock, withWorkflowDirLock } from './gates/agent-flow.ts'
 
 import type { ExecutionBinding } from '@mstar-harness/engine'
 /** Envelope schema version carried by the snapshot file (`sv`). */
@@ -109,6 +109,21 @@ export const ENGINE_STATUS_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
  * panel.
  */
 export const ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS = 250
+/**
+ * §4.3 outer-exclusion budget (ms): both write paths take the SAME
+ * `.execution-maintenance` key the engine's `withExecutionMaintenanceLock`
+ * takes (activation / migration / restore) BEFORE their directory lock, so a
+ * plugin write never slips into such a window with the ordering the engine
+ * documents (maintenance → directory). The wait is bounded by the same
+ * reasoning as {@link ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS}: an emission runs
+ * on the per-turn `agent/pre-step` path, so a held key must refuse quickly
+ * rather than stall the agent step (and the `/api` gateway in this process).
+ */
+export const ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS = 250
+/** Poll interval (ms) for the maintenance exclusion; the wait is a bounded sync loop. */
+export const ENGINE_STATUS_MAINTENANCE_POLL_MS = 10
+/** Stable reason reported when the maintenance exclusion could not be taken. */
+export const ENGINE_STATUS_MAINTENANCE_REASON = 'execution-maintenance-active'
 /** Snapshot file location relative to `{HARNESS_DIR}`. */
 export const ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH = 'snapshots/engine-status.json'
 
@@ -566,7 +581,7 @@ export function writeEngineStatusSnapshot(
     // acquisition — otherwise the missing parent surfaces as ENOENT, not as
     // lock contention.
     mkdirSync(dir, { recursive: true })
-    return withWorkflowDirLock(dir, () => {
+    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
       const loaded = loadForWrite(harnessDir)
       // A store this build does not understand is not the writer's to replace:
       // refusing keeps every other session's snapshots (and the bytes the newer
@@ -626,7 +641,10 @@ export function writeEngineStatusSnapshot(
         evicted,
         ...(warn === undefined ? {} : { warn }),
       }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
+      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
+      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
+    })
   } catch (error) {
     // Remove ONLY this call's temp file: the lock may have failed before the
     // directory existed, and the name above is unique to this writer.
@@ -635,8 +653,22 @@ export function writeEngineStatusSnapshot(
     } catch {
       // best-effort cleanup only
     }
-    return { kind: 'degraded', reason: (error as Error)?.message ?? 'write-failed' }
+    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
   }
+}
+
+/**
+ * The stable reason of one refused store write. A refusal that names the
+ * maintenance lockdir is the §4.3 window (reported as
+ * {@link ENGINE_STATUS_MAINTENANCE_REASON} — both writers take that key, so an
+ * activation/restore window is the caller's expected state, not a mystery
+ * timeout); anything else keeps its own message.
+ */
+function pluginWriteFailureReason(harnessDir: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR))
+    ? ENGINE_STATUS_MAINTENANCE_REASON
+    : message === '' ? 'write-failed' : message
 }
 
 /**
@@ -808,7 +840,7 @@ export function updateWorkflowSessionBinding(
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
   try {
     mkdirSync(dir, { recursive: true })
-    return withWorkflowDirLock(dir, () => {
+    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
       const loaded = loadForWrite(harnessDir)
       if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
       const doc = loaded.doc
@@ -852,7 +884,10 @@ export function updateWorkflowSessionBinding(
       // is visible to the next read, never served from the pre-pick memo.
       bindingStoreMemos.delete(file)
       return { kind: 'written' as const }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
+      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
+      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
+    })
   } catch (error) {
     // Remove ONLY this call's temp file (writer-unique name, same rule as the
     // emission write).
@@ -861,6 +896,6 @@ export function updateWorkflowSessionBinding(
     } catch {
       // best-effort cleanup only
     }
-    return { kind: 'degraded', reason: (error as Error)?.message ?? 'write-failed' }
+    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
   }
 }
