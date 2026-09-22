@@ -33,8 +33,26 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  createFsStore,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionPlan,
+  readExecutionAuthority,
+  registerCatalogEntity,
+  setArtifactStore,
+} from "@mstar-harness/engine";
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef, ExecutionToken } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
-import type { HandoffBinding, HandoffBindingInput, Phase1CompletionInput, Phase1Readiness } from "../src/model-handoff-readiness";
+import type {
+  HandoffBinding,
+  HandoffBindingInput,
+  Phase1CompletionInput,
+  Phase1Readiness,
+} from "../src/model-handoff-readiness";
+import { executionBindingOf } from "../src/coordinator-identity";
 
 const SPECIALISTS = ["product-manager", "architect", "writing-specialist"] as const;
 const SCRATCH: string[] = [];
@@ -1166,4 +1184,465 @@ describe("E2 phase 1 readiness", () => {
     expect(stillRefused.ready).toBe(false);
     expect(codesOf(stillRefused)).toContain("push-unverified");
   }, 60_000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * The ACTIVE route (§6): DB root/workflow/plan views + real Git/artifact
+ * witnesses. No retired document (root register, workflow snapshot, session
+ * envelope) exists anywhere in these fixtures — a verdict that needed one could
+ * not be produced at all.
+ * ------------------------------------------------------------------------ */
+
+type ActiveFixture = Readonly<{
+  root: string;
+  main: string;
+  harness: string;
+  integration: string;
+  integrationBranch: string;
+  workflowId: string;
+  planId: string;
+  sessionId: string;
+  /** The DB's own coordinator seat, as `bindExecutionSession` returned it. */
+  coordinator: ExecutionSessionRef;
+  binding: HandoffBinding;
+  input: Phase1CompletionInput;
+  planPath: string;
+  /** A second real plan document that is NOT the row's registered pointer. */
+  movedPlanPath: string;
+  prepareEvidencePath: string;
+  reportPaths: readonly string[];
+  compassPath: string;
+}>;
+
+type ActiveFixtureOptions = {
+  compassStatus?: "locked" | "active";
+  /** Skip the DB `prepare` operation, so the plan row records no Prepare. */
+  skipPrepare?: boolean;
+  /** Bind this session id as the coordinator instead of the default one. */
+  sessionId?: string;
+};
+
+/** A canonical plain copy of an engine-returned session reference. */
+function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
+  return {
+    storeId: ref.storeId,
+    epoch: ref.epoch,
+    workflowId: ref.workflowId,
+    role: ref.role,
+    sessionId: ref.sessionId,
+    planId: ref.planId,
+  };
+}
+
+/** The scoped Assignment header block `parseAssignmentFile` accepts. */
+function assignmentText(input: {
+  harness: string;
+  workflowId: string;
+  planId: string;
+  planPath: string;
+  worktreePath: string;
+  sddDir: string;
+  branch: string;
+}): string {
+  return [
+    `# Assignment — ${input.planId} independent slice`,
+    "",
+    `**Control harness root**: ${input.harness}`,
+    `**Workflow id**: ${input.workflowId}`,
+    `**Plan id**: ${input.planId}`,
+    `**Plan Path**: ${input.planPath}`,
+    `**Worktree Path**: ${input.worktreePath}`,
+    `**Working branch**: ${input.branch}`,
+    `**SDD dir**: ${input.sddDir}`,
+    "**Execute as**: project-manager",
+    "**Execution scope**: plan",
+    "**Delegation**: allowed (plan-local subagents only)",
+    "**Prepare gate**: go",
+    "**QA gate**: mandatory",
+    "**Findings cleanup**: allow-residual",
+    "",
+    "Prepared plan for the ACTIVE-route readiness fixtures.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The real ACTIVE-authority fixture: a store upgraded to an execution authority,
+ * the plan registered in the catalog, one created workflow (running, with its
+ * branch anchors, compass reference, integration checkout and plan row), the
+ * coordinator bound under the host session id the binding adopts, the plan
+ * PREPARED from a real Assignment file, and the real artifact/Git witnesses the
+ * checkpoint samples.
+ */
+async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<ActiveFixture> {
+  const workflowId = "fixture-active-iteration";
+  const planId = "fixture-active-plan";
+  const sessionId = options.sessionId ?? "fixture-active-session-0001";
+  const integrationBranch = "iteration/fixture-active";
+
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-handoff-active-")));
+  SCRATCH.push(root);
+  const bare = join(root, "remote.git");
+  git(["init", "-q", "--bare", bare], root);
+  const main = join(root, "main");
+  git(["init", "-q", "-b", "main", main], root);
+  git(["config", "user.email", "fixture@example.invalid"], main);
+  git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, "README.md"), "fixture\n");
+  git(["add", "README.md"], main);
+  git(["commit", "-qm", "init"], main);
+  git(["remote", "add", "origin", bare], main);
+  git(["push", "-q", "-u", "origin", "main"], main);
+
+  const integration = join(root, "integration");
+  git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
+  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+
+  // No `status.json` and no `workflows/` directory: the execution authority is
+  // initialized over an empty execution workspace, so no retired document can
+  // silently answer any part of this route.
+  const harness = join(main, ".mstar");
+  const plansDir = join(harness, "plans");
+  const sddDir = join(harness, "sdd", planId);
+  const iterationDir = join(harness, "iterations", workflowId);
+  const guidesDir = join(iterationDir, "guides");
+  for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
+
+  const planPath = join(plansDir, `${planId}.md`);
+  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  const movedPlanPath = join(plansDir, "moved", `${planId}.md`);
+  mkdirSync(dirname(movedPlanPath), { recursive: true });
+  writeFileSync(movedPlanPath, `# ${planId} (moved)\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
+  writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
+  const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
+  reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
+  const assignmentPath = join(sddDir, "assignment.md");
+  const planningWorktree = join(root, "plan-worktree");
+  git(["worktree", "add", "-q", "-b", `feature/${planId}`, planningWorktree], main);
+  writeFileSync(
+    assignmentPath,
+    assignmentText({
+      harness,
+      workflowId,
+      planId,
+      planPath,
+      worktreePath: planningWorktree,
+      sddDir,
+      branch: `feature/${planId}`,
+    }),
+  );
+  const compassPath = join(iterationDir, "delivery-compass.md");
+  writeFileSync(
+    compassPath,
+    [
+      "---",
+      `iteration_id: ${workflowId}`,
+      "start_date: 2026-09-16",
+      `status: ${options.compassStatus ?? "locked"}`,
+      "iteration_base_branch: main",
+      `spec_integration_branch: ${integrationBranch}`,
+      "target_branch: main",
+      `integration_worktree_path: ${integration}`,
+      "plans:",
+      `  - ${planId}`,
+      "---",
+      "",
+      "# Fixture compass",
+      "",
+    ].join("\n"),
+  );
+
+  setArtifactStore(createFsStore(harness));
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `plans/${planId}.md` },
+    { operationId: `register-${planId}`, actor: "model-handoff-readiness.test" },
+  );
+  const context: ExecutionContext = {
+    harnessDir: harness,
+    caller: { sessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+  };
+  await createExecutionWorkflow(context, {
+    entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+      branch: { base: "main", integration: integrationBranch, target: "main" },
+      integration_worktree_path: integration,
+      plans: [
+        {
+          id: planId,
+          title: planId,
+          file: `plans/${planId}.md`,
+          status: "InProgress",
+        },
+      ],
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${workflowId}`,
+  });
+  const workflowToken: ExecutionToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token;
+  const bound = await bindExecutionSession(context, {
+    workflowId,
+    planId: null,
+    role: "coordinator",
+    expected: workflowToken,
+    operationId: `bind-${sessionId}`,
+  });
+  if (options.skipPrepare !== true) {
+    await mutateExecutionPlan(context, {
+      operationId: `prepare-${planId}`,
+      session: plainRef(bound.data),
+      expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
+      planId,
+      operation: { kind: "prepare", assignmentPath } as never,
+    });
+  }
+
+  const reservation = await reserveHandoffBinding(
+    { workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" },
+    { sessionId, cwd: main, taskSession: false, executionBinding: executionBindingOf(harness, bound.data) },
+    "reserve",
+  );
+  if (!reservation.ok) throw new Error(`ACTIVE fixture reservation refused: ${reservation.code} ${reservation.message}`);
+  const input: Phase1CompletionInput = {
+    workflowId,
+    mainWorktreeBranch: "main",
+    reviews: [
+      {
+        role: "product-manager",
+        agentId: "fixture-pm-agent",
+        resultRef: "agent://fixture-pm-agent",
+        reportPath: reportPaths[0]!,
+      },
+      {
+        role: "architect",
+        agentId: "fixture-architect-agent",
+        resultRef: "agent://fixture-architect-agent",
+        reportPath: reportPaths[1]!,
+      },
+      {
+        role: "writing-specialist",
+        agentId: "fixture-writer-agent",
+        resultRef: "artifact://fixture-writer-agent",
+        reportPath: reportPaths[2]!,
+      },
+    ],
+    plans: [{ planId, planPath, prepareEvidencePath }],
+  };
+  return {
+    root,
+    main,
+    harness,
+    integration,
+    integrationBranch,
+    workflowId,
+    planId,
+    sessionId,
+    coordinator: plainRef(bound.data),
+    binding: reservation.binding,
+    input,
+    planPath,
+    movedPlanPath,
+    prepareEvidencePath,
+    reportPaths,
+    compassPath,
+  };
+}
+
+/** The E1 input of one ACTIVE-route start. */
+function activeBindingInput(workflowId: string): HandoffBindingInput {
+  return { workflowId, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" };
+}
+
+describe("E1 explicit binding on the ACTIVE route", () => {
+  test("the adopted DB session binding reserves and is returned as the durable record's binding", async () => {
+    const f = await buildActiveFixture();
+    const adopted = f.binding.executionBinding;
+    expect(adopted).toBeDefined();
+    if (adopted === null || adopted === undefined) throw new Error("the ACTIVE arm must adopt the DB binding");
+    expect(adopted.version).toBe(1);
+    expect(adopted.harnessRoot).toBe(realpathSync(f.harness));
+    expect(adopted.session).toEqual({
+      storeId: f.coordinator.storeId,
+      epoch: f.coordinator.epoch,
+      workflowId: f.workflowId,
+      role: "coordinator",
+      sessionId: f.sessionId,
+      planId: null,
+    });
+    // The reference a durable record persists is a plain canonical value, never
+    // the engine's own object.
+    expect(Object.getPrototypeOf(adopted.session)).toBe(Object.prototype);
+    // The derived locations follow from the control root and the named workflow.
+    expect(f.binding.controlRoot).toBe(realpathSync(f.main));
+    expect(f.binding.compassPath).toBe(join(realpathSync(f.harness), "iterations", f.workflowId, "delivery-compass.md"));
+  }, 120_000);
+
+  test("a binding that does not describe this host session, workflow or coordinator seat refuses", async () => {
+    const f = await buildActiveFixture();
+    const adopted = f.binding.executionBinding!;
+    const host = (executionBinding: unknown) => ({
+      sessionId: f.sessionId,
+      cwd: f.main,
+      taskSession: false,
+      executionBinding: executionBinding as never,
+    });
+
+    // Another session's reference: a copy-only claim never matches the session
+    // this call acquired.
+    const foreignSession = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, sessionId: "someone-else-session" } }),
+      "reserve",
+    );
+    expect(foreignSession).toMatchObject({ ok: false, code: "not-coordinator" });
+
+    // A stale epoch: the engine's own reference check refuses it.
+    const stale = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, epoch: adopted.session.epoch + 1 } }),
+      "reserve",
+    );
+    expect(stale).toMatchObject({ ok: false, code: "not-coordinator" });
+
+    // A plan-scoped reference is not a coordinator binding.
+    const planScoped = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: f.planId } }),
+      "reserve",
+    );
+    expect(planScoped).toMatchObject({ ok: false, code: "not-coordinator" });
+
+    // Another workflow's binding.
+    const otherWorkflow = await reserveHandoffBinding(
+      activeBindingInput(`${f.workflowId}-other`),
+      host(adopted),
+      "reserve",
+    );
+    expect(otherWorkflow).toMatchObject({ ok: false, code: "not-coordinator" });
+
+    // A foreign control root.
+    const foreignRoot = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      host({ ...adopted, harnessRoot: f.integration }),
+      "reserve",
+    );
+    expect(foreignRoot).toMatchObject({ ok: false, code: "invalid-root" });
+
+    // The FILE form on the same ACTIVE root keeps its own refusal: no adopted
+    // binding means the retired register/snapshot route, which the authority
+    // owns.
+    const fileForm = await reserveHandoffBinding(
+      activeBindingInput(f.workflowId),
+      { sessionId: f.sessionId, cwd: f.main, taskSession: false },
+      "reserve",
+    );
+    expect(fileForm).toMatchObject({ ok: false, code: "execution.consumer-not-ready" });
+  }, 120_000);
+});
+
+describe("E2 phase 1 readiness on the ACTIVE route", () => {
+  test("the DB root/workflow/plan views plus the real artifact and Git witnesses report ready", async () => {
+    const f = await buildActiveFixture();
+    const readiness = await inspectPhase1Readiness(f.binding, f.input);
+    expect(readiness.ready).toBe(true);
+    if (!readiness.ready) throw new Error(`unexpected refusal: ${readiness.codes.join(", ")}`);
+    expect(readiness.integrationHead).toBe(git(["rev-parse", "HEAD"], f.integration));
+    const versions = readiness.receipt.artifactVersions.map((row) => row.path);
+    expect(versions).toContain(realpathSync(f.compassPath));
+    expect(versions).toContain(realpathSync(f.planPath));
+    expect(readiness.binding.executionBinding?.session.sessionId).toBe(f.sessionId);
+    // The envelope path is not part of an ACTIVE checkpoint's input at all.
+    expect(f.input.coordinatorSessionPath).toBeUndefined();
+  }, 120_000);
+
+  test("the plan's registered pointer is the DB plan view's own, and a receipt naming another file refuses", async () => {
+    const f = await buildActiveFixture();
+    const mismatched: Phase1CompletionInput = {
+      ...f.input,
+      plans: [{ planId: f.planId, planPath: f.movedPlanPath, prepareEvidencePath: f.prepareEvidencePath }],
+    };
+    const readiness = await inspectPhase1Readiness(f.binding, mismatched);
+    expect(readiness.ready).toBe(false);
+    expect(codesOf(readiness)).toContain("prepare-not-locked");
+    expect(detailsOf(readiness)).toContain("plan-identity-mismatch");
+    const detail = readiness.ready
+      ? undefined
+      : readiness.diagnostics.find((entry) => entry.detail === "plan-identity-mismatch");
+    // The expectation is the DB row's OWN registered file — the plan view is
+    // what resolves the pointer, and the receipt's caller-supplied path is never
+    // echoed back (§5 safe rendering).
+    expect(detail?.expected).toBe(realpathSync(f.planPath));
+    expect(detail).toMatchObject({ planId: f.planId, source: "plan-row" });
+    expect(detail).not.toHaveProperty("current");
+  }, 120_000);
+
+  test("a plan the DB does not record as prepared refuses prepare-not-locked", async () => {
+    const f = await buildActiveFixture({ skipPrepare: true });
+    const readiness = await inspectPhase1Readiness(f.binding, f.input);
+    expect(readiness.ready).toBe(false);
+    expect(codesOf(readiness)).toContain("prepare-not-locked");
+  }, 120_000);
+
+  test("an unlocked DB-route compass is classified as an unlocked Prepare", async () => {
+    const f = await buildActiveFixture({ compassStatus: "active" });
+    const readiness = await inspectPhase1Readiness(f.binding, f.input);
+    expect(readiness.ready).toBe(false);
+    expect(codesOf(readiness)).toContain("prepare-not-locked");
+    expect(detailsOf(readiness)).toContain("prepare-unlocked");
+    expect(detailsOf(readiness)).not.toContain("plan-pointer-invalid");
+    expect(readiness.ready ? undefined : readiness.diagnostics.find((entry) => entry.detail === "prepare-unlocked")?.current).toBe(
+      "active",
+    );
+  }, 120_000);
+
+  test("the real Git witnesses still gate the ACTIVE route", async () => {
+    const f = await buildActiveFixture();
+    const baseline = await inspectPhase1Readiness(f.binding, f.input);
+    expect(baseline.ready).toBe(true);
+
+    // A local commit the integration remote does not hold.
+    writeFileSync(join(f.integration, "unpushed.txt"), "local only\n");
+    git(["add", "unpushed.txt"], f.integration);
+    git(["commit", "-qm", "unpushed"], f.integration);
+    const unpushed = await inspectPhase1Readiness(f.binding, f.input);
+    expect(unpushed.ready).toBe(false);
+    expect(codesOf(unpushed)).toContain("push-unverified");
+  }, 120_000);
+
+  test("a missing ordered specialist return refuses review-evidence-missing", async () => {
+    const f = await buildActiveFixture();
+    const missing: Phase1CompletionInput = { ...f.input, reviews: f.input.reviews.slice(1) as never };
+    const readiness = await inspectPhase1Readiness(f.binding, missing);
+    expect(readiness.ready).toBe(false);
+    expect(codesOf(readiness)).toContain("review-evidence-missing");
+  }, 120_000);
+
+  test("a FILE binding on the ACTIVE root keeps the unchanged not-ready refusal", async () => {
+    const f = await buildActiveFixture();
+    const fileBinding: HandoffBinding = {
+      sessionId: f.sessionId,
+      workflowId: f.workflowId,
+      controlRoot: f.main,
+      harnessRoot: f.harness,
+      snapshotPath: join(f.harness, "workflows", f.workflowId, "snapshot.json"),
+      compassPath: f.compassPath,
+    };
+    const readiness = await inspectPhase1Readiness(fileBinding, f.input);
+    expect(readiness.ready).toBe(false);
+    if (readiness.ready) throw new Error("a file binding must refuse under an ACTIVE authority");
+    expect([...readiness.codes]).toEqual(["execution.consumer-not-ready"]);
+    expect(detailsOf(readiness)).toEqual([]);
+  }, 120_000);
 });

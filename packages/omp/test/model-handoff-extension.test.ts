@@ -35,7 +35,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionActions, ExtensionContext, ExtensionContextActions, ExtensionMode, SessionEntry } from "@oh-my-pi/pi-coding-agent";
@@ -63,7 +63,18 @@ import modelHandoffFactory, {
 } from "../src/extensions/model-handoff";
 import type { HandoffRecord } from "../src/extensions/model-handoff";
 import { COORDINATOR_TOOL_NAME } from "../src/coordinator-identity";
-import { setArtifactStore, createFsStore } from "@mstar-harness/engine";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  createFsStore,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionPlan,
+  readExecutionAuthority,
+  registerCatalogEntity,
+  setArtifactStore,
+} from "@mstar-harness/engine";
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 
 /* --------------------------------------------------------------- scratch --- */
 
@@ -166,9 +177,16 @@ type ControlRepo = Readonly<{
 /**
  * Disposable control repository: a main checkout (branch `main`, pushed to a
  * local bare remote), a linked integration worktree on its own pushed branch,
- * and a harness root with one registered sibling active iteration.
+ * and a harness root. `legacySources` (default `true`) also plants the
+ * pre-activation file state — one registered sibling active iteration with its
+ * own snapshot — which the FILE route derives from; the ACTIVE-route fixtures
+ * pass `false`, because an execution authority is initialized only over an
+ * empty execution workspace.
  */
-function buildControlRepo(siblingId = "fixture-sibling-iteration"): ControlRepo {
+function buildControlRepo(
+  siblingId = "fixture-sibling-iteration",
+  options: { legacySources?: boolean } = {},
+): ControlRepo {
   const root = scratchDir("omp-handoff-ext-");
   const bare = join(root, "remote.git");
   git(["init", "-q", "--bare", bare], root);
@@ -188,7 +206,9 @@ function buildControlRepo(siblingId = "fixture-sibling-iteration"): ControlRepo 
   git(["push", "-q", "-u", "origin", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
-  for (const dir of ["workflows", "iterations", "plans"]) mkdirSync(join(harness, dir), { recursive: true });
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  if (options.legacySources === false) return { root, main, harness, integration, integrationBranch, siblingId };
+  for (const dir of ["workflows", "iterations"]) mkdirSync(join(harness, dir), { recursive: true });
   mkdirSync(join(harness, "workflows", siblingId), { recursive: true });
   writeJson(join(harness, "workflows", siblingId, "snapshot.json"), {
     schema_version: 1,
@@ -2680,4 +2700,326 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     expect(JSON.stringify(refused.details)).not.toContain("sessions/");
     expect(readFileSync(snapshotPath, "utf8")).toBe(before);
   }, 120000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * The ACTIVE route (§6): the host adapter takes its start authority from the
+ * DB workflow/coordinator view, carries the adopted binding in the durable
+ * handoff record, and keeps the pre-activation FILE arm distinct.
+ * ------------------------------------------------------------------------ */
+
+type ActiveHandoffState = Readonly<{
+  planId: string;
+  /** The DB's own coordinator seat of the seeded workflow. */
+  coordinator: ExecutionSessionRef;
+  workflowId: string;
+  reviews: readonly Readonly<{ role: string; agentId: string; resultRef: string; reportPath: string }>[];
+  plans: readonly Readonly<{ planId: string; planPath: string; prepareEvidencePath: string }>[];
+}>;
+
+/** The scoped Assignment header block `parseAssignmentFile` accepts. */
+function activeAssignmentText(input: {
+  harness: string;
+  workflowId: string;
+  planId: string;
+  planPath: string;
+  worktreePath: string;
+  sddDir: string;
+  branch: string;
+}): string {
+  return [
+    `# Assignment — ${input.planId} independent slice`,
+    "",
+    `**Control harness root**: ${input.harness}`,
+    `**Workflow id**: ${input.workflowId}`,
+    `**Plan id**: ${input.planId}`,
+    `**Plan Path**: ${input.planPath}`,
+    `**Worktree Path**: ${input.worktreePath}`,
+    `**Working branch**: ${input.branch}`,
+    `**SDD dir**: ${input.sddDir}`,
+    "**Execute as**: project-manager",
+    "**Execution scope**: plan",
+    "**Delegation**: allowed (plan-local subagents only)",
+    "**Prepare gate**: go",
+    "**QA gate**: mandatory",
+    "**Findings cleanup**: allow-residual",
+    "",
+    "Prepared plan for the ACTIVE-route handoff fixtures.",
+    "",
+  ].join("\n");
+}
+
+/** A canonical plain copy of an engine-returned session reference. */
+function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
+  return {
+    storeId: ref.storeId,
+    epoch: ref.epoch,
+    workflowId: ref.workflowId,
+    role: ref.role,
+    sessionId: ref.sessionId,
+    planId: ref.planId,
+  };
+}
+
+/**
+ * A REAL active execution authority on the fixture repo: the store upgraded to
+ * an execution authority, the plan registered in the catalog, one running
+ * workflow with its branch anchors, compass reference, integration checkout and
+ * plan row, the coordinator bound under `coordinatorSessionId`, the plan
+ * PREPARED from a real Assignment, and the real artifact/Git witnesses the
+ * readiness checkpoint samples. No root register and no workflow snapshot exist
+ * anywhere on this route.
+ */
+async function seedActiveHandoffAuthority(
+  repo: ControlRepo,
+  coordinatorSessionId: string,
+  workflowId = "active-iteration",
+): Promise<ActiveHandoffState> {
+  const planId = `${workflowId}-plan`;
+  const harness = repo.harness;
+  const plansDir = join(harness, "plans");
+  const sddDir = join(harness, "sdd", planId);
+  const iterationDir = join(harness, "iterations", workflowId);
+  const guidesDir = join(iterationDir, "guides");
+  for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
+  const planPath = join(plansDir, `${planId}.md`);
+  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
+  writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
+  const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
+  reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
+  const planWorktree = join(repo.root, `${workflowId}-plan-worktree`);
+  git(["worktree", "add", "-q", "-b", `feature/${planId}`, planWorktree], repo.main);
+  const assignmentPath = join(sddDir, "assignment.md");
+  writeFileSync(
+    assignmentPath,
+    activeAssignmentText({
+      harness,
+      workflowId,
+      planId,
+      planPath,
+      worktreePath: planWorktree,
+      sddDir,
+      branch: `feature/${planId}`,
+    }),
+  );
+  writeFileSync(
+    join(iterationDir, "delivery-compass.md"),
+    [
+      "---",
+      `iteration_id: ${workflowId}`,
+      "start_date: 2026-09-16",
+      "status: locked",
+      "iteration_base_branch: main",
+      `spec_integration_branch: ${repo.integrationBranch}`,
+      "target_branch: main",
+      `integration_worktree_path: ${repo.integration}`,
+      "plans:",
+      `  - ${planId}`,
+      "---",
+      "",
+      "# Fixture compass",
+      "",
+    ].join("\n"),
+  );
+
+  setArtifactStore(createFsStore(harness));
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `plans/${planId}.md` },
+    { operationId: `register-${planId}`, actor: "model-handoff-extension.test" },
+  );
+  const context: ExecutionContext = {
+    harnessDir: harness,
+    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+  };
+  await createExecutionWorkflow(context, {
+    entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+      branch: { base: "main", integration: repo.integrationBranch, target: "main" },
+      integration_worktree_path: repo.integration,
+      plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "InProgress" }],
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${workflowId}`,
+  });
+  const bound = await bindExecutionSession(context, {
+    workflowId,
+    planId: null,
+    role: "coordinator",
+    expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token,
+    operationId: `bind-${coordinatorSessionId}`,
+  });
+  await mutateExecutionPlan(context, {
+    operationId: `prepare-${planId}`,
+    session: plainRef(bound.data),
+    expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
+    planId,
+    operation: { kind: "prepare", assignmentPath } as never,
+  });
+  return {
+    planId,
+    coordinator: plainRef(bound.data),
+    workflowId,
+    reviews: [
+      {
+        role: "product-manager",
+        agentId: "fixture-pm-agent",
+        resultRef: "agent://fixture-pm-agent",
+        reportPath: reportPaths[0]!,
+      },
+      {
+        role: "architect",
+        agentId: "fixture-architect-agent",
+        resultRef: "agent://fixture-architect-agent",
+        reportPath: reportPaths[1]!,
+      },
+      {
+        role: "writing-specialist",
+        agentId: "fixture-writer-agent",
+        resultRef: "artifact://fixture-writer-agent",
+        reportPath: reportPaths[2]!,
+      },
+    ],
+    plans: [{ planId, planPath, prepareEvidencePath }],
+  };
+}
+
+/** The completion checkpoint of one ACTIVE-route binding: no envelope path. */
+function activeCompletionParams(state: ActiveHandoffState): ToolParams {
+  return {
+    operation: "phase1-complete",
+    workflowId: state.workflowId,
+    mainWorktreeBranch: "main",
+    reviews: state.reviews,
+    plans: state.plans,
+  };
+}
+
+describe("model handoff on the ACTIVE route", () => {
+  test("the arm adopts the DB coordinator binding, records it, and the target fires from the DB readiness", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const state = await seedActiveHandoffAuthority(repo, session.getSessionId());
+
+    const armed = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(armed)).toBe("armed");
+    expect(stateOf(armed)).toBe("pending");
+    expect(harness.attempts).toEqual(["probe/slow-model"]);
+    expect(statesOf(harness)).toEqual(["attempting", "pending"]);
+
+    // The durable record carries the adopted DB binding, not a file address.
+    const record = harness.records()[0]!;
+    const adopted = record.binding.executionBinding;
+    expect(adopted).toBeDefined();
+    expect(adopted?.harnessRoot).toBe(realpathSync(repo.harness));
+    expect(adopted?.session).toEqual({
+      storeId: state.coordinator.storeId,
+      epoch: state.coordinator.epoch,
+      workflowId: state.workflowId,
+      role: "coordinator",
+      sessionId: session.getSessionId(),
+      planId: null,
+    });
+    expect(Object.getPrototypeOf(adopted?.session)).toBe(Object.prototype);
+
+    // The completion checkpoint runs the ACTIVE readiness arm: no envelope path
+    // is accepted or required, and the DB views plus the real witnesses fire the
+    // one-shot switch.
+    const fired = await harness.runTool(activeCompletionParams(state));
+    expect(codeOf(fired)).toBe("handed_off");
+    expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting", "handed_off"]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
+    expect(fired.details.mstarModelHandoff?.integrationHead).toBe(git(["rev-parse", "HEAD"], repo.integration));
+  }, 120_000);
+
+  test("a session that is not the workflow's DB coordinator refuses the start without any model action", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    // A real workflow whose seat is another coordinator session.
+    const state = await seedActiveHandoffAuthority(repo, "creator-session");
+
+    const refused = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(refused)).toBe("coordinator-elsewhere");
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+    expect(harness.notices().some((line) => line.includes("coordinator-elsewhere"))).toBe(true);
+  }, 120_000);
+
+  test("a lifecycle the authority does not hold refuses instead of reserving an unregistered id", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: repo.harness });
+
+    const refused = await harness.runTool(startParams("absent-iteration"));
+    expect(codeOf(refused)).toBe("register-invalid");
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+  }, 120_000);
+
+  test("a durable FILE record on an ACTIVE root never fires from the retired route", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    // The authority governs the root first; the FILE arm's own artifacts are
+    // planted afterwards, so a verdict derived from them would be a live
+    // fallback — the checkpoint must refuse instead.
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: repo.harness });
+    const artifacts = createWorkflowArtifacts(repo, session.getSessionId(), "legacy-iteration");
+
+    // A pending binding as the pre-activation generation wrote it.
+    const baselineModelChangeId = session.appendModelChange("probe/slow-model", "default");
+    session.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+      version: 1,
+      binding: {
+        sessionId: session.getSessionId(),
+        workflowId: "legacy-iteration",
+        controlRoot: repo.main,
+        harnessRoot: repo.harness,
+        snapshotPath: join(repo.harness, "workflows", "legacy-iteration", "snapshot.json"),
+        compassPath: join(repo.harness, "iterations", "legacy-iteration", "delivery-compass.md"),
+      },
+      state: "pending",
+      operationId: "arm-legacy-fixture",
+      action: "arm",
+      baselineModelChangeId,
+      observedModel: "probe/slow-model",
+      reason: null,
+    } satisfies HandoffRecord);
+
+    const fired = await harness.runTool(completionParams(artifacts));
+    expect(codeOf(fired)).toBe("not-ready");
+    expect(fired.details.mstarModelHandoff?.codes).toEqual(["execution.consumer-not-ready"]);
+    expect(harness.attempts).toHaveLength(0);
+    expect(statesOf(harness)).toEqual(["pending"]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
+  }, 120_000);
 });
