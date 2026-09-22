@@ -168,14 +168,18 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
   writeFileSync,
+  writeSync,
   type Dirent,
   type Stats,
 } from "node:fs";
@@ -3624,12 +3628,48 @@ function readIfExists(path: string): Buffer | undefined {
   }
 }
 
-/** Atomic write: same-directory temp + rename, so a reader never sees a partial ledger. */
+/** Write the whole buffer, tolerating a short write (the store's own convention). */
+function writeAllBytes(fd: number, bytes: Buffer): void {
+  let written = 0;
+  while (written < bytes.length) {
+    written += writeSync(fd, bytes, written, bytes.length - written, written);
+  }
+}
+
+/** Fsync one directory's own entry, so a rename into it is durable. */
+function fsyncDirectoryEntry(dir: string): void {
+  const fd = openSync(dir, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Atomic AND durable write of one JSON document: same-directory temp + rename, so
+ * a reader never sees a partial ledger, with the temp file fsynced before the
+ * rename and the directory fsynced after it (the store's existing commit
+ * convention). The fsyncs are what makes the retirement ledger survive a crash:
+ * without them a torn `retirement.json` could be left behind, which the resume
+ * would then REFUSE - fail-closed and lossless, but a durability defect rather
+ * than a refusal we intend to rely on. This hardens the write; it does not
+ * relax any refusal.
+ */
 function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temp = join(dirname(path), `.${randomUUID()}.tmp`);
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  const temp = join(dir, `.${randomUUID()}.tmp`);
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const fd = openSync(temp, "w");
+  try {
+    writeAllBytes(fd, bytes);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(temp, path);
+  fsyncDirectoryEntry(dir);
 }
 
 /** The harness-relative path of one retired source, traversal-refused. */

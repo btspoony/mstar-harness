@@ -25,14 +25,15 @@
  *   takes the maintenance → root → workflow locks in that order.
  * - `execution-activation-*` (R2): a no-deferred-file core fixture activates
  *   only behind the real barrier — one epoch advance, one root revision, old
- *   references revoked, the migrated graph readable and the file route fenced;
- *   a deferred surface, source drift, a tampered staged graph and an
- *   attestation the frozen owner inventory cannot justify each refuse with the
- *   staged footprint unchanged (including the unknown-session predicate — the
- *   only owner-gate arm a 2a-legal fixture can reach, since a discovered owner
- *   implies a populated session surface); a crash before the commit leaves
- *   exactly the staged (JSON-live) authority and the retry commits once; a
- *   replay returns the recorded receipt without a second epoch bump.
+ *   references revoked, the migrated graph readable and the file route fenced.
+ *   A populated surface is no longer a block: the barrier activates on the
+ *   VALIDATED coverage (recomputed from the named bytes, closed through the pure
+ *   validator), while a coverage set that is missing, forged or drifted, a
+ *   `coverageDigest` the workspace does not recompute, source drift, a tampered
+ *   staged graph and an attestation the frozen owner inventory cannot justify
+ *   each refuse with the staged footprint unchanged. A crash before the commit
+ *   leaves exactly the staged (JSON-live) authority and the retry commits once;
+ *   a replay returns the recorded receipt without a second epoch bump.
  * - `execution-retirement-*` (R2): retirement moves exactly the root register
  *   and the registered snapshots into manifest-addressed history, leaves every
  *   deferred/host file byte-identical, refuses a source written since the
