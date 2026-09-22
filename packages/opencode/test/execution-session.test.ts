@@ -32,13 +32,14 @@ import {
   ExecutionError,
   initializeExecutionAuthority,
   initializeStore,
+  prepareExecutionPlan,
+  readExecutionAuthority,
   registerCatalogEntity,
   serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionIdentity,
   type ExecutionSessionRef,
-  type ExecutionToken,
 } from "@mstar-harness/engine";
 import {
   EXECUTION_IDENTITY_ENV,
@@ -119,7 +120,9 @@ function makeCliLauncher(project: string): string {
  * A REAL ACTIVE execution authority with a plan-pm session bound to the native
  * session id, and the canonical wire for that binding — the state a
  * session-authorized read needs to succeed, so the fixture can witness a real
- * success instead of a log-wording-only assertion.
+ * success instead of a log-wording-only assertion. The row is PREPARED first
+ * (a plan session never claims an unprepared row) and every token is read back
+ * from the authority rather than reused from a creation receipt.
  */
 async function seedBoundPlanSession(
   harness: string,
@@ -145,33 +148,63 @@ async function seedBoundPlanSession(
     workflowId: planScope.workflowId,
     planId: null,
   };
-  const created = await createExecutionWorkflow(
-    { harnessDir: harness, caller: coordinatorCaller } satisfies ExecutionContext,
-    {
-      entry: { id: planScope.workflowId, type: "plan", started_at: TS, dir: `workflows/${planScope.workflowId}` },
-      snapshot: {
-        schema_version: 1,
-        id: planScope.workflowId,
-        type: "plan",
-        status: "running",
-        started_at: TS,
-        updated_at: TS,
-        plans: [
-          {
-            id: planScope.planId,
-            title: `${planScope.planId} title`,
-            file: `plans/${planScope.planId}.md`,
-            status: "Todo",
-          },
-        ],
-        delivery_kind: "development",
-        branch: { source: `feature/${planScope.workflowId}`, target: "main" },
-      } as never,
-      expected: initialized.token,
-      operationId: `create-${planScope.workflowId}`,
-    },
-  );
-  const planToken = created.data.workflows[0]?.planTokens[planScope.planId] as ExecutionToken;
+  const coordinatorContext: ExecutionContext = { harnessDir: harness, caller: coordinatorCaller };
+  await createExecutionWorkflow(coordinatorContext, {
+    entry: { id: planScope.workflowId, type: "plan", started_at: TS, dir: `workflows/${planScope.workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: planScope.workflowId,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      plans: [
+        {
+          id: planScope.planId,
+          title: `${planScope.planId} title`,
+          file: `plans/${planScope.planId}.md`,
+          status: "Todo",
+        },
+      ],
+      delivery_kind: "development",
+      branch: { source: `feature/${planScope.workflowId}`, target: "main" },
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${planScope.workflowId}`,
+  });
+
+  const createdState = await readExecutionAuthority(coordinatorContext);
+  const workflow = createdState.data.workflows.find((entry) => entry.state.id === planScope.workflowId);
+  if (workflow === undefined) throw new Error("fixture: the workflow is not registered");
+  const coordinatorRef = (
+    await bindExecutionSession(coordinatorContext, {
+      workflowId: planScope.workflowId,
+      planId: null,
+      role: "coordinator",
+      expected: workflow.workflowToken,
+      operationId: "bind-coordinator",
+    })
+  ).data;
+
+  // The prepare prerequisite: a real Assignment document (absolute path, headers
+  // the seal validates) and the plan token from the CURRENT authority read.
+  const assignmentPath = writeAssignmentDocument(harness, planScope.planId, planScope.workflowId);
+  const beforePrepare = await readExecutionAuthority(coordinatorContext, {
+    workflowId: planScope.workflowId,
+    planId: planScope.planId,
+  });
+  await prepareExecutionPlan(coordinatorContext, {
+    operationId: "prepare-plan",
+    session: coordinatorRef,
+    expected: beforePrepare.token,
+    planId: planScope.planId,
+    operation: { kind: "prepare", assignmentPath },
+  });
+
+  const afterPrepare = await readExecutionAuthority(coordinatorContext, {
+    workflowId: planScope.workflowId,
+    planId: planScope.planId,
+  });
   const bound = await bindExecutionSession(
     {
       harnessDir: harness,
@@ -181,11 +214,44 @@ async function seedBoundPlanSession(
       workflowId: planScope.workflowId,
       planId: planScope.planId,
       role: "plan-pm",
-      expected: planToken,
+      expected: afterPrepare.token,
       operationId: `bind-${planScope.planId}`,
     },
   );
   return { wire: encodeExecutionSessionRef(bound.data), planId: planScope.planId, workflowId: planScope.workflowId };
+}
+
+/** One prepared Assignment document (the same header set the sibling suites seal). */
+function writeAssignmentDocument(harness: string, planId: string, workflowId: string): string {
+  const planPath = join(harness, "plans", `${planId}.md`);
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  mkdirSync(join(harness, "sdd", planId), { recursive: true });
+  mkdirSync(join(harness, "worktrees", planId), { recursive: true });
+  writeFileSync(planPath, `# ${planId}\n`);
+  const headers: Record<string, string> = {
+    "Execution scope": "plan",
+    "Execute as": "project-manager",
+    Delegation: "allowed",
+    "Control harness root": harness,
+    "Workflow id": workflowId,
+    "Plan id": planId,
+    "Plan Path": planPath,
+    "Worktree path": join(harness, "worktrees", planId),
+    "Working branch": `feature/${planId}`,
+    "SDD dir": join(harness, "sdd", planId),
+    "QA gate": "mandatory",
+    "Findings cleanup": "allow-residual",
+    "Prepare gate": "go",
+  };
+  const assignmentPath = join(harness, "assignments", `${planId}.md`);
+  mkdirSync(join(harness, "assignments"), { recursive: true });
+  writeFileSync(
+    assignmentPath,
+    `${Object.entries(headers)
+      .map(([header, value]) => `**${header}**: ${value}`)
+      .join("\n")}\n`,
+  );
+  return assignmentPath;
 }
 
 /** Collect everything the plugin logs while a fixture runs. */
