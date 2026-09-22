@@ -66,6 +66,7 @@ import {
 import type { WorkflowSnapshot } from "@mstar-harness/engine";
 import { COORDINATOR_TOOL_NAME } from "../src/coordinator-identity";
 import modelHandoffFactory, { HANDOFF_CUSTOM_TYPE } from "../src/extensions/model-handoff";
+import { readHandoffSettings } from "../src/model-handoff-settings";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput, Phase1Readiness } from "../src/model-handoff-readiness";
 
@@ -695,18 +696,32 @@ describe("prerequisite handoff — readiness integration", () => {
     for (const { pointer } of cases) {
       // The native host session is created FIRST: the workflow binding, its
       // recorded coordinator and the pending ledger record all have to name it.
-      const sessionManager = SessionManager.create(
-        scratchDir("omp-prerequisite-session-home-"),
-        scratchDir("omp-prerequisite-session-"),
-      );
+      // Its own cwd is kept as a handle: the host reads the native settings for
+      // `ctx.cwd`, and `ExtensionRunner.cwd` is `sessionManager.getCwd()` (the
+      // first argument below) — never the fixture repo.
+      const sessionCwd = scratchDir("omp-prerequisite-session-home-");
+      const sessionManager = SessionManager.create(sessionCwd, scratchDir("omp-prerequisite-session-"));
       const hostId = sessionManager.getSessionId();
       const fixture = await buildFixture({ boundSession: hostId, staleRowPointer: pointer });
       setArtifactStore(createFsStore(fixture.harness));
       // The saved preference a real `start` arm required: without it the
       // completion checkpoint refuses before readiness ever runs.
-      mkdirSync(join(fixture.main, ".omp"), { recursive: true });
-      writeJson(join(fixture.main, ".omp", "plugin-overrides.json"), {
+      //
+      // The override goes to the session's own project root — the directory the
+      // host resolves plugin settings from — and it declares every key this case
+      // depends on, so the project layer alone decides the effective value: the
+      // case never inherits the operator's or CI's user-level host settings.
+      mkdirSync(join(sessionCwd, ".omp"), { recursive: true });
+      writeJson(join(sessionCwd, ".omp", "plugin-overrides.json"), {
         settings: { "@mstar-harness/omp": { modelHandoff: true, handoffTarget: "@smol" } },
+      });
+      // The host helper the handler itself calls, resolved for that same
+      // directory: a host-side change in where the project layer is read then
+      // fails HERE, naming the settings contract, instead of surfacing later as
+      // an unexplained `preference-off` on a machine without user settings.
+      expect(await readHandoffSettings(sessionCwd)).toMatchObject({
+        ok: true,
+        value: { modelHandoff: true, handoffTarget: "@smol" },
       });
 
       // The pending binding a real arm records. Arming also performs a live
