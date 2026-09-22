@@ -1009,9 +1009,12 @@ export async function reservePlanLaunch(
       const drift = assertPreparedHash(prepared, planId);
       if (drift !== null) return drift;
 
-      // The Assignment-scope form resolves the checkout/branch facts from the
-      // stored pin and the real Assignment file — never from the retired
-      // workflow snapshot, which is not an authority on this route.
+      // The Assignment-scope form of P2's resolver (§6 "reuse the P2 resolver").
+      // The pin is the DB's (`coordination.prepared`, validated by
+      // assertPreparedHash above); the resolver additionally CROSS-CHECKS the
+      // Assignment against the workflow snapshot FILE, which on an ACTIVE root is
+      // historical input — present until the operator retirement step moves it
+      // (reported gap: without it this call refuses "workflow snapshot not found").
       let scope: ResolvedPlanScope;
       try {
         scope = await resolvePlanScope({ assignmentPath: prepared.assignment_path as string }, authority.cwd);

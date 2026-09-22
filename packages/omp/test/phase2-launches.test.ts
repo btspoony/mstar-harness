@@ -324,6 +324,35 @@ async function seedActiveAuthority(fixture: Fixture): Promise<void> {
       operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! } as never,
     });
   }
+  // HISTORICAL INPUT, never authority: the scope resolver this module reuses
+  // (plan P2's `resolvePlanScope`) cross-checks the Assignment against the
+  // workflow snapshot file and throws "workflow snapshot not found" without it.
+  // A root that has not yet run the operator retirement step still holds that
+  // file, so the fixture reproduces the pre-retirement (activated) shape. The
+  // post-retirement shape is a reported engine gap, not something this fixture
+  // hides: see the report's scope-resolution gap section.
+  writeJson(fixture.snapshotPath, {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "iteration",
+    status: "running",
+    phase: "phase-2-execute",
+    started_at: "2026-09-16T00:00:00Z",
+    updated_at: "2026-09-16T00:00:00Z",
+    branch: { base: "main", integration: "integration/wf" },
+    integration_worktree_path: fixture.integrationPath,
+    plans: PLAN_IDS.map((planId) => ({
+      id: planId,
+      plan_id: planId,
+      title: `Plan ${planId}`,
+      file: `plans/${planId}.md`,
+      status: "Todo",
+      coordination: {
+        revision: 1,
+        prepared: { assignment_path: fixture.assignments[planId]!, assignment_sha256: sha256OfFile(fixture.assignments[planId]!) },
+      },
+    })),
+  });
 }
 
 /** Bind the lifecycle coordinator in the DB and prepare every plan. */
