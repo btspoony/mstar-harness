@@ -38,15 +38,19 @@
  */
 import { createHash } from "node:crypto";
 import {
+  closeSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   statSync,
-  writeFileSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "../packages/engine/src/index.ts";
@@ -291,7 +295,11 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     packageJson: "packages/omp/package.json",
     entrypoint: "packages/omp/dist/hooks/pre/mstar-gates.js",
     sourceTrees: [{ root: "packages/omp/src" }, { root: "packages/omp/scripts" }],
-    sourceFiles: ["packages/omp/package.json", "packages/omp/tsconfig.json"],
+    sourceFiles: [
+      ".omp-plugin/plugin.json",
+      "packages/omp/package.json",
+      "packages/omp/tsconfig.json",
+    ],
     // `dist` plus the package-root convention mirrors the build produces with
     // `cp -R` (hooks/tools/extensions) — the plugin loads the mirrors.
     generatedTrees: [
@@ -1042,9 +1050,11 @@ function parseCli(argv: readonly string[]): CliOptions {
   return { repo, mode };
 }
 
-/** Write a manifest copy without following a foreign target: the parent is
- * canonicalized inside the checkout, a symlinked target refuses, and the bytes
- * land through a temp file plus rename. */
+/** Write a manifest copy without following a foreign target or staging path:
+ * the parent is canonicalized inside the checkout, a symlinked target refuses,
+ * and the bytes land through a staging file opened exclusively with no-follow —
+ * so a pre-created staging symlink (or any existing file at that path) refuses
+ * instead of being written through — followed by a rename. */
 function writeManifestCopy(repoAbs: string, target: string, text: string): void {
   const parent = canonicalInsideRepo(repoAbs, dirname(target), `manifest parent ${target}`);
   mkdirSync(parent, { recursive: true });
@@ -1052,17 +1062,45 @@ function writeManifestCopy(repoAbs: string, target: string, text: string): void 
     refuse("consumer.path-outside-root", `refusing to write through a symlinked manifest ${target}`);
   }
   canonicalInsideRepo(repoAbs, target, `manifest ${target}`);
-  const staging = `${target}.tmp-${process.pid}`;
-  writeFileSync(staging, text);
-  renameSync(staging, target);
+
+  const staging = `${target}.staging-${process.pid}`;
+  let handle: number;
+  try {
+    handle = openSync(
+      staging,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch {
+    refuse(
+      "consumer.path-outside-root",
+      `refusing to stage ${target}: ${staging} already exists or is not a fresh regular file`,
+    );
+  }
+  try {
+    try {
+      writeSync(handle, text);
+    } finally {
+      closeSync(handle);
+    }
+    renameSync(staging, target);
+  } catch {
+    try {
+      unlinkSync(staging);
+    } catch {
+      // best effort: the refusal below is the outcome that matters
+    }
+    refuse("consumer.path-missing", `cannot write ${target}`);
+  }
 }
 
 function readManifestCopy(repoAbs: string, target: string): string {
-  const canonical = canonicalInsideRepo(repoAbs, target, `manifest ${target}`);
-  if (lstatSync(canonical).isSymbolicLink()) {
+  // The lexical leaf is checked before canonicalization: a manifest copy that
+  // is itself a symlink refuses even when it resolves to another in-repo file.
+  if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
     refuse("consumer.path-outside-root", `refusing to read a symlinked manifest ${target}`);
   }
-  return readFileSync(canonical, "utf8");
+  return readFileSync(canonicalInsideRepo(repoAbs, target, `manifest ${target}`), "utf8");
 }
 
 /** Run the CLI. Returns the process exit code (0 ok, 1 refusal, 2 usage). */

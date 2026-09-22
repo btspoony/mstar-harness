@@ -3,34 +3,40 @@
  * consumer-v1 inventory producer (contract §4.2 / §7 R1).
  *
  * The fixture is a self-contained temporary checkout: a small instruction
- * corpus (`skills/`, `commands/`, `agents/`, including a relative symlink), the
- * five package build layouts (source trees, config, build scripts, output
- * trees), the OMP convention mirrors and the committed ZCode hook artifact.
+ * corpus, the five package build layouts (source trees, config, build scripts,
+ * output trees), the OMP convention mirrors and the committed ZCode hook
+ * artifact.
  *
- * Instruction copies are replicated with `replicateTree`, which preserves a
- * link's tree-relative target — the semantics a package copy must have to stay
- * portable once installed (the real corpus currently holds no symlinks).
+ * Instruction copies are produced by the **real bundler primitive** —
+ * `fs.rmSync(target)` plus `fs.cpSync(source, target, { recursive: true })`,
+ * exactly as `packages/{dsh,omp,opencode}/scripts/bundle-harness-assets.ts`
+ * does (the OpenCode overlay is the merge variant without the `rmSync`). The
+ * fixture therefore exercises the producer's actual copy semantics; where that
+ * primitive yields a checkout-bound link instead of a portable one, the
+ * validator must refuse rather than accept it.
  *
  * Nothing outside the fixture is read: the containment cases prove a recorded
- * path or a symlinked root that would leave the checkout refuses before any
- * bytes are touched.
+ * path, symlinked root, staging path or manifest leaf that would leave the
+ * checkout refuses before any bytes are touched.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
-  readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import {
   CONSUMER_MANIFEST_PROTOCOL,
   ExecutionConsumerManifestError,
@@ -51,6 +57,11 @@ const OMP_MIRROR_TOOLS = [
   "mstar_status_validate",
   "mstar_worktree_check",
 ] as const;
+
+interface FixtureOptions {
+  /** Add a self-contained in-repo instruction symlink to the `skills` corpus. */
+  readonly instructionSymlink?: boolean;
+}
 
 /** Structure of a JSON-round-tripped manifest; the refusals under test need a
  * writable shape, and `verifyExecutionConsumerManifest` stays the source of
@@ -92,27 +103,27 @@ function write(root: string, rel: string, content: string): void {
   writeFileSync(abs, content);
 }
 
-/** Self-contained tree replication: files are copied by bytes and symlinks keep
- * their tree-relative link text, so the copy stays inside its own tree. */
-function replicateTree(root: string, from: string, to: string): void {
-  const sourceAbs = join(root, from);
-  const targetAbs = join(root, to);
-  const walk = (dirAbs: string, rel: string): void => {
-    for (const dirent of readdirSync(dirAbs, { withFileTypes: true })) {
-      const source = join(dirAbs, dirent.name);
-      const target = join(targetAbs, rel, dirent.name);
-      mkdirSync(dirname(target), { recursive: true });
-      if (dirent.isDirectory()) {
-        walk(source, join(rel, dirent.name));
-      } else if (dirent.isSymbolicLink()) {
-        symlinkSync(readlinkSync(source), target);
-      } else {
-        copyFileSync(source, target);
-      }
-    }
-  };
-  mkdirSync(targetAbs, { recursive: true });
-  walk(sourceAbs, "");
+/** The `copyTree` primitive of the real bundle-assets scripts: clear the target,
+ * then `cpSync(..., { recursive: true })`. */
+function bundleCopy(root: string, from: string, to: string): void {
+  const dest = join(root, to);
+  mkdirSync(dirname(dest), { recursive: true });
+  rmSync(dest, { recursive: true, force: true });
+  cpSync(join(root, from), dest, { recursive: true });
+}
+
+/** The OpenCode overlay primitive (`mergeTree`): `cpSync` without the clear. */
+function overlayCopy(root: string, from: string, to: string): void {
+  const dest = join(root, to);
+  mkdirSync(dirname(dest), { recursive: true });
+  cpSync(join(root, from), dest, { recursive: true });
+}
+
+/** Mirror one built file to its package-root convention path (OMP's `cp -R`). */
+function mirrorFile(root: string, from: string, to: string): void {
+  const target = join(root, to);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(join(root, from), target);
 }
 
 function packageJson(root: string, dir: string, engines: Record<string, string>): void {
@@ -123,26 +134,21 @@ function packageJson(root: string, dir: string, engines: Record<string, string>)
   );
 }
 
-/** Mirror one built file to its package-root convention path (OMP's `cp -R`). */
-function mirrorFile(root: string, from: string, to: string): void {
-  const target = join(root, to);
-  mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(root, from), target);
-}
-
-function scaffoldInstructions(root: string): void {
+function scaffoldInstructions(root: string, options: FixtureOptions): void {
   write(root, "skills/mstar-demo/SKILL.md", "# demo skill\n");
   write(root, "skills/shared/note.md", "shared note\n");
   write(root, "commands/mstar-demo.md", "# demo command\n");
   write(root, "agents/mstar-demo.md", "# demo agent\n");
-  // Relative link that stays inside the copied tree after replication.
-  symlinkSync("../shared/note.md", join(root, "skills/mstar-demo/linked.md"));
+  if (options.instructionSymlink === true) {
+    // Relative link that stays inside the `skills` tree.
+    symlinkSync("../shared/note.md", join(root, "skills/mstar-demo/linked.md"));
+  }
 }
 
-function buildFixture(): string {
+function buildFixture(options: FixtureOptions = {}): string {
   const root = mkdtempSync(join(tmpdir(), "execution-consumer-manifest-"));
   fixtures.push(root);
-  scaffoldInstructions(root);
+  scaffoldInstructions(root, options);
 
   write(root, "scripts/escape-dist-literals.ts", "export const escape = 1;\n");
   write(root, "scripts/ascii-literal-utils.ts", "export const mask = 1;\n");
@@ -174,7 +180,7 @@ function buildFixture(): string {
   write(root, "packages/dsh/dist/client.js", "// dsh client bundle\n");
   write(root, "packages/dsh/dist/index.d.ts", "export declare const dsh: number;\n");
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    replicateTree(root, instructionRoot, `packages/dsh/harness-${instructionRoot}`);
+    bundleCopy(root, instructionRoot, `packages/dsh/harness-${instructionRoot}`);
   }
 
   packageJson(root, "packages/omp", { bun: ">=1.4.0" });
@@ -207,11 +213,11 @@ function buildFixture(): string {
     "packages/omp/extensions/phase2-orchestration.js",
   );
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    replicateTree(root, instructionRoot, `packages/omp/harness-${instructionRoot}`);
-    replicateTree(root, instructionRoot, `packages/omp/${instructionRoot}`);
+    bundleCopy(root, instructionRoot, `packages/omp/harness-${instructionRoot}`);
+    bundleCopy(root, instructionRoot, `packages/omp/${instructionRoot}`);
   }
   write(root, "assets/logo.txt", "brand asset\n");
-  replicateTree(root, "assets", "packages/omp/assets");
+  bundleCopy(root, "assets", "packages/omp/assets");
   write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
   mirrorFile(root, ".omp-plugin/plugin.json", "packages/omp/plugin.json");
 
@@ -221,9 +227,9 @@ function buildFixture(): string {
   write(root, "packages/opencode/dist/mstar.js", "// opencode bundle\n");
   write(root, "packages/opencode/agents/pm.md", "# opencode-only primary\n");
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    replicateTree(root, instructionRoot, `packages/opencode/harness-${instructionRoot}`);
+    bundleCopy(root, instructionRoot, `packages/opencode/harness-${instructionRoot}`);
   }
-  replicateTree(root, "packages/opencode/agents", "packages/opencode/harness-agents");
+  overlayCopy(root, "packages/opencode/agents", "packages/opencode/harness-agents");
 
   write(root, "hooks/src/mstar-write-gate.ts", "export const writeGate = 1;\n");
   write(root, "hooks/mstar-write-gate.mjs", "#!/usr/bin/env node\n// zcode hook\n");
@@ -258,6 +264,19 @@ function expectRefusal(run: () => void, code: string): void {
   if (caught === undefined) throw new Error(`expected refusal ${code}, nothing was thrown`);
   expect(caught).toBeInstanceOf(ExecutionConsumerManifestError);
   expect((caught as ExecutionConsumerManifestError).code).toBe(code);
+}
+
+/** Classify what the bundler actually produced for a copied instruction entry:
+ * a self-contained link, a checkout-bound link, a dereferenced file, or nothing.
+ * The producer's expected outcome is derived from this, never assumed. */
+function classifyCopiedLink(
+  treeRoot: string,
+  entry: string,
+): { kind: "symlink" | "file" | "missing"; portable: boolean } {
+  if (!existsSync(entry)) return { kind: "missing", portable: false };
+  if (!lstatSync(entry).isSymbolicLink()) return { kind: "file", portable: true };
+  const rel = relative(treeRoot, realpathSync(entry));
+  return { kind: "symlink", portable: rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel) };
 }
 
 afterAll(() => {
@@ -299,6 +318,12 @@ describe("execution-consumer-manifest — canonical collection", () => {
     const omp = manifest.consumers.find((consumer) => consumer.id === "omp");
     expect(omp?.runtime.target).toBe("bun");
     expect(omp?.runtime.floor).toBe(">=1.4.0");
+    // The plugin manifest source is a real copy input, not only its root mirror.
+    expect(omp?.sources.files.map((file) => file.path)).toEqual([
+      ".omp-plugin/plugin.json",
+      "packages/omp/package.json",
+      "packages/omp/tsconfig.json",
+    ]);
     // The plugin loads the package-root convention mirrors, so they are part of
     // the generated closure, not only `dist`.
     expect(omp?.generated.trees.map((tree) => tree.root)).toEqual([
@@ -343,7 +368,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "commands->packages/dsh/harness-commands",
       "skills->packages/dsh/harness-skills",
     ]);
-    expect(dshCopies.map((tree) => tree.files)).toEqual([1, 1, 3]);
+    expect(dshCopies.map((tree) => tree.files)).toEqual([1, 1, 2]);
 
     const ompCopies = manifest.consumers.find((consumer) => consumer.id === "omp")?.copiedInstructions ?? [];
     expect(ompCopies.map((tree) => tree.targetRoot)).toEqual([
@@ -446,21 +471,78 @@ describe("execution-consumer-manifest — verification refusals", () => {
     );
   });
 
-  test("refuses a stale copied instruction corpus and a repointed copied symlink", () => {
-    const corpusDrift = buildFixture();
-    const corpusManifest = collectExecutionConsumerManifest(corpusDrift);
+  test("refuses a changed OMP plugin manifest while the old root copy stays", () => {
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
+    writeFileSync(join(root, ".omp-plugin/plugin.json"), '{ "name": "renamed-harness" }\n');
+    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+    expect(readFileSync(join(root, "packages/omp/plugin.json"), "utf8")).toBe(
+      '{ "name": "morning-star-harness" }\n',
+    );
+  });
+
+  test("refuses a stale copied instruction corpus", () => {
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
     writeFileSync(
-      join(corpusDrift, "packages/dsh/harness-skills/mstar-demo/SKILL.md"),
+      join(root, "packages/dsh/harness-skills/mstar-demo/SKILL.md"),
       "# drifted skill\n",
     );
-    expectRefusal(() => verifyExecutionConsumerManifest(corpusManifest), "consumer.digest-mismatch");
+    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+  });
 
-    const linkDrift = buildFixture();
-    const linkManifest = collectExecutionConsumerManifest(linkDrift);
-    writeFileSync(join(linkDrift, "packages/dsh/harness-skills/shared/other.md"), "shared note\n");
-    unlinkSync(join(linkDrift, "packages/dsh/harness-skills/mstar-demo/linked.md"));
-    symlinkSync("../shared/other.md", join(linkDrift, "packages/dsh/harness-skills/mstar-demo/linked.md"));
-    expectRefusal(() => verifyExecutionConsumerManifest(linkManifest), "consumer.digest-mismatch");
+  test("the real bundler copy decides whether an instruction symlink stays portable", () => {
+    const root = buildFixture({ instructionSymlink: true });
+    const copied = join(root, "packages/dsh/harness-skills/mstar-demo/linked.md");
+    const treeRoot = join(root, "packages/dsh/harness-skills");
+    const shape = classifyCopiedLink(treeRoot, copied);
+
+    if (shape.kind === "symlink" && shape.portable) {
+      // The bundler produced a self-contained link: parity must be accepted.
+      verifyExecutionConsumerManifest(collectExecutionConsumerManifest(root));
+      return;
+    }
+    if (shape.kind === "symlink") {
+      // The copy kept a checkout-bound backlink (or points at a foreign file):
+      // the producer must refuse it, never accept it as portable parity.
+      expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.symlink-escapes-tree");
+      return;
+    }
+    // Dereferenced into a regular file, or dropped: the copied entry no longer
+    // matches the source link shape, so the tree digest must refuse.
+    expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.digest-mismatch");
+  });
+
+  test("refuses a copied tree that keeps a link back into the source checkout", () => {
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
+    // A link from inside the copied tree back to the repo corpus is not
+    // installable, even though it resolves inside the checkout.
+    symlinkSync(
+      "../../../../skills/shared/note.md",
+      join(root, "packages/dsh/harness-skills/mstar-demo/backlink.md"),
+    );
+    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.symlink-escapes-tree");
+  });
+
+  test("refuses source symlinks that escape the checkout or dangle", () => {
+    const outsideLink = buildFixture();
+    const outside = join(dirname(outsideLink), "outside-instruction.md");
+    writeFileSync(outside, "foreign instruction\n");
+    try {
+      symlinkSync(outside, join(outsideLink, "skills/mstar-demo/outside.md"));
+      expectRefusal(() => collectExecutionConsumerManifest(outsideLink), "consumer.symlink-escapes-tree");
+    } finally {
+      rmSync(outside, { force: true });
+    }
+
+    const crossTree = buildFixture();
+    symlinkSync("../skills/shared/note.md", join(crossTree, "agents/escaped.md"));
+    expectRefusal(() => collectExecutionConsumerManifest(crossTree), "consumer.symlink-escapes-tree");
+
+    const dangling = buildFixture();
+    symlinkSync("../shared/missing.md", join(dangling, "skills/mstar-demo/dangling.md"));
+    expectRefusal(() => collectExecutionConsumerManifest(dangling), "consumer.symlink-unresolved");
   });
 
   test("refuses runtime, capability, packageRoot, protocol and set tampering", () => {
@@ -576,7 +658,7 @@ describe("execution-consumer-manifest — verification refusals", () => {
     }
   });
 
-  test("refuses file, root and output symlinks that point outside the checkout", () => {
+  test("refuses file, root and artifact symlinks that point outside the checkout", () => {
     const fileLink = buildFixture();
     const outsideFile = join(dirname(fileLink), "outside-package.json");
     writeFileSync(outsideFile, '{ "engines": { "node": ">=24.18.0" } }\n');
@@ -610,12 +692,6 @@ describe("execution-consumer-manifest — verification refusals", () => {
       rmSync(outsideArtifact, { force: true });
     }
   });
-
-  test("refuses a symlink that resolves outside its own tree", () => {
-    const root = buildFixture();
-    symlinkSync("../skills/shared/note.md", join(root, "agents/escaped.md"));
-    expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.symlink-escapes-tree");
-  });
 });
 
 describe("execution-consumer-manifest — CLI", () => {
@@ -642,13 +718,13 @@ describe("execution-consumer-manifest — CLI", () => {
       verifyExecutionConsumerManifest(manifest);
     }
     expect(written[0]).toBe(written[written.length - 1]);
+    // The staging files are renamed away, never left behind.
+    expect(targets.some((target) => existsSync(`${target}.staging-${process.pid}`))).toBe(false);
 
     // The written manifest lives inside the recorded dist trees; the digest must
     // stay stable across the write (the manifest basename is excluded).
-    const before = readFileSync(join(root, "packages/cli/dist/mstar-harness.js"), "utf8");
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(0);
     expect(targets.map((target) => readFileSync(target, "utf8"))).toEqual(written);
-    expect(readFileSync(join(root, "packages/cli/dist/mstar-harness.js"), "utf8")).toBe(before);
 
     // A drifted copy of one manifest refuses rather than silently winning.
     writeFileSync(join(root, "hooks/execution-consumer.json"), "{}\n");
@@ -657,6 +733,22 @@ describe("execution-consumer-manifest — CLI", () => {
     // Invalid JSON in every copy is a stable schema refusal, not a raw SyntaxError.
     for (const target of targets) writeFileSync(target, "{ not json");
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+  });
+
+  test("refuses a pre-created staging path instead of writing through it", async () => {
+    const root = buildFixture();
+    const outside = join(dirname(root), "outside-staging.json");
+    writeFileSync(outside, "foreign staging\n");
+    try {
+      const target = executionConsumerManifestPaths(root)[0]!;
+      mkdirSync(dirname(target), { recursive: true });
+      symlinkSync(outside, `${target}.staging-${process.pid}`);
+      expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(1);
+      expect(readFileSync(outside, "utf8")).toBe("foreign staging\n");
+      expect(existsSync(target)).toBe(false);
+    } finally {
+      rmSync(outside, { force: true });
+    }
   });
 
   test("refuses to read or write a manifest through a symlink", async () => {
@@ -673,6 +765,19 @@ describe("execution-consumer-manifest — CLI", () => {
     } finally {
       rmSync(outside, { force: true });
     }
+  });
+
+  test("refuses a manifest copy symlinked to another in-repo manifest", async () => {
+    const root = buildFixture();
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(0);
+
+    const targets = executionConsumerManifestPaths(root);
+    const source = targets[0]!;
+    const redirected = targets[targets.length - 1]!;
+    // Byte-identical bytes, so only the lexical symlink check can catch this.
+    unlinkSync(redirected);
+    symlinkSync(source, redirected);
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
   });
 
   test("the real entrypoint runs under bun from an arbitrary cwd", () => {
