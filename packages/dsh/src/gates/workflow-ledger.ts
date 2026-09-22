@@ -30,8 +30,9 @@
  * harness-root cursor file is NOT read — no fallback). The cursor is only the
  * SCAN BOUND: the DEDUP AUTHORITY is the row's stable `eventId`
  * (`wfe1:<kind>:<sessionId>:<streamId>:<seq>`, where `streamId` is the
- * VERIFIED native log incarnation — the log's immutable head, never the store
- * epoch) recorded in the durable accepted-identity index
+ * VERIFIED native log incarnation — the durable session header's creation
+ * stamp paired with the session id, never the store epoch) recorded in the
+ * durable accepted-identity index
  * (`agent-flow-ids.jsonl`), which survives tail compaction and cursor
  * eviction. The cursor entry stores the incarnation it belongs to, so a
  * rebuilt log is scanned from its own floor instead of being skipped by a
@@ -250,7 +251,7 @@ interface AgentsView {
  * is deliberately not part of this view — the scan never copies a whole log.
  */
 interface SessionView {
-  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown }
+  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown; createdAt?: unknown }
   seq?: unknown
   inheritedEventCount?: unknown
   eventAt?(seq: number): unknown
@@ -324,71 +325,29 @@ function sessionEventAtOf(session: unknown): ((seq: number) => unknown) | undefi
 }
 
 /**
- * The VERIFIED native log INCARNATION of one session — derived from the
- * durable log itself, not from a guess. The anchor is the log's IMMUTABLE
- * HEAD: the event stored at seq 0 (`eventAt(0)`), fingerprinted by its type,
- * its envelope time and a canonical serialization of its payload. A resumed
- * session replays the same stored head → the same incarnation; a rebuilt or
- * reused session id starts a different head → a different incarnation. The
- * store epoch is deliberately NOT an input (an epoch change is not a new log
- * and must not fork history), and neither is a file mtime.
+ * The VERIFIED native log INCARNATION of one session — read from the durable
+ * session header, which the SDK marks as REQUIRED creation metadata.
  *
- * SDK evidence (`@deepseek-ai/dsh-session`): the real `Session` exposes
- * `header` (id/createdAt/lineage), `seq` and `eventAt(seq)`; the header
- * creation stamp is a stronger native fact but reading it is OPTIONAL here,
- * because the log head is the fact that also holds for the structural session
- * surfaces this consumer is handed, and because the identity must be the SAME
- * one the cursor and the compaction window are keyed on. The fingerprint is
- * canonical so two reads of one stored event always agree.
+ * SDK evidence (`@deepseek-ai/dsh-session` `lib/types/types.d.ts`): the real
+ * `Session` exposes `header: SessionHeader` with required `version`, `id`,
+ * `createdAt` (non-negative safe-integer Unix epoch ms) and `isSeeded`.
+ * `createdAt` is immutable storage metadata, so a resumed log replays the same
+ * stamp while a rebuilt or reused session id carries a new one. The store epoch
+ * is deliberately NOT an input (an epoch change is not a new log) and neither
+ * is any file mtime. Pairing the session id with that stamp makes the identity
+ * stable for the WHOLE life of the log — including before its first event,
+ * which is why a legitimate newly created session's first event is recorded
+ * rather than refused, and why the identity is readable without touching the
+ * event log at all.
  *
- * Returns `undefined` when no verified head is readable (no `eventAt`, an
- * empty log, a malformed head): the caller then REFUSES the identity-bearing
- * association instead of falling back to the bare session id — an
- * unverifiable incarnation must never be presented as a stable stream.
+ * Returns `undefined` when the header carries no valid creation stamp (a
+ * surface that is not a real session): the caller then REFUSES the
+ * identity-bearing association instead of falling back to the bare session id.
  */
 function sessionStreamIdOf(session: unknown, sessionId: string): string | undefined {
-  if (typeof session !== 'object' || session === null) return undefined
-  const cached = streamIncarnationCache.get(session)
-  if (cached !== undefined) return cached.value
-  const head = sessionEventAtOf(session)?.(0)
-  const fingerprint = logHeadFingerprint(head)
-  const value = fingerprint === undefined ? undefined : `s1-${createHash('sha256').update(`${sessionId}\u0000${fingerprint}`).digest('hex').slice(0, 32)}`
-  streamIncarnationCache.set(session, { value })
-  return value
-}
-
-/** Per-session-object memo of the verified incarnation (the object identity is the live incarnation). */
-const streamIncarnationCache = new WeakMap<object, { value: string | undefined }>()
-
-/**
- * The immutable-head fingerprint of one stored log event, or `undefined` when
- * the value is not a readable event envelope. Canonical (sorted object keys,
- * bounded depth and size) so two reads of the same stored event agree.
- */
-function logHeadFingerprint(head: unknown): string | undefined {
-  const rec = asRecord(head)
-  if (rec === undefined) return undefined
-  const type = rec.type
-  if (typeof type !== 'string' || type === '') return undefined
-  const time = typeof rec.time === 'number' && Number.isFinite(rec.time) ? rec.time : null
-  return `${type}\u0000${time}\u0000${canonicalJson(rec.data)}`
-}
-
-/** A canonical, size-bounded JSON rendering of one value (sorted keys; `undefined` for the absent value). */
-function canonicalJson(value: unknown, depth = 0): string {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return String(value)
-  if (typeof value === 'string') return JSON.stringify(value.length > 256 ? value.slice(0, 256) : value)
-  if (value === undefined) return 'undefined'
-  if (depth >= 4) return '[depth]'
-  if (Array.isArray(value)) {
-    const items = value.slice(0, 16).map((item) => canonicalJson(item, depth + 1))
-    return `[${items.join(',')}${value.length > 16 ? ',…' : ''}]`
-  }
-  const rec = asRecord(value)
-  if (rec === undefined) return '[opaque]'
-  const keys = Object.keys(rec).sort()
-  const rendered = keys.slice(0, 32).map((key) => `${JSON.stringify(key)}:${canonicalJson(rec[key], depth + 1)}`)
-  return `{${rendered.join(',')}${keys.length > 32 ? ',…' : ''}}`
+  const createdAt = (session as SessionView | null | undefined)?.header?.createdAt
+  if (typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt) || createdAt < 0) return undefined
+  return `s1-${createHash('sha256').update(`${sessionId}\u0000${createdAt}`).digest('hex').slice(0, 32)}`
 }
 
 /* ---------------------------------- explicit ledger target ---------------------------------- */

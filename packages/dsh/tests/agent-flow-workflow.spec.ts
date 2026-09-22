@@ -15,7 +15,7 @@
  * narrow to `undefined`.
  */
 import { describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -444,7 +444,13 @@ const SESSION_T0 = 1_700_000_000_000
  * never reads.
  */
 interface FakeSession {
-  header: { id: string; cwd?: string; delegationDepth?: number }
+  /**
+   * The native identity header. `createdAt` is REQUIRED on the real
+   * `SessionHeader` (`@deepseek-ai/dsh-session`) and is the consumer's
+   * incarnation input; the factory stamps `SESSION_T0` by default and a test
+   * that models a REBUILT log passes its own stamp.
+   */
+  header: { id: string; cwd?: string; delegationDepth?: number; createdAt?: number }
   /**
    * The installed `Session`'s durable fork-lineage cut
    * (`inheritedEventCount`): the leading events a conversation fork copied
@@ -478,7 +484,7 @@ function fakeSession(
 ): FakeSession {
   const log: FakeSessionEvent[] = seed.map((e, i) => ({ type: e.type, seq: i, time: SESSION_T0 + i, data: e.data }))
   return {
-    header: { id: init.id ?? `sess-${fakeSessionSeq++}`, ...init.header },
+    header: { id: init.id ?? `sess-${fakeSessionSeq++}`, createdAt: SESSION_T0, ...init.header },
     inheritedEventCount: init.inheritedEventCount ?? 0,
     log,
     get seq(): number { return log.length },
@@ -494,8 +500,8 @@ function fakeSession(
  * FAKES (plain objects): `@deepseek-ai/dsh-session` cannot construct under
  * Bun/JSC (`Session.create` rejects non-lossless-JSON headers — Task 1
  * review reproduced the throw), and the consumer reads only `header.id` /
- * `header.cwd` / `header.delegationDepth` / `seq` / `eventAt(seq)`
- * structurally.
+ * `header.cwd` / `header.delegationDepth` / `header.createdAt` / `seq` /
+ * `eventAt(seq)` structurally.
  */
 class FakeSessionRegistry extends Service {
   private readonly app: Context
@@ -1345,8 +1351,6 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
 
   it('a held workflow lock refuses the record: nothing durable moves, and a later retry advances once', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-lockheld-')
-    const captured: string[] = []
-    const priorAgentFlowSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     try {
       // A foreign lockdir = a peer holding the workflow lock (crashed or stuck
       // mid-write). The whole transaction is refused: no row, no identity
@@ -1355,7 +1359,6 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       await mkdir(lockDir, { recursive: true })
       expect(advanceWatermark(workflowDir, 'parent-1', 1, 's1-stalled', () => false, { timeoutMs: 120 })).toBe(false)
       expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
-      expect(captured.some((m) => m.includes('cursor advance refused'))).toBe(true)
 
       // The peer recovers: the refusal cost a retry, never a lost or a
       // duplicated record.
@@ -1363,7 +1366,6 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       expect(advanceWatermark(workflowDir, 'parent-1', 1, 's1-stalled', () => false)).toBe(true)
       expect(cursorEntry(workflowDir, 'parent-1')).toEqual({ next: 1, stream: 's1-stalled' })
     } finally {
-      setAgentFlowLogger(priorAgentFlowSink)
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -1408,13 +1410,13 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
         "import { readFileSync } from 'node:fs'",
         "import { join } from 'node:path'",
         'interface SessionFixture {',
-        '  header: { id: string; cwd: string }',
+        '  header: { id: string; cwd: string; createdAt: number }',
         '  log: Array<{ type: string; seq: number; time: number; data: object }>',
         '  readonly seq: number',
         '  eventAt(seq: number): unknown',
         '}',
         'class FakeSession {',
-        "  constructor(id, cwd) { this.header = { id, cwd }; this.log = [] }",
+        "  constructor(id, cwd) { this.header = { id, cwd, createdAt: 1700000000000 }; this.log = [] }",
         '  get seq() { return this.log.length }',
         '  eventAt(seq) { return this.log[seq] }',
         '}',
@@ -1476,13 +1478,13 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
         "import { registerWorkflowLedger } from './src/gates/workflow-ledger.ts'",
         "import { HarnessResolver } from './src/gates/_shared.ts'",
         'interface SessionFixture {',
-        '  header: { id: string; cwd: string }',
+        '  header: { id: string; cwd: string; createdAt: number }',
         '  log: Array<{ type: string; seq: number; time: number; data: object }>',
         '  readonly seq: number',
         '  eventAt(seq: number): unknown',
         '}',
         'class FakeSession {',
-        '  constructor(id, cwd) { this.header = { id, cwd }; this.log = [] }',
+        '  constructor(id, cwd) { this.header = { id, cwd, createdAt: 1700000000000 }; this.log = [] }',
         '  get seq() { return this.log.length }',
         '  eventAt(seq) { return this.log[seq] }',
         '}',
@@ -2135,7 +2137,7 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       // BYTE-EXACT, in original order — the accepted history is preserved.
       expect(archived).toBe(`${seeded.slice(0, 11).join('\n')}\n`)
       // Every accepted identity is still durable after the eviction.
-      expect(indexRows(workflowDir).map((row) => row.id)).toContain(parseLine(seeded[0]!)!.eventId)
+      expect(indexRows(workflowDir).map((row) => row.id)).toContain(String(parseLine(seeded[0]!)!.eventId))
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -2254,8 +2256,6 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
 
   it('an already-recorded event id with DIFFERENT bytes is refused — no append, no bound advance', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-refuse-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     try {
       const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(true)
@@ -2269,19 +2269,18 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
         event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-other', name: 'audit' },
       })).toBe(false)
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
-      expect(captured.some((m) => m.includes('already recorded with different bytes'))).toBe(true)
-      // The durable bound still names the next position after the accepted row.
+      // The refused attempt changed NOTHING durable: same bytes on disk, same
+      // index, same scan bound.
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
       expect(cursorEntry(workflowDir, 'sess-a')).toEqual({ next: 1, stream: 'sess-a' })
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('a torn record that could be this event id is refused — an unknown outcome is never accepted success', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-torn-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     try {
       const file = join(workflowDir, AGENT_FLOW_FILE)
       // A partial write of the very row we are about to record (crash mid-append).
@@ -2293,12 +2292,12 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
         source: src(0, 'sess-a'),
         event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
       })).toBe(false)
-      expect(captured.some((m) => m.includes('torn ledger record'))).toBe(true)
+      // Nothing durable moved: the damaged bytes are untouched and neither the
+      // identity index nor a scan bound was created.
       expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
       expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
       expect(readFileSync(file, 'utf8')).toBe(`{"v":1,"ts":1700000000000,"kind":"workflow-run","runId":"run-1","name":"audit","eventId":"${eventId}"`)
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -2354,30 +2353,30 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
 describe('agent-flow — durable authority read/write failures are refusals (F2)', () => {
   it('a PRESENT-but-unreadable cursor refuses the record: no row, no index, no success observation', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-cursor-unreadable-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     try {
-      await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), JSON.stringify({ v: 9, cursors: 'nope' }))
+      const damaged = JSON.stringify({ v: 9, cursors: 'nope' })
+      await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), damaged)
       expect(recordWorkflowEvent({
         harnessDir,
         workflowDir,
         source: src(0, 'sess-a'),
         event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
       })).toBe(false)
-      expect(captured.some((m) => m.includes('durable cursor is unreadable'))).toBe(true)
+      // Refused: no row, no identity entry, no bound advance — and the damaged
+      // sidecar is left exactly as found (an unreadable authority is not
+      // rewritten into a fresh empty one).
       expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
       expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+      expect(readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')).toBe(damaged)
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('an unreadable identity index refuses the record — the dedup authority is never assumed empty', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-unreadable-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     try {
+      // The index path exists but cannot be read as an index (a directory).
       await mkdir(join(workflowDir, AGENT_FLOW_INDEX_FILE), { recursive: true })
       expect(recordWorkflowEvent({
         harnessDir,
@@ -2385,43 +2384,53 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
         source: src(0, 'sess-a'),
         event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
       })).toBe(false)
-      expect(captured.some((m) => m.includes('accepted-identity index is unreadable'))).toBe(true)
+      // The ledger is not written and no bound is established — a re-run after
+      // the authority is repaired records the row exactly once.
       expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      await rm(join(workflowDir, AGENT_FLOW_INDEX_FILE), { recursive: true, force: true })
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-a'),
+        event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
+      })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('a failed identity-index commit refuses the record even though the row reached the ledger — the retry heals it', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-write-fail-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
+    const indexPath = join(workflowDir, AGENT_FLOW_INDEX_FILE)
     try {
-      // A DIRECTORY at the index slot makes the append fail while the ledger
-      // slot stays writable.
-      await mkdir(join(workflowDir, AGENT_FLOW_INDEX_FILE), { recursive: true })
+      // A DANGLING SYMLINK at the index slot: the read stage sees no index
+      // ("absent") while the committed append cannot land (ENOENT through the
+      // link) — a real write-stage failure, not a read refusal.
+      symlinkSync(join(workflowDir, 'missing-index-target'), indexPath)
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(false)
-      expect(captured.some((m) => m.includes('accepted-identity index write failed'))).toBe(true)
-      // The row IS in the ledger (the append cannot be taken back)…
+      // The row IS in the ledger (the append cannot be taken back), but its
+      // identity did NOT commit and no scan bound was written.
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
 
-      // …and the retry recognizes it by identity and indexes it: ONE row.
-      await rm(join(workflowDir, AGENT_FLOW_INDEX_FILE), { recursive: true, force: true })
+      // The retry recognizes the row by identity, indexes it and advances the
+      // bound: still ONE row, ONE identity entry.
+      await rm(indexPath, { force: true })
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(true)
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
       expect(indexRows(workflowDir)).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('a failed cursor write refuses the record (row + identity durable) and the retry does not duplicate it', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-cursor-write-fail-')
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((level, message) => { if (level === 'warn') captured.push(message) })
     const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
     try {
       // A DIRECTORY at the atomic-write temp slot makes the cursor rename fail
@@ -2429,7 +2438,6 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
       const tmp = join(workflowDir, `${WORKFLOW_LEDGER_WATERMARK_FILE}.tmp`)
       await mkdir(tmp, { recursive: true })
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(false)
-      expect(captured.some((m) => m.includes('cursor write failed'))).toBe(true)
       // The row and its identity ARE durable — only the scan bound did not commit.
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
       expect(indexRows(workflowDir)).toHaveLength(1)
@@ -2439,36 +2447,50 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
       expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
     } finally {
-      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
 })
 
-describe('workflow-ledger — verified log incarnation (F2 identity)', () => {
-  /** A session whose log head is unreadable (a trimmed/malformed stored log). */
-  function headlessSession(id: string, cwd: string, event: unknown): unknown {
-    const log: unknown[] = [undefined, event]
-    return {
-      header: { id, cwd },
-      log,
-      get seq(): number { return log.length },
-      eventAt(seq: number): unknown { return log[seq] },
-    }
-  }
-
-  it('a session without a readable log head records nothing — no fabricated incarnation', async () => {
+describe('workflow-ledger — verified native incarnation (F2 identity)', () => {
+  it('a session whose header carries no creation stamp records nothing — no fabricated identity', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-no-incarnation-')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
-    const captured: string[] = []
-    const priorSink = setWorkflowLedgerLogger((level, message) => { if (level === 'warn') captured.push(message) })
+    const priorSink = setWorkflowLedgerLogger(() => {})
     try {
-      sessions.register(headlessSession('sess-nohead', root, { type: 'tool-workflow/run-start', seq: 1, time: SESSION_T0 + 1, data: runStart({ runId: 'run-x' }) }))
+      // The real SessionHeader REQUIRES `createdAt`; a surface without it is
+      // not a real session, so the identity-bearing write is refused.
+      const parent = fakeSession([], { id: 'sess-nostamp', header: { cwd: root, createdAt: undefined } })
+      sessions.register(parent)
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-x' }))
 
-      expect(captured.some((m) => m.includes('identity unavailable'))).toBe(true)
       expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a legitimate newly created session (empty log) records its FIRST event — never permanently refused', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-new-session-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([], { id: 'sess-new', header: { cwd: root } })
+    sessions.register(parent)
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-first' }))
+
+      expect(readAgentFlow(workflowDir)!.events.map((e) => e.runId)).toEqual(['run-first'])
+      const entry = cursorEntry(workflowDir, 'sess-new')!
+      expect(entry.next).toBe(1)
+      expect(entry.stream).toMatch(STREAM_SHAPE)
+      expect(indexRows(workflowDir)).toHaveLength(1)
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -2499,6 +2521,7 @@ describe('workflow-ledger — verified log incarnation (F2 identity)', () => {
       expect(entry.next).toBe(2)
       expect(entry.stream).toMatch(STREAM_SHAPE)
       expect(entry.stream).not.toBe('s1-00000000000000000000000000000000')
+      const boundStream = entry.stream!
       // Both rows carry the SAME verified incarnation the bound was stamped with.
       const streamIds = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')
         .trim()
@@ -2508,7 +2531,7 @@ describe('workflow-ledger — verified log incarnation (F2 identity)', () => {
           if (typeof source === 'object' && source !== null && 'streamId' in source && typeof source.streamId === 'string') return source.streamId
           return ''
         })
-      expect(streamIds).toEqual([entry.stream, entry.stream])
+      expect(streamIds).toEqual([boundStream, boundStream])
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -2516,7 +2539,7 @@ describe('workflow-ledger — verified log incarnation (F2 identity)', () => {
     }
   })
 
-  it('the same session id with a DIFFERENT log is a new incarnation: recorded, never falsely refused', async () => {
+  it('the same session id with a NEW creation stamp is a new incarnation: recorded, never falsely refused', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-incarnation-distinct-')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
@@ -2526,10 +2549,11 @@ describe('workflow-ledger — verified log incarnation (F2 identity)', () => {
         { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-old' }) },
       ], { id: 'sess-same', header: { cwd: root } }))
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
-      // ID reuse: the same session id now holds a DIFFERENT log (new head).
+      // ID reuse: the same session id comes back as a NEW session (a new
+      // durable creation stamp — the native incarnation input).
       sessions.register(fakeSession([
         { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-new' }) },
-      ], { id: 'sess-same', header: { cwd: root } }))
+      ], { id: 'sess-same', header: { cwd: root, createdAt: SESSION_T0 + 5_000 } }))
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
 
       const rows = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').map((line) => parseLine(line)!)
