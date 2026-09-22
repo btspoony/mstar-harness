@@ -17,7 +17,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PlanPathError, resolveRegisteredPlanFile } from "../src/plan-path.js";
+import { PlanPathError, resolveRegisteredPlanFile, type RegisteredPlanFileInput } from "../src/plan-path.js";
 
 const PLAN_ID = "20260921-plan-path-demo";
 
@@ -171,6 +171,37 @@ describe("resolveRegisteredPlanFile — accepted forms", () => {
 });
 
 describe("resolveRegisteredPlanFile — refusals", () => {
+  test("refuses a malformed pointer with its own typed error, not a raw Node TypeError", () => {
+    const root = tmpRoot();
+    const harness = join(root, "harness");
+    writePlan(join(harness, "plans"), `${PLAN_ID}.md`, planMarkdown(PLAN_ID));
+
+    // The exported resolver is a shared contract (§4): a JavaScript caller or a
+    // decoded payload reaches it with a `file` that is not a string at all, and
+    // the refusal must be the typed one its callers map onto their domain error.
+    const malformed: readonly unknown[] = [undefined, null, 42, { path: `plans/${PLAN_ID}.md` }, [PLAN_ID]];
+    for (const file of malformed) {
+      const refusal = refusalOf(() =>
+        resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file } as unknown as RegisteredPlanFileInput),
+      );
+      expect({ file, code: refusal.code, name: refusal.name }).toEqual({
+        file,
+        code: "plan-path.invalid-pointer",
+        name: "PlanPathError",
+      });
+      expect(refusal.message).toContain("strings");
+      expect(refusal.details.form).toBe(null);
+    }
+
+    // The same guard covers a non-string plan id, and echoes no rejected value.
+    const idRefusal = refusalOf(() =>
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: 7, file: `plans/${PLAN_ID}.md` } as unknown as RegisteredPlanFileInput),
+    );
+    expect(idRefusal.code).toBe("plan-path.invalid-pointer");
+    expect(idRefusal.details.plan_id).toBe(null);
+    expect(idRefusal.details.received).toBeUndefined();
+  });
+
   test("refuses the repository-relative .mstar/plans spelling", () => {
     const root = tmpRoot();
     const harness = join(root, ".mstar");

@@ -137,6 +137,14 @@ export function planDeclaredHeaders(planPath: string): Map<string, string> {
 /** The received form of one pointer; named in every diagnostic. */
 type PointerForm = "canonical-absolute" | "harness-relative";
 
+/** The received type of one malformed pointer value — the type, never the value. */
+function describePointerValue(value: unknown): string {
+  if (value === undefined) return "nothing";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
+}
+
 /**
  * Resolve a caller-supplied plan pointer to the one registered plan file.
  *
@@ -149,6 +157,20 @@ type PointerForm = "canonical-absolute" | "harness-relative";
  */
 export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): RegisteredPlanFile {
   const { harnessRoot, planId, file } = input;
+  // The shared exported contract (§4), so the pointer SHAPE is settled before
+  // any path API sees a value: a JavaScript caller or a decoded payload can
+  // supply `null`, a number, an object or no `file` at all, and `isAbsolute`
+  // would then raise a raw Node `TypeError` instead of the typed refusal this
+  // resolver promises and its callers map onto their own domain error. The
+  // rejected value itself is never echoed — only the received type is named.
+  if (typeof planId !== "string" || typeof file !== "string") {
+    throw new PlanPathError(
+      "plan-path.invalid-pointer",
+      "a plan pointer needs a plan id and a file path as strings; received " +
+        `${describePointerValue(planId)} as the plan id and ${describePointerValue(file)} as the file`,
+      { plan_id: typeof planId === "string" ? planId : null, form: null },
+    );
+  }
   // The base a harness-relative spelling resolves against, and the configured
   // plan root, both canonical: a symlinked ancestor can therefore never make an
   // alias pass the equality check below.
@@ -163,11 +185,6 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
   const refusal = (code: PlanPathRefusalCode, message: string, extra: Record<string, unknown> = {}): PlanPathError =>
     new PlanPathError(code, message, { received: file, form, base, expected, permitted, ...extra });
 
-  if (typeof planId !== "string" || typeof file !== "string") {
-    throw refusal("plan-path.invalid-pointer", `a plan pointer needs a plan id and a file path as strings`, {
-      plan_id: typeof planId === "string" ? planId : null,
-    });
-  }
   try {
     assertSafePathComponent(planId, "plan id");
   } catch (error) {
