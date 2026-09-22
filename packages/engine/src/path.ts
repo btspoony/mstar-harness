@@ -666,17 +666,18 @@ export function emitGitignoreSnippet(kind?: HarnessKind): string {
 
 /**
  * Harness-root declaration rule: a trimmed, non-blank, non-comment line
- * matching `^!?/?\.(?:mstar|agents)(?:\/|$)` (compass D25). Both root
- * spellings count, with or without a leading slash, as does a negation
- * (`!`); `.mstarc` alone does not declare. This is a mechanical line scan —
- * no escaping, glob, precedence or custom-root semantics.
+ * matching `^!?/?\.(?:mstar|agents)(?:\/|$)` (plan-conventions § Git 跟踪策略).
+ * Both root spellings count, with or without a leading slash, as does a
+ * negation (`!`); `.mstarc` alone does not declare. This is a mechanical
+ * line scan — no escaping, glob, precedence or custom-root semantics.
  */
 const HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
 
 /**
- * Whether `content` states a harness-root declaration (compass D25). Read
- * only: the lines are trimmed for recognition and the input bytes are never
- * rewritten. A declared file is author-owned — the caller must not append,
+ * Whether `content` states a harness-root declaration: any trimmed non-blank,
+ * non-comment line naming a `.mstar` or `.agents` harness root. Read only —
+ * the lines are trimmed for recognition and the input bytes are never
+ * rewritten. A declared file is author-owned: the caller must not append,
  * reorder, dedupe or normalize its contents.
  */
 export function hasHarnessRootDeclaration(content: string): boolean {
@@ -693,15 +694,14 @@ export function hasHarnessRootDeclaration(content: string): boolean {
  * Validate that `<root>/.gitignore` carries a harness ignore policy per
  * plan-conventions § Git 跟踪策略. An authored harness-root declaration
  * makes the file author-owned and the gate passes as
- * `gitignore.author-declared` (compass D25) — regardless of the DETECTED
- * harness kind, and without proposing a rewrite, normalization or
- * canonical-completion append. A file with no such declaration is
- * undeclared: it reports the canonical entries it lacks for the detected
- * kind — `.mstar/` for a `.mstar` harness, `.agents/` for a legacy
- * `.agents` harness, the default `.mstar/` set for a layout without a
- * canonical snippet (rung-3 `.plans`/`plans`, or no harness yet) — plus the
- * fix that appends the canonical snippet. A missing file stays
- * `gitignore.missing`. Non-blocking: returns a `ValidationResult` (v1
+ * `gitignore.author-declared` — regardless of the DETECTED harness kind, and
+ * without proposing a rewrite, normalization or canonical-completion append.
+ * A file with no such declaration is undeclared: it reports the canonical
+ * entries it lacks for the detected kind — `.mstar/` for a `.mstar` harness,
+ * `.agents/` for a legacy `.agents` harness, the default `.mstar/` set for a
+ * layout without a canonical snippet (rung-3 `.plans`/`plans`, or no harness
+ * yet) — plus the fix that appends the canonical snippet. A missing file
+ * stays `gitignore.missing`. Non-blocking: returns a `ValidationResult` (v1
  * enforcement depth, roadmap §8.5).
  */
 export function validateGitignore(root: string): ValidationResult {
