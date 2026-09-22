@@ -2208,7 +2208,9 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       // occurrence exists exactly once.
       expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
       const tail = readFileSync(file, 'utf8').trim().split('\n')
-      expect(tail).toHaveLength(AGENT_FLOW_MAX_EVENTS + 1)
+      // The recovery compacts to the bound and the new row's own append is
+      // compacted in turn, so the display tail holds the bound either way.
+      expect(tail).toHaveLength(AGENT_FLOW_MAX_EVENTS)
       const archive = listAgentFlowHistoryChunks(workflowDir)
         .map((name) => readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, name), 'utf8'))
         .join('')
@@ -2307,6 +2309,10 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       const seeded = Array.from({ length: 12 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-h', 'sess-h', i, pad))
       const before = `${seeded.join('\n')}\n`
       await writeFile(file, before)
+      // The seeded rows were ACCEPTED, so their identity index exists — the
+      // recovery archives identified rows, and an index that should exist must
+      // never be treated as absent.
+      await seedIdentityIndex(workflowDir, seeded)
       // The journal only: the crash cut between the record and the append.
       await writeFile(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), compactionJournalOf(before, 2, { chunk: 'chunk-000001.jsonl', offset: 0 }))
 
@@ -2324,6 +2330,7 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       const { root: root2, harnessDir: harnessDir2, workflowDir: workflowDir2 } = await tempHarness('dsh-agentflow-compaction-bad-offset-')
       try {
         await writeFile(join(workflowDir2, AGENT_FLOW_FILE), before)
+        await seedIdentityIndex(workflowDir2, seeded)
         await writeFile(join(workflowDir2, AGENT_FLOW_COMPACTION_FILE), compactionJournalOf(before, 2, { chunk: 'chunk-000001.jsonl', offset: 5 }))
         expect(recordWorkflowEvent({
           harnessDir: harnessDir2,
