@@ -57,6 +57,7 @@ export {
   canonicalizeNearestExisting,
   detectHarnessKind,
   emitGitignoreSnippet,
+  hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -593,6 +594,15 @@ export {
   readExecutionState,
   serializeExecutionValue,
 } from "./execution-store.js";
+export type { ExecutionBinding } from "./execution-session.js";
+export {
+  assertExecutionSessionCurrent,
+  createLocalExecutionIdentity,
+  decodeExecutionSessionRef,
+  encodeExecutionSessionRef,
+  executionContextFor,
+  resumeExecutionSession,
+} from "./execution-session.js";
 // §3 the DB plan-operation surface: ONE entry point for the whole closed
 // `CoordinationOperation` union — prepare, progress, residual-add,
 // residual-close, handoff, accept, return, integration-start,

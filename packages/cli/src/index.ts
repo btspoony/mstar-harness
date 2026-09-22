@@ -49,6 +49,7 @@ import {
   findingsCleanupGate,
   GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
+  hasHarnessRootDeclaration,
   isReadOnlyAssignmentRole,
   isTerminalSnapshot,
   IssueError,
@@ -137,6 +138,7 @@ import {
   type AuditSeverityRank,
   type AuditTraceKind,
   type AuditTraceStep,
+  type CatalogExecutionWorkflow,
   type ExecutionPlanView,
   type ExecutionState,
   type GateResult,
@@ -158,6 +160,23 @@ import {
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
+import {
+  assertLegacyExecutionFormAvailable,
+  failExecutionVerb,
+  printExecutionSuccess,
+  registerSessionCommands,
+  requireExecutionIdentity,
+} from "./execution-session";
+import {
+  activeWorkflowContext,
+  activeWorkflowScope,
+  closeActiveWorkflow,
+  readActiveWorkflowFlags,
+  readActiveRegistrationFlags,
+  recordActiveDelivery,
+  registerActiveWorkflow,
+  registerExecutionWorkflowCommands,
+} from "./execution-workflow";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { registerStoreCommands } from "./store-migrate";
@@ -397,33 +416,14 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
- * is a no-op except creating missing pieces. Ordering is normalized as the
- * final step of the gitignore routine: duplicate `.mstar/**` rules are
- * deduped segment-wise \u2014 a trailing duplicate is dropped only when no
- * un-crossable line lies strictly between it and the previously retained
- * broad rule (a custom `!.mstar/…` re-inclusion between two broad rules
- * makes the trailing broad semantically load-bearing: last-match-wins
- * re-ignores the custom path), and a misplaced `.mstar/**` (after one
- * or more canonical `!.mstar/…` re-includes, which gitignore's
- * last-match-wins would shadow) is relocated to sit immediately before the
- * first canonical re-include \u2014 but only when the move crosses no line
- * whose semantics we do not own. The broad rule may cross blank/comment
- * lines, other exact `.mstar/**` duplicates, the 5 canonical negations,
- * and our own `.mstarc` entry; every other line (custom `!.mstar/…`
- * negations, custom `.mstar/<path>` ignores, anything else) is
- * un-crossable. A broad rule already before every canonical negation is
- * correctly placed and never moves, regardless of surrounding custom
- * lines. Infeasible → the file keeps its user-authored order (missing
- * entries were already appended).
+ * is a no-op except creating missing pieces.
+ *
+ * An authored harness-root declaration (`hasHarnessRootDeclaration`) makes
+ * the `.gitignore` author-owned: the fence then writes NO bytes \u2014 no append,
+ * reorder, dedupe or normalization \u2014 and reports it as skipped. The fence
+ * only bootstraps an undeclared file with the canonical snippet; it never
+ * maintains a file that already states its own harness-root policy.
  */
-/** The 5 canonical `!.mstar/…` re-includes (verbatim from the snippet SSOT). */
-const CANONICAL_NEGATIONS: Record<string, true> = {
-  "!.mstar/AGENTS.md": true,
-  "!.mstar/knowledge/": true,
-  "!.mstar/knowledge/**": true,
-  "!.mstar/specs/": true,
-  "!.mstar/specs/**": true,
-};
 
 /**
  * Git top-level of `startDir` (lexical, symlink-safe): mirrors the engine's
@@ -471,17 +471,21 @@ async function runScaffold(pathArg: string | undefined) {
   const created: string[] = [];
   const skipped: string[] = [];
 
- // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
- // snippet literals are `.mstar/**`-based, so the append only makes sense
- // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
- // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
- // and are skipped with an explicit note. The comparison AND the fence target
- // are anchored at the git top-level of `root` (falling back to `root` when
- // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
- // the harness dir against the config file's location, so scaffolding a
- // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
- // `<subdir>/.mstar` and skip the fence while process artifacts stay
- // committable.
+  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
+  // snippet literals are `.mstar/**`-based, so the append only makes sense
+  // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
+  // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
+  // and are skipped with an explicit note. The comparison AND the fence target
+  // are anchored at the git top-level of `root` (falling back to `root` when
+  // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
+  // the harness dir against the config file's location, so scaffolding a
+  // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
+  // `<subdir>/.mstar` and skip the fence while process artifacts stay
+  // committable.
+  //
+  // An authored harness-root declaration makes the file author-owned: the
+  // fence writes NO bytes — no append, reorder, dedupe or normalization. Only
+  // an undeclared file is bootstrapped with the canonical snippet.
   const workspaceRoot = gitWorkspaceRoot(root);
   const harnessKind = detectHarnessKind(harnessDir);
   const mstarDirAtWorkspaceRoot = workspaceRoot.endsWith(path.sep)
@@ -491,301 +495,29 @@ async function runScaffold(pathArg: string | undefined) {
     const gitignorePath = workspaceRoot.endsWith(path.sep)
       ? `${workspaceRoot}.gitignore`
       : `${workspaceRoot}${path.sep}.gitignore`;
-    const snippet = emitGitignoreSnippet("mstar");
     const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-    const snippetLines = snippet.split("\n").map((line) => line.trim());
-    const fenceEntries = snippetLines.filter(
-      (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
-    );
-    const commentLines = snippetLines.filter((line) => line.startsWith("#"));
-    const missing = fenceEntries.filter((entry) => !lines.has(entry));
-    if (missing.length > 0) {
-      const missingComments = commentLines.filter((line) => !lines.has(line));
-      const broadRule = ".mstar/**";
-      const currentLines = current.split(/\r?\n/);
-      const firstNegation = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
-      if (!lines.has(broadRule) && firstNegation !== -1) {
- // gitignore = last matching pattern wins: appending `.mstar/**`
- // after existing `!.mstar/…` re-includes would shadow them. Splice
- // the canonical block start (comments + broad rule + missing
- // re-includes) BEFORE the first negation so the re-includes stay
- // effective. `.mstarc` is a plain ignore (no negations) \u2014 appended
- // at the end when missing.
-        const blockStart = [...missingComments, broadRule, ...missing.filter((entry) => entry.startsWith("!.mstar/"))];
-        currentLines.splice(firstNegation, 0, ...blockStart);
-        let next = currentLines.join("\n");
-        if (missing.includes(".mstarc")) next = `${next}${next.endsWith("\n") ? "" : "\n"}.mstarc\n`;
-        fs.writeFileSync(gitignorePath, next, "utf8");
-      } else {
- // Broad rule present (append missing entries after it) or no
- // negations to shadow (append the whole block) \u2014 both safe.
+    if (hasHarnessRootDeclaration(current)) {
+      skipped.push(".gitignore (author-owned harness-root declaration)");
+    } else {
+      const snippet = emitGitignoreSnippet("mstar");
+      const snippetLines = snippet.split("\n").map((line) => line.trim());
+      const fenceEntries = snippetLines.filter(
+        (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
+      );
+      const commentLines = snippetLines.filter((line) => line.startsWith("#"));
+      const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+      const missing = fenceEntries.filter((entry) => !lines.has(entry));
+      if (missing.length > 0) {
+        const missingComments = commentLines.filter((line) => !lines.has(line));
         const prefix = current && !current.endsWith("\n") ? "\n" : "";
         fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
+        created.push(".gitignore (canonical harness snippet)");
+      } else {
+        skipped.push(".gitignore (canonical harness snippet already present)");
       }
-      created.push(".gitignore (canonical harness snippet)");
-    }
-
- // Unconditional final normalization \u2014 gitignore is last-match-wins, so a
- // misplaced `.mstar/**` (appearing after one or more canonical
- // `!.mstar/…` re-includes, whether pre-existing or just appended) would
- // shadow them. Dedupe is SEGMENTED: a duplicate `.mstar/**` is dropped
- // only when no un-crossable line lies strictly between it and the
- // previously retained broad rule \u2014 a custom `!.mstar/…` re-inclusion
- // between two broad rules makes the trailing broad semantically
- // load-bearing (last-match-wins re-ignores the custom path), so it is
- // retained exactly where it is. The kept (earliest) broad rule is then
- // relocated to sit immediately before the first canonical re-include \u2014
- // but only when the move crosses no line whose semantics we do not own.
- // The broad rule may cross blank/comment lines, other exact
- // `.mstar/**` duplicates, the 5 canonical negations, and our own
- // `.mstarc` entry; every other line (custom `!.mstar/…` negations,
- // custom `.mstar/<path>` ignores, anything else) is un-crossable. A
- // broad rule already before every canonical negation is correctly placed
- // and never moves, regardless of surrounding custom lines. Infeasible →
- // the file keeps its user-authored order (missing entries were already
- // appended above). Every other line stays byte-for-byte. Runs after
- // EVERY branch above.
-    const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
-    const broadIndexes = finalLines
-      .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-      .filter((index) => index !== -1);
-    const canonicalNegationIndexes = finalLines
-      .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-      .filter((index) => index !== -1);
-    const firstCanonicalNegationIndex = canonicalNegationIndexes[0] ?? -1;
-    let normalized = false;
-    if (broadIndexes.length > 0) {
- // Segmented dedupe: drop a duplicate `.mstar/**` only when NO
- // un-crossable line lies strictly between it and the previously
- // retained broad rule. A custom `!.mstar/…` re-inclusion (or any
- // other un-owned line) between two broad rules makes the trailing
- // broad semantically load-bearing \u2014 gitignore's last-match-wins
- // re-ignores the custom path, and deleting the broad would flip
- // that line's meaning. Retained secondary broads stay exactly
- // where they are.
-      let removed = 0;
-      let lastRetainedBroadIndex = broadIndexes[0];
-      for (let i = 1; i < broadIndexes.length; i++) {
-        const candidate = broadIndexes[i] - removed;
-        let crossable = true;
-        for (let j = lastRetainedBroadIndex + 1; j < candidate; j++) {
-          const line = finalLines[j].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          crossable = false;
-          break;
-        }
-        if (crossable) {
-          finalLines.splice(candidate, 1);
-          removed++;
-          normalized = true;
-        } else {
-          lastRetainedBroadIndex = candidate;
-        }
-      }
-      const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
- // A broad rule already before every canonical negation is correctly
- // placed \u2014 never move it, regardless of surrounding custom lines.
- // Only a broad rule AFTER the first canonical negation is misplaced.
-      if (firstCanonicalNegationIndex !== -1 && keptIndex > firstCanonicalNegationIndex) {
- // Feasibility: the move may only cross lines whose semantics we own
- // \u2014 blank/comment lines, other exact `.mstar/**` duplicates, the 5
- // canonical negations, and our own `.mstarc` entry. Any other line
- // (custom `!.mstar/…` negation, custom `.mstar/<path>` ignore, or
- // anything else) between the first canonical negation and the kept
- // rule makes the relocation infeasible \u2014 the file keeps its
- // user-authored order.
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndex; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndex, 0, broadLine);
-          normalized = true;
-        }
-      }
- // Ownership invariant, final pass. Pipeline order matters for
- // one-run convergence:
- // 1. PARTITION \u2014 user-authored targeted `.mstar/…` rules always speak
- // LAST: relocate every targeted user rule (non-canonical
- // `!.mstar/…` re-inclusions and `.mstar/<path>` ignores \u2014 never
- // the bare broad rule, canonical negations, or our own
- // `.mstarc`) to after the fence, preserving their relative order.
- // Gitignore's last-match-wins then resolves every overlap in the
- // user's favor while our tracked results stay re-included.
- // 2. DEDUPE \u2014 after the partition no un-owned line can sit between
- // two broad rules, so any extra `.mstar/**` is redundant: keep
- // the first only.
- // 3. RELOCATE \u2014 a broad rule sitting after the first canonical
- // negation is moved before it when only owned lines lie in
- // between.
- // 4. GUARANTEE \u2014 every canonical negation occurs at least once after
- // the last broad rule (append missing occurrences; duplicates are
- // harmless in gitignore).
-      const isTargetedUserMstarRule = (line: string): boolean => {
-        const trimmed = line.trim();
-        if (trimmed === "" || trimmed.startsWith("#")) return false;
-        if (trimmed === ".mstar/**" || trimmed === ".mstarc") return false;
-        if (CANONICAL_NEGATIONS[trimmed] === true) return false;
-        if (trimmed.startsWith("!.mstar/") || trimmed.startsWith(".mstar/")) return true;
-        return false;
-      };
-      const isOwnedLine = (line: string): boolean => !isTargetedUserMstarRule(line);
-
- // 1. Partition targeted user rules to the tail (with synthesis).
-      const targetedRules = finalLines.filter((line) => isTargetedUserMstarRule(line));
-      if (targetedRules.length > 0) {
-        const owned = finalLines.filter(isOwnedLine);
-        const hadTrailingNewline = owned[owned.length - 1] === "";
-        const ownedBody = hadTrailingNewline ? owned.slice(0, -1) : owned;
- // A contents-level negation like `!.mstar/custom/**` cannot take
- // effect while its parent directory stays excluded by
- // `.mstar/**` \u2014 git prunes excluded directories without descending
- // (this is why the canonical fence pairs `!.mstar/knowledge/` with
- // `!.mstar/knowledge/**`). Synthesize the missing
- // ancestor-directory re-inclusions so the relocated user rule keeps
- // working after the fence.
-        const tail: string[] = [];
-        const ensuredDirs = new Set<string>();
-        const broadPositionsPrePartition = finalLines
-          .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-          .filter((index) => index !== -1);
-        const lastBroadPrePartition =
-          broadPositionsPrePartition[broadPositionsPrePartition.length - 1] ?? -1;
-        for (const rule of targetedRules) {
-          const trimmedRule = rule.trim();
-          if (trimmedRule.startsWith("!") && trimmedRule.endsWith("/**")) {
-            const inner = trimmedRule.slice(1, -3); // e.g. `.mstar/custom`
-            const segments = inner.split("/").slice(1); // drop the harness dir name
-            let prefix = inner.split("/")[0];
-            for (const segment of segments) {
-              prefix += "/" + segment;
-              const dirNegation = "!" + prefix + "/";
- // Idempotency: skip when the dir negation already exists
- // after the last broad rule (synthesized by an earlier run)
- // or is already queued in this pass.
-              const alreadyQueued = ensuredDirs.has(dirNegation);
-              const alreadyPresent =
-                !alreadyQueued &&
-                finalLines.some(
-                  (line, index) =>
-                    index > lastBroadPrePartition && line.trim() === dirNegation,
-                );
-              if (!alreadyQueued && !alreadyPresent) {
-                ensuredDirs.add(dirNegation);
-                tail.push(dirNegation);
-              }
-            }
-          }
-          tail.push(rule);
-        }
-        const rebuilt = [...ownedBody, ...tail];
-        const current =
-          finalLines[finalLines.length - 1] === "" ? finalLines.slice(0, -1) : finalLines;
-        if (rebuilt.join("\n") !== current.join("\n")) {
-          finalLines.length = 0;
-          finalLines.push(...rebuilt);
-          normalized = true;
-        }
-      }
-
- // Recompute broad positions after the partition.
-      const broadAfter = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadAfter.length > 1) {
- // 2. Dedupe: post-partition every line between two broad rules is
- // owned, so extra broad rules are pure redundancy. Removing them
- // can only make canonical re-inclusions effective.
-        const [first, ...duplicates] = broadAfter;
-        let removed = 0;
-        for (const duplicate of duplicates) {
-          finalLines.splice(duplicate - removed, 1);
-          removed++;
-        }
-        if (removed > 0) normalized = true;
-      }
-
- // Recompute once more; relocate a misplaced primary broad rule.
-      const broadIndexesFinal = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      const canonicalNegationIndexesFinal = finalLines
-        .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-        .filter((index) => index !== -1);
-      const firstCanonicalNegationIndexFinal = canonicalNegationIndexesFinal[0] ?? -1;
-      if (
-        broadIndexesFinal.length > 0 &&
-        firstCanonicalNegationIndexFinal !== -1 &&
-        broadIndexesFinal[0] > firstCanonicalNegationIndexFinal
-      ) {
-        const keptIndex = broadIndexesFinal[0];
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndexFinal; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "" || line.startsWith("#")) continue;
-          if (line === ".mstar/**" || line === ".mstarc") continue;
-          if (CANONICAL_NEGATIONS[line] === true) continue;
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndexFinal, 0, broadLine);
-          normalized = true;
-        }
-      }
-
- // 4. Guarantee: every canonical negation occurs at least once AFTER
- // the last broad rule. A retained/misplaced broad sitting between
- // canonical re-inclusions would otherwise shadow them under
- // last-match-wins even though the fence was reported as installed.
-      const broadIndexesLast = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadIndexesLast.length > 0) {
-        const lastBroadIndex = broadIndexesLast[broadIndexesLast.length - 1];
- // Insert missing negations BEFORE the partitioned user tail (the
- // first targeted user rule, if any) \u2014 appending after it would put
- // our negations past the user's rules, and the next run's partition
- // would move the user rules again (flip-flop).
-        let insertIndex = finalLines.findIndex((line) => isTargetedUserMstarRule(line));
-        if (insertIndex === -1) insertIndex = finalLines.length;
-        for (const negation of Object.keys(CANONICAL_NEGATIONS)) {
-          const covered = finalLines.some(
-            (line, index) => index > lastBroadIndex && line.trim() === negation,
-          );
-          if (!covered) {
-            finalLines.splice(insertIndex, 0, negation);
-            insertIndex++;
-            normalized = true;
-          }
-        }
-      }
- // Preserve a trailing newline whenever normalization changed the
- // file (appends land after any newline the original file had).
-      if (normalized && finalLines[finalLines.length - 1] !== "") finalLines.push("");
-    }
-    if (normalized) {
-      fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
-      created.push(".gitignore (canonical harness snippet reordered)");
-    } else if (missing.length === 0) {
-      skipped.push(".gitignore (canonical harness snippet already present)");
     }
   } else {
-    skipped.push(".gitignore (canonical harness snippet) \u2014 custom harness layout manages its own ignore rules");
+    skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
   }
 
  // Minimal {HARNESS_DIR}/AGENTS.md harness-layer rules (tracked result).
@@ -1071,6 +803,15 @@ statusCommand
         if (harnessDir !== null && (await resolveExecutionReadRoute({ harnessDir })) === "execution") {
           const read = await readExecutionAuthority({ harnessDir });
           console.log(pc.green(`${authorityLabel(read)} register: OK`));
+          // The active transport addresses a scope by ITS OWN CAS token (§3.2):
+          // the register read is the route that reports them, so a caller can
+          // pass `--expect` from this read instead of inventing a revision.
+          console.log(`  root token: ${read.token}`);
+          if ("workflows" in read.data) {
+            for (const entry of read.data.workflows) {
+              console.log(`  workflow ${entry.state.id} token: ${entry.workflowToken}`);
+            }
+          }
           return;
         }
       }
@@ -1303,14 +1044,32 @@ statusCommand
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
-  .option("--ended-at <date>", "Terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
-  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
-  .action(async (options: { workflow?: string; harness?: string; endedAt?: string; session?: string }) => {
+  .option("--ended-at <date>", "Pre-activation only: terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
+  .option("--session <path>", "Pre-activation: absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
+  .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+  .option("--expect <token>", "Active DB route: the workflow's full execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+  .option("--reason <text>", "Active DB route: the reason recorded with the terminal lifecycle transition")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
+  .action(
+    async (options: {
+      workflow?: string;
+      harness?: string;
+      endedAt?: string;
+      session?: string;
+      sessionRef?: string;
+      expect?: string;
+      operation?: string;
+      reason?: string;
+      json?: boolean;
+    }) => {
     try {
       const workflowId = options.workflow;
       if (workflowId === undefined || workflowId.trim() === "") {
         throw new SddScriptError(
-          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]",
+          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]\n" +
+            "       status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> " +
+            "--operation <id> --reason <text> [--harness <path>] [--json]",
           2,
         );
       }
@@ -1326,6 +1085,45 @@ statusCommand
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
       }
+      // Active DB route (contract §3.2): the terminal state and the registry
+      // membership belong to the execution authority, so this form performs the
+      // terminal `lifecycle` transition and NOTHING else — no file close, no
+      // unregister step, and no `--ended-at` rewrite.
+      const active = readActiveWorkflowFlags(options, "status workflow-close");
+      if (active !== null) {
+        if (options.endedAt !== undefined) {
+          throw new SddScriptError(
+            "status workflow-close: --ended-at belongs to the pre-activation file close \u2014 the active lifecycle transition " +
+              "records its own timestamp",
+            2,
+          );
+        }
+        const reason = options.reason;
+        if (reason === undefined || reason.trim() === "") {
+          throw new SddScriptError(
+            "usage: status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> " +
+              "--operation <id> --reason <text> [--harness <path>] [--json]",
+            2,
+          );
+        }
+        setArtifactStore(createFsStore(harnessDir));
+        const receipt = await closeActiveWorkflow(
+          activeWorkflowContext({ workflowId, role: "coordinator", planId: null }, harnessDir, "status workflow-close"),
+          workflowId,
+          active,
+          reason,
+        );
+        printExecutionSuccess(
+          "status workflow-close",
+          receipt,
+          options.json === true,
+          `workflow-close: ${workflowId} closed through the execution authority`,
+        );
+        return;
+      }
+      // Pre-activation route. While the authority is ACTIVE the retired file
+      // close (and its unregister step) is refused before any write.
+      await assertLegacyExecutionFormAvailable({ harnessDir }, "status workflow-close");
       // Store-root pinning (see `status workflow-register`): closeWorkflow and
       // unregisterWorkflow write through the active ArtifactStore with
       // fail-loud path agreement — the control harness root resolved above
@@ -1372,7 +1170,8 @@ statusCommand
           : `workflow-close: status.json has no ${workflowId} entry (${statusFile})`,
       );
     } catch (error) {
-      failScript(error, "status workflow-close");
+      if (options.json === true) failExecutionVerb("status workflow-close", error, true);
+      else failScript(error, "status workflow-close");
     }
   });
 
@@ -1433,6 +1232,9 @@ workflowCommand
   .option("--completion-policy <text>", "Completion evidence policy (required for verification/report-only)")
   .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--expect <token>", "Active DB route: the store's full root execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one registration operation (the replay key)")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -1446,6 +1248,9 @@ workflowCommand
       completionPolicy?: string;
       startedAt?: string;
       harness?: string;
+      expect?: string;
+      operation?: string;
+      json?: boolean;
     }) => {
       try {
         const usage =
@@ -1480,6 +1285,50 @@ workflowCommand
         if (!harnessDir) {
           throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
         }
+        // Contract §3: one producer call, whichever route publishes it. The
+        // active route consumes it through `commitExecutionRegistration`
+        // (trusted identity + full expected token); the pre-activation route
+        // keeps the catalog journal unchanged.
+        const workflow: CatalogExecutionWorkflow = {
+          kind: "plan",
+          workflowId: options.workflow!,
+          options: {
+            harnessDir,
+            plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
+            deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+            ...(options.project !== undefined ? { project: options.project } : {}),
+            ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+            ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+            ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+            ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+          },
+        };
+        const active = readActiveRegistrationFlags(options, "workflow register");
+        if (active !== null) {
+          setArtifactStore(createFsStore(harnessDir));
+          const identity = requireExecutionIdentity(
+            { workflowId: options.workflow!, role: "coordinator", planId: null },
+            "workflow register",
+          );
+          const receipt = await registerActiveWorkflow({ harnessDir }, {
+            workflow,
+            actor: "cli:workflow-register",
+            flags: active,
+            identity,
+          });
+          if (options.json === true) {
+            console.log(JSON.stringify({ ok: true, route: "execution", operation: "workflow register", data: receipt }));
+          } else {
+            console.log(
+              pc.green(
+                `workflow register: OK \u2014 ${receipt.workflowId} registered through the execution authority ` +
+                  `(catalog revision ${receipt.catalogRevision}, operation ${receipt.operationId})`,
+              ),
+            );
+          }
+          return;
+        }
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow register");
         // Store-root pinning (see `status workflow-close`): the register
         // producer writes through the active ArtifactStore with fail-loud
         // path agreement — the control harness root resolved above must
@@ -1494,20 +1343,7 @@ workflowCommand
           // a duplicate registration keeps its create-only refusal.
           operationId: randomUUID(),
           actor: "cli:workflow-register",
-          workflow: {
-            kind: "plan",
-            workflowId: options.workflow!,
-            options: {
-              harnessDir,
-              plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
-              deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-              ...(options.project !== undefined ? { project: options.project } : {}),
-              ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
-              ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
-              ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
-              ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
-            },
-          },
+          workflow,
         });
         console.log(
           pc.green(
@@ -1518,7 +1354,8 @@ workflowCommand
         );
         console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
-        failScript(error, "workflow register");
+        if (options.json === true) failExecutionVerb("workflow register", error, true);
+        else failScript(error, "workflow register");
       }
     },
   );
@@ -1577,9 +1414,13 @@ workflowCommand
   .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (declare mode; required for development)")
   .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (declare mode; required for development)")
   .option("--completion-policy <text>", "Completion policy for verification/report-only (declare mode; required for that kind)")
-  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
-  .option("--at <timestamp>", "Recording/declaration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--session <path>", "Pre-activation: absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
+  .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+  .option("--expect <token>", "Active DB route: the workflow's full execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+  .option("--at <timestamp>", "Pre-activation only: recording/declaration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -1589,15 +1430,21 @@ workflowCommand
       branchTarget?: string;
       completionPolicy?: string;
       session?: string;
+      sessionRef?: string;
+      expect?: string;
+      operation?: string;
       at?: string;
       harness?: string;
+      json?: boolean;
     }) => {
     try {
       const workflowId = options.workflow;
       const usage =
         "usage: workflow evidence --workflow <id> (--file <payload.json> | --declare-kind <kind> " +
         "[--branch-source <branch> --branch-target <branch> | --completion-policy <text>]) " +
-        "[--session <path>] [--at <ts>] [--harness <path>]";
+        "[--session <path>] [--at <ts>] [--harness <path>]\n" +
+        "       workflow evidence --workflow <id> --file <payload.json> --session-ref <wire> " +
+        "--expect <full-execution-token> --operation <id> [--harness <path>] [--json]";
       if (workflowId === undefined || workflowId.trim() === "") {
         throw new SddScriptError(usage, 2);
       }
@@ -1627,6 +1474,37 @@ workflowCommand
       const harnessDir = resolveProcessHarnessDir(options.harness);
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+      }
+      const active = readActiveWorkflowFlags(options, "workflow evidence");
+      if (declaring) {
+        // A one-time delivery-kind declaration is a pre-activation snapshot
+        // rewrite: the DB creation route declares its kind at registration, so
+        // there is no active operation for it and it is never disguised as one.
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow evidence --declare-kind");
+      } else if (active !== null) {
+        if (options.at !== undefined) {
+          throw new SddScriptError(
+            "workflow evidence: --at belongs to the pre-activation file write \u2014 the active delivery transition records its " +
+              "own timestamp",
+            2,
+          );
+        }
+        setArtifactStore(createFsStore(harnessDir));
+        const receipt = await recordActiveDelivery(
+          activeWorkflowContext(activeWorkflowScope(workflowId, active.ref, "workflow evidence"), harnessDir, "workflow evidence"),
+          workflowId,
+          active,
+          evidence!,
+        );
+        printExecutionSuccess(
+          "workflow evidence",
+          receipt,
+          options.json === true,
+          `workflow evidence: OK \u2014 ${workflowId} delivery evidence recorded through the execution authority`,
+        );
+        return;
+      } else {
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow evidence");
       }
       // Store-root pinning (see `status workflow-close`): the evidence write
       // routes through the active ArtifactStore with fail-loud path
@@ -1662,7 +1540,8 @@ workflowCommand
         ),
       );
     } catch (error) {
-      failScript(error, "workflow evidence");
+      if (options.json === true) failExecutionVerb("workflow evidence", error, true);
+      else failScript(error, "workflow evidence");
     }
   });
 
@@ -2611,6 +2490,9 @@ iterationCommand
   .option("--project <id>", "Project register id recorded on the snapshot")
   .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--expect <token>", "Active DB route: the store's full root execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one registration operation (the replay key)")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -2622,6 +2504,9 @@ iterationCommand
       project?: string;
       startedAt?: string;
       harness?: string;
+      expect?: string;
+      operation?: string;
+      json?: boolean;
     }, command: Command) => {
       try {
         const usage =
@@ -2707,24 +2592,62 @@ iterationCommand
             );
           }
         });
+        // Contract §3: one producer call, whichever route publishes it. The
+        // active route consumes it through `commitExecutionRegistration`
+        // (trusted identity + full expected token) with the P2-resolved plan
+        // pointers; the pre-activation route keeps the catalog journal
+        // unchanged.
+        const workflow: CatalogExecutionWorkflow = {
+          kind: "iteration",
+          workflowId: options.workflow!,
+          options: {
+            harnessDir,
+            compassRef: options.compassRef!,
+            branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
+            rows: resolvedRows,
+            ...(options.project !== undefined ? { project: options.project } : {}),
+            ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+          },
+        };
+        // Only the fields this helper reads are projected: `--row` is a
+        // repeatable array the registration owns, not part of the active
+        // transport flag set.
+        const active = readActiveRegistrationFlags(
+          { expect: options.expect, operation: options.operation },
+          "iteration register",
+        );
+        if (active !== null) {
+          setArtifactStore(createFsStore(harnessDir));
+          const identity = requireExecutionIdentity(
+            { workflowId: options.workflow!, role: "coordinator", planId: null },
+            "iteration register",
+          );
+          const receipt = await registerActiveWorkflow({ harnessDir }, {
+            workflow,
+            actor: "cli:iteration-register",
+            flags: active,
+            identity,
+          });
+          if (options.json === true) {
+            console.log(JSON.stringify({ ok: true, route: "execution", operation: "iteration register", data: receipt }));
+          } else {
+            console.log(
+              pc.green(
+                `iteration register: OK \u2014 ${receipt.workflowId} registered through the execution authority ` +
+                  `(catalog revision ${receipt.catalogRevision}, operation ${receipt.operationId})`,
+              ),
+            );
+          }
+          return;
+        }
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "iteration register");
         // Contract §3: the shipped entry point registers through the catalog
         // registration journal and reports success only from the committed
         // receipt — a half-registered workflow is never advertised.
         const result = await registerShippedCatalogExecution({ harnessDir }, {
           operationId: randomUUID(),
           actor: "cli:iteration-register",
-          workflow: {
-            kind: "iteration",
-            workflowId: options.workflow!,
-            options: {
-              harnessDir,
-              compassRef: options.compassRef!,
-              branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
-              rows: resolvedRows,
-              ...(options.project !== undefined ? { project: options.project } : {}),
-              ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
-            },
-          },
+          workflow,
         });
         console.log(
           pc.green(
@@ -2735,7 +2658,8 @@ iterationCommand
         );
         console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
-        failScript(error, "iteration register");
+        if (options.json === true) failExecutionVerb("iteration register", error, true);
+        else failScript(error, "iteration register");
       }
     },
   );
@@ -6466,6 +6390,13 @@ registerPlanCommands(program);
 // scoped transport (one coordinator envelope, one engine call, the shared
 // argument/failure protocol), registered by the same module.
 registerWorkflowCommands(program);
+
+// The ACTIVE transport verbs: the workflow-level DB grammar joins the existing
+// `workflow` group (created just above), and `mstar session` owns the local
+// identity launcher plus the active coordinator recovery.
+registerExecutionWorkflowCommands(program);
+
+registerSessionCommands(program);
 
 registerIssueCommands(program);
 
