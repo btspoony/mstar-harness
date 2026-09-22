@@ -1,33 +1,53 @@
 /**
  * execution-coverage.ts — the pure coverage substrate of the execution
- * authority (architecture contract §4.1): the closed 18-surface inventory, the
- * per-surface protocol validators, canonical receipt hashing and the
+ * authority (architecture contract §4.1/§4.2): the closed 18-surface
+ * inventory, the per-surface byte codecs, canonical receipt hashing and the
  * exact-set/witness validation of a coverage set against a frozen manifest.
  *
  * The module is deliberately pure: it opens no file, loads no driver and
- * imports no host package. Evidence bytes are handed in; the validator hashes
- * them, decodes the bounded evidence document and RECOMPUTES the facts a
- * receipt claims. A self-consistent hash alone therefore proves nothing: a
- * fabricated boolean acknowledgement has no closed schema to satisfy, and a
- * receipt whose facts disagree with the bytes it names is refused.
+ * imports no host package. Evidence bytes are handed in, and every fact this
+ * module reports is DECODED FROM THOSE BYTES. A receipt never asserts its own
+ * result: `resultHash` covers the surface identity, the disposition and the
+ * normalized result this module recomputed, so a producer that invents facts —
+ * or reuses a self-consistent hash over a fabricated document — is refused.
+ *
+ * Byte formats this module really decodes, and the only ones it accepts:
+ *
+ * - `core-v1`: the v2 root register (`{version:2, workflows:[{id,…}]}`) and the
+ *   workflow snapshots (`{schema_version:1, id,…}`) whose `id` is the workflow.
+ * - `session-v1`: retained session envelopes, decoded for their `session_id`
+ *   (and their `workflowId` when the envelope carries one).
+ * - `notes-v1` / `agent-flow-v2`: retained JSONL ledgers, decoded line by line
+ *   (exact line order, per-line digest; a record's own `workflowId`/`eventId`
+ *   are validated when present).
+ * - `selection-v1` / `omp-launch-v2`: retained JSON documents, decoded member
+ *   by member (member digest) with a `workflowId` member bound to the row.
+ * - `omp-hidden-v1`: the canonical host-history export H1 owns
+ *   (`{version:1, document:"execution-host-history", records, diagnostics}`),
+ *   including native order, per-record `payloadHash` recomputed from the
+ *   published payload, and the record's decoded workflow.
+ * - `retained-body-v1`: retained SDD evidence bodies, summarized by digest and
+ *   byte length.
+ * - `consumer-v1` / `recovery-v1`: a canonical producer manifest / recovery
+ *   inventory (the row's evidence document) whose recorded digests must equal
+ *   the hashed source bytes it describes.
+ *
+ * Everything else fails closed: an unknown document shape, an unknown record
+ * field, a diagnostic-bearing host export or a missing byte is a refusal, never
+ * a silent re-interpretation.
  *
  * `ExecutionCoverageManifest` is this module's small manifest view, not the
  * migration module's `ExecutionManifest` (§4.1). The root task compiles without
- * a type cycle, and C3 builds this view from the version-2 manifest it just
- * hashed. C3 owns every piece of IO around this module — safe reads, symlink
- * and canonical-root checks, fresh bytes — plus the public barrel export.
+ * a type cycle, and C3 builds this view from the version-2 manifest it hashed.
+ * C3 owns every piece of IO around this module — safe reads, symlink and
+ * canonical-root checks, fresh bytes — plus the public barrel export.
  *
  * Receipt identity is `(surface, workflowId)`. Workflow-scoped surfaces repeat
  * for every discovered workflow, so one global receipt can never hide a sibling
  * workflow; root-scoped surfaces carry a null `workflowId` and are refused if
- * they claim one. The manifest is a CLOSED inventory too: it carries every
- * root-scoped surface once and every workflow-scoped surface once per
- * discovered workflow, so a surface is never dropped by omission — a surface
- * with nothing discovered is an `absent` row.
- *
- * `protocol` is a closed validator-version mapping, one version per surface
- * group. A receipt does not choose its validator: the surface does, and an
- * unknown value refuses.
+ * they claim one. The manifest is a CLOSED inventory too: every root-scoped
+ * surface once, every workflow-scoped surface once per discovered workflow, so a
+ * surface with nothing discovered is an `absent` row rather than an omission.
  */
 import { createHash } from "node:crypto";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
@@ -61,28 +81,12 @@ export const EXECUTION_COVERAGE_SURFACES = [
 
 export type ExecutionSurface = (typeof EXECUTION_COVERAGE_SURFACES)[number];
 
-/** The closed validator versions (§4.1). */
-export const EXECUTION_COVERAGE_PROTOCOLS = [
-  "session-v1",
-  "notes-v1",
-  "agent-flow-v2",
-  "selection-v1",
-  "omp-launch-v2",
-  "omp-hidden-v1",
-  "retained-body-v1",
-  "consumer-v1",
-  "recovery-v1",
-  "core-v1",
-] as const;
-
-export type CoverageProtocol = (typeof EXECUTION_COVERAGE_PROTOCOLS)[number];
-
-export type CoverageDisposition = "absent" | "retain" | "migrate" | "retire";
-
-/** The configured roots a witness path is relative to. */
-export type CoverageRoot = "control" | "sdd" | "host" | "package";
-
-export type CoverageWitness = Readonly<{ root: CoverageRoot; path: string; sha256: string }>;
+/** A witness is a root-relative path plus the sha256 of the exact bytes handed in. */
+export type CoverageWitness = Readonly<{
+  root: "control" | "sdd" | "host" | "package";
+  path: string;
+  sha256: string;
+}>;
 
 export type ExecutionCoverageReceipt = Readonly<{
   version: 1;
@@ -92,8 +96,18 @@ export type ExecutionCoverageReceipt = Readonly<{
   manifestHash: string;
   storeId: string;
   epoch: number;
-  disposition: CoverageDisposition;
-  protocol: CoverageProtocol;
+  disposition: "absent" | "retain" | "migrate" | "retire";
+  protocol:
+    | "session-v1"
+    | "notes-v1"
+    | "agent-flow-v2"
+    | "selection-v1"
+    | "omp-launch-v2"
+    | "omp-hidden-v1"
+    | "retained-body-v1"
+    | "consumer-v1"
+    | "recovery-v1"
+    | "core-v1";
   sources: readonly CoverageWitness[];
   evidence: readonly CoverageWitness[];
   resultHash: string;
@@ -112,12 +126,27 @@ export type ExecutionCoverageManifest = Readonly<{
   manifestHash: string;
   storeId: string;
   epoch: number;
-  surfaces: readonly Readonly<{ surface: ExecutionSurface; workflowId: string | null }>[];
+  /**
+   * The discovered surface identities. Each row carries the sources C3's
+   * canonical discovery assigned to it, so a source witness is bound to exactly
+   * one `(surface, workflowId)` — or, where the hashed manifest assigns the same
+   * byte to two rows, to those two and no others.
+   */
+  surfaces: readonly Readonly<{
+    surface: ExecutionSurface;
+    workflowId: string | null;
+    sources: readonly CoverageWitness[];
+  }>[];
   sources: readonly CoverageWitness[];
 }>;
 
 /** Evidence bytes keyed by `${root}:${path}` — the only proof a validator accepts. */
 export type ExecutionCoverageEvidence = ReadonlyMap<string, Uint8Array>;
+
+type Disposition = ExecutionCoverageReceipt["disposition"];
+type Protocol = ExecutionCoverageReceipt["protocol"];
+type Root = CoverageWitness["root"];
+type Capability = "writer" | "read-only" | "decision-only" | "body-only";
 
 /** The workflow-scoped surfaces; every other surface is root-scoped (§4.1). */
 const WORKFLOW_SCOPED_SURFACES: readonly ExecutionSurface[] = [
@@ -131,7 +160,7 @@ const WORKFLOW_SCOPED_SURFACES: readonly ExecutionSurface[] = [
 ];
 
 /** The 18 surfaces, each pinned to the one protocol that validates it. */
-const SURFACE_PROTOCOLS: Readonly<Record<ExecutionSurface, CoverageProtocol>> = {
+const SURFACE_PROTOCOLS: Readonly<Record<ExecutionSurface, Protocol>> = {
   "core-execution": "core-v1",
   "workflow-session-envelopes": "session-v1",
   "workflow-notes-ledger": "notes-v1",
@@ -158,7 +187,7 @@ const SURFACE_PROTOCOLS: Readonly<Record<ExecutionSurface, CoverageProtocol>> = 
  * archived), so those two surfaces never claim `absent`; every retained file,
  * host ledger, package and inventory surface may be `retain` or `absent`.
  */
-const SURFACE_DISPOSITIONS: Readonly<Record<ExecutionSurface, readonly CoverageDisposition[]>> = {
+const SURFACE_DISPOSITIONS: Readonly<Record<ExecutionSurface, readonly Disposition[]>> = {
   "core-execution": ["migrate", "retain"],
   "workflow-session-envelopes": ["migrate", "retire", "absent"],
   "workflow-notes-ledger": ["retain", "absent"],
@@ -179,44 +208,58 @@ const SURFACE_DISPOSITIONS: Readonly<Record<ExecutionSurface, readonly CoverageD
   "backup-recovery": ["retain", "absent"],
 };
 
-const COVERAGE_ROOTS: readonly CoverageRoot[] = ["control", "sdd", "host", "package"];
-const COVERAGE_DISPOSITIONS: readonly CoverageDisposition[] = ["absent", "retain", "migrate", "retire"];
-const ENVELOPE_ROLES = ["coordinator", "plan-pm"] as const;
-const ENVELOPE_STATES = ["suspended", "revoked"] as const;
-const ENVELOPE_ARCHIVE = ["pending", "archived"] as const;
-const LAUNCH_STATES = ["reserved", "occupied", "settled", "reconciled"] as const;
-const PACKAGE_CAPABILITIES = ["writer", "read-only", "decision-only", "body-only"] as const;
+/**
+ * The authority each consumer surface is REQUIRED to expose (§4.2): a
+ * package/instruction row is not coverage when it declares some other
+ * capability — the writer rows write, the hook rows only decide, the copied
+ * instructions only read, and a deployed store injection is body-only storage.
+ */
+const SURFACE_CAPABILITY: Readonly<Record<ExecutionSurface, Capability>> = {
+  "core-execution": "read-only",
+  "workflow-session-envelopes": "read-only",
+  "workflow-notes-ledger": "read-only",
+  "workflow-agent-flow-ledger": "read-only",
+  "workflow-ledger-cursors": "read-only",
+  "engine-status-snapshot": "read-only",
+  "workflow-omp-launch-journal": "read-only",
+  "omp-hidden-entries": "read-only",
+  "sdd-evidence": "read-only",
+  "artifact-store-injectors": "body-only",
+  "cli-writer": "writer",
+  "engine-cli-package": "writer",
+  "dsh-package": "writer",
+  "omp-package": "writer",
+  "opencode-plugin": "decision-only",
+  "zcode-hook": "decision-only",
+  "copied-instructions": "read-only",
+  "backup-recovery": "read-only",
+};
+
+const COVERAGE_ROOTS: readonly Root[] = ["control", "sdd", "host", "package"];
+const COVERAGE_DISPOSITIONS: readonly Disposition[] = ["absent", "retain", "migrate", "retire"];
+const CAPABILITIES: readonly Capability[] = ["writer", "read-only", "decision-only", "body-only"];
 const RUNTIME_TARGETS = ["node", "bun"] as const;
-const HIDDEN_ENTRY_NAMES = [
+const HOST_HISTORY_KINDS = [
   "mstar:phase2",
   "mstar:phase2-continuation",
   "mstar:phase2-checkpoint",
   "mstar:phase2-launch-reservation",
   "mstar:model-handoff",
 ] as const;
+const HOST_HISTORY_STATES = ["pending", "attempting", "handed_off", "cancelled", "failed", "uncertain"] as const;
 
-/** The configured root a surface's witnesses are pinned to, and its scope. */
+/** The scope of one surface: a root-scoped row is inventoried once, never per workflow. */
 export function executionCoverageSurfaceScope(surface: ExecutionSurface): "root" | "workflow" {
   return (WORKFLOW_SCOPED_SURFACES as readonly string[]).includes(surface) ? "workflow" : "root";
 }
 
-/** The one validator version that owns a surface. */
-export function executionCoverageProtocolFor(surface: ExecutionSurface): CoverageProtocol {
-  return SURFACE_PROTOCOLS[surface];
-}
-
-/** The dispositions a surface may declare. */
-export function executionCoverageAllowedDispositions(surface: ExecutionSurface): readonly CoverageDisposition[] {
-  return SURFACE_DISPOSITIONS[surface];
-}
-
 /** The evidence-map key of a witness: one configured root plus its relative path. */
-export function coverageWitnessKey(root: CoverageRoot, path: string): string {
+export function coverageWitnessKey(root: Root, path: string): string {
   return `${root}:${path}`;
 }
 
 // ---------------------------------------------------------------------------
-// Refusals and small typed predicates
+// Refusals and typed predicates
 // ---------------------------------------------------------------------------
 
 /**
@@ -231,7 +274,7 @@ function refuse(detail: string): never {
 const HEX64 = /^[0-9a-f]{64}$/;
 
 function expectObject(value: unknown, what: string): Record<string, unknown> {
-  if (!isPlainObject(value)) refuse(`${what} must be a plain JSON object; free-text or scalar coverage is never accepted.`);
+  if (!isPlainObject(value)) refuse(`${what} must be a plain JSON object; free-text or scalar evidence is never accepted.`);
   return value;
 }
 
@@ -244,7 +287,7 @@ function expectExactKeys(value: Record<string, unknown>, keys: readonly string[]
     `${what} must carry exactly ${keys.join(", ")}` +
       `${missing.length > 0 ? `; it is missing ${missing.join(", ")}` : ""}` +
       `${unknown.length > 0 ? `; it carries unknown field(s) ${unknown.join(", ")}` : ""}. ` +
-      `A coverage document is a closed schema, never free-form prose.`,
+      `A coverage document is a closed schema, never an open-ended assertion.`,
   );
 }
 
@@ -253,7 +296,7 @@ function expectString(value: unknown, what: string): string {
   return value;
 }
 
-function expectNullableId(value: unknown, what: string): string | null {
+function expectNullableString(value: unknown, what: string): string | null {
   if (value === null) return null;
   return expectString(value, what);
 }
@@ -292,13 +335,12 @@ function expectSurface(value: unknown, what: string): ExecutionSurface {
   );
 }
 
-function expectProtocol(value: unknown, what: string): CoverageProtocol {
-  if (typeof value === "string" && (EXECUTION_COVERAGE_PROTOCOLS as readonly string[]).includes(value)) {
-    return value as CoverageProtocol;
-  }
+function expectProtocol(value: unknown, what: string): Protocol {
+  const known: readonly string[] = Object.values(SURFACE_PROTOCOLS);
+  if (typeof value === "string" && known.includes(value)) return value as Protocol;
   refuse(
-    `${what} must be one of the closed validator versions ${EXECUTION_COVERAGE_PROTOCOLS.join(", ")}; ` +
-      `got ${JSON.stringify(value)}. An unknown protocol never validates coverage.`,
+    `${what} must be one of the closed validator versions ${[...new Set(known)].join(", ")}; got ${JSON.stringify(value)}. ` +
+      `An unknown protocol never validates coverage.`,
   );
 }
 
@@ -346,80 +388,459 @@ function expectWitnessList(value: unknown, what: string): readonly CoverageWitne
   const items = expectArray(value, what).map((entry, index) => expectWitness(entry, `${what}[${index}]`));
   for (let index = 1; index < items.length; index++) {
     const order = compareWitness(items[index - 1], items[index]);
-    if (order > 0) refuse(`${what} is not in canonical order; sources sort by root then path, so an unchanged inventory always reads back identically.`);
+    if (order > 0) refuse(`${what} is not in canonical order; witnesses sort by root then path, so an unchanged inventory always reads back identically.`);
     if (order === 0) refuse(`${what} repeats the witness ${coverageWitnessKey(items[index].root, items[index].path)}; duplicates refuse.`);
   }
   return items;
 }
 
-function expectList<T>(
-  value: unknown,
-  what: string,
-  build: (entry: unknown, where: string) => T,
-  compare: (left: T, right: T) => number,
-  order: string,
-): readonly T[] {
-  const items = expectArray(value, what).map((entry, index) => build(entry, `${what}[${index}]`));
-  for (let index = 1; index < items.length; index++) {
-    const comparison = compare(items[index - 1], items[index]);
-    if (comparison > 0) refuse(`${what} is not sorted by ${order}; a canonical list is a function of its content, never of discovery order.`);
-    if (comparison === 0) refuse(`${what} repeats the same ${order} row; duplicates refuse.`);
-  }
-  return items;
-}
-
-/** The §3.1 canonical value digest used for every result and set hash. */
+/** The §3.1 canonical value digest used for every result, payload and set hash. */
 function digestOf(value: unknown): string {
   return createHash("sha256").update(serializeExecutionValue(value), "utf8").digest("hex");
 }
 
+function bytesDigest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 // ---------------------------------------------------------------------------
-// Result hashing (§4.1)
+// Byte decoding
 // ---------------------------------------------------------------------------
 
-/**
- * The canonical `resultHash` of one receipt: the canonical digest of the
- * surface identity, the disposition and the surface-specific normalized facts.
- * An `absent` row has no facts — its digest covers the absence itself, so a
- * missing surface cannot borrow the result of a populated one.
- *
- * This is the single normalization point: `validateExecutionCoverage`
- * recomputes a receipt's `resultHash` through this function, and a producer
- * computes the same value from the same facts.
- */
-export function executionCoverageResultHash(
-  entry: Readonly<{
-    surface: ExecutionSurface;
-    workflowId: string | null;
-    disposition: CoverageDisposition;
-    facts?: unknown;
-  }>,
-): string {
-  const record = expectObject(entry, "a coverage result");
-  const unknown = Object.keys(record).filter((key) => !["surface", "workflowId", "disposition", "facts"].includes(key));
-  if (unknown.length > 0) refuse(`a coverage result carries unknown field(s) ${unknown.join(", ")}; the normalized result is a closed value.`);
-  const surface = expectSurface(record.surface, "a coverage result.surface");
-  const workflowId = expectNullableId(record.workflowId, "a coverage result.workflowId");
-  expectScope(surface, workflowId, "a coverage result");
-  const disposition = expectEnum(record.disposition, COVERAGE_DISPOSITIONS, "a coverage result.disposition");
-  if (disposition === "absent") {
-    if (record.facts !== undefined) refuse("an absent row has no facts; only a populated row carries a result.");
-    return digestOf({ surface, workflowId, disposition: "absent" });
+function utf8(bytes: Uint8Array, what: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return refuse(`${what} is not UTF-8 text; a coverage source is a canonical UTF-8 document.`);
   }
-  if (record.facts === undefined) refuse("a populated row must carry the normalized facts its resultHash covers.");
-  return digestOf({ surface, workflowId, disposition, facts: record.facts });
+}
+
+function parseJson(text: string, what: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return refuse(`${what} is not JSON (${(error as Error).message}); a malformed source is never re-interpreted.`);
+  }
+}
+
+/** A JSON object decoded from real bytes: any member shape is acceptable, the object itself is not optional. */
+function jsonObject(bytes: Uint8Array, what: string): Record<string, unknown> {
+  return expectObject(parseJson(utf8(bytes, what), what), what);
 }
 
 /**
- * Canonical receipt digest (§4.1). The list must already carry the closed
- * receipt shape in canonical order — a digest over an unordered or duplicated
- * list would not be a function of the covered set.
+ * A document the harness itself produced (a producer manifest, a recovery
+ * inventory, a host-history export). These must be canonical §3.1 JSON, so the
+ * bytes have exactly one meaning: a duplicated member, a reordered object or
+ * any other ambiguity is refused here instead of being resolved by a parser.
+ * Retained bodies are NOT canonical and are decoded with `jsonObject` above.
  */
-export function executionCoverageDigest(receipts: readonly ExecutionCoverageReceipt[]): string {
-  const list = expectArray(receipts, "coverage receipts").map((entry, index) => expectReceiptShape(entry, `coverage receipts[${index}]`));
-  assertReceiptOrder(list, "coverage receipts");
-  return digestOf(list);
+function canonicalDocument(bytes: Uint8Array, what: string): Record<string, unknown> {
+  const text = utf8(bytes, what);
+  const parsed = parseJson(text, what);
+  if (serializeExecutionValue(parsed) !== text) {
+    refuse(
+      `${what} is not canonical JSON with one terminal LF; a produced coverage document is byte-stable, so an ambiguous or duplicated ` +
+        `member is refused rather than resolved by the reader.`,
+    );
+  }
+  return expectObject(parsed, what);
 }
+
+/** The retained JSONL records of one file, in exact line order. */
+type JsonlFile = Readonly<{
+  root: Root;
+  path: string;
+  sha256: string;
+  count: number;
+  records: readonly Readonly<{ line: number; sha256: string; workflowId: string | null; eventId: string | null }>[];
+}>;
+
+function jsonlFile(witness: CoverageWitness, bytes: Uint8Array, context: RowContext): JsonlFile {
+  const text = utf8(bytes, `${context.label} file ${witness.path}`);
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  const eventIds = new Set<string>();
+  const records = lines.map((line, index) => {
+    if (line.trim() === "") {
+      refuse(`${context.label}: ${witness.path} line ${index + 1} is blank; a retained ledger line is an accepted record, never padding.`);
+    }
+    const record = expectObject(parseJson(line, `${context.label}: ${witness.path} line ${index + 1}`), `${context.label}: ${witness.path} line ${index + 1}`);
+    const workflowId = record.workflowId === undefined || record.workflowId === null ? null : expectString(record.workflowId, `${witness.path} line ${index + 1}.workflowId`);
+    if (workflowId !== null && workflowId !== context.workflowId) {
+      refuse(
+        `${context.label}: ${witness.path} line ${index + 1} names workflow ${workflowId}, not ${String(context.workflowId)}; a retained record is ` +
+          `never attributed to a sibling workflow.`,
+      );
+    }
+    const eventId = record.eventId === undefined || record.eventId === null ? null : expectString(record.eventId, `${witness.path} line ${index + 1}.eventId`);
+    if (eventId !== null) {
+      if (eventIds.has(eventId)) refuse(`${context.label}: ${witness.path} records the event id ${eventId} twice; a duplicated record is not an accepted record.`);
+      eventIds.add(eventId);
+    }
+    return { line: index, sha256: bytesDigest(new TextEncoder().encode(line)), workflowId, eventId };
+  });
+  return { root: witness.root, path: witness.path, sha256: witness.sha256, count: records.length, records };
+}
+
+/** The retained JSON document members of one file, in canonical key order. */
+type JsonFile = Readonly<{
+  root: Root;
+  path: string;
+  sha256: string;
+  count: number;
+  entries: readonly Readonly<{ key: string; digest: string }>[];
+}>;
+
+function jsonFile(witness: CoverageWitness, bytes: Uint8Array, context: RowContext): JsonFile {
+  const document = jsonObject(bytes, `${context.label} file ${witness.path}`);
+  const declared = document.workflowId;
+  if (declared !== undefined && declared !== null && expectString(declared, `${witness.path}.workflowId`) !== context.workflowId) {
+    refuse(`${context.label}: ${witness.path} declares workflow ${String(declared)}, not ${String(context.workflowId)}; a retained document is never attributed to a sibling workflow.`);
+  }
+  for (const key of Object.keys(document)) {
+    const member = document[key];
+    const nested = isPlainObject(member) ? [member] : Array.isArray(member) ? member.filter(isPlainObject) : [];
+    for (const entry of nested) {
+      const declaredWorkflow = entry.workflowId;
+      if (declaredWorkflow === undefined || declaredWorkflow === null) continue;
+      if (expectString(declaredWorkflow, `${witness.path}.${key}.workflowId`) !== context.workflowId) {
+        refuse(`${context.label}: ${witness.path} carries ${key}.workflowId ${String(declaredWorkflow)}, not ${String(context.workflowId)}.`);
+      }
+    }
+  }
+  const entries = Object.keys(document)
+    .sort(compareText)
+    .map((key) => ({ key, digest: digestOf(document[key]) }));
+  return { root: witness.root, path: witness.path, sha256: witness.sha256, count: entries.length, entries };
+}
+
+// ---------------------------------------------------------------------------
+// Per-surface codecs (§4.2)
+// ---------------------------------------------------------------------------
+
+type RowContext = Readonly<{
+  surface: ExecutionSurface;
+  workflowId: string | null;
+  sources: readonly CoverageWitness[];
+  evidence: readonly CoverageWitness[];
+  bytesOf: (witness: CoverageWitness) => Uint8Array;
+  label: string;
+}>;
+
+type Codec = (context: RowContext) => unknown;
+
+function sourceRefs(context: RowContext): unknown[] {
+  return context.sources.map((witness) => ({ root: witness.root, path: witness.path, sha256: witness.sha256 }));
+}
+
+/** `core-v1`: the root register plus one workflow snapshot per discovered workflow. */
+function coreCodec(context: RowContext): unknown {
+  const registers: Array<Readonly<{ path: string; sha256: string; workflows: readonly string[] }>> = [];
+  const snapshots: Array<Readonly<{ path: string; sha256: string; workflowId: string }>> = [];
+  for (const witness of context.sources) {
+    const document = jsonObject(context.bytesOf(witness), `${context.label} source ${witness.path}`);
+    if (document.schema_version === 1) {
+      snapshots.push({
+        path: witness.path,
+        sha256: witness.sha256,
+        workflowId: expectString(document.id, `${context.label} snapshot ${witness.path}.id`),
+      });
+      continue;
+    }
+    if (document.version === 2 && Array.isArray(document.workflows)) {
+      const workflows = document.workflows.map((entry, index) =>
+        expectString(expectObject(entry, `${context.label} register ${witness.path} workflows[${index}]`).id, `${witness.path} workflows[${index}].id`),
+      );
+      registers.push({ path: witness.path, sha256: witness.sha256, workflows: [...new Set(workflows)].sort(compareText) });
+      continue;
+    }
+    refuse(
+      `${context.label}: the core source ${witness.path} is neither a v2 root register nor a workflow snapshot; an unknown core document is not ` +
+        `coverage of the core authority.`,
+    );
+  }
+  if (registers.length !== 1) {
+    refuse(`${context.label} carries ${registers.length} root registers; the core authority is one v2 register plus its snapshots.`);
+  }
+  if (snapshots.length === 0) refuse(`${context.label} carries no workflow snapshot; the discovered workflow set is not provable from these bytes.`);
+  const workflows = snapshots.map((snapshot) => snapshot.workflowId).sort(compareText);
+  for (let index = 1; index < workflows.length; index++) {
+    if (workflows[index] === workflows[index - 1]) {
+      refuse(`${context.label} carries two snapshots for workflow ${workflows[index]}; a duplicated discovery is not coverage.`);
+    }
+  }
+  const missing = registers[0].workflows.filter((workflowId) => !workflows.includes(workflowId));
+  if (missing.length > 0) {
+    refuse(
+      `${context.label}: the root register names workflow(s) ${missing.join(", ")} with no snapshot witness; the register and the snapshots must ` +
+        `describe the same discovered authority.`,
+    );
+  }
+  return { sources: sourceRefs(context), format: "core-v2", workflows };
+}
+
+/** `session-v1`: retained envelopes, decoded for the session identity they carry. */
+function sessionCodec(context: RowContext): unknown {
+  const owners = new Set<string>();
+  const envelopes = context.sources.map((witness) => {
+    const document = jsonObject(context.bytesOf(witness), `${context.label} envelope ${witness.path}`);
+    const sessionId = expectString(document.session_id, `${context.label} envelope ${witness.path}.session_id`);
+    const declared = document.workflowId;
+    if (declared !== undefined && declared !== null && expectString(declared, `${witness.path}.workflowId`) !== context.workflowId) {
+      refuse(`${context.label}: envelope ${witness.path} names workflow ${String(declared)}, not ${String(context.workflowId)}.`);
+    }
+    if (owners.has(sessionId)) refuse(`${context.label} carries two envelopes for session ${sessionId}; a duplicated association is not coverage.`);
+    owners.add(sessionId);
+    return { root: witness.root, path: witness.path, sha256: witness.sha256, sessionId };
+  });
+  return { sources: sourceRefs(context), format: "session-envelope", envelopes };
+}
+
+/** `notes-v1` / `agent-flow-v2`: retained JSONL ledgers, decoded line by line. */
+function ledgerCodec(context: RowContext): unknown {
+  const files = context.sources.map((witness) => jsonlFile(witness, context.bytesOf(witness), context));
+  return { sources: sourceRefs(context), format: "jsonl", files };
+}
+
+/** `selection-v1` / `omp-launch-v2`: retained JSON documents, decoded member by member. */
+function selectionCodec(context: RowContext): unknown {
+  const files = context.sources.map((witness) => jsonFile(witness, context.bytesOf(witness), context));
+  return { sources: sourceRefs(context), format: "json", files };
+}
+
+/**
+ * `omp-hidden-v1`: the canonical host-history export (H1's
+ * `execution-history.ts` shape). Native order is the array order and the
+ * per-record `payloadHash` is recomputed from the published payload, so a
+ * relabelled or reordered history cannot pass. A diagnosed export publishes no
+ * derived fact for the entry it could not decode, so it is refused instead of
+ * being counted as complete coverage.
+ */
+function hiddenCodec(context: RowContext): unknown {
+  if (context.evidence.length > 0) {
+    refuse(
+      `${context.label} carries ${context.evidence.length} evidence witness(es); the host-history export is the row's source, and no separate ` +
+        `host-inventory attestation document exists for the engine to decode yet.`,
+    );
+  }
+  const files = context.sources.map((witness) => {
+    const what = `${context.label} host-history export ${witness.path}`;
+    const document = canonicalDocument(context.bytesOf(witness), what);
+    expectExactKeys(document, ["version", "document", "records", "diagnostics"], what);
+    if (document.version !== 1 || document.document !== "execution-host-history") {
+      refuse(`${what} is not a version 1 execution-host-history export; an unknown host document is not coverage.`);
+    }
+    const diagnostics = expectArray(document.diagnostics, `${what}.diagnostics`);
+    if (diagnostics.length > 0) {
+      refuse(
+        `${what} carries ${diagnostics.length} diagnostic(s); an entry the exporter could not decode publishes no derived fact, so a diagnosed ` +
+          `history is not a complete inventory.`,
+      );
+    }
+    const records = expectArray(document.records, `${what}.records`).map((entry, index) => {
+      const record = expectObject(entry, `${what}.records[${index}]`);
+      expectExactKeys(record, ["index", "entryId", "type", "sessionId", "payloadHash", "payload", "view"], `${what}.records[${index}]`);
+      if (record.index !== index) refuse(`${what}.records[${index}].index must be ${index}; the native ledger order is the published order.`);
+      const type = expectEnum(record.type, HOST_HISTORY_KINDS, `${what}.records[${index}].type`);
+      const entryId = expectNullableString(record.entryId, `${what}.records[${index}].entryId`);
+      const sessionId = expectNullableString(record.sessionId, `${what}.records[${index}].sessionId`);
+      const payloadHash = expectHex64(record.payloadHash, `${what}.records[${index}].payloadHash`);
+      const recomputed = digestOf(record.payload);
+      if (payloadHash !== recomputed) {
+        refuse(
+          `${what}.records[${index}].payloadHash ${payloadHash} does not hash the payload it publishes (${recomputed}); a payload digest is recomputed ` +
+            `from the bytes, never carried on trust.`,
+        );
+      }
+      const view = expectObject(record.view, `${what}.records[${index}].view`);
+      expectExactKeys(
+        view,
+        ["generation", "declaredKind", "declaredAction", "declaredState", "workflowId", "checkpointId", "operationId", "dedupKey", "cancelled", "provenance"],
+        `${what}.records[${index}].view`,
+      );
+      if (view.generation !== 1) refuse(`${what}.records[${index}].view.generation must be 1; generation 1 is the only decoded generation.`);
+      const recordWorkflow = expectString(view.workflowId, `${what}.records[${index}].view.workflowId`);
+      if (recordWorkflow !== context.workflowId) {
+        refuse(
+          `${what}.records[${index}] belongs to workflow ${recordWorkflow}, not ${String(context.workflowId)}; a hidden-history record is never ` +
+            `attributed to a sibling workflow.`,
+        );
+      }
+      const declaredState = expectEnum(view.declaredState, HOST_HISTORY_STATES, `${what}.records[${index}].view.declaredState`);
+      if (typeof view.cancelled !== "boolean") refuse(`${what}.records[${index}].view.cancelled must be a boolean.`);
+      const checkpointId = expectNullableString(view.checkpointId, `${what}.records[${index}].view.checkpointId`);
+      const operationId = expectNullableString(view.operationId, `${what}.records[${index}].view.operationId`);
+      const dedupKey = expectNullableString(view.dedupKey, `${what}.records[${index}].view.dedupKey`);
+      if (dedupKey !== (operationId ?? checkpointId)) {
+        refuse(`${what}.records[${index}].view.dedupKey must be the operation id or the checkpoint id it dedups on.`);
+      }
+      expectArray(view.provenance, `${what}.records[${index}].view.provenance`).forEach((item, position) => {
+        const where = `${what}.records[${index}].view.provenance[${position}]`;
+        const field = expectObject(item, where);
+        expectExactKeys(field, ["field", "path"], where);
+        expectString(field.field, `${where}.field`);
+        expectString(field.path, `${where}.path`);
+      });
+      return { index, entryId, type, sessionId, payloadHash, workflowId: recordWorkflow, declaredState, cancelled: view.cancelled, checkpointId, dedupKey };
+    });
+    const sessions = [...new Set(records.map((record) => record.sessionId).filter((sessionId): sessionId is string => sessionId !== null))].sort(compareText);
+    if (sessions.length === 0) {
+      refuse(`${what} names no decoded native session; a hidden-history row covers the sessions its export publishes, so an empty export is an absent row.`);
+    }
+    return { root: witness.root, path: witness.path, sha256: witness.sha256, document: "execution-host-history", count: records.length, sessions, records };
+  });
+  return { sources: sourceRefs(context), format: "host-history-v1", files };
+}
+
+/** `retained-body-v1`: retained evidence bodies, summarized from their exact bytes. */
+function retainedBodyCodec(context: RowContext): unknown {
+  const bodies = context.sources.map((witness) => {
+    const bytes = context.bytesOf(witness);
+    return { root: witness.root, path: witness.path, sha256: witness.sha256, size: bytes.byteLength };
+  });
+  bodies.sort((left, right) => compareText(left.path, right.path));
+  return { sources: sourceRefs(context), format: "retained-body", bodies };
+}
+
+const CONSUMER_MANIFEST_KEYS = ["version", "document", "surface", "entries"] as const;
+
+/**
+ * `consumer-v1`: one producer manifest (the row's evidence document) whose
+ * recorded digests must equal the hashed source bytes it describes, and whose
+ * declared capability must be the authority its surface is required to expose.
+ */
+function consumerCodec(context: RowContext): unknown {
+  const required = SURFACE_CAPABILITY[context.surface];
+  if (context.evidence.length !== 1) {
+    refuse(`${context.label} carries ${context.evidence.length} evidence document(s); a package/instruction row carries exactly one producer manifest.`);
+  }
+  const document = canonicalDocument(context.bytesOf(context.evidence[0]), `${context.label} producer manifest`);
+  expectExactKeys(document, CONSUMER_MANIFEST_KEYS, `${context.label} producer manifest`);
+  if (document.version !== 1 || document.document !== "consumer-manifest") {
+    refuse(`${context.label} producer manifest must be a version 1 consumer-manifest document.`);
+  }
+  const declaredSurface = expectSurface(document.surface, `${context.label} producer manifest.surface`);
+  if (declaredSurface !== context.surface) {
+    refuse(`${context.label} producer manifest describes ${declaredSurface}; a manifest is never reused for another surface.`);
+  }
+  const claimed = new Set<string>();
+  const claim = (path: string, sha256: string, what: string): CoverageWitness => {
+    const witness = context.sources.find((candidate) => candidate.path === path && candidate.sha256 === sha256);
+    if (witness === undefined) {
+      refuse(`${what} (${path}) is not a source witness of this receipt; a manifest digest that names no supplied byte proves nothing.`);
+    }
+    const key = coverageWitnessKey(witness.root, witness.path);
+    if (claimed.has(key)) refuse(`${what} (${path}) is claimed twice; one retained byte is described by one manifest entry.`);
+    claimed.add(key);
+    return witness;
+  };
+  const entries = expectArray(document.entries, `${context.label} producer manifest.entries`).map((entry, index) => {
+    const what = `${context.label} producer manifest.entries[${index}]`;
+    const item = expectObject(entry, what);
+    expectExactKeys(item, ["path", "sha256", "capability", "entrypoint", "runtime", "generated"], what);
+    const path = expectWitnessPath(item.path, `${what}.path`);
+    const sha256 = expectHex64(item.sha256, `${what}.sha256`);
+    const capability = expectEnum(item.capability, CAPABILITIES, `${what}.capability`);
+    if (capability !== required) {
+      refuse(
+        `${what} declares capability ${capability} while ${context.surface} is required to expose ${required}; a consumer receipt cannot relabel the ` +
+          `authority it provides.`,
+      );
+    }
+    const entrypoint = item.entrypoint === null ? null : expectString(item.entrypoint, `${what}.entrypoint`);
+    const runtime = item.runtime === null ? null : expectEnum(item.runtime, RUNTIME_TARGETS, `${what}.runtime`);
+    const generated = item.generated === null ? null : expectObject(item.generated, `${what}.generated`);
+    const generatedRef =
+      generated === null
+        ? null
+        : (() => {
+            expectExactKeys(generated, ["path", "sha256"], `${what}.generated`);
+            const generatedPath = expectWitnessPath(generated.path, `${what}.generated.path`);
+            const generatedSha = expectHex64(generated.sha256, `${what}.generated.sha256`);
+            const witness = claim(
+              generatedPath,
+              generatedSha,
+              `${what}.generated`,
+            );
+            return { root: witness.root, path: generatedPath, sha256: generatedSha };
+          })();
+    if (generatedRef !== null && runtime === null) {
+      refuse(`${what} names a generated artifact without its runtime target; a built artifact declares the runtime it was built for.`);
+    }
+    const witness = claim(path, sha256, what);
+    return { root: witness.root, path, sha256, capability, entrypoint, runtime, generated: generatedRef };
+  });
+  const unclaimed = context.sources.filter((witness) => !claimed.has(coverageWitnessKey(witness.root, witness.path)));
+  if (unclaimed.length > 0) {
+    refuse(
+      `${context.label} pins source witness(es) ${unclaimed.map((witness) => witness.path).join(", ")} that its producer manifest does not describe; ` +
+        `every retained byte of the row is accounted for.`,
+    );
+  }
+  return { sources: sourceRefs(context), format: "consumer-manifest-v1", entries };
+}
+
+const RECOVERY_INVENTORY_KEYS = ["version", "document", "backup", "schemaVersion", "integrity", "coverageDigest", "recoveryGeneration"] as const;
+
+/** `recovery-v1`: a verified recovery point described by its own inventory document. */
+function recoveryCodec(context: RowContext): unknown {
+  if (context.evidence.length !== 1) {
+    refuse(`${context.label} carries ${context.evidence.length} evidence document(s); a recovery point carries exactly one verified inventory.`);
+  }
+  if (context.sources.length !== 1) {
+    refuse(`${context.label} carries ${context.sources.length} source witnesses; a recovery point is one backup image plus its verified inventory.`);
+  }
+  const document = canonicalDocument(context.bytesOf(context.evidence[0]), `${context.label} recovery inventory`);
+  expectExactKeys(document, RECOVERY_INVENTORY_KEYS, `${context.label} recovery inventory`);
+  if (document.version !== 1 || document.document !== "recovery-inventory") {
+    refuse(`${context.label} recovery inventory must be a version 1 recovery-inventory document.`);
+  }
+  const backup = expectObject(document.backup, `${context.label} recovery inventory.backup`);
+  expectExactKeys(backup, ["path", "sha256"], `${context.label} recovery inventory.backup`);
+  const path = expectWitnessPath(backup.path, `${context.label} recovery inventory.backup.path`);
+  const sha256 = expectHex64(backup.sha256, `${context.label} recovery inventory.backup.sha256`);
+  const image = context.sources[0];
+  if (image.path !== path || image.sha256 !== sha256) {
+    refuse(
+      `${context.label} recovery inventory describes ${path}, which is not the pinned backup image ${image.path}; the inventory and the image must be ` +
+        `the same recovery point.`,
+    );
+  }
+  if (document.integrity !== "verified") {
+    refuse(`${context.label} recovery inventory declares integrity ${JSON.stringify(document.integrity)}; only a verified backup is a recovery point.`);
+  }
+  return {
+    sources: sourceRefs(context),
+    format: "recovery-inventory-v1",
+    backup: { root: image.root, path, sha256 },
+    schemaVersion: expectInteger(document.schemaVersion, `${context.label} recovery inventory.schemaVersion`, 1),
+    integrity: "verified",
+    coverageDigest: expectHex64(document.coverageDigest, `${context.label} recovery inventory.coverageDigest`),
+    recoveryGeneration: expectInteger(document.recoveryGeneration, `${context.label} recovery inventory.recoveryGeneration`, 0),
+  };
+}
+
+const CODECS: Readonly<Record<ExecutionSurface, Codec>> = {
+  "core-execution": coreCodec,
+  "workflow-session-envelopes": sessionCodec,
+  "workflow-notes-ledger": ledgerCodec,
+  "workflow-agent-flow-ledger": ledgerCodec,
+  "workflow-ledger-cursors": selectionCodec,
+  "engine-status-snapshot": selectionCodec,
+  "workflow-omp-launch-journal": selectionCodec,
+  "omp-hidden-entries": hiddenCodec,
+  "sdd-evidence": retainedBodyCodec,
+  "artifact-store-injectors": consumerCodec,
+  "cli-writer": consumerCodec,
+  "engine-cli-package": consumerCodec,
+  "dsh-package": consumerCodec,
+  "omp-package": consumerCodec,
+  "opencode-plugin": consumerCodec,
+  "zcode-hook": consumerCodec,
+  "copied-instructions": consumerCodec,
+  "backup-recovery": recoveryCodec,
+};
 
 // ---------------------------------------------------------------------------
 // Receipts
@@ -445,7 +866,7 @@ function expectReceiptShape(value: unknown, what: string): ExecutionCoverageRece
   expectExactKeys(record, RECEIPT_KEYS, what);
   if (record.version !== 1) refuse(`${what}.version must be 1; a coverage receipt is versioned, never guessed.`);
   const surface = expectSurface(record.surface, `${what}.surface`);
-  const workflowId = expectNullableId(record.workflowId, `${what}.workflowId`);
+  const workflowId = expectNullableString(record.workflowId, `${what}.workflowId`);
   expectScope(surface, workflowId, what);
   const disposition = expectEnum(record.disposition, COVERAGE_DISPOSITIONS, `${what}.disposition`);
   const allowed = SURFACE_DISPOSITIONS[surface];
@@ -472,12 +893,11 @@ function expectReceiptShape(value: unknown, what: string): ExecutionCoverageRece
   };
 }
 
-/** Receipt identity order: surface in the contract's order, then workflowId (null first). */
 function compareReceiptIdentity(
   left: Readonly<{ surface: ExecutionSurface; workflowId: string | null }>,
   right: Readonly<{ surface: ExecutionSurface; workflowId: string | null }>,
 ): number {
-  const bySurface = (EXECUTION_COVERAGE_SURFACES as readonly string[]).indexOf(left.surface) - (EXECUTION_COVERAGE_SURFACES as readonly string[]).indexOf(right.surface);
+  const bySurface = EXECUTION_COVERAGE_SURFACES.indexOf(left.surface) - EXECUTION_COVERAGE_SURFACES.indexOf(right.surface);
   if (bySurface !== 0) return bySurface < 0 ? -1 : 1;
   if (left.workflowId === right.workflowId) return 0;
   if (left.workflowId === null) return -1;
@@ -492,7 +912,9 @@ function assertReceiptOrder(
   for (let index = 1; index < receipts.length; index++) {
     const order = compareReceiptIdentity(receipts[index - 1], receipts[index]);
     if (order > 0) refuse(`${what} is not sorted by surface/workflow; a canonical receipt list is a function of its content, never of discovery order.`);
-    if (order === 0) refuse(`${what} carries two receipts for the same surface identity (${identityLabel(receipts[index].surface, receipts[index].workflowId)}); duplicates refuse.`);
+    if (order === 0) {
+      refuse(`${what} carries two receipts for the same surface identity (${identityLabel(receipts[index].surface, receipts[index].workflowId)}); duplicates refuse.`);
+    }
   }
 }
 
@@ -504,21 +926,151 @@ function identityLabel(surface: ExecutionSurface, workflowId: string | null): st
   return workflowId === null ? surface : `${surface} of workflow ${workflowId}`;
 }
 
+type ReceiptInput = Readonly<{
+  surface: ExecutionSurface;
+  workflowId: string | null;
+  disposition: Disposition;
+  manifestId: string;
+  manifestHash: string;
+  storeId: string;
+  epoch: number;
+  sources: readonly CoverageWitness[];
+  evidence?: readonly CoverageWitness[];
+}>;
+
+/**
+ * Validate a row identity and its witness lists against the closed tables, and
+ * RECOMPUTE the row's result from the bytes of every witness (hashing each byte
+ * as it is read). Returns the canonical receipt plus the decoded facts, which
+ * are never carried by the receipt itself.
+ */
+function computeRow(
+  input: unknown,
+  evidence: ExecutionCoverageEvidence,
+  what: string,
+): { receipt: ExecutionCoverageReceipt; facts: unknown } {
+  const record = expectObject(input, what);
+  const surface = expectSurface(record.surface, `${what}.surface`);
+  const workflowId = expectNullableString(record.workflowId, `${what}.workflowId`);
+  expectScope(surface, workflowId, what);
+  const disposition = expectEnum(record.disposition, COVERAGE_DISPOSITIONS, `${what}.disposition`);
+  const allowed = SURFACE_DISPOSITIONS[surface];
+  if (!allowed.includes(disposition)) {
+    refuse(`${what} declares disposition ${disposition} for ${surface}; that surface allows ${allowed.join(", ")}.`);
+  }
+  const sources = expectWitnessList(record.sources, `${what}.sources`);
+  const witnesses = expectWitnessList(record.evidence ?? [], `${what}.evidence`);
+  const manifestId = expectString(record.manifestId, `${what}.manifestId`);
+  const manifestHash = expectHex64(record.manifestHash, `${what}.manifestHash`);
+  const storeId = expectString(record.storeId, `${what}.storeId`);
+  const epoch = expectInteger(record.epoch, `${what}.epoch`, 1);
+  const label = `receipt ${identityLabel(surface, workflowId)}`;
+
+  const bytesOf = (witness: CoverageWitness): Uint8Array => {
+    const key = coverageWitnessKey(witness.root, witness.path);
+    const bytes = evidence.get(key);
+    if (bytes === undefined) {
+      refuse(`${label} names witness ${key}, whose bytes were not supplied; coverage is recomputed from bytes, never from a path alone.`);
+    }
+    if (!(bytes instanceof Uint8Array)) refuse(`${label} witness ${key} is not handed in as bytes.`);
+    if (bytesDigest(bytes) !== witness.sha256) {
+      refuse(`${label} witness ${key} does not hash to ${witness.sha256}; the bytes changed since the receipt was written, so the receipt is stale.`);
+    }
+    return bytes;
+  };
+
+  let facts: unknown;
+  let resultHash: string;
+  if (disposition === "absent") {
+    if (sources.length > 0 || witnesses.length > 0) {
+      refuse(`${label} is absent yet names witnesses; an absent surface has no bytes to witness, and a populated surface is never reported absent.`);
+    }
+    resultHash = digestOf({ surface, workflowId, disposition: "absent" });
+  } else {
+    if (sources.length === 0) {
+      refuse(
+        `${label} is populated but names no source witness; every populated surface has retained bytes, and a result is recomputed from bytes, never ` +
+          `from a row identity alone.`,
+      );
+    }
+    // Every named byte is hashed before any decoding: a witness whose bytes were
+    // not supplied, were replaced or do not hash to the receipt is refused even
+    // when the codec would never have read it.
+    for (const witness of [...sources, ...witnesses]) bytesOf(witness);
+    facts = CODECS[surface]({ surface, workflowId, sources, evidence: witnesses, bytesOf, label });
+    resultHash = digestOf({ surface, workflowId, disposition, facts });
+  }
+  return {
+    receipt: {
+      version: 1,
+      surface,
+      workflowId,
+      manifestId,
+      manifestHash,
+      storeId,
+      epoch,
+      disposition,
+      protocol: SURFACE_PROTOCOLS[surface],
+      sources,
+      evidence: witnesses,
+      resultHash,
+    },
+    facts,
+  };
+}
+
+/**
+ * Build the canonical receipt for one row from its bytes. This is the single
+ * producer entry point: C3 decodes, hashes and receives exactly the receipt
+ * `validateExecutionCoverage` recomputes later, so a producer cannot drift from
+ * the validator's schema or invent a result of its own.
+ */
+export function buildExecutionCoverageReceipt(
+  input: Readonly<{
+    surface: ExecutionSurface;
+    workflowId: string | null;
+    disposition: "absent" | "retain" | "migrate" | "retire";
+    manifestId: string;
+    manifestHash: string;
+    storeId: string;
+    epoch: number;
+    sources: readonly CoverageWitness[];
+    evidence?: readonly CoverageWitness[];
+  }>,
+  evidence: ExecutionCoverageEvidence,
+): ExecutionCoverageReceipt {
+  if (evidence === null || typeof evidence.get !== "function") {
+    refuse("the evidence map must supply bytes per `${root}:${path}` key; a coverage claim without bytes is an assertion, not evidence.");
+  }
+  return computeRow(input, evidence, "a coverage receipt request").receipt;
+}
+
+/**
+ * Canonical receipt digest (§4.1). The list must already carry the closed
+ * receipt shape in canonical order — a digest over an unordered or duplicated
+ * list would not be a function of the covered set.
+ */
+export function executionCoverageDigest(receipts: readonly ExecutionCoverageReceipt[]): string {
+  const list = expectArray(receipts, "coverage receipts").map((entry, index) => expectReceiptShape(entry, `coverage receipts[${index}]`));
+  assertReceiptOrder(list, "coverage receipts");
+  return digestOf(list);
+}
+
 // ---------------------------------------------------------------------------
 // Manifest and coverage set
 // ---------------------------------------------------------------------------
 
 const MANIFEST_KEYS = ["manifestId", "manifestHash", "storeId", "epoch", "surfaces", "sources"] as const;
 
-type ManifestSurface = Readonly<{ surface: ExecutionSurface; workflowId: string | null }>;
+type ManifestSurface = Readonly<{ surface: ExecutionSurface; workflowId: string | null; sources: readonly CoverageWitness[] }>;
 
 function expectManifestSurface(value: unknown, what: string): ManifestSurface {
   const record = expectObject(value, what);
-  expectExactKeys(record, ["surface", "workflowId"], what);
+  expectExactKeys(record, ["surface", "workflowId", "sources"], what);
   const surface = expectSurface(record.surface, `${what}.surface`);
-  const workflowId = expectNullableId(record.workflowId, `${what}.workflowId`);
+  const workflowId = expectNullableString(record.workflowId, `${what}.workflowId`);
   expectScope(surface, workflowId, what);
-  return { surface, workflowId };
+  return { surface, workflowId, sources: expectWitnessList(record.sources, `${what}.sources`) };
 }
 
 /**
@@ -546,20 +1098,18 @@ function expectManifest(value: unknown): ExecutionCoverageManifest {
   for (const surface of EXECUTION_COVERAGE_SURFACES) {
     if (executionCoverageSurfaceScope(surface) === "root" && !known.has(identityKey(surface, null))) {
       refuse(
-        `the coverage manifest does not carry the root-scoped surface ${surface}; the closed 18-row inventory is never narrowed by ` +
-          `omission, so a surface with nothing discovered is an absent row instead.`,
+        `the coverage manifest does not carry the root-scoped surface ${surface}; the closed 18-row inventory is never narrowed by omission, ` +
+          `so a surface with nothing discovered is an absent row instead.`,
       );
     }
   }
-  const workflows = [
-    ...new Set(surfaces.filter((row) => row.workflowId !== null).map((row) => row.workflowId as string)),
-  ].sort(compareText);
+  const workflows = [...new Set(surfaces.filter((row) => row.workflowId !== null).map((row) => row.workflowId as string))].sort(compareText);
   for (const workflowId of workflows) {
     for (const surface of WORKFLOW_SCOPED_SURFACES) {
       if (!known.has(identityKey(surface, workflowId))) {
         refuse(
-          `the coverage manifest carries ${surface} for another workflow but not for ${workflowId}; workflow-scoped rows repeat for ` +
-            `every discovered workflow, so a sibling workflow is never omitted.`,
+          `the coverage manifest carries ${surface} for another workflow but not for ${workflowId}; workflow-scoped rows repeat for every ` +
+            `discovered workflow, so a sibling workflow is never omitted.`,
         );
       }
     }
@@ -579,7 +1129,10 @@ function expectCoverageSet(value: unknown, manifest: ExecutionCoverageManifest):
     refuse(`the coverage set binds manifest ${manifestId}, but the frozen manifest is ${manifest.manifestId}; the set belongs to another discovery.`);
   }
   if (manifestHash !== manifest.manifestHash) {
-    refuse(`the coverage set binds manifest hash ${manifestHash}, but the frozen manifest hashes to ${manifest.manifestHash}; the receipts were reviewed against another document.`);
+    refuse(
+      `the coverage set binds manifest hash ${manifestHash}, but the frozen manifest hashes to ${manifest.manifestHash}; the receipts were ` +
+        `reviewed against another document.`,
+    );
   }
   const receipts = expectArray(record.receipts, "the coverage set.receipts").map((entry, index) =>
     expectReceiptShape(entry, `the coverage set.receipts[${index}]`),
@@ -595,519 +1148,19 @@ function expectCoverageSet(value: unknown, manifest: ExecutionCoverageManifest):
 }
 
 // ---------------------------------------------------------------------------
-// Per-surface facts (§4.2)
-// ---------------------------------------------------------------------------
-
-type FactsContext = Readonly<{
-  surface: ExecutionSurface;
-  workflowId: string | null;
-  disposition: CoverageDisposition;
-  sources: readonly CoverageWitness[];
-}>;
-
-/** A fact about a file proves nothing unless the receipt names that exact file. */
-function requireSource(context: FactsContext, path: string, sha256: string, what: string): void {
-  if (!context.sources.some((witness) => witness.path === path && witness.sha256 === sha256)) {
-    refuse(
-      `${what} (${path}) is not carried as a source witness of this receipt; facts are recomputed from the bytes the receipt names, ` +
-        `so a claim about an unnamed or changed file proves nothing.`,
-    );
-  }
-}
-
-function expectFileFacts(value: unknown, what: string): Readonly<{ path: string; sha256: string }> {
-  const record = expectObject(value, what);
-  expectExactKeys(record, ["path", "sha256"], what);
-  return { path: expectWitnessPath(record.path, `${what}.path`), sha256: expectHex64(record.sha256, `${what}.sha256`) };
-}
-
-/** `core-v1`: the discovered core authority — catalog revision plus its workflows. */
-function coreFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "core-v1 facts");
-  expectExactKeys(record, ["catalogRevision", "workflows"], "core-v1 facts");
-  const catalogRevision = expectInteger(record.catalogRevision, "core-v1 facts.catalogRevision", 0);
-  const workflows = expectList(
-    record.workflows,
-    "core-v1 facts.workflows",
-    (entry, what) => expectString(entry, what),
-    compareText,
-    "workflowId",
-  );
-  if (context.workflowId !== null) refuse("core-v1 facts belong to the root-scoped core-execution row, which never carries a workflow scope.");
-  return { catalogRevision, workflows };
-}
-
-/** `session-v1`: the validated workflow/role/identity mapping of each envelope. */
-function sessionFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "session-v1 facts");
-  expectExactKeys(record, ["envelopes"], "session-v1 facts");
-  const envelopes = expectList(
-    record.envelopes,
-    "session-v1 facts.envelopes",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["path", "sha256", "role", "sessionId", "planId", "state", "archive"], what);
-      return {
-        path: expectWitnessPath(item.path, `${what}.path`),
-        sha256: expectHex64(item.sha256, `${what}.sha256`),
-        role: expectEnum(item.role, ENVELOPE_ROLES, `${what}.role`),
-        sessionId: expectString(item.sessionId, `${what}.sessionId`),
-        planId: expectNullableId(item.planId, `${what}.planId`),
-        state: expectEnum(item.state, ENVELOPE_STATES, `${what}.state`),
-        archive: expectEnum(item.archive, ENVELOPE_ARCHIVE, `${what}.archive`),
-      };
-    },
-    (left, right) => compareText(left.path, right.path),
-    "envelope path",
-  );
-  const owners = new Set<string>();
-  for (const envelope of envelopes) {
-    requireSource(context, envelope.path, envelope.sha256, `the session envelope ${envelope.path}`);
-    if (envelope.role === "coordinator" && envelope.planId !== null) {
-      refuse(`session-v1 facts name ${envelope.sessionId} as a coordinator envelope for plan ${envelope.planId}; a coordinator association carries no plan.`);
-    }
-    if (envelope.role === "plan-pm" && envelope.planId === null) {
-      refuse(`session-v1 facts name ${envelope.sessionId} as a plan-pm envelope with no plan; a plan association is never inferred.`);
-    }
-    const owner = `${envelope.role}|${envelope.sessionId}`;
-    if (owners.has(owner)) refuse(`session-v1 facts associate the ${envelope.role} session ${envelope.sessionId} twice; a duplicated association is not coverage.`);
-    owners.add(owner);
-    if (context.disposition === "migrate" && (envelope.state !== "suspended" || envelope.archive !== "pending")) {
-      refuse(
-        `session-v1 facts record ${envelope.path} as ${envelope.state}/${envelope.archive}; a migrated envelope is associated as suspended with an ` +
-          `archive decision still pending.`,
-      );
-    }
-    if (context.disposition === "retire" && (envelope.state !== "revoked" || envelope.archive !== "archived")) {
-      refuse(
-        `session-v1 facts record ${envelope.path} as ${envelope.state}/${envelope.archive}; only a revoked, archived envelope is retired, and no ` +
-          `envelope revives authority through coverage.`,
-      );
-    }
-  }
-  return { envelopes };
-}
-
-/** `notes-v1`: the ordered accepted note records of one workflow's file. */
-function notesFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "notes-v1 facts");
-  expectExactKeys(record, ["file", "records"], "notes-v1 facts");
-  const file = expectFileFacts(record.file, "notes-v1 facts.file");
-  requireSource(context, file.path, file.sha256, `the notes file ${file.path}`);
-  const ids = new Set<string>();
-  const records = expectArray(record.records, "notes-v1 facts.records").map((entry, index) => {
-    const what = `notes-v1 facts.records[${index}]`;
-    const item = expectObject(entry, what);
-    expectExactKeys(item, ["line", "id", "sha256"], what);
-    if (item.line !== index) refuse(`${what}.line must be ${index}; retained note records are the exact ordered lines of the file, never a filtered view.`);
-    const id = expectString(item.id, `${what}.id`);
-    if (ids.has(id)) refuse(`notes-v1 facts record the accepted note id ${id} twice; a duplicated record is not an accepted record.`);
-    ids.add(id);
-    return { line: index, id, sha256: expectHex64(item.sha256, `${what}.sha256`) };
-  });
-  return { file, records };
-}
-
-/** `agent-flow-v2`: the ordered accepted event identities of one workflow's tail. */
-function agentFlowFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "agent-flow-v2 facts");
-  expectExactKeys(record, ["file", "records"], "agent-flow-v2 facts");
-  const file = expectFileFacts(record.file, "agent-flow-v2 facts.file");
-  requireSource(context, file.path, file.sha256, `the agent-flow file ${file.path}`);
-  const eventIds = new Set<string>();
-  const records = expectArray(record.records, "agent-flow-v2 facts.records").map((entry, index) => {
-    const what = `agent-flow-v2 facts.records[${index}]`;
-    const item = expectObject(entry, what);
-    expectExactKeys(item, ["index", "eventId", "sessionId", "streamId", "seq", "sha256"], what);
-    if (item.index !== index) refuse(`${what}.index must be ${index}; accepted events are inventoried in append order.`);
-    const eventId = expectString(item.eventId, `${what}.eventId`);
-    if (eventIds.has(eventId)) refuse(`agent-flow-v2 facts record the event id ${eventId} twice; separate real calls are never deduplicated into one row.`);
-    eventIds.add(eventId);
-    return {
-      index,
-      eventId,
-      sessionId: expectString(item.sessionId, `${what}.sessionId`),
-      streamId: expectString(item.streamId, `${what}.streamId`),
-      seq: expectInteger(item.seq, `${what}.seq`, 0),
-      sha256: expectHex64(item.sha256, `${what}.sha256`),
-    };
-  });
-  return { file, records };
-}
-
-/** `selection-v1`: a durable selection/watermark file and its ordered entries. */
-function selectionFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "selection-v1 facts");
-  expectExactKeys(record, ["file", "entries"], "selection-v1 facts");
-  const file = expectFileFacts(record.file, "selection-v1 facts.file");
-  requireSource(context, file.path, file.sha256, `the selection file ${file.path}`);
-  const entries = expectList(
-    record.entries,
-    "selection-v1 facts.entries",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["key", "digest"], what);
-      return { key: expectString(item.key, `${what}.key`), digest: expectHex64(item.digest, `${what}.digest`) };
-    },
-    (left, right) => compareText(left.key, right.key),
-    "selection key",
-  );
-  return { file, entries };
-}
-
-/** `omp-launch-v2`: the launch intents retained for one workflow. */
-function launchFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "omp-launch-v2 facts");
-  expectExactKeys(record, ["file", "launches"], "omp-launch-v2 facts");
-  const file = expectFileFacts(record.file, "omp-launch-v2 facts.file");
-  requireSource(context, file.path, file.sha256, `the launch journal ${file.path}`);
-  const launches = expectList(
-    record.launches,
-    "omp-launch-v2 facts.launches",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["launchId", "workflowId", "planId", "state"], what);
-      return {
-        launchId: expectString(item.launchId, `${what}.launchId`),
-        workflowId: expectString(item.workflowId, `${what}.workflowId`),
-        planId: expectNullableId(item.planId, `${what}.planId`),
-        state: expectEnum(item.state, LAUNCH_STATES, `${what}.state`),
-      };
-    },
-    (left, right) => compareText(left.launchId, right.launchId),
-    "launchId",
-  );
-  for (const launch of launches) {
-    if (launch.workflowId !== context.workflowId) {
-      refuse(
-        `omp-launch-v2 facts carry launch ${launch.launchId} of workflow ${launch.workflowId} inside the row for ${String(context.workflowId)}; ` +
-          `a launch journal is inventoried under the workflow that owns it.`,
-      );
-    }
-  }
-  return { file, launches };
-}
-
-/** `omp-hidden-v1`: one workflow's hidden entries, covering its whole host inventory. */
-function hiddenFacts(facts: unknown): unknown {
-  const record = expectObject(facts, "omp-hidden-v1 facts");
-  expectExactKeys(record, ["inventory", "sessions"], "omp-hidden-v1 facts");
-  const inventory = expectList(
-    record.inventory,
-    "omp-hidden-v1 facts.inventory",
-    (entry, what) => expectString(entry, what),
-    compareText,
-    "native sessionId",
-  );
-  const sessions = expectList(
-    record.sessions,
-    "omp-hidden-v1 facts.sessions",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["sessionId", "entries"], what);
-      return {
-        sessionId: expectString(item.sessionId, `${what}.sessionId`),
-        entries: expectList(
-          item.entries,
-          `${what}.entries`,
-          (nested, where) => {
-            const value = expectObject(nested, where);
-            expectExactKeys(value, ["entryId", "name", "sha256"], where);
-            return {
-              entryId: expectString(value.entryId, `${where}.entryId`),
-              name: expectEnum(value.name, HIDDEN_ENTRY_NAMES, `${where}.name`),
-              sha256: expectHex64(value.sha256, `${where}.sha256`),
-            };
-          },
-          (left, right) => compareText(left.entryId, right.entryId),
-          "entryId",
-        ),
-      };
-    },
-    (left, right) => compareText(left.sessionId, right.sessionId),
-    "native sessionId",
-  );
-  const covered = sessions.map((session) => session.sessionId);
-  const missing = inventory.filter((sessionId) => !covered.includes(sessionId));
-  const unknown = covered.filter((sessionId) => !inventory.includes(sessionId));
-  if (missing.length > 0 || unknown.length > 0) {
-    refuse(
-      `omp-hidden-v1 facts do not cover the explicit host inventory for this workflow` +
-        `${missing.length > 0 ? `; ${missing.join(", ")} name(s) no retained history` : ""}` +
-        `${unknown.length > 0 ? `; ${unknown.join(", ")} is outside the inventory` : ""}. ` +
-        `A hidden-history row covers every native session the inventory names, and none it does not.`,
-    );
-  }
-  return { inventory, sessions };
-}
-
-/** `retained-body-v1`: the retained SDD evidence bodies of one workflow. */
-function retainedBodyFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "retained-body-v1 facts");
-  expectExactKeys(record, ["plans"], "retained-body-v1 facts");
-  const plans = expectList(
-    record.plans,
-    "retained-body-v1 facts.plans",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["planId", "bodies"], what);
-      const bodies = expectList(
-        item.bodies,
-        `${what}.bodies`,
-        (nested, where) => expectFileFacts(nested, where),
-        (left, right) => compareText(left.path, right.path),
-        "body path",
-      );
-      for (const body of bodies) requireSource(context, body.path, body.sha256, `the SDD evidence body ${body.path}`);
-      return { planId: expectString(item.planId, `${what}.planId`), bodies };
-    },
-    (left, right) => compareText(left.planId, right.planId),
-    "planId",
-  );
-  return { plans };
-}
-
-/** `consumer-v1`: the package/injector inventory with its declared capability. */
-function consumerFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "consumer-v1 facts");
-  expectExactKeys(record, ["entries"], "consumer-v1 facts");
-  const injector = context.surface === "artifact-store-injectors";
-  const entries = expectList(
-    record.entries,
-    "consumer-v1 facts.entries",
-    (entry, what) => {
-      const item = expectObject(entry, what);
-      expectExactKeys(item, ["path", "sha256", "capability", "entrypoint", "runtime", "generated"], what);
-      const generated = item.generated === null ? null : expectFileFacts(item.generated, `${what}.generated`);
-      const entrypoint = item.entrypoint === null ? null : expectString(item.entrypoint, `${what}.entrypoint`);
-      const runtime = item.runtime === null ? null : expectEnum(item.runtime, RUNTIME_TARGETS, `${what}.runtime`);
-      if (generated !== null && runtime === null) {
-        refuse(`${what} names a generated artifact without its runtime target; a built artifact declares the runtime it was built for.`);
-      }
-      return {
-        path: expectWitnessPath(item.path, `${what}.path`),
-        sha256: expectHex64(item.sha256, `${what}.sha256`),
-        capability: expectEnum(item.capability, PACKAGE_CAPABILITIES, `${what}.capability`),
-        entrypoint,
-        runtime,
-        generated,
-      };
-    },
-    (left, right) => compareText(left.path, right.path),
-    "package path",
-  );
-  for (const entry of entries) {
-    requireSource(context, entry.path, entry.sha256, `the inventoried source ${entry.path}`);
-    if (entry.generated !== null) requireSource(context, entry.generated.path, entry.generated.sha256, `the generated artifact ${entry.generated.path}`);
-    if (injector && entry.capability !== "body-only") {
-      refuse(
-        `consumer-v1 facts declare capability ${entry.capability} for the injected store ${entry.path}; a deployed ArtifactStore injector is ` +
-          `inventoried as body-only storage, since the active execution authority never routes through an injection.`,
-      );
-    }
-    if (!injector && entry.capability === "body-only") {
-      refuse(`${context.surface} cannot declare body-only capability; that capability belongs to the injected ArtifactStore inventory.`);
-    }
-  }
-  return { entries };
-}
-
-/** `recovery-v1`: a verified recovery point with populated coverage. */
-function recoveryFacts(facts: unknown, context: FactsContext): unknown {
-  const record = expectObject(facts, "recovery-v1 facts");
-  expectExactKeys(record, ["backup", "schemaVersion", "integrity", "coverageDigest", "recoveryGeneration"], "recovery-v1 facts");
-  const backup = expectFileFacts(record.backup, "recovery-v1 facts.backup");
-  requireSource(context, backup.path, backup.sha256, `the backup image ${backup.path}`);
-  if (record.integrity !== "verified") {
-    refuse(`recovery-v1 facts declare integrity ${JSON.stringify(record.integrity)}; only a verified backup describes a recovery point.`);
-  }
-  return {
-    backup,
-    schemaVersion: expectInteger(record.schemaVersion, "recovery-v1 facts.schemaVersion", 1),
-    integrity: "verified",
-    coverageDigest: expectHex64(record.coverageDigest, "recovery-v1 facts.coverageDigest"),
-    recoveryGeneration: expectInteger(record.recoveryGeneration, "recovery-v1 facts.recoveryGeneration", 0),
-  };
-}
-
-const FACTS_VALIDATORS: Readonly<Record<CoverageProtocol, (facts: unknown, context: FactsContext) => unknown>> = {
-  "core-v1": coreFacts,
-  "session-v1": sessionFacts,
-  "notes-v1": notesFacts,
-  "agent-flow-v2": agentFlowFacts,
-  "selection-v1": selectionFacts,
-  "omp-launch-v2": launchFacts,
-  "omp-hidden-v1": hiddenFacts,
-  "retained-body-v1": retainedBodyFacts,
-  "consumer-v1": consumerFacts,
-  "recovery-v1": recoveryFacts,
-};
-
-// ---------------------------------------------------------------------------
-// One receipt against the frozen manifest, the bytes and the schema
-// ---------------------------------------------------------------------------
-
-const EVIDENCE_DOCUMENT_KEYS = [
-  "version",
-  "protocol",
-  "surface",
-  "workflowId",
-  "manifestId",
-  "manifestHash",
-  "storeId",
-  "epoch",
-  "disposition",
-  "sources",
-  "facts",
-] as const;
-
-function expectEvidenceBytes(
-  evidence: ExecutionCoverageEvidence,
-  witness: CoverageWitness,
-  what: string,
-): Uint8Array {
-  const key = coverageWitnessKey(witness.root, witness.path);
-  const bytes = evidence.get(key);
-  if (bytes === undefined) {
-    refuse(`${what} names witness ${key}, whose bytes were not supplied; coverage is recomputed from bytes, never from a path alone.`);
-  }
-  if (!(bytes instanceof Uint8Array)) refuse(`${what} witness ${key} is not handed in as bytes.`);
-  if (createHash("sha256").update(bytes).digest("hex") !== witness.sha256) {
-    refuse(`${what} witness ${key} does not hash to ${witness.sha256}; the bytes changed since the receipt was written, so the receipt is stale.`);
-  }
-  return bytes;
-}
-
-function decodeEvidenceDocument(bytes: Uint8Array, what: string): Record<string, unknown> {
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return refuse(`${what} is not UTF-8 text; a coverage evidence document is a canonical JSON document.`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return refuse(`${what} is not JSON (${(error as Error).message}); free-form evidence never substitutes for facts.`);
-  }
-  return expectObject(parsed, what);
-}
-
-/**
- * One receipt: witness bytes, manifest pins, the closed evidence document and
- * the recomputed result. Returns the normalized facts (undefined for an absent
- * row) so the caller can cross-check facts across rows.
- */
-function validateReceipt(
-  receipt: ExecutionCoverageReceipt,
-  manifest: ExecutionCoverageManifest,
-  evidence: ExecutionCoverageEvidence,
-  pinned: ReadonlySet<string>,
-): unknown {
-  const label = `receipt ${identityLabel(receipt.surface, receipt.workflowId)}`;
-  if (receipt.manifestId !== manifest.manifestId) {
-    refuse(`${label} binds manifest ${receipt.manifestId}, but the frozen manifest is ${manifest.manifestId}; a receipt from another discovery is stale coverage.`);
-  }
-  if (receipt.manifestHash !== manifest.manifestHash) {
-    refuse(`${label} binds manifest hash ${receipt.manifestHash}, but the frozen manifest hashes to ${manifest.manifestHash}; the receipt was not written against this document.`);
-  }
-  if (receipt.storeId !== manifest.storeId) {
-    refuse(`${label} binds store ${receipt.storeId}, but the frozen manifest belongs to store ${manifest.storeId}.`);
-  }
-  if (receipt.epoch !== manifest.epoch) {
-    refuse(`${label} binds epoch ${receipt.epoch}, but the frozen manifest was discovered at epoch ${manifest.epoch}; a superseded epoch never authorizes coverage.`);
-  }
-
-  for (const witness of [...receipt.sources, ...receipt.evidence]) {
-    expectEvidenceBytes(evidence, witness, label);
-  }
-  for (const witness of receipt.sources) {
-    const key = coverageWitnessKey(witness.root, witness.path);
-    if (!pinned.has(key)) {
-      refuse(`${label} names source witness ${key}, which the frozen manifest does not pin; a receipt never invents a source outside the reviewed inventory.`);
-    }
-  }
-
-  if (receipt.disposition === "absent") {
-    if (receipt.sources.length > 0 || receipt.evidence.length > 0) {
-      refuse(`${label} is absent yet names witnesses; an absent surface has no bytes to witness, and a populated surface is never reported absent.`);
-    }
-    const expected = executionCoverageResultHash({ surface: receipt.surface, workflowId: receipt.workflowId, disposition: "absent" });
-    if (receipt.resultHash !== expected) {
-      refuse(`${label} is absent but its resultHash is not the digest of an absent result (${expected}); a missing surface never borrows a populated result.`);
-    }
-    return undefined;
-  }
-
-  if (receipt.evidence.length !== 1) {
-    refuse(`${label} carries ${receipt.evidence.length} evidence witnesses; a populated row carries exactly one bounded evidence document, and an operator acknowledgement is not one.`);
-  }
-  const documentBytes = expectEvidenceBytes(evidence, receipt.evidence[0], label);
-  const document = decodeEvidenceDocument(documentBytes, `${label}'s evidence document`);
-  expectExactKeys(document, EVIDENCE_DOCUMENT_KEYS, `${label}'s evidence document`);
-  if (document.version !== 1) refuse(`${label}'s evidence document does not declare version 1.`);
-  const documentProtocol = expectProtocol(document.protocol, `${label}'s evidence document.protocol`);
-  if (documentProtocol !== receipt.protocol) {
-    refuse(`${label}'s evidence document was written by ${documentProtocol}, not by ${receipt.protocol}; the bytes and the receipt must describe the same validator.`);
-  }
-  const documentSurface = expectSurface(document.surface, `${label}'s evidence document.surface`);
-  const documentWorkflow = expectNullableId(document.workflowId, `${label}'s evidence document.workflowId`);
-  if (documentSurface !== receipt.surface || documentWorkflow !== receipt.workflowId) {
-    refuse(`${label}'s evidence document describes ${identityLabel(documentSurface, documentWorkflow)}; evidence is never reused across surfaces or workflows.`);
-  }
-  if (document.manifestId !== receipt.manifestId || document.manifestHash !== receipt.manifestHash) {
-    refuse(`${label}'s evidence document was produced against another manifest; the facts it carries belong to a different discovery.`);
-  }
-  if (document.storeId !== receipt.storeId || document.epoch !== receipt.epoch) {
-    refuse(`${label}'s evidence document belongs to another store epoch; superseded evidence never validates coverage.`);
-  }
-  const documentDisposition = expectEnum(document.disposition, COVERAGE_DISPOSITIONS, `${label}'s evidence document.disposition`);
-  if (documentDisposition !== receipt.disposition) {
-    refuse(`${label}'s evidence document declares disposition ${documentDisposition} while the receipt declares ${receipt.disposition}.`);
-  }
-  const documentSources = expectWitnessList(document.sources, `${label}'s evidence document.sources`);
-  if (documentSources.length !== receipt.sources.length || documentSources.some((witness, index) => {
-    const source = receipt.sources[index];
-    return witness.root !== source.root || witness.path !== source.path || witness.sha256 !== source.sha256;
-  })) {
-    refuse(`${label}'s evidence document source witnesses are not the receipt's sources; the facts must be recomputed from the very bytes the receipt names.`);
-  }
-  const context: FactsContext = {
-    surface: receipt.surface,
-    workflowId: receipt.workflowId,
-    disposition: receipt.disposition,
-    sources: receipt.sources,
-  };
-  const facts = FACTS_VALIDATORS[receipt.protocol](document.facts, context);
-  const expected = executionCoverageResultHash({
-    surface: receipt.surface,
-    workflowId: receipt.workflowId,
-    disposition: receipt.disposition,
-    facts,
-  });
-  if (receipt.resultHash !== expected) {
-    refuse(
-      `${label}'s resultHash ${receipt.resultHash} is not the digest of the facts recomputed from its evidence bytes (${expected}); ` +
-        `a self-consistent hash over a fabricated document proves nothing.`,
-    );
-  }
-  return facts;
-}
-
-// ---------------------------------------------------------------------------
 // Entry point (§4.1)
 // ---------------------------------------------------------------------------
 
 /**
  * Validate a coverage set against its frozen manifest and the evidence bytes.
  * Synchronous and pure: nothing is read from disk, nothing is written, and no
- * caller-supplied callback can substitute an assertion for bytes.
+ * caller-supplied callback can substitute an assertion for bytes. Every
+ * receipt's result is RECOMPUTED from the bytes it names, so a self-consistent
+ * hash over an invented document proves nothing.
  *
  * Refuses `execution.coverage-incomplete` when the set is not the exact closed
- * inventory, when a receipt disagrees with its manifest binding, its pinned
- * witnesses or its recomputed facts, or when the canonical digest does not
- * cover the receipts it claims.
+ * inventory, when a receipt disagrees with its manifest binding, its assigned
+ * or pinned witnesses, or its recomputed result.
  */
 export function validateExecutionCoverage(
   manifest: ExecutionCoverageManifest,
@@ -1120,10 +1173,10 @@ export function validateExecutionCoverage(
   const frozen = expectManifest(manifest);
   const set = expectCoverageSet(coverage, frozen);
 
-  const expected = new Set(frozen.surfaces.map((row) => identityKey(row.surface, row.workflowId)));
+  const assignment = new Map<string, ManifestSurface>();
+  for (const row of frozen.surfaces) assignment.set(identityKey(row.surface, row.workflowId), row);
   for (const receipt of set.receipts) {
-    const key = identityKey(receipt.surface, receipt.workflowId);
-    if (!expected.has(key)) {
+    if (!assignment.has(identityKey(receipt.surface, receipt.workflowId))) {
       refuse(
         `the coverage set carries a receipt for ${identityLabel(receipt.surface, receipt.workflowId)}, which the frozen manifest does not list; ` +
           `a receipt never adds a surface identity of its own.`,
@@ -1148,16 +1201,62 @@ export function validateExecutionCoverage(
   const pinned = new Set(frozen.sources.map((witness) => coverageWitnessKey(witness.root, witness.path)));
   const factsBySurface = new Map<string, unknown>();
   for (const receipt of set.receipts) {
-    const facts = validateReceipt(receipt, frozen, evidence, pinned);
-    if (facts !== undefined) factsBySurface.set(identityKey(receipt.surface, receipt.workflowId), facts);
+    const key = identityKey(receipt.surface, receipt.workflowId);
+    const label = `receipt ${identityLabel(receipt.surface, receipt.workflowId)}`;
+    const assigned = assignment.get(key);
+    if (assigned === undefined) refuse(`${label} is not a surface identity of the frozen manifest.`);
+    if (receipt.manifestId !== frozen.manifestId) {
+      refuse(`${label} binds manifest ${receipt.manifestId}, but the frozen manifest is ${frozen.manifestId}; a receipt from another discovery is stale coverage.`);
+    }
+    if (receipt.manifestHash !== frozen.manifestHash) {
+      refuse(`${label} binds manifest hash ${receipt.manifestHash}, but the frozen manifest hashes to ${frozen.manifestHash}.`);
+    }
+    if (receipt.storeId !== frozen.storeId) {
+      refuse(`${label} binds store ${receipt.storeId}, but the frozen manifest belongs to store ${frozen.storeId}.`);
+    }
+    if (receipt.epoch !== frozen.epoch) {
+      refuse(`${label} binds epoch ${receipt.epoch}, but the frozen manifest was discovered at epoch ${frozen.epoch}; a superseded epoch never authorizes coverage.`);
+    }
+    if (!sameWitnesses(assigned.sources, receipt.sources)) {
+      refuse(
+        `${label} names source witnesses ${describeWitnesses(receipt.sources)} where the frozen manifest assigns ${describeWitnesses(assigned.sources)} ` +
+          `to ${identityLabel(assigned.surface, assigned.workflowId)}; a row's sources are the ones C3's discovery pinned to it, never another row's.`,
+      );
+    }
+    for (const witness of receipt.sources) {
+      const sourceKey = coverageWitnessKey(witness.root, witness.path);
+      if (!pinned.has(sourceKey)) {
+        refuse(`${label} names source witness ${sourceKey}, which the frozen manifest does not pin; a receipt never invents a source outside the reviewed inventory.`);
+      }
+    }
+    const recomputed = computeRow(
+      {
+        surface: receipt.surface,
+        workflowId: receipt.workflowId,
+        disposition: receipt.disposition,
+        manifestId: receipt.manifestId,
+        manifestHash: receipt.manifestHash,
+        storeId: receipt.storeId,
+        epoch: receipt.epoch,
+        sources: receipt.sources,
+        evidence: receipt.evidence,
+      },
+      evidence,
+      label,
+    );
+    if (recomputed.receipt.resultHash !== receipt.resultHash) {
+      refuse(
+        `${label} carries resultHash ${receipt.resultHash}, but the result recomputed from its bytes is ${recomputed.receipt.resultHash}; a coverage ` +
+          `result is recomputed from the named bytes, never asserted by the receipt.`,
+      );
+    }
+    factsBySurface.set(key, recomputed.facts);
   }
 
-  const discovered = [
-    ...new Set(frozen.surfaces.filter((row) => row.workflowId !== null).map((row) => row.workflowId as string)),
-  ].sort(compareText);
+  const discovered = [...new Set(frozen.surfaces.filter((row) => row.workflowId !== null).map((row) => row.workflowId as string))].sort(compareText);
   const core = factsBySurface.get(identityKey("core-execution", null)) as { workflows: readonly string[] } | undefined;
   if (core === undefined) {
-    refuse("the core-execution row carries no validated facts; the core authority is always populated, so its discovery is always recomputed.");
+    refuse("the core-execution row carries no recomputed discovery; the core authority is always populated, so its discovery is always recomputed.");
   }
   if (core.workflows.length !== discovered.length || core.workflows.some((workflowId, index) => workflowId !== discovered[index])) {
     refuse(
@@ -1165,4 +1264,16 @@ export function validateExecutionCoverage(
         `a workflow discovered by the core authority is never omitted from the workflow-scoped inventory.`,
     );
   }
+}
+
+function sameWitnesses(left: readonly CoverageWitness[], right: readonly CoverageWitness[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((witness, index) => witness.root === right[index].root && witness.path === right[index].path && witness.sha256 === right[index].sha256)
+  );
+}
+
+function describeWitnesses(witnesses: readonly CoverageWitness[]): string {
+  if (witnesses.length === 0) return "(none)";
+  return witnesses.map((witness) => coverageWitnessKey(witness.root, witness.path)).join(", ");
 }
