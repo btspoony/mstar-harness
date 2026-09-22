@@ -61,18 +61,12 @@
  */
 import {
   closeSync,
+  constants as fsConstants,
   fstatSync,
   fsyncSync,
   ftruncateSync,
   lstatSync,
   mkdirSync,
-  O_APPEND,
-  O_CREAT,
-  O_EXCL,
-  O_NOFOLLOW,
-  O_RDONLY,
-  O_RDWR,
-  O_WRONLY,
   openSync,
   readFileSync,
   rmSync,
@@ -88,9 +82,6 @@ import { withStatusWriteLock } from "./lease.js";
 import { NOTES_LEDGER_FILE } from "./migrate.js";
 import { assertSafePathComponent, resolveWorkflowDir } from "./path.js";
 import { storeDbPath, type StoreContext } from "./store-db.js";
-
-/** `O_NOFOLLOW` where the platform has it; the fd-level `fstat` check is the fallback boundary. */
-const NO_FOLLOW = typeof O_NOFOLLOW === "number" ? O_NOFOLLOW : 0;
 
 /* ------------------------------------------------------------------------ *
  * Public shapes (§5)
@@ -362,10 +353,16 @@ type RetainedLedger =
   /** The retained bytes AND the file identity they were read from. */
   | Readonly<{ kind: "present"; bytes: Buffer; dev: number; ino: number }>;
 
-/** Open one leaf without ever following a symbolic link; a link refuses. */
+/**
+ * Open one leaf without ever following a symbolic link; a link refuses. The
+ * `O_NOFOLLOW` flag comes from `fs.constants` (the repo's one source for open
+ * flags); where a platform does not provide it, the `fstat` verification of the
+ * same descriptor remains the boundary.
+ */
 function openWithoutFollowing(path: string, flags: number, mode?: number): number {
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   try {
-    return mode === undefined ? openSync(path, flags | NO_FOLLOW) : openSync(path, flags | NO_FOLLOW, mode);
+    return mode === undefined ? openSync(path, flags | noFollow) : openSync(path, flags | noFollow, mode);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") {
       throw new ExecutionLedgerError(
@@ -386,7 +383,7 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
 function readRetainedLedger(path: string): RetainedLedger {
   let fd: number;
   try {
-    fd = openWithoutFollowing(path, O_RDONLY);
+    fd = openWithoutFollowing(path, fsConstants.O_RDONLY);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
     throw error;
@@ -418,7 +415,7 @@ function replaceLeafSeam(path: string): void {
   writeFileSync(path, "replaced between the read and the commit\n");
 }
 
-/** Write the whole line, tolerating a short write; `offset < 0` means O_APPEND. */
+/** Write the whole line, tolerating a short write; `offset < 0` means the append-at-EOF mode. */
 function writeAll(fd: number, line: Buffer, offset: number): void {
   let written = 0;
   while (written < line.length) {
@@ -466,11 +463,11 @@ function commitLedgerLine(input: {
     let fd: number;
     let created = false;
     try {
-      fd = openWithoutFollowing(path, O_WRONLY | O_APPEND | O_CREAT | O_EXCL, 0o644);
+      fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
       created = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fd = openWithoutFollowing(path, O_WRONLY | O_APPEND);
+      fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND);
     }
     try {
       const info = fstatSync(fd);
@@ -498,7 +495,7 @@ function commitLedgerLine(input: {
 
   let fd: number;
   try {
-    fd = openWithoutFollowing(path, O_RDWR);
+    fd = openWithoutFollowing(path, fsConstants.O_RDWR);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new ExecutionLedgerError(
@@ -660,7 +657,7 @@ function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNote): void
       "execution-ledgers.scope-mismatch",
       `the note records provenance ${JSON.stringify(record.workflowId)}/${JSON.stringify(record.sessionId)}, but the bound ` +
         `session is ${JSON.stringify(session.workflowId)}/${JSON.stringify(session.sessionId)}. Provenance is the bound ` +
-        `session's own scope — it is never taken from the record; nothing was written.`,
+        `session's own scope - it is never taken from the record; nothing was written.`,
     );
   }
 }
