@@ -26,6 +26,7 @@ import {
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { parseExecutionRequest, registerExecutionSessionCommand, runExecutionCommand } from '../src/gates/execution-session.ts'
 import { readWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
@@ -52,6 +53,15 @@ function agentOf(cwd: string, overrides: Record<string, unknown> = {}): unknown 
 
 function invocationOf(agent: unknown, rawInput: string, signal = new AbortController().signal): CommandInvocation {
   return { commandId: 'cmd-1', agent, rawInput, attachments: [], signal } as unknown as CommandInvocation
+}
+
+/**
+ * The stored control record, narrowed through the read's OWN discriminant
+ * (`unavailable` carries a reason instead of a binding).
+ */
+function storedBinding(harnessDir: string, cwd: string): WorkflowSessionBinding | undefined {
+  const read = readWorkflowSessionBinding(harnessDir, SESSION_ID, cwd)
+  return read.kind === 'ok' ? read.binding : undefined
 }
 
 /** Register through the PRODUCTION seam and return the registered handler. */
@@ -200,16 +210,15 @@ describe('mstar-execution — canonical native adoption', () => {
 
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({ operation: 'adopt', sessionRef: ref }))))
       .resolves.toEqual({ kind: 'success', text: `execution binding adopted for ${WORKFLOW_ID}` })
-    const adopted = readWorkflowSessionBinding(harnessDir, SESSION_ID, root)
-    expect(adopted.kind).toBe('ok')
-    expect(adopted.binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
-    expect(adopted.binding?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
+    const adopted = storedBinding(harnessDir, root)
+    expect(adopted?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    expect(adopted?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
 
     await expect(handler(invocationOf(agentOf(root), '{"operation":"clear"}')))
       .resolves.toEqual({ kind: 'success', text: 'execution binding cleared' })
-    const cleared = readWorkflowSessionBinding(harnessDir, SESSION_ID, root)
-    expect(cleared.binding?.executionBinding ?? null).toBeNull()
-    expect(cleared.binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    const cleared = storedBinding(harnessDir, root)
+    expect(cleared?.executionBinding ?? null).toBeNull()
+    expect(cleared?.selectedWorkflowId).toBe(WORKFLOW_ID)
   })
 
   it('refuses a reference that does not name the carrying native session', async () => {
@@ -230,7 +239,7 @@ describe('mstar-execution — canonical native adoption', () => {
     // resume refuses it and nothing is adopted.
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({ operation: 'adopt', sessionRef: copied }))))
       .rejects.toThrow(/scope-mismatch|store/)
-    expect(readWorkflowSessionBinding(harnessDir, SESSION_ID, root).binding?.executionBinding ?? null).toBeNull()
+    expect(storedBinding(harnessDir, root)?.executionBinding ?? null).toBeNull()
   })
 })
 
