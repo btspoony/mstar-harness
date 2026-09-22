@@ -1009,9 +1009,12 @@ export async function reservePlanLaunch(
       const drift = assertPreparedHash(prepared, planId);
       if (drift !== null) return drift;
 
+      // The Assignment-scope form resolves the checkout/branch facts from the
+      // stored pin and the real Assignment file — never from the retired
+      // workflow snapshot, which is not an authority on this route.
       let scope: ResolvedPlanScope;
       try {
-        scope = await resolvePlanScope({ workflowId, planId, harnessDir: harnessRoot }, authority.cwd);
+        scope = await resolvePlanScope({ assignmentPath: prepared.assignment_path as string }, authority.cwd);
       } catch (error) {
         return refuse("launch.plan-unavailable", `plan ${planId} scope is not resolvable for a launch: ${messageOf(error)}`);
       }
