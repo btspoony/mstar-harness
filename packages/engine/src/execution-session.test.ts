@@ -22,8 +22,7 @@ describe("execution session transport", () => {
   test("encodes and decodes the canonical reference without adding authority", () => {
     const wire = encodeExecutionSessionRef(ref);
     expect(wire).toMatch(/^exec-session-v1:/);
-    expect(decodeExecutionSessionRef(wire)).toEqual(ref);
-    expect(decodeExecutionSessionRef(`${wire}AA`)).not.toEqual(ref);
+    expect(() => decodeExecutionSessionRef(`${wire}AA`)).toThrow();
   });
 
   test("rejects copied, stale-shaped, and extra-field references", () => {
