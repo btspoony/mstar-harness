@@ -45,6 +45,8 @@ const PLAN_ID = "20260922-execution-workflow-plan";
 const COORDINATOR_ID = "coord-exec-workflow";
 const ITERATION_ID = "iter-exec-workflow";
 const INTEGRATION_BRANCH = "iteration/exec-workflow";
+/** The completion policy a `verification/report-only` registration records. */
+const REPORT_ONLY_POLICY = `acceptance report at plans/${PLAN_ID}/report.md`;
 
 interface RunResult {
   exitCode: number | null;
@@ -102,6 +104,15 @@ function jsonOf(result: RunResult): Record<string, unknown> {
   } catch {
     throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
   }
+}
+
+/** The `data` object of one CLI success/failure envelope. */
+function dataOf(result: RunResult): Record<string, unknown> {
+  const data = jsonOf(result).data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(`expected a data object, got ${result.stdout}`);
+  }
+  return data as Record<string, unknown>;
 }
 
 function coordinatorIdentity(workflowId = WORKFLOW_ID): ExecutionIdentity {
@@ -188,6 +199,37 @@ function registerPlanWorkflow(
   );
 }
 
+/** Register the SAME workflow as `verification/report-only` (its own completion policy). */
+function registerReportOnlyWorkflow(fixture: Fixture, identity: ExecutionIdentity, rootToken: string): RunResult {
+  return runCli(
+    [
+      "workflow",
+      "register",
+      "--workflow",
+      WORKFLOW_ID,
+      "--plan-id",
+      PLAN_ID,
+      "--plan-title",
+      "Active workflow transport plan",
+      "--plan-file",
+      `plans/${PLAN_ID}.md`,
+      "--delivery-kind",
+      "verification/report-only",
+      "--completion-policy",
+      REPORT_ONLY_POLICY,
+      "--expect",
+      rootToken,
+      "--operation",
+      "register-report-only-1",
+      "--harness",
+      fixture.harnessDir,
+      "--json",
+    ],
+    fixture,
+    identity,
+  );
+}
+
 /** Bind one workflow's coordinator through the documented active form. */
 function bindCoordinator(
   fixture: Fixture,
@@ -249,14 +291,17 @@ describe("mstar workflow \u2014 documented invocation", () => {
   test("registers through the authority, then moves the lifecycle and records its policy and delivery evidence", async () => {
     const fixture = await activeFixture("mstar-workflow-active");
     const identity = coordinatorIdentity();
-    const registered = registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture));
+    // `verification/report-only`: its only delivery member is `completion`,
+    // which is the ONE member the engine records before every owned row is Done
+    // (a `development` tail — compound/pr/merge — is refused until then, §3).
+    const registered = registerReportOnlyWorkflow(fixture, identity, await rootTokenOf(fixture));
     expect(registered.exitCode).toBe(0);
     expect(jsonOf(registered).route).toBe("execution");
     expect((await storedHeader(fixture)) as Record<string, unknown>).toMatchObject({
       id: WORKFLOW_ID,
       type: "plan",
       status: "running",
-      delivery_kind: "development",
+      delivery_kind: "verification/report-only",
     });
 
     const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
@@ -275,16 +320,20 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect((await storedHeader(fixture)).execution_policy).toEqual({ plan_parallelism: "parallel" });
 
     // Delivery evidence is recorded stage by stage on the RUNNING lifecycle,
-    // before the status move below (the close consultation reads it later).
+    // before the status move below (the close consultation reads it later). For
+    // this kind the recorded member is `completion` — the fulfilment of the
+    // registered completion policy.
     const deliveryPath = join(fixture.root, "delivery.json");
-    writeJson(deliveryPath, { compound: { outcome: "created" } });
+    writeJson(deliveryPath, {
+      completion: { policy: REPORT_ONLY_POLICY, evidence: "acceptance report at plans/" + PLAN_ID + "/report.md" },
+    });
     const delivery = runCli(
       workflowVerbArgs("evidence", fixture, bound, await workflowTokenOf(fixture), "delivery-1", ["--file", deliveryPath]),
       fixture,
       identity,
     );
     expect(delivery.exitCode).toBe(0);
-    expect((await storedHeader(fixture)).delivery).toMatchObject({ compound: { outcome: "created" } });
+    expect((await storedHeader(fixture)).delivery).toMatchObject({ completion: { policy: REPORT_ONLY_POLICY } });
 
     const pausedToken = await workflowTokenOf(fixture);
     const paused = runCli(
