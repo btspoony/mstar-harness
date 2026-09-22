@@ -2358,7 +2358,85 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
   });
 
+  test("migrated handoff keeps historical submitter association without reviving authorization", async () => {
+    const shared = "host-migrated";
+    const fixture = await createdWorkflow("migrated-handoff", shared);
+    const { context, workflowToken, planTokens, epoch } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-migrated-coordinator"),
+    );
+    preparePlanRow(context, "p-1", {
+      worktreePath: join(context.harnessDir, "worktrees", "p-1"),
+      workingBranch: "feature/migrated-handoff",
+    });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const planRef = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-migrated-plan"),
+    );
+    const handoff = {
+      id: "handoff-migrated",
+      attempt: 1,
+      state: "submitted",
+      submitted_by: shared,
+      submitted_at: TS,
+      source_branch: "feature/migrated-handoff",
+      source_sha: "a".repeat(40),
+      worktree_path: join(context.harnessDir, "worktrees", "p-1"),
+      review_base: "b".repeat(40),
+      review_head: "c".repeat(40),
+      qc: {
+        decision: "approve",
+        reports: [{ path: join(context.harnessDir, "sdd", "migrated-handoff", "qc1.md"), sha256: "d".repeat(64) }],
+        consolidated: { path: join(context.harnessDir, "sdd", "migrated-handoff", "qc.md"), sha256: "e".repeat(64) },
+      },
+      qa: {
+        gate: "mandatory",
+        decision: "pass",
+        report: { path: join(context.harnessDir, "sdd", "migrated-handoff", "qa.md"), sha256: "f".repeat(64) },
+      },
+    };
+    const db = rawDb(storePath(context));
+    try {
+      const stored = one(db, "select coordination_json, state_json from execution_plans where workflow_id = 'wf-1' and plan_id = 'p-1'");
+      const coordination = JSON.parse(String(stored.coordination_json)) as Record<string, unknown>;
+      coordination.progress = { status: "InReview", summary: "historical handoff", evidence_paths: [] };
+      coordination.handoff = handoff;
+      const state = JSON.parse(String(stored.state_json)) as Record<string, unknown>;
+      state.status = "InReview";
+      db.prepare("update execution_plans set coordination_json = ?, state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run(
+        JSON.stringify(coordination),
+        JSON.stringify(state),
+      );
+      db.prepare("update execution_sessions set state = 'suspended' where workflow_id = 'wf-1' and role = 'plan-pm'").run();
+      db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      db.close();
+    }
+
+    const history = await readExecutionState(context);
+    const migratedPlan = history.data.workflows[0]?.plans.find((plan) => plan.plan.id === "p-1");
+    expect(migratedPlan?.coordination?.handoff).toMatchObject({ submitted_by: shared, state: "submitted" });
+    expect(migratedPlan?.session).toBeNull();
+    expect(migratedPlan?.executionLease).toMatchObject({ status: "held", holder_session_id: shared });
+    expect(history.epoch).toBe(epoch + 1);
+
+    await expect(readExecutionPlan(domainContext(context, planPm), planRef.data, "p-1")).rejects.toMatchObject({
+      code: "store.stale-epoch",
+    });
+    const currentPlanToken = history.data.workflows[0]?.planTokens["p-1"];
+    await expect(
+      bindExecutionSession(
+        domainContext(context, planPm),
+        sessionBind("wf-1", "p-1", currentPlanToken as ExecutionToken, "bind-migrated-revival"),
+      ),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+    expect(migratedPlan?.session).toBeNull();
+  });
   test("reads the committed authority after a clean close folded the journal into the store file", async () => {
+
     // This failure mechanism, made deterministic. This runtime completes a
     // closed connection's SQLite cleanup — checkpoint every committed frame into
     // the database file, then remove the now-empty `-wal`/`-shm` pair — when the
