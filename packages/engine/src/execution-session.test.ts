@@ -1,10 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import {
   createLocalExecutionIdentity,
   decodeExecutionSessionRef,
   encodeExecutionSessionRef,
   executionContextFor,
+  resumeExecutionSession,
 } from "./execution-session.js";
+import { serializeExecutionValue } from "./execution-store.js";
 import type { ExecutionSessionRef } from "./execution-store.js";
 
 const ref: ExecutionSessionRef = {
@@ -25,10 +27,12 @@ describe("execution session transport", () => {
   });
 
   test("rejects copied, stale-shaped, and extra-field references", () => {
-    const wire = encodeExecutionSessionRef(ref);
-    const decoded = JSON.parse(Buffer.from(wire.slice("exec-session-v1:".length), "base64url").toString("utf8")) as Record<string, unknown>;
-    decoded.extra = true;
-    const copied = `exec-session-v1:${Buffer.from(`${JSON.stringify(decoded)}\n`).toString("base64url")}`;
+    const decoded = { ...ref, extra: true };
+    const copied = `exec-session-v1:${Buffer.from(serializeExecutionValue(decoded), "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "")}`;
     expect(() => decodeExecutionSessionRef(copied)).toThrow();
     expect(() => decodeExecutionSessionRef("exec-session-v1:eyJzdG9yZUlkIjoiYSJ9")).toThrow();
   });
@@ -44,5 +48,16 @@ describe("execution session transport", () => {
       role: "coordinator",
       planId: null,
     });
+  });
+
+  test("refuses foreign caller and role/plan scope before any store read", async () => {
+    const identity = createLocalExecutionIdentity({ workflowId: "workflow-1", role: "coordinator", planId: null });
+    const context = executionContextFor({ harnessDir: "/tmp/harness" }, identity);
+    await expect(
+      resumeExecutionSession({ ...context, caller: { ...context.caller, sessionId: "foreign-session" } }, ref),
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
+    await expect(
+      resumeExecutionSession({ ...context, caller: { ...context.caller, role: "plan-pm", planId: "p-1" } }, ref),
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
   });
 });

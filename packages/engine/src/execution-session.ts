@@ -77,8 +77,9 @@ export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
   let text: string;
   try {
     const encoded = wire.slice(SESSION_WIRE_PREFIX.length);
-    if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error("invalid base64url");
-    text = Buffer.from(encoded, "base64url").toString("utf8");
+    if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1) throw new Error("invalid base64url");
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (encoded.length % 4)) % 4);
+    text = Buffer.from(padded, "base64").toString("utf8");
   } catch {
     throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid base64url");
   }
