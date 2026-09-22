@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resumeExecutionSession } from "./execution-session.js";
+import { assertExecutionSessionCurrent, resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin } from "./coordination.js";
 import {
@@ -2380,8 +2380,21 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     expect(resumedCoordinator.data).toEqual(coordinatorRef.data);
     expect(resumedPlan.data).toEqual(planRef.data);
     expect(resumedCoordinator.token).toBe(coordinatorRef.token);
-    expect(resumedPlan.token).toBe(planRef.token);
+    assertExecutionSessionCurrent(domainContext(context, coordinator), coordinatorRef.data);
+    assertExecutionSessionCurrent(domainContext(context, planPm), planRef.data);
     expect(sessionRows(context)).toEqual(before);
+    expect(() => assertExecutionSessionCurrent(domainContext(context, planPm), { ...planRef.data, sessionId: "copied" })).toThrow();
+    const foreign = await createdWorkflow("session-resume-foreign", shared);
+    await expect(resumeExecutionSession(domainContext(foreign.context, coordinator), coordinatorRef.data)).rejects.toMatchObject({
+      code: "execution.scope-mismatch",
+    });
+    const revoked = rawDb(storePath(context));
+    try {
+      revoked.prepare("update execution_sessions set state = 'revoked' where workflow_id = 'wf-1' and role = 'plan-pm'").run();
+    } finally {
+      revoked.close();
+    }
+    expect(() => assertExecutionSessionCurrent(domainContext(context, planPm), planRef.data)).toThrow();
   });
 
   test("migrated handoff keeps historical submitter association without reviving authorization", async () => {
