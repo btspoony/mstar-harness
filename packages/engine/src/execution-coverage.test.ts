@@ -261,7 +261,7 @@ function consumerRow(surface: ExecutionSurface, consumer: string, capability: st
   const sourceFile = doc("package", sourcePath, "export const index = {};");
   const configFile = doc("package", configPath, "{}");
   const generatedFile = doc("package", generatedPath, "// built");
-  const copyFile = doc("package", `${packageRoot}/harness-skills/SKILL.md`, "# copied skill\n");
+  const copyFile = doc("package", `${packageRoot}/harness-skills/mstar-harness-core/SKILL.md`, "# copied skill\n");
   // C3's proof is a separate input: it is derived from the real bytes/kinds and
   // is never read out of the declaration below.
   const sourceSkill = doc("package", "skills/mstar-harness-core/SKILL.md", "# copied skill\n");
@@ -876,7 +876,7 @@ describe("execution-coverage", () => {
       copies: [
         {
           ...copyEntry,
-          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/RENAMED.md", sha256: sha("# copied skill\n") }],
+          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/mstar-harness-core/RENAMED.md", sha256: sha("# copied skill\n") }],
         },
       ],
     });
@@ -891,7 +891,7 @@ describe("execution-coverage", () => {
       copies: [
         {
           ...copyBytesEntry,
-          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/SKILL.md", sha256: fakeHex(55) }],
+          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/mstar-harness-core/SKILL.md", sha256: fakeHex(55) }],
         },
       ],
     });
@@ -906,10 +906,9 @@ describe("execution-coverage", () => {
       copies: [
         {
           ...copyExtraEntry,
-          files: 2,
           targetWitnesses: [
             ...(copyExtraEntry.targetWitnesses as unknown[]),
-            { root: "package", path: "packages/dsh/harness-skills/EXTRA.md", sha256: fakeHex(56) },
+            { root: "package", path: "packages/dsh/harness-skills/mstar-harness-core/EXTRA.md", sha256: fakeHex(56) },
           ],
         },
       ],
