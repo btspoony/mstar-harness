@@ -35,6 +35,7 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
+import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -1813,7 +1814,7 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
       updated_at: TS,
       delivery_kind: route === "report-only" ? "verification/report-only" : "development",
       ...(route === "report-only"
-        ? { completion_policy: "acceptance report", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } }
+        ? { completion_policy: "acceptance report" }
         : { branch, ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}) }),
       plans: planIds.map((planId) => ({
         id: planId,
@@ -1860,6 +1861,15 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
     evidence: { [OWN_PLAN]: planEvidenceOf(harnessRoot, OWN_PLAN) },
     seat: undefined as unknown as Seat,
   } as LifecycleFixture;
+  if (route === "report-only") {
+    await mutateExecutionWorkflow(domainContext(context, coordinatorCaller), {
+      operationId: `delivery-${label}`,
+      session: fixture.coordinator,
+      expected: fixture.coordinator.workflowToken,
+      workflowId: WORKFLOW_ID,
+      operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } },
+    });
+  }
   await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
     operationId: `prepare-${label}`,
     session: fixture.coordinator,
