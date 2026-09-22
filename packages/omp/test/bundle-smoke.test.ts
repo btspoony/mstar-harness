@@ -723,7 +723,7 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.packedNodeModules).toBe(false);
       expect("error" in report.engineFromPackedRoot).toBe(true);
       expect(report.packed.errors).toEqual([]);
-      expect(report.packed.tools).toEqual(["mstar_model_handoff"]);
+      expect(report.packed.tools).toEqual(["mstar_model_handoff", "mstar_coordinator"]);
       expect(report.packed.handlers).toEqual(EXTENSION_EVENTS);
 
       // The model-facing tool contract is the host's own schema.

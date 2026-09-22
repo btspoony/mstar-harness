@@ -69,7 +69,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { promotedAuditSnapshot, promoteAuditPlans, promotedAuditPlanRows, type PromoteAuditPlansOptions } from "./audit.js";
 import {
   CatalogError,
@@ -85,6 +85,7 @@ import {
 import { isPlainObject, readArtifactBytes } from "./coordination-write.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
+import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { findRegisteredWorkflow, registerWorkflowEntryLocked, validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
@@ -490,6 +491,55 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
     workflow: validated,
     delta: validateDelta(request.delta, validated.kind),
   };
+}
+
+/**
+ * The registered-plan path preflight (prerequisite contract §4). Every
+ * iteration row pointer is resolved to the canonical `{PLAN_DIR}/<id>.md`
+ * BEFORE the request is validated, hashed or journaled, so the derived
+ * operation identity and the eventual producer agree on one representation —
+ * a retry can never hash one spelling and write another.
+ *
+ * Iteration workflows only: standalone/audit catalog location schemas and the
+ * plan producer's own `file` are not execution pointers and stay unchanged. A
+ * row whose shape is malformed is left alone — the shape gate below owns that
+ * refusal — and a pointer the resolver refuses throws before any journal row
+ * exists.
+ *
+ * This is the ONE normalization seam: the shipped transport normalizes the
+ * workflow through the same helper before it derives its default operation id,
+ * so identity, request hash, journal payload and producer cannot disagree on
+ * the caller's spelling.
+ */
+function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
+  if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
+  const options: unknown = workflow.options;
+  if (!isPlainObject(options)) return workflow;
+  const rows = options.rows;
+  const harnessDir = options.harnessDir;
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute(harnessDir)) return workflow;
+  let changed = false;
+  const resolvedRows = rows.map((row) => {
+    if (!isPlainObject(row)) return row;
+    const id = row.id;
+    const file = row.file;
+    if (typeof id !== "string" || id.trim() === "" || typeof file !== "string" || file.trim() === "") return row;
+    const planPath = resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: id, file }).planPath;
+    if (planPath === file) return row;
+    changed = true;
+    return { ...row, file: planPath };
+  });
+  if (!changed) return workflow;
+  return { ...workflow, options: { ...options, rows: resolvedRows } } as unknown as CatalogExecutionWorkflow;
+}
+
+function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
+  if (!isPlainObject(request)) return request;
+  const workflow = request.workflow;
+  if (!isPlainObject(workflow) || workflow.kind !== "iteration") return request;
+  const normalized = normalizeIterationWorkflow(workflow);
+  if (normalized === workflow) return request;
+  return { ...request, workflow: normalized };
 }
 
 /**
@@ -1171,13 +1221,19 @@ export function writeBinding(
  * flight), `catalog.registration-aborted` (that operation id is spent),
  * `store.operation-conflict` (the operation id was reused with a different
  * request), plus the producers' own refusals and the catalog domain verbs'
- * refusals at publish.
+ * refusals at publish. An iteration row whose plan pointer the registered-plan
+ * path resolver refuses (`PlanPathError`) throws BEFORE the journal row exists:
+ * a refused pointer never becomes a `prepared` operation.
  */
 export async function registerCatalogExecution(
   context: StoreContext,
   request: CatalogExecutionRequest,
 ): Promise<CatalogExecutionReceipt> {
-  const plan = resolveCatalogExecutionPlan(context, request);
+  // §4 path preflight BEFORE the first journal write: a refused plan pointer
+  // must not leave a `prepared` row, and the normalized request is what gets
+  // hashed, stored and later handed to the producer.
+  const normalized = normalizeIterationPlanPaths(request);
+  const plan = resolveCatalogExecutionPlan(context, normalized);
   const validated = plan.request;
   const hash = requestHash(validated);
 
@@ -1295,7 +1351,13 @@ export async function registerShippedCatalogExecution(
     operationId?: string;
   },
 ): Promise<CatalogExecutionReceipt> {
-  const workflow = input.workflow;
+  // The ONE registered-plan path preflight, applied here as well: the default
+  // operation id is derived from the request this call will journal, so the
+  // iteration workflow is normalized before the id is computed — otherwise two
+  // accepted spellings of the same plan target would receive different
+  // operation ids while the journal hash and producer used the normalized
+  // request, and a retry could not replay the original operation.
+  const workflow = normalizeIterationWorkflow(input.workflow);
   const delta = catalogDeltaFor(workflow);
   const operationId =
     input.operationId ??

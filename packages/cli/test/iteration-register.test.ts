@@ -21,7 +21,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { initializeStore } from "@mstar-harness/engine";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -96,6 +96,12 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
+  // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
+  // declaration is read, so the fixture owns the registered plan markdown.
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  for (const id of ["20260918-plan-alpha", "20260918-plan-beta"]) {
+    writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
+  }
   // Contract §3: registration goes through the catalog journal, which requires
   // an initialized ACTIVE store — the fixture provisions one.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
@@ -136,7 +142,7 @@ describe("mstar iteration register", () => {
         {
           id: "20260918-plan-alpha",
           title: "Plan 20260918-plan-alpha",
-          file: "plans/20260918-plan-alpha.md",
+          file: realpathSync(join(harness, "plans", "20260918-plan-alpha.md")),
           status: "Todo",
           metadata: {
             iteration_refs: [COMPASS_REF],
@@ -147,7 +153,7 @@ describe("mstar iteration register", () => {
         {
           id: "20260918-plan-beta",
           title: "Plan 20260918-plan-beta",
-          file: "plans/20260918-plan-beta.md",
+          file: realpathSync(join(harness, "plans", "20260918-plan-beta.md")),
           status: "Todo",
           metadata: {
             iteration_refs: [COMPASS_REF],
@@ -171,7 +177,7 @@ describe("mstar iteration register", () => {
   test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
     await setupHarness((harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--json"]);
+      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator", "--json"]);
       expect(bind.exitCode).toBe(0);
       const payload = JSON.parse(bind.stdout) as Record<string, unknown>;
       expect(payload.ok).toBe(true);

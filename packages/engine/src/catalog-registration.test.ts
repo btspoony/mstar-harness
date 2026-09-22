@@ -14,9 +14,9 @@
  * the producer suites use when they erase the root entry to simulate a lost
  * write).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
 import {
@@ -27,6 +27,7 @@ import {
   readCatalogRevisions,
   reconcileCatalogExecution,
   registerCatalogExecution,
+  registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
@@ -424,6 +425,13 @@ describe("catalog execution registration \u2014 the other two producers", () => 
   test("registers an iteration (with its relation) through the same journal", async () => {
     const { harnessDir, context } = await fixture("iteration-");
     const iterationId = "20260918-registration-iteration";
+    // §4: the row pointer is the registered plan file under the configured
+    // `{PLAN_DIR}` — the resolver reads and declaration-checks it, and the
+    // snapshot persists its canonical absolute path.
+    mkdirSync(join(harnessDir, "plans"), { recursive: true });
+    const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
+    writeFileSync(planFile, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+    const canonicalPlanFile = realpathSync(planFile);
     const request: CatalogExecutionRequest = {
       operationId: "op-iteration",
       actor: "project-manager",
@@ -435,7 +443,7 @@ describe("catalog execution registration \u2014 the other two producers", () => 
           harnessDir,
           compassRef: `iterations/${iterationId}/delivery-compass.md`,
           branch: { base: "main", integration: "feature/20260918-registration-iteration", target: "main" },
-          rows: [{ id: PLAN_ID, title: "State projection plan", file: `${PLAN_ID}.md` }],
+          rows: [{ id: PLAN_ID, title: "State projection plan", file: `plans/${PLAN_ID}.md` }],
           project: "harness",
           startedAt: "2026-09-18T00:00:00.000Z",
         },
@@ -465,6 +473,9 @@ describe("catalog execution registration \u2014 the other two producers", () => 
       plans: Array<Record<string, unknown>>;
     };
     expect(snapshot.type).toBe("iteration");
+    // The registered pointer is the canonical absolute plan file, not the
+    // `plans/<id>.md` spelling the reviewer passed in.
+    expect(snapshot.plans).toEqual([expect.objectContaining({ id: PLAN_ID, file: canonicalPlanFile, status: "Todo" })]);
     expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
     expect((await resolveCatalogRegistrationState(context, iterationId)).binding).toEqual({
       catalogKind: "iteration",
@@ -685,5 +696,126 @@ describe("catalog execution registration \u2014 refusals are typed and recoverab
       code: "catalog.not-found",
     });
     expect(new CatalogRegistrationError("catalog.registration-pending", "x").code).toBe("catalog.registration-pending");
+  });
+});
+
+describe("catalog execution registration \u2014 registered-plan path preflight (\u00a74)", () => {
+  const ITERATION_ID = "20260918-path-iteration";
+
+  /** A minimal iteration request whose single row points at `file`. */
+  function iterationRequest(harnessDir: string, file: string, operationId: string): CatalogExecutionRequest {
+    return {
+      operationId,
+      actor: "project-manager",
+      expectedCatalogRevision: 0,
+      workflow: {
+        kind: "iteration",
+        workflowId: ITERATION_ID,
+        options: {
+          harnessDir,
+          compassRef: `iterations/${ITERATION_ID}/delivery-compass.md`,
+          branch: { base: "main", integration: "feature/20260918-path", target: "main" },
+          rows: [{ id: PLAN_ID, title: "State projection plan", file }],
+          startedAt: "2026-09-18T00:00:00.000Z",
+        },
+      },
+      delta: {
+        entities: [
+          { kind: "iteration", id: ITERATION_ID, title: "Path iteration", rootKind: "iterations", relativePath: ITERATION_ID },
+        ],
+        binding: { catalogKind: "iteration", catalogId: ITERATION_ID },
+      },
+    };
+  }
+
+  function planFixture(harnessDir: string): string {
+    const file = join(harnessDir, "plans", `${PLAN_ID}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+    return realpathSync(file);
+  }
+
+  test("prerequisite path: the repository-relative .mstar/plans spelling refuses before any journal row", async () => {
+    const { harnessDir, context } = await fixture("path-refusal-");
+    planFixture(harnessDir);
+
+    await expect(
+      registerCatalogExecution(context, iterationRequest(harnessDir, `.mstar/plans/${PLAN_ID}.md`, "op-path-refusal")),
+    ).rejects.toMatchObject({ code: "plan-path.invalid-pointer" });
+
+    // No prepared row, no catalog delta, no execution bytes: the refusal
+    // precedes the first journal write.
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect((await listCatalog(context, {})).total).toBe(0);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+    expect(existsSync(join(harnessDir, "workflows", ITERATION_ID, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  test("prerequisite path: the normalized request is what is hashed, stored and written", async () => {
+    const { harnessDir, context } = await fixture("path-accepted-");
+    const canonical = planFixture(harnessDir);
+
+    const receipt = await registerCatalogExecution(
+      context,
+      iterationRequest(harnessDir, `plans/${PLAN_ID}.md`, "op-path-accepted"),
+    );
+    expect(receipt).toEqual({ operationId: "op-path-accepted", workflowId: ITERATION_ID, catalogRevision: 1, recovered: false });
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+
+    const snapshot = JSON.parse(
+      readFileSync(join(harnessDir, "workflows", ITERATION_ID, WORKFLOW_SNAPSHOT_FILE), "utf8"),
+    ) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans).toEqual([expect.objectContaining({ id: PLAN_ID, file: canonical })]);
+
+    // The same operation replayed with the OTHER accepted spelling of the same
+    // target must hash identically and replay — one normalized representation
+    // feeds both the catalog identity and the producer.
+    const replay = await registerCatalogExecution(
+      context,
+      iterationRequest(harnessDir, canonical, "op-path-accepted"),
+    );
+    expect(replay).toEqual(receipt);
+  });
+
+  test("prerequisite path: the equivalent accepted spellings share ONE shipped operation identity", async () => {
+    const { harnessDir, context } = await fixture("path-shipped-identity-");
+    const canonical = planFixture(harnessDir);
+    // The shipped transport derives its own operation id (no explicit id): both
+    // accepted spellings of the same plan target must land on the same
+    // operation, so the second call is the EXISTING operation rather than a
+    // second, competing registration of the same workflow.
+    const shipped = (file: string) =>
+      registerShippedCatalogExecution(context, {
+        actor: "cli:iteration-register",
+        workflow: iterationRequest(harnessDir, file, "op-derived").workflow,
+      });
+
+    const first = await shipped(`plans/${PLAN_ID}.md`);
+    expect(first.recovered).toBe(false);
+
+    // A same-spelling retry reuses the committed operation id with a moved
+    // request expectation; the canonical spelling must be indistinguishable
+    // from it — a different id would have started a second operation for the
+    // same workflow and never collided with the committed one.
+    await expect(shipped(`plans/${PLAN_ID}.md`)).rejects.toMatchObject({ code: "store.operation-conflict" });
+    await expect(shipped(canonical)).rejects.toMatchObject({ code: "store.operation-conflict" });
+
+    // One operation was ever recorded: the equivalent spelling left no
+    // half-registered workflow behind.
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect((await listCatalog(context, {})).total).toBe(1);
+  });
+
+  test("prerequisite path: a mismatched declared plan_id refuses before any journal row", async () => {
+    const { harnessDir, context } = await fixture("path-identity-");
+    const file = join(harnessDir, "plans", `${PLAN_ID}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "# Plan\n\n**plan_id:** some-other-plan\n");
+
+    await expect(
+      registerCatalogExecution(context, iterationRequest(harnessDir, `plans/${PLAN_ID}.md`, "op-path-identity")),
+    ).rejects.toMatchObject({ code: "plan-path.identity-mismatch" });
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
   });
 });

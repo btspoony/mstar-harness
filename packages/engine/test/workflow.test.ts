@@ -29,9 +29,9 @@
  *   snapshot), no harness-root pollution; `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
   closeWorkflow,
@@ -49,6 +49,7 @@ import {
   type RegisterPlanWorkflowOptions,
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
+import { PlanPathError } from "../src/plan-path.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
 import { getCatalog, listCatalog } from "../src/catalog.js";
 import {
@@ -1650,16 +1651,32 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
 
 describe("registerIterationWorkflow — iteration registration producer", () => {
   const id = "20260918-iteration-register-fixture";
+  const ROW_IDS = ["20260918-iteration-register-cli", "20260918-iteration-register-cli-2"] as const;
   const roots: string[] = [];
   afterEach(() => {
     setArtifactStore(undefined);
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  /**
+   * Write one registered plan markdown under the default `{PLAN_DIR}` and
+   * return its canonical absolute path — the pointer the §4 resolver admits and
+   * the producer persists. Every fixture harness owns its own plan files: the
+   * registration path resolves and reads them, so a pointer without a real
+   * matching declaration is refused.
+   */
+  function planFile(root: string, planId: string, dir = "plans"): string {
+    const file = join(root, dir, `${planId}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `# Plan ${planId}\n\n**plan_id:** ${planId}\n`);
+    return realpathSync(file);
+  }
+
   function harness(): { root: string; statusPath: string; dir: string; snapshotPath: string } {
     const root = tmpRoot("iteration-register-");
     roots.push(root);
     setArtifactStore(createFsStore(root));
+    for (const planId of ROW_IDS) planFile(root, planId);
     return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
   }
 
@@ -1669,8 +1686,8 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       compassRef: "iterations/20260918-fixture/delivery-compass.md",
       branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
       rows: [
-        { id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" },
-        { id: "20260918-iteration-register-cli-2", title: "CLI verb", file: "plans/two.md" },
+        { id: ROW_IDS[0], title: "Engine producer", file: `plans/${ROW_IDS[0]}.md` },
+        { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
       ],
       project: "engine",
       startedAt: "2026-09-18T00:00:00.000Z",
@@ -1710,7 +1727,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       {
         id: "20260918-iteration-register-cli",
         title: "Engine producer",
-        file: "plans/one.md",
+        file: planFile(root, "20260918-iteration-register-cli"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -1721,7 +1738,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       {
         id: "20260918-iteration-register-cli-2",
         title: "CLI verb",
-        file: "plans/two.md",
+        file: planFile(root, "20260918-iteration-register-cli-2"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -2010,6 +2027,114 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     expect(existsSync(join(root, "workflows"))).toBe(false);
     expect(existsSync(join(root, "escape"))).toBe(false);
   });
+
+  // §4 registered-plan path contract on the iteration producer: the snapshot
+  // persists the canonical absolute pointer, and the old repository-relative
+  // spelling (or a foreign/absent declaration) refuses BEFORE any write.
+  test("prerequisite path: a valid pointer registers as the canonical absolute plan file", async () => {
+    const { root, snapshotPath } = harness();
+    const result = await registerIterationWorkflow(id, options(root));
+    expect(result.recovered).toBe(false);
+
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans.map((row) => row.file)).toEqual([planFile(root, ROW_IDS[0]), planFile(root, ROW_IDS[1])]);
+    // Canonical absolute, resolved through the configured root — never the
+    // caller's `plans/<id>.md` spelling.
+    expect(snapshot.plans.every((row) => row.file.startsWith(realpathSync(root)))).toBe(true);
+  });
+
+  test("prerequisite path: the repository-relative .mstar/plans spelling refuses with no root or snapshot write", async () => {
+    const { root, statusPath, snapshotPath } = harness();
+    const rows = [
+      { id: ROW_IDS[0], title: "Engine producer", file: `.mstar/plans/${ROW_IDS[0]}.md` },
+      { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
+    ];
+    const refusal = await registerIterationWorkflow(id, options(root, { rows })).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect((refusal as PlanPathError).code).toBe("plan-path.invalid-pointer");
+    expect(existsSync(statusPath)).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+  });
+
+  test("prerequisite path: a .mstarc-declared plan root resolves from its own base", async () => {
+    const root = tmpRoot("iteration-register-mstarc-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    writeFileSync(join(root, ".mstarc"), "[config]\nplan_dir=planning\n");
+    const planPath = planFile(root, ROW_IDS[0], "planning");
+
+    const result = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `planning/${ROW_IDS[0]}.md` }] }),
+    );
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans).toEqual([
+      expect.objectContaining({ id: ROW_IDS[0], file: planPath }),
+    ]);
+    expect(realpathSync(dirname(planPath))).toBe(realpathSync(join(root, "planning")));
+
+    // The default-root spelling is NOT the configured root: it refuses.
+    const other = tmpRoot("iteration-register-mstarc-default-");
+    roots.push(other);
+    setArtifactStore(createFsStore(other));
+    writeFileSync(join(other, ".mstarc"), "[config]\nplan_dir=planning\n");
+    planFile(other, ROW_IDS[0], "planning");
+    const refusal = await registerIterationWorkflow(
+      id,
+      options(other, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `plans/${ROW_IDS[0]}.md` }] }),
+    ).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect(existsSync(join(other, "workflows"))).toBe(false);
+  });
+
+  test("prerequisite path: an external plan root is admitted only as an absolute pointer", async () => {
+    const root = tmpRoot("iteration-register-external-");
+    const external = tmpRoot("iteration-register-external-plans-");
+    roots.push(root, external);
+    setArtifactStore(createFsStore(root));
+    writeFileSync(join(root, ".mstarc"), `[config]\nplan_dir=${external}\n`);
+    const planPath = planFile(external, ROW_IDS[0], "");
+
+    // A harness-relative spelling cannot reach an external configured root.
+    const refusal = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: `${ROW_IDS[0]}.md` }] }),
+    ).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PlanPathError);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+
+    // The same file addressed absolutely is the declared input form.
+    const result = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: planPath }] }),
+    );
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
+    expect(snapshot.plans[0]!.file).toBe(planPath);
+  });
+
+  test("prerequisite path: a missing or mismatched declaration refuses before any write", async () => {
+    const { root, snapshotPath } = harness();
+    // A same-basename file in an unrelated directory: not this plan's file.
+    const foreign = tmpRoot("iteration-register-foreign-");
+    roots.push(foreign);
+    const foreignPlan = planFile(foreign, ROW_IDS[0]);
+    const missing = await registerIterationWorkflow(
+      id,
+      options(root, { rows: [{ id: ROW_IDS[0], title: "Engine producer", file: foreignPlan }] }),
+    ).catch((error: unknown) => error);
+    expect(missing).toBeInstanceOf(PlanPathError);
+
+    // A declaration naming a different plan refuses as an identity mismatch.
+    writeFileSync(join(root, "plans", `${ROW_IDS[0]}.md`), "# Plan\n\n**plan_id:** some-other-plan\n");
+    const mismatched = await registerIterationWorkflow(id, options(root)).catch((error: unknown) => error);
+    expect(mismatched).toBeInstanceOf(PlanPathError);
+    expect((mismatched as PlanPathError).code).toBe("plan-path.identity-mismatch");
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+  });
 });
 
 describe("standalone-completion-shape", () => {
@@ -2221,6 +2346,9 @@ describe("catalog registration — the journal joins this producer to the catalo
   test("catalog registration — the iteration registers with its committed catalog binding", async () => {
     const { root, context } = await workspace("catalog-registration-iteration-");
     const id = "20260918-iteration-register-catalog";
+    const rowId = "20260918-iteration-register-cli";
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", `${rowId}.md`), `# Plan ${rowId}\n\n**plan_id:** ${rowId}\n`);
     const request: CatalogExecutionRequest = {
       operationId: "op-iteration-workflow-suite",
       actor: "project-manager",
@@ -2232,7 +2360,7 @@ describe("catalog registration — the journal joins this producer to the catalo
           harnessDir: root,
           compassRef: "iterations/20260918-fixture/delivery-compass.md",
           branch: { base: "main", integration: "feature/20260918-iteration-fixture", target: "main" },
-          rows: [{ id: "20260918-iteration-register-cli", title: "Engine producer", file: "plans/one.md" }],
+          rows: [{ id: rowId, title: "Engine producer", file: `plans/${rowId}.md` }],
           project: "engine",
           startedAt: "2026-09-18T00:00:00.000Z",
         },
@@ -2254,4 +2382,217 @@ describe("catalog registration — the journal joins this producer to the catalo
       catalogRevision: 1,
     });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * JSON Prepare coordinator recovery — the schema owner and the ordinary writers
+ * (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** One well-formed audit record (the eleven required fields, frozen). */
+function recoveryEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    operation_id: "op-recover-1",
+    request_hash: "a".repeat(64),
+    workflow_id: "00000819-workflow-engine-core",
+    prior_session_id: "prior-session",
+    session_id: "recovered-session",
+    authorization_ref: "PM-authorization-20260921",
+    reason: "the prior host session was cancelled and cannot authenticate",
+    stopped_session_ids: ["prior-session"],
+    snapshot_version_before: `sha256:${"b".repeat(64)}`,
+    compass_version: `sha256:${"c".repeat(64)}`,
+    recovered_at: "2026-09-21T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+/** A running iteration snapshot carrying a recovered coordinator and its audit. */
+function recoveredSnapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return validSnapshot({
+    status: "running",
+    ended_at: undefined,
+    phase: "phase-1-prepare",
+    coordination: {
+      coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+      identity_recoveries: [recoveryEntry()],
+    },
+    ...overrides,
+  });
+}
+
+describe("prepare coordinator recovery audit schema", () => {
+  test("prepare coordinator recovery audit entries are validated strictly by the snapshot schema owner", () => {
+    expect(validateWorkflowSnapshot(recoveredSnapshot()).ok).toBe(true);
+
+    const cases: ReadonlyArray<{ name: string; document: Record<string, unknown>; code: string }> = [
+      {
+        name: "a missing operation id",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ operation_id: "" })] },
+        }),
+        code: "coordination.recovery.field",
+      },
+      {
+        name: "a request hash that is not a bare sha256 digest",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ request_hash: "sha256:short" })] },
+        }),
+        code: "coordination.recovery.hash",
+      },
+      {
+        name: "a malformed version token",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ compass_version: "not-a-version" })] },
+        }),
+        code: "coordination.recovery.version",
+      },
+      {
+        name: "an empty stop assertion",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ stopped_session_ids: [] })] },
+        }),
+        code: "coordination.recovery.stopped",
+      },
+      {
+        name: "an unexpected audit field",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: [recoveryEntry({ envelope: "leaked" })] },
+        }),
+        code: "coordination.recovery.field",
+      },
+      {
+        name: "an audit that is not an array",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, identity_recoveries: recoveryEntry() },
+        }),
+        code: "coordination.snapshot.field",
+      },
+      {
+        name: "an unexpected coordination-block key",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "s", session_file: "/fixture/s.json", bound_at: "2026-09-21" }, recoveries: [] },
+        }),
+        code: "coordination.snapshot.field",
+      },
+    ];
+    for (const recoveryCase of cases) {
+      const result = validateWorkflowSnapshot(recoveryCase.document);
+      expect(`${recoveryCase.name}: ${result.ok ? "accepted" : violationsOf(result).includes(recoveryCase.code)}`).toBe(
+        `${recoveryCase.name}: true`,
+      );
+    }
+  });
+
+  test("prepare coordinator recovery audit survives the ordinary writers and cannot be dropped through them", async () => {
+    const root = tmpRoot("workflow-recovery-audit-");
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const document = recoveredSnapshot();
+    writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+    setArtifactStore(createFsStore(root));
+
+    // The reader accepts the audited document and hands it back unchanged.
+    const read = readWorkflowSnapshot(dir);
+    expect(read.snapshot.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    const committedBytes = readFileSync(path, "utf8");
+    const version = artifactVersion(committedBytes);
+
+    // A generic snapshot replacement may neither drop nor rewrite the audit —
+    // and it may not add one either.
+    const rewrites: ReadonlyArray<{ name: string; document: Record<string, unknown> }> = [
+      {
+        name: "drops the whole audit",
+        document: recoveredSnapshot({
+          coordination: { coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" } },
+        }),
+      },
+      {
+        name: "rewrites the recorded reason",
+        document: recoveredSnapshot({
+          coordination: {
+            coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+            identity_recoveries: [recoveryEntry({ reason: "a different reason" })],
+          },
+        }),
+      },
+      {
+        name: "appends an entry of its own",
+        document: recoveredSnapshot({
+          coordination: {
+            coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+            identity_recoveries: [recoveryEntry(), recoveryEntry({ operation_id: "op-forged" })],
+          },
+        }),
+      },
+    ];
+    for (const rewrite of rewrites) {
+      const code = await refusalCode(() =>
+        writeWorkflowSnapshot(rewrite.document as never, dir, {
+          expectedVersion: version,
+          sessionPath: "/fixture/recovered-session.json",
+        }),
+      );
+      expect(`${rewrite.name}: ${code}`).toBe(`${rewrite.name}: coordination.direct-write-refused`);
+      expect(readFileSync(path, "utf8")).toBe(committedBytes);
+    }
+
+    // The one delta the ordinary writer owns (phase + updated_at) keeps the
+    // whole coordination block, audit included, from disk.
+    await writeWorkflowSnapshot(
+      recoveredSnapshot({ phase: "phase-2-execute", updated_at: "2026-09-21T11:00:00.000Z" }) as never,
+      dir,
+      { expectedVersion: version, sessionPath: "/fixture/recovered-session.json" },
+    );
+    const afterProjection = readWorkflowSnapshot(dir).snapshot;
+    expect(afterProjection.phase).toBe("phase-2-execute");
+    expect(afterProjection.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    // A lifecycle close preserves the audit as well: recovering a coordinator
+    // never becomes an eraser of its own provenance.
+    const closed = await closeWorkflow("00000819-workflow-engine-core", dir, {
+      endedAt: "2026-09-22T09:00:00.000Z",
+      sessionPath: "/fixture/recovered-session.json",
+    });
+    expect(closed.status).toBe("completed");
+    expect(closed.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+    expect(readWorkflowSnapshot(dir).snapshot.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
+
+    // A malformed audit never reaches a writer through the reader at all.
+    writeFileSync(path, JSON.stringify(recoveredSnapshot({
+      coordination: {
+        coordinator: { session_id: "recovered-session", session_file: "/fixture/recovered-session.json", bound_at: "2026-09-21T10:00:00.000Z" },
+        identity_recoveries: [recoveryEntry({ recovered_at: "" })],
+      },
+    })));
+    expect(() => readWorkflowSnapshot(dir)).toThrow(/coordination\.recovery\.field/);
+  }, 30000);
+
+  test("prepare coordinator recovery history cannot be CREATED by an ordinary writer", async () => {
+    const root = tmpRoot("workflow-recovery-create-");
+    const dir = join(root, "workflows", "00000819-workflow-engine-core");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    setArtifactStore(createFsStore(root));
+
+    // The forged document passes the SHAPE validator — that is exactly why the
+    // create-only route needs a provenance boundary: with no snapshot on disk
+    // there is no audit to pin against, so nothing else would stop a caller from
+    // minting recovery history that never passed through the recovery
+    // transition.
+    expect(validateWorkflowSnapshot(recoveredSnapshot()).ok).toBe(true);
+    const code = await refusalCode(() => writeWorkflowSnapshot(recoveredSnapshot() as never, dir, { createOnly: true }));
+    expect(code).toBe("coordination.direct-write-refused");
+    expect(existsSync(path)).toBe(false);
+
+    // The same create-only route without recovery history is untouched: this is
+    // a provenance boundary, not a new gate on creating snapshots.
+    await writeWorkflowSnapshot(validSnapshot({ status: "running", ended_at: undefined, phase: "phase-1-prepare" }) as never, dir, {
+      createOnly: true,
+    });
+    expect(existsSync(path)).toBe(true);
+    expect(readWorkflowSnapshot(dir).snapshot.coordination).toBeUndefined();
+  }, 30000);
 });

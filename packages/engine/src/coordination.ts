@@ -40,8 +40,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
   CoordinationError,
@@ -62,7 +62,10 @@ import {
   type PlanProgress,
   type PreparedCoordination,
   type RowCoordination,
+  type CoordinatorBinding,
+  type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
+import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
@@ -112,6 +115,7 @@ import {
 import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
+import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -216,7 +220,19 @@ export type CoordinationSession = {
  */
 export type BindPlanSessionInput =
   | { scope: PlanScopeInput; cwd: string; sessionId?: string }
-  | { coordinator: true; workflowId: string; harnessDir?: string; cwd: string; sessionId?: string }
+  | {
+      coordinator: true;
+      workflowId: string;
+      harnessDir?: string;
+      /**
+       * Provenance the adapter states for the acquired identity (§3.1). A
+       * managed host bootstrap states `host`; a plain local operator or an
+       * engine-local call is `local`. Unknown values are refused, never coerced.
+       */
+      source?: "host" | "local";
+      cwd: string;
+      sessionId?: string;
+    }
   | { resumePath: string; cwd: string };
 
 /** One artifact read: payload plus the byte version it was read at. */
@@ -700,35 +716,18 @@ function safePlanId(planId: string, where: string): string {
   return planId;
 }
 
-/** Longest session id the envelope contract accepts. */
-const SESSION_ID_MAX_LENGTH = 128;
-
 /**
  * The caller-supplied session identity, validated **before any write**. The id
  * names the envelope's file (`sessionFilePath`), so a value that could name
  * another directory or another file is refused here rather than left to a
- * filesystem error. `undefined` keeps the engine-generated UUID.
+ * filesystem error. `undefined` keeps the engine-generated UUID. The rule
+ * itself is the shared public-session-id contract the recovery stop assertion
+ * uses too — one validator, not two.
  */
 function safeSessionId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw invalidInput("sessionId must be a string");
-  if (value.length > SESSION_ID_MAX_LENGTH) {
-    throw new CoordinationError(
-      "coordination.invalid-session-id",
-      `session id is longer than ${SESSION_ID_MAX_LENGTH} characters: ${JSON.stringify(value)}`,
-      { session_id: value, max_length: SESSION_ID_MAX_LENGTH },
-    );
-  }
-  try {
-    assertSafePathComponent(value, "session id");
-  } catch (error) {
-    throw new CoordinationError(
-      "coordination.invalid-session-id",
-      `session id ${JSON.stringify(value)} is not a safe path component: ${errorMessage(error)}`,
-      { session_id: value },
-    );
-  }
-  return value;
+  return assertSafeSessionId(value, "session id");
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1522,20 +1521,35 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
 }
 
 /**
- * Fresh coordinator bind (spec §C1). The engine generates the session UUID —
- * or adopts the caller-supplied one — and creates the envelope **inside** the
- * validated critical section, then records the binding in the same snapshot
- * commit. A crash between the two leaves an orphan envelope that grants
- * nothing: every later call matches the snapshot.
+ * Fresh coordinator bind (spec §C1, prerequisite contract §3.1/§3.2). The
+ * identity is **acquired, never generated**: the caller supplies an explicit
+ * native or local session id, validated as an `ExecutionIdentity` before any
+ * write, and the envelope is created **inside** the validated critical section,
+ * then recorded in the same snapshot commit. A crash between the two leaves an
+ * orphan envelope that grants nothing: every later call matches the snapshot.
  */
 async function bindCoordinatorSession(
   cwd: string,
   workflowId: string,
   harnessDir?: string,
   sessionId?: string,
+  source?: "host" | "local",
 ): Promise<CoordinationResult> {
   const harnessRoot = requireProcessRoot(cwd, harnessDir);
   safePlanId(workflowId, "workflowId");
+  // The shared adapter-only validator is the one refusal vocabulary: a missing
+  // id is `identity-missing` here, not a silently generated UUID fallback. The
+  // canonical root is supplied separately (never an identity member); the
+  // provenance defaults to `local` because a direct engine call is a plain
+  // local cooperative call — a managed host adapter states `host` explicitly.
+  const identity: ExecutionIdentity = {
+    source: source ?? "local",
+    sessionId: isNonEmptyString(sessionId) ? sessionId : "",
+    workflowId,
+    role: "coordinator",
+    planId: null,
+  };
+  validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
 
@@ -1543,7 +1557,7 @@ async function bindCoordinatorSession(
   const session: CoordinationSession = {
     schema_version: 1,
     role: "coordinator",
-    session_id: sessionId ?? randomUUID(),
+    session_id: sessionId as string,
     workflow_id: workflowId,
     harness_root: harnessRoot,
   };
@@ -1729,9 +1743,11 @@ export function leaseFailure(violations: readonly { code: string; message: strin
  */
 /**
  * Bind a session (spec §B, §C2). Fresh addressing never supplies a session
- * path: the engine generates the UUID — or adopts the caller-supplied
- * `sessionId`, refused unless it is a single safe path component — and creates
- * the envelope. `resumePath` names an existing envelope and resumes read-only,
+ * path: a **plan** bind generates the UUID — or adopts the caller-supplied
+ * `sessionId`, refused unless it is a single safe path component — while a
+ * **coordinator** bind adopts the caller-supplied id only (a missing one is
+ * `coordination.identity-missing`: a coordinator identity is acquired, never
+ * generated). `resumePath` names an existing envelope and resumes read-only,
  * so it takes no identity input at all.
  */
 export async function bindPlanSession(input: BindPlanSessionInput): Promise<CoordinationResult> {
@@ -1742,12 +1758,12 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
     return resumeBoundSession(input.resumePath);
   }
   if ("coordinator" in input) {
-    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "cwd", "sessionId"], "bind coordinator input");
+    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "source", "cwd", "sessionId"], "bind coordinator input");
     if (input.coordinator !== true) throw invalidInput("`coordinator` is only meaningful as true");
     if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
     requireCwd(input.cwd);
     const sessionId = safeSessionId(input.sessionId);
-    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId);
+    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId, input.source);
   }
   assertExactKeys(input, ["scope", "cwd", "sessionId"], "bind plan input");
   if (!isPlainObject(input.scope)) throw invalidInput("a plan bind requires a scope");
@@ -4848,13 +4864,39 @@ export type PreparePlanAppend = Readonly<{
 }>;
 
 /**
+ * One existing row's plan-file pointer correction (prerequisite contract §4.1):
+ * `expectedFile` is the exact pointer the row holds **now** and `file` is that
+ * row's own canonical registered plan file. The exact old value is supplied
+ * rather than inferred, so the correction can only move a pointer it observed —
+ * a row that changed underneath the caller (or was addressed by a guess) never
+ * gets repointed.
+ */
+export type PreparePlanFileCorrection = Readonly<{
+  id: string;
+  expectedFile: string;
+  file: string;
+}>;
+
+/**
  * The whole structural delta one amendment may apply (§ Admission and mutation
  * step 5): the caller's main-worktree branch, the approved plan appends, the
- * reviewed integration checkout, and the single approved execution-policy key.
+ * exact pointer corrections of existing rows, the reviewed integration
+ * checkout, and the single approved execution-policy key.
  */
 export type PrepareWorkflowPatch = Readonly<{
   mainWorktreeBranch: string;
   appendPlans: readonly PreparePlanAppend[];
+  /**
+   * Optional exact corrections of existing rows' plan-file pointers
+   * (prerequisite contract §4.1): each entry names one registered Todo row by
+   * the pointer it holds now and that row's own canonical plan file, repairing
+   * a malformed repository-relative pointer without a raw snapshot edit. Only
+   * `file` is addressable — a correction never rebinds a row to a different
+   * document, and no other row field can travel through the patch. Omitted or
+   * empty means no correction; a correction-only call passes an empty
+   * `appendPlans`.
+   */
+  correctPlanFiles?: readonly PreparePlanFileCorrection[];
   integrationWorktreePath?: string;
   planParallelism?: "serial" | "parallel";
 }>;
@@ -4901,12 +4943,19 @@ const PREPARE_PHASE = "phase-1-prepare";
 const PREPARE_PATCH_KEYS: readonly string[] = [
   "mainWorktreeBranch",
   "appendPlans",
+  "correctPlanFiles",
   "integrationWorktreePath",
   "planParallelism",
 ];
 
 /** One plan append carries exactly these fields — no runtime row state. */
 const PREPARE_APPEND_KEYS: readonly string[] = ["id", "title", "file", "metadata"];
+
+/**
+ * One pointer correction carries exactly these fields — no row state at all,
+ * and the old pointer by value so the addressed row can be re-verified.
+ */
+const PREPARE_CORRECTION_KEYS: readonly string[] = ["id", "expectedFile", "file"];
 
 /** Row metadata the amendment may record (spec § New API and CLI, frozen). */
 const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
@@ -5228,73 +5277,6 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
 }
 
 /**
- * The plan-markdown labels the amendment actually consults. Every other
- * `Label: value` line is plan-body content, and a real multi-task plan repeats
- * those per task (`**Files:**`, `**Interfaces:**`, `**Task budget:**`) with a
- * different value each time — so a repeated label outside this set is not a
- * declaration conflict.
- */
-const PLAN_CONSULTED_HEADERS: Record<string, true> = {
-  plan_id: true,
-  "main worktree branch": true,
-  "working branch": true,
-};
-
-/**
- * The consulted headers one plan markdown declares, keyed by lowercased label —
- * the idiom `parseAssignmentFile` uses for Assignment headers, widened to the
- * forms real plan documents actually use: the colon inside the bold
- * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon
- * after it (`**Main worktree branch**: value`). A plain `Label: value` line is
- * accepted too. Fenced code is skipped so a quoted example is never read as a
- * declaration, and a consulted label twice with different values refuses
- * instead of silently picking one.
- */
-function planHeadersOf(planPath: string, planId: string): Map<string, string> {
-  const headers = new Map<string, string>();
-  // The fence is tracked by its marker character and run length: it is closed
-  // only by a run of the same character at least as long, so a `~~~` example is
-  // never read as a declaration and a shorter backtick run inside a longer
-  // fence cannot close it early.
-  let marker: string | undefined;
-  let markerLength = 0;
-  for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
-    const line = raw.trim();
-    const fence = /^(`{3,}|~{3,})/.exec(line);
-    if (fence !== null) {
-      const run = fence[1]!;
-      if (marker === undefined) {
-        marker = run.charAt(0);
-        markerLength = run.length;
-      } else if (run.charAt(0) === marker && run.length >= markerLength) {
-        marker = undefined;
-      }
-      continue;
-    }
-    if (marker !== undefined) continue;
-    // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
-    // not contain `:` or `*` (those are the markup), and the value starts at
-    // the first non-space character after the closing markup and colon.
-    const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
-    if (match === null) continue;
-    const label = match[1]!.trim();
-    const key = label.toLowerCase();
-    if (PLAN_CONSULTED_HEADERS[key] !== true) continue;
-    const value = match[2]!.trim();
-    const prior = headers.get(key);
-    if (prior !== undefined && prior !== value) {
-      throw prepareAmendmentRefusal(
-        "invalid-plan",
-        `plan ${planId} markdown declares conflicting "${label}" headers (${prior} vs ${value})`,
-        { plan_id: planId, header: label },
-      );
-    }
-    headers.set(key, value);
-  }
-  return headers;
-}
-
-/**
  * One plan metadata reference: absolute, inside the harness root (canonical,
  * so a symlink out of it is an escape), and an existing file. `iteration_compass`
  * is additionally required to BE this workflow's compass — the caller checks
@@ -5391,44 +5373,42 @@ function readPlanAppend(
     throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a non-empty title`, { plan_id: id, actual: title ?? null });
   }
   const declaredFile = value.file;
-  if (!isNonEmptyString(declaredFile) || !isAbsolute(declaredFile)) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} file must be the absolute plan path \u2014 got ${JSON.stringify(declaredFile ?? null)}`,
-      { plan_id: id, actual: declaredFile ?? null },
-    );
+  // The PlanRow `file` convention belongs to the ONE registered-plan path
+  // resolver (prerequisite contract §4): it accepts the canonical absolute or
+  // the normalized harness-relative pointer, and owns the canonical-target and
+  // declared-`plan_id` checks — so the Prepare append cannot drift from
+  // registration and readiness. The refusal vocabulary and code stay
+  // `invalid-plan`; the resolver's typed path detail is attached rather than
+  // weakening a predicate. No second absolute-path key is introduced (spec §
+  // Admission step 4).
+  //
+  // The shape guard is enforced HERE, before the resolver is reached: the
+  // resolver names the pointer form with `path.isAbsolute(file)` ahead of its
+  // own type check, so an absent/numeric/null `file` would surface as a native
+  // `TypeError` instead of this boundary's refusal code. String pointers
+  // (including empty or whitespace-only) still reach the resolver, whose typed
+  // path detail is attached below.
+  if (typeof declaredFile !== "string") {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a file path as a string`, {
+      plan_id: id,
+      actual: declaredFile ?? null,
+    });
   }
-  // The PlanRow `file` convention, resolved by the plan resolver: the row's own
-  // plan file is `{PLAN_DIR}/<plan-id>.md`. This is the only path field — the
-  // patch introduces no second absolute-path key (spec § Admission step 4).
-  const planPath = canonicalTarget(declaredFile);
-  const planDir = canonicalizeNearestExisting(resolvePlanDir(context.harnessRoot));
-  if (dirname(planPath) !== planDir || basename(planPath) !== `${id}.md`) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} file ${planPath} is not ${join(planDir, `${id}.md`)}`,
-      { plan_id: id, expected: join(planDir, `${id}.md`), actual: planPath },
-    );
+  let resolved: RegisteredPlanFile;
+  try {
+    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declaredFile });
+  } catch (error) {
+    if (error instanceof PlanPathError) {
+      throw prepareAmendmentRefusal("invalid-plan", error.message, {
+        plan_id: id,
+        path_code: error.code,
+        ...error.details,
+      });
+    }
+    throw error;
   }
-  if (!existsSync(planPath) || !statSync(planPath).isFile()) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} markdown not found: ${planPath}`, { plan_id: id, path: planPath });
-  }
-  const headers = planHeadersOf(planPath, id);
-  const declaredPlanId = headers.get("plan_id");
-  if (declaredPlanId === undefined) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} markdown ${planPath} declares no plan_id header \u2014 the row cannot be traced to its reviewed plan`,
-      { plan_id: id, path: planPath },
-    );
-  }
-  if (declaredPlanId !== id) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan append id ${id} does not match the plan markdown header plan_id ${declaredPlanId} (${planPath})`,
-      { plan_id: id, expected: id, actual: declaredPlanId, path: planPath },
-    );
-  }
+  const planPath = resolved.planPath;
+  const headers = planDeclaredHeaders(planPath);
 
   const metadata = value.metadata;
   if (!isPlainObject(metadata)) {
@@ -5642,9 +5622,182 @@ function readIntegrationWorktreePath(
   return path;
 }
 
+/** One pointer correction as the commit path applies it: the row and its canonical file. */
+type PreparePlanFileCorrectionDelta = Readonly<{ id: string; file: string }>;
+
+/**
+ * The exact repository-relative spelling of a plan file, derived from this
+ * control root's **configured** plan directory and the repository root that
+ * owns the harness — the malformed form rows registered before P2 still hold
+ * (`.mstar/plans/<id>.md`), and the one recovery spelling prerequisite contract
+ * §4.1 admits for the *old* pointer only.
+ *
+ * It is derived, never searched: the spelling is the relative path from the
+ * repository root to the canonical plan file, must not be absolute or escape
+ * that root, and must resolve back to the same canonical target (so an alias or
+ * a symlinked ancestor cannot make a different file pass). `undefined` means
+ * this control root has no repository root to derive the form from, and then
+ * only the declared forms count.
+ */
+function repositoryRelativePlanPointer(harnessRoot: string, planPath: string): string | undefined {
+  const repository = readMainWorktree(canonicalizeNearestExisting(harnessRoot));
+  if (repository === null) return undefined;
+  const repositoryRoot = canonicalTarget(repository.root);
+  const spelling = relative(repositoryRoot, planPath);
+  if (spelling === "" || isAbsolute(spelling) || spelling === ".." || spelling.startsWith(`..${sep}`)) return undefined;
+  if (canonicalTarget(join(repositoryRoot, spelling)) !== planPath) return undefined;
+  return spelling;
+}
+
+/**
+ * One existing row's plan-file pointer correction (prerequisite contract §4.1).
+ * The addressed row must be exactly one registered row of this workflow, the
+ * pointer it holds now must be **exactly** the caller's `expectedFile`, that old
+ * pointer must identify the same plan, and the corrected pointer must pass the
+ * shared registered-plan resolver — the canonical configured
+ * `{PLAN_DIR}/<id>.md`, with a matching declared `plan_id`.
+ *
+ * The old pointer is accepted in only two forms: a pointer the shared resolver
+ * itself accepts (the canonical absolute or the normalized harness-relative
+ * spelling), or the exact derived repository-relative spelling of that same
+ * canonical target. Everything else refuses — a foreign absolute path, a
+ * same-basename guess, an unrelated directory prefix, a copied plan markdown
+ * with a matching header, a pointer naming another plan. The returned delta is
+ * the pointer alone: a correction carries no other row field, so it can neither
+ * rebind a row to a different document nor change a row's contents, status or
+ * metadata. A row that already carries preparation or execution evidence
+ * refuses earlier, at the admission that gates every amendment.
+ */
+function readPlanFileCorrection(
+  value: unknown,
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot },
+): PreparePlanFileCorrectionDelta {
+  if (!isPlainObject(value)) {
+    throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object", { actual: value ?? null });
+  }
+  const unexpected = Object.keys(value).filter((key) => !PREPARE_CORRECTION_KEYS.includes(key));
+  if (unexpected.length > 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `a plan-file correction accepts only ${PREPARE_CORRECTION_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      { allowed: [...PREPARE_CORRECTION_KEYS], unexpected },
+    );
+  }
+  const id = value.id;
+  if (!isNonEmptyString(id)) {
+    throw prepareAmendmentRefusal("invalid-plan", `a plan-file correction requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}`, {
+      actual: id ?? null,
+    });
+  }
+  try {
+    assertSafePathComponent(id, "plan id");
+  } catch (error) {
+    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}`, {
+      plan_id: id,
+    });
+  }
+  // Exactly one row may address the id: a correction addresses the row the
+  // caller observed, never "whichever row matched first".
+  const addressed = context.snapshot.plans.filter((row) => rowPlanIds(row).includes(id));
+  if (addressed.length === 0) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} is not a row of workflow ${context.snapshot.id} \u2014 a correction repairs an existing row's pointer and never creates one`,
+      { plan_id: id, workflow_id: context.snapshot.id },
+    );
+  }
+  if (addressed.length > 1) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} is addressed by ${addressed.length} rows of workflow ${context.snapshot.id} \u2014 the corrected row would be ambiguous`,
+      { plan_id: id, workflow_id: context.snapshot.id, rows: addressed.length },
+    );
+  }
+  const row = addressed[0]!;
+  const previous = row.file;
+  if (!isNonEmptyString(previous)) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} records no readable file pointer \u2014 a correction cannot prove which pointer it replaces`,
+      { plan_id: id, actual: previous ?? null },
+    );
+  }
+  const expectedFile = value.expectedFile;
+  if (typeof expectedFile !== "string") {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} correction requires expectedFile as a string \u2014 got ${JSON.stringify(expectedFile ?? null)}`,
+      { plan_id: id, actual: expectedFile ?? null },
+    );
+  }
+  // The exact observed value, not a normalised one: a correction applies to the
+  // pointer this patch was reviewed against, so a row that moved underneath the
+  // caller refuses instead of being repointed from a stale observation.
+  if (previous !== expectedFile) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
+      { plan_id: id, expected: expectedFile, actual: previous },
+    );
+  }
+  const declared = value.file;
+  // Shape first, like the append path: the shared resolver names the pointer
+  // form with `path.isAbsolute(file)` before its own type check.
+  if (typeof declared !== "string") {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a corrected file path as a string`, {
+      plan_id: id,
+      actual: declared ?? null,
+    });
+  }
+  let resolved: RegisteredPlanFile;
+  try {
+    resolved = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: declared });
+  } catch (error) {
+    if (error instanceof PlanPathError) {
+      throw prepareAmendmentRefusal("invalid-plan", error.message, {
+        plan_id: id,
+        path_code: error.code,
+        ...error.details,
+      });
+    }
+    throw error;
+  }
+  const planPath = resolved.planPath;
+  // The pointer being replaced must identify THIS plan: either a form the shared
+  // resolver accepts, or the exact derived repository-relative spelling of the
+  // same canonical target. A same-basename file, a copied document whose header
+  // happens to match, and a foreign or unrelated directory all fail both tests.
+  let previousIdentifiesPlan = false;
+  try {
+    previousIdentifiesPlan = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: expectedFile }).planPath === planPath;
+  } catch (error) {
+    if (!(error instanceof PlanPathError)) throw error;
+  }
+  if (!previousIdentifiesPlan) {
+    previousIdentifiesPlan = expectedFile === repositoryRelativePlanPointer(context.harnessRoot, planPath);
+  }
+  if (!previousIdentifiesPlan) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} held pointer ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row`,
+      { plan_id: id, actual: expectedFile, expected: planPath },
+    );
+  }
+  // A correction that would not move the pointer is not a correction.
+  if (previous === planPath) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} already records ${planPath} \u2014 the correction would not change this row's pointer`,
+      { plan_id: id, path: planPath },
+    );
+  }
+  return { id, file: planPath };
+}
+
 /** The validated delta of one amendment. */
 type PrepareProposal = {
   rows: PlanRow[];
+  corrections: readonly PreparePlanFileCorrectionDelta[];
   integrationWorktreePath?: string;
   planParallelism?: string;
 };
@@ -5664,7 +5817,11 @@ function samePlanIdSet(left: readonly string[], right: readonly string[]): boole
  * colliding ids, malformed metadata, escaping or missing references,
  * mismatched plan headers, a patch that changes nothing, a plan set the
  * compass does not declare, and an integration branch or checkout the
- * workflow does not own all refuse here — before anything is written.
+ * workflow does not own all refuse here — before anything is written. So does
+ * a plan-file correction that addresses no existing row (or an ambiguous one),
+ * whose `expectedFile` is not the exact pointer the row holds, whose old
+ * pointer names another document, or whose corrected pointer is not that plan's
+ * own registered file (prerequisite contract §4.1).
  */
 function readPreparePatch(
   patch: unknown,
@@ -5747,6 +5904,32 @@ function readPreparePatch(
       mainWorktreeBranch,
     }),
   );
+  // Plan-file corrections address existing rows and obey the append's own
+  // plan-file rules. An id is either new (appended) or existing (corrected),
+  // never both, and never twice in one patch.
+  const rawCorrections = patch.correctPlanFiles;
+  if (rawCorrections !== undefined && !Array.isArray(rawCorrections)) {
+    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires correctPlanFiles as an array", {
+      actual: rawCorrections ?? null,
+    });
+  }
+  const correctionIds = new Set<string>();
+  for (const entry of rawCorrections ?? []) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
+    if (declaredIds.has(id)) {
+      throw prepareAmendmentRefusal(
+        "duplicate-plan",
+        `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`,
+        { plan_id: id },
+      );
+    }
+    if (correctionIds.has(id)) {
+      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in correctPlanFiles`, { plan_id: id });
+    }
+    correctionIds.add(id);
+  }
+  const corrections = (rawCorrections ?? []).map((entry) => readPlanFileCorrection(entry, context));
   const integrationWorktreePath =
     patch.integrationWorktreePath === undefined
       ? undefined
@@ -5760,10 +5943,10 @@ function readPreparePatch(
     : undefined;
   const changesPath = integrationWorktreePath !== undefined && integrationWorktreePath !== recordedPath;
   const changesPolicy = planParallelism !== undefined && planParallelism !== recordedParallelism;
-  if (rows.length === 0 && !changesPath && !changesPolicy) {
+  if (rows.length === 0 && corrections.length === 0 && !changesPath && !changesPolicy) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
-      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, records no new integration checkout and no different plan parallelism`,
+      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
       { workflow_id: context.snapshot.id },
     );
   }
@@ -5820,6 +6003,7 @@ function readPreparePatch(
   }
   return {
     rows,
+    corrections,
     ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
     ...(planParallelism !== undefined ? { planParallelism } : {}),
   };
@@ -5954,15 +6138,25 @@ export async function amendPrepareWorkflow(
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
     const proposal = readPreparePatch(input.patch, { harnessRoot: scope.harnessRoot, snapshot, compass, main });
     // Old rows and unknown fields are taken from disk by value — only the new
-    // rows, the requested whitelist projections and `updated_at` are new. The
-    // policy copy carries the stored object's own keys, so keys this verb may
-    // not edit survive it.
+    // rows, the corrected row pointers, the requested whitelist projections and
+    // `updated_at` are new. The policy copy carries the stored object's own
+    // keys, so keys this verb may not edit survive it.
     const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
     if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
+    // A corrected row is rebuilt by spread, so every field but `file` survives
+    // by value and by position (prerequisite contract §4.1).
+    const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
+    const plans = [
+      ...snapshot.plans.map((row) => {
+        const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
+        return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
+      }),
+      ...proposal.rows,
+    ];
     const next: WorkflowSnapshot = {
       ...snapshot,
       updated_at: nowIso(),
-      plans: [...snapshot.plans, ...proposal.rows],
+      plans,
       ...(proposal.integrationWorktreePath !== undefined
         ? { integration_worktree_path: proposal.integrationWorktreePath }
         : {}),
@@ -6003,8 +6197,9 @@ export async function amendPrepareWorkflow(
     session: scope.session,
     session_file: scope.sessionPath,
     outcome: "amended",
-    // The delta only appends admissible Todo rows and records the requested
-    // path/policy, so the workflow stays admissible after the commit.
+    // The delta only appends admissible Todo rows, corrects the addressed rows'
+    // plan-file pointers and records the requested path/policy, so the workflow
+    // stays admissible after the commit.
     view: {
       workflowId: scope.workflowId,
       snapshotVersion: committed.snapshotVersion,
@@ -6014,4 +6209,748 @@ export async function amendPrepareWorkflow(
       blockers: [],
     },
   };
+}
+
+/* ------------------------------------------------------------------------ *
+ * § JSON Prepare coordinator recovery (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** One reason `recoverPrepareCoordinator` must not run, as a readable blocker. */
+export type PrepareCoordinatorRecoveryBlocker = Readonly<{ code: string; message: string }>;
+
+/**
+ * What a caller observes about one recorded coordinator binding before
+ * replacing it (§3.3). Deliberately owner-neutral: the recorded public session
+ * id, both byte versions and the Prepare verdict — never envelope bytes, a
+ * credential path or any bearer material.
+ */
+export type PrepareCoordinatorRecoveryView = Readonly<{
+  workflowId: string;
+  /** The session id the snapshot currently records as the workflow's coordinator. */
+  priorSessionId: string;
+  /** `sha256:<64 hex>` of the snapshot bytes (the recovery CAS token). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass bytes (the recovery CAS token). */
+  compassVersion: string;
+  /** `true` when a recovery is admitted for this workflow with fresh tokens. */
+  allowed: boolean;
+  /** One typed blocker per admission refusal; empty when allowed. */
+  blockers: readonly PrepareCoordinatorRecoveryBlocker[];
+}>;
+
+/**
+ * The public projection of one accepted recovery (§3.3): the two public
+ * session ids, the replay identity, versions and time. No envelope body, no
+ * credential, and the new envelope PATH stays in coordinator-owned transport
+ * (`CoordinationResult.session_file`) rather than in this receipt.
+ */
+export type PrepareCoordinatorRecoveryReceipt = Readonly<{
+  workflowId: string;
+  priorSessionId: string;
+  sessionId: string;
+  operationId: string;
+  requestHash: string;
+  /** `true` when this call replayed an already-recorded operation and wrote nothing. */
+  replay: boolean;
+  /** `sha256:<64 hex>` of the snapshot bytes AFTER this call (the receipt's own commit). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass the recovery was authorized against. */
+  compassVersion: string;
+  recoveredAt: string;
+}>;
+
+/** The existing `CoordinationResult` envelope plus the recovery receipt (§3.3). */
+export type RecoverPrepareCoordinatorResult = CoordinationResult & {
+  recovery: PrepareCoordinatorRecoveryReceipt;
+};
+
+/** Refusal reasons of the JSON Prepare recovery (§3.3 / §5). */
+type RecoveryReason =
+  | "invalid-request"
+  | "stale"
+  | "not-prepare"
+  | "execution-started"
+  | "foreign-owner"
+  | "unauthorized"
+  | "operation-conflict";
+
+/** One `coordination.identity-recovery.<reason>` code (`coordination-write.ts`). */
+type RecoveryCode = `coordination.identity-recovery.${RecoveryReason}`;
+
+function recoveryRefusal(reason: RecoveryReason, message: string, details: Record<string, unknown> = {}): CoordinationError {
+  const code: RecoveryCode = `coordination.identity-recovery.${reason}`;
+  return new CoordinationError(code, message, details);
+}
+
+/** The exact input keys of one recovery call (§3.3 — no force, no extra fields). */
+const RECOVERY_INPUT_KEYS: readonly string[] = [
+  "cwd",
+  "harnessDir",
+  "identity",
+  "priorSessionPath",
+  "priorSessionId",
+  "expectedSnapshotVersion",
+  "expectedCompassVersion",
+  "operationId",
+  "reason",
+  "authorizationRef",
+  "stoppedSessionIds",
+];
+
+/**
+ * The canonical request digest of one recovery (§3.3): the stable serializer
+ * over the caller-STATED request, with both version tokens normalized to their
+ * bare digest so the same reviewed request presented with or without the
+ * `sha256:` prefix is the SAME operation.
+ *
+ * Deliberately excluded: the prior holder's session id and envelope path. Both
+ * are DERIVED — the host re-resolves them from the live binding, which its own
+ * accepted recovery has since moved — so a digest over them would make an exact
+ * retry unrecognizable while adding nothing: a genuine recovery authenticates
+ * the prior owner inside the lock, and the replay branch additionally requires
+ * the current binding to still be that operation's own result.
+ */
+function recoveryRequestHash(request: {
+  workflowId: string;
+  sessionId: string;
+  expectedSnapshotVersion: string;
+  expectedCompassVersion: string;
+  operationId: string;
+  reason: string;
+  authorizationRef: string;
+  stoppedSessionIds: readonly string[];
+}): string {
+  return sha256Bytes(
+    stableJson({
+      workflow_id: request.workflowId,
+      session_id: request.sessionId,
+      expected_snapshot_version: prepareVersionDigest(request.expectedSnapshotVersion),
+      expected_compass_version: prepareVersionDigest(request.expectedCompassVersion),
+      operation_id: request.operationId,
+      reason: request.reason,
+      authorization_ref: request.authorizationRef,
+      stopped_session_ids: [...request.stoppedSessionIds],
+    }),
+  );
+}
+
+/**
+ * The file-authority verdict of the recovery, FIRST and before any payload,
+ * version, identity or path is inspected (§4.3). With an ACTIVE execution
+ * authority the snapshot and session envelopes are retired as a persistence
+ * route: the refusal names the existing DB recovery verb instead of silently
+ * running this JSON writer, and the DB route (full execution token + stop
+ * attestation) stays the only recovery there.
+ */
+function assertPrepareRecoveryFileAuthority(harnessRoot: string): void {
+  try {
+    assertExecutionFileWriteAllowed({ harnessDir: harnessRoot });
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "execution.direct-write-refused") {
+      throw new StoreError(
+        error.code,
+        `${error.message} Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the ` +
+          `existing DB recovery verb (\`mstar session recover\`) with its execution token and stop attestation; ` +
+          `this JSON Prepare writer never runs against an active store.`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create the recovery's role-scoped coordinator envelope through the existing
+ * exclusive creation, reclaiming an already-present file ONLY when its bytes
+ * are exactly the envelope this call would write. The envelope bytes are the
+ * session JSON alone, so a byte-identical leftover proves the same TARGET
+ * SESSION (same role, workflow, session id and canonical root) — not the same
+ * operation: no operation id is in those bytes. It is therefore the signature
+ * of a leftover from a retry (or a crashed earlier attempt) of a recovery
+ * targeting this session, and it is reclaimed on that basis. An unrelated
+ * role/session file is never overwritten (`invalid-request`), and the envelope
+ * is the only file the recovery ever creates.
+ */
+function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean; bytes: string } {
+  const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
+  const expected = `${JSON.stringify(session, null, 2)}\n`;
+  try {
+    const created = createSessionEnvelope(session);
+    return { path: canonicalTarget(created), created: true, bytes: expected };
+  } catch (error) {
+    if (!(error instanceof CoordinationError) || error.code !== "coordination.session-mismatch") throw error;
+    // Exclusive creation refused because the file exists. The only lawful
+    // reuse is byte-identical content for this exact session; anything else is
+    // somebody else's file and refuses without a write.
+    let existing: string;
+    try {
+      existing = readFileSync(path, "utf8");
+    } catch {
+      throw error;
+    }
+    if (existing !== expected) {
+      // This refusal is a public diagnostic (CLI JSON, host tool result), so it
+      // names the already-public session the path would hold and never repeats
+      // the envelope path itself (§3.3 keeps it in coordinator-owned transport).
+      throw recoveryRefusal(
+        "invalid-request",
+        `a coordinator envelope for session ${session.session_id} already exists with different content \u2014 a ` +
+          `recovery reclaims only the exact same-session envelope a crashed or retried attempt left behind, and never ` +
+          `overwrites an unrelated role or session file`,
+        { workflow_id: session.workflow_id, session_id: session.session_id },
+      );
+    }
+    return { path: canonicalTarget(path), created: false, bytes: expected };
+  }
+}
+
+let prepareRecoveryEnvelopeGapForTest: (() => void) | undefined;
+
+/**
+ * Test-only hook observing the window between the recovery's exclusive envelope
+ * creation and its final compass recheck (the commit CAS). Mirrors
+ * `setCompleteStandaloneMutateGapForTest`: a concurrent compass edit inside that
+ * window can only be injected deterministically from the inside.
+ */
+export function setPrepareRecoveryEnvelopeGapForTest(callback: (() => void) | undefined): void {
+  prepareRecoveryEnvelopeGapForTest = callback;
+}
+
+/**
+ * Reclaim the ONE envelope this operation created, and only while it still
+ * holds the exact bytes this call wrote (`§3.3`). `created` is a historical
+ * boolean: between the exclusive creation and this cleanup the path may have
+ * been replaced by a completely unrelated role/session file, and unlinking it
+ * would destroy somebody else's credential. The check is no-follow (`lstat`),
+ * so a symlink planted at the path is left alone too, and a file whose bytes
+ * changed since creation is never deleted — the caller's own failure is what
+ * surfaces, with the replacement untouched.
+ */
+function reclaimRecoveryEnvelope(path: string, bytes: string): void {
+  let current: string;
+  try {
+    if (!lstatSync(path).isFile()) return;
+    current = readFileSync(path, "utf8");
+  } catch {
+    return; // gone or unreadable: nothing of this operation's left to reclaim
+  }
+  if (current !== bytes) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* the recovery failed; a leftover envelope is harmless but never trusted */
+  }
+}
+
+/**
+ * Read the workflow-level recovery view (§3.3). Read-only: no lock, no write.
+ * The two byte versions are the tokens `recoverPrepareCoordinator` requires,
+ * and `allowed`/`blockers` report the Prepare/no-execution admission exactly as
+ * the mutation evaluates it — an inadmissible lifecycle is READABLE here, not
+ * an error, so an operator can inspect the workflow before recovering it.
+ *
+ * A workflow with no recorded coordinator binding refuses (there is no owner to
+ * expose and nothing this narrow repair may replace), and so do an
+ * unregistered/unreadable snapshot and an unreadable or borrowed compass.
+ */
+export async function showPrepareCoordinatorRecovery(
+  input: Readonly<{ cwd: string; harnessDir: string; workflowId: string }>,
+): Promise<PrepareCoordinatorRecoveryView> {
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery view input must be an object");
+  requireCwd(input.cwd);
+  const harnessRoot = requireProcessRoot(input.cwd, input.harnessDir);
+  assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
+  assertExactKeys(input as unknown as Record<string, unknown>, ["cwd", "harnessDir", "workflowId"], "coordinator recovery view input");
+  const workflowId = safePlanId(input.workflowId, "workflowId");
+  const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
+  assertRootRegisterEntry(harnessRoot, workflowId);
+  const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+  const coordinator = snapshot.coordination?.coordinator;
+  if (coordinator === undefined) {
+    throw new CoordinationError(
+      "coordination.not-prepared",
+      `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one`,
+      { workflow_id: workflowId },
+    );
+  }
+  const compass = readRecoveryCompass(harnessRoot, snapshot);
+  const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+  return {
+    workflowId,
+    priorSessionId: coordinator.session_id,
+    snapshotVersion: version,
+    compassVersion: compass.version,
+    allowed: admission.ok,
+    blockers: admission.ok ? [] : [{ code: admission.reason, message: admission.message }],
+  };
+}
+
+/**
+ * Replace the recorded coordinator binding of one Prepare workflow with a
+ * freshly acquired identity, after the prior owner can no longer authenticate
+ * (§3.3). Intentionally NARROWER than the existing DB recovery: no
+ * prepared-plan takeover, no lease transfer, no raw session rewrite, no force
+ * flag, and it is JSON/Prepare-only.
+ *
+ * Required under the snapshot write lock: the named registered RUNNING
+ * iteration in this canonical root, a committed registration, a prior envelope
+ * that still authenticates the EXACT recorded coordinator, an explicitly
+ * acquired identity addressing this workflow's coordinator seat with no plan
+ * scope, an explicit reason + authorization reference + a stop assertion naming
+ * the prior holder, both fresh byte versions, and the ORIGINAL `prepareAdmission`
+ * over every row (no lease, no row coordination, no progress — this verb never
+ * touches a workflow that has begun executing). Every semantic refusal happens
+ * before a file is created.
+ *
+ * Accepted effect: one role-scoped envelope through exclusive creation, the
+ * top-level coordinator binding replaced, one immutable
+ * `coordination.identity_recoveries` entry appended, `updated_at` refreshed —
+ * every row, branch anchor, evidence field and other workflow stays
+ * byte-identical. The old envelope's bytes remain as history and stop
+ * authorizing because the binding moved, never because a credential was edited.
+ */
+export async function recoverPrepareCoordinator(
+  input: Readonly<{
+    cwd: string;
+    harnessDir: string;
+    identity: ExecutionIdentity;
+    priorSessionPath: string;
+    priorSessionId: string;
+    expectedSnapshotVersion: string;
+    expectedCompassVersion: string;
+    operationId: string;
+    reason: string;
+    authorizationRef: string;
+    stoppedSessionIds: readonly string[];
+  }>,
+): Promise<RecoverPrepareCoordinatorResult> {
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery input must be an object");
+  requireCwd(input.cwd);
+  // Canonical authority discrimination precedes every other check (§4.3): the
+  // active-store refusal must not be pre-empted by a payload, version or path
+  // error, and this writer must never run against an active authority.
+  const harnessRoot = requireProcessRoot(input.cwd, input.harnessDir);
+  assertPrepareRecoveryFileAuthority(harnessRoot);
+  assertExactKeys(input as unknown as Record<string, unknown>, RECOVERY_INPUT_KEYS, "coordinator recovery input");
+  // The workflow this recovery addresses is the one the acquired identity
+  // names (§3.3): the request carries no separate workflow id, so the scope the
+  // identity is validated against is its own — the adapter boundary is what
+  // holds the caller's `workflowId` and the host-derived identity together.
+  const identity: ExecutionIdentity = input.identity;
+  validateExecutionIdentity(identity, {
+    workflowId: (identity as unknown as Record<string, unknown>).workflowId as string,
+    role: "coordinator",
+    planId: null,
+  });
+  const workflowId = safePlanId(identity.workflowId, "workflowId");
+  const operationId = recoveryText(input.operationId, "operationId");
+  const reason = recoveryText(input.reason, "reason");
+  const authorizationRef = recoveryText(input.authorizationRef, "authorizationRef");
+  const priorSessionId = recoveryText(input.priorSessionId, "priorSessionId");
+  const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
+  const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
+  const stoppedSessionIds = recoveryStopList(input.stoppedSessionIds);
+
+  // The new identity's session id names the envelope this recovery creates, so
+  // it obeys the same single-safe-component rule every session id does.
+  const sessionId = safeSessionId(identity.sessionId) as string;
+  if (!isNonEmptyString(input.priorSessionPath) || !isAbsolute(input.priorSessionPath)) {
+    // The addressed path is caller-supplied and this refusal is a public
+    // diagnostic (CLI JSON, host tool result), so the value is never repeated:
+    // the rule is stated with the received form and length instead.
+    throw recoveryRefusal(
+      "invalid-request",
+      "priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 the received value is " +
+        "not an absolute path and is not echoed in this diagnostic",
+      {
+        form: isNonEmptyString(input.priorSessionPath) ? "relative" : typeof input.priorSessionPath,
+        length: isNonEmptyString(input.priorSessionPath) ? input.priorSessionPath.length : 0,
+      },
+    );
+  }
+  const priorSessionPath = canonicalTarget(input.priorSessionPath);
+  const requestHash = recoveryRequestHash({
+    workflowId,
+    sessionId,
+    expectedSnapshotVersion,
+    expectedCompassVersion,
+    operationId,
+    reason,
+    authorizationRef,
+    stoppedSessionIds,
+  });
+  const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
+
+  const committed = await withStatusWriteLock(snapshotPath, async () => {
+    const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+    const recorded = snapshot.coordination?.coordinator;
+    if (recorded === undefined) {
+      throw recoveryRefusal(
+        "not-prepare",
+        `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one`,
+        { workflow_id: workflowId },
+      );
+    }
+    const audit: readonly CoordinationIdentityRecovery[] = snapshot.coordination?.identity_recoveries ?? [];
+    // Replay BEFORE the CAS comparison: an exact retry of an accepted recovery
+    // presents the tokens it was authorized against, which that recovery has
+    // already superseded. Same operation + same canonical request + a binding
+    // that is still this operation's own result → the recorded receipt, with no
+    // revision churn and nothing written. Anything else with this operation id
+    // (a changed request, or a binding that has since moved) refuses.
+    const replayedOperation = audit.find((entry) => entry.operation_id === operationId);
+    if (replayedOperation !== undefined) {
+      if (replayedOperation.request_hash !== requestHash) {
+        throw recoveryRefusal(
+          "operation-conflict",
+          `operation ${operationId} was already recorded for workflow ${workflowId} with a different request \u2014 ` +
+            `an operation id names exactly one reviewed recovery`,
+          { workflow_id: workflowId, operation_id: operationId, recorded: replayedOperation.request_hash, actual: requestHash },
+        );
+      }
+      if (replayedOperation.session_id !== recorded.session_id) {
+        throw recoveryRefusal(
+          "operation-conflict",
+          `operation ${operationId} was recorded for coordinator session ${replayedOperation.session_id}, but workflow ` +
+            `${workflowId} now records ${recorded.session_id} \u2014 the binding was superseded; the recorded receipt is no longer this workflow's state`,
+          {
+            workflow_id: workflowId,
+            operation_id: operationId,
+            recorded_session_id: replayedOperation.session_id,
+            current_session_id: recorded.session_id,
+          },
+        );
+      }
+      const recoveredPath = sessionFilePath(harnessRoot, workflowId, "coordinator", replayedOperation.session_id);
+      // The receipt describes a LIVE binding: if its envelope is gone the
+      // workflow is broken rather than recovered, and no success may be
+      // reported from the record alone. The envelope path stays out of this
+      // public diagnostic (§3.3 keeps it in coordinator-owned transport): the
+      // already-public workflow and session ids identify it.
+      if (!existsSync(recoveredPath)) {
+        throw new CoordinationError(
+          "coordination.session-not-found",
+          `workflow ${workflowId} records recovered coordinator session ${recorded.session_id}, but that binding's ` +
+            `envelope is gone \u2014 the binding is broken; do not replay it`,
+          { workflow_id: workflowId, session_id: recorded.session_id },
+        );
+      }
+      return {
+        replay: true,
+        entry: replayedOperation,
+        snapshotVersion: version,
+        compassVersion: replayedOperation.compass_version,
+      } satisfies RecoveryCommit;
+    }
+    // A recovery replaces a coordinator that can no longer authenticate: naming
+    // the CURRENT recorded holder as the replacement is not a recovery. Checked
+    // after the replay branch above, because an exact retry legitimately names
+    // the holder this operation already replaced.
+    if (sessionId === recorded.session_id) {
+      throw recoveryRefusal(
+        "invalid-request",
+        `the replacement identity is the recorded coordinator session ${recorded.session_id} \u2014 a recovery replaces ` +
+          `a coordinator that can no longer authenticate and never re-binds the same one`,
+        { prior_session_id: recorded.session_id },
+      );
+    }
+    if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
+      throw recoveryRefusal(
+        "stale",
+        `snapshot ${snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read ` +
+          `\`workflow show-prepare\` (or the host \`show-recovery\`) and review again`,
+        { path: snapshotPath, expected: expectedSnapshotVersion, actual: version },
+      );
+    }
+    const compass = readRecoveryCompass(harnessRoot, snapshot);
+    if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
+      throw recoveryRefusal(
+        "stale",
+        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read the ` +
+          `recovery view and review again`,
+        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
+      );
+    }
+    // The recorded binding must still be authenticated by the envelope the
+    // caller pointed at: same canonical file, same session, same workflow, same
+    // canonical root, coordinator seat. A caller-chosen credential path can
+    // therefore never become the prior owner.
+    assertPriorRecoveryOwner(harnessRoot, workflowId, priorSessionPath, priorSessionId, recorded);
+    // Explicit operator authorization and stop proof (§3.3): the request names a
+    // reason, an authorization reference and the RECORDED prior holder among the
+    // stopped sessions. Checked after the owner is authenticated, so an operator
+    // who does not hold the prior owner's proof is told that — not that its stop
+    // assertion was incomplete.
+    if (!stoppedSessionIds.includes(recorded.session_id)) {
+      throw recoveryRefusal(
+        "unauthorized",
+        `the stop assertion does not name the recorded coordinator ${recorded.session_id} \u2014 recovery requires an ` +
+          `explicit attestation that the prior holder stopped or reloaded`,
+        { prior_session_id: recorded.session_id, stopped_session_ids: [...stoppedSessionIds] },
+      );
+    }
+    // The ORIGINAL admission, over EVERY row (§3.3): no lease, no row
+    // coordination block, no progress, no merge lease. A recovery never touches
+    // a workflow that has started executing.
+    const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+    if (!admission.ok) {
+      throw recoveryRefusal(
+        admission.reason === "execution-started" ? "execution-started" : "not-prepare",
+        admission.message,
+        admission.details,
+      );
+    }
+    await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
+
+    const session: CoordinationSession = {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: sessionId,
+      workflow_id: workflowId,
+      harness_root: harnessRoot,
+    };
+    const recoveredAt = nowIso();
+    const entry: CoordinationIdentityRecovery = {
+      operation_id: operationId,
+      request_hash: requestHash,
+      workflow_id: workflowId,
+      prior_session_id: priorSessionId,
+      session_id: sessionId,
+      authorization_ref: authorizationRef,
+      reason,
+      stopped_session_ids: [...stoppedSessionIds],
+      snapshot_version_before: version,
+      compass_version: compass.version,
+      recovered_at: recoveredAt,
+    };
+    let envelope = "";
+    let envelopeBytes = "";
+    let created = false;
+    // The envelope is created INSIDE this locked section and the snapshot
+    // commit is the atomic binding step. A failure between them is not a
+    // semantic refusal: it reports failure (never a receipt) and reclaims only
+    // the exact envelope this call created, so a retry is lawful.
+    try {
+      const made = createRecoveryEnvelope(session);
+      envelope = made.path;
+      envelopeBytes = made.bytes;
+      created = made.created;
+      prepareRecoveryEnvelopeGapForTest?.();
+      // The reviewed compass must STILL be the bytes this call inspected when
+      // the recovery lands: the snapshot write lock does not lock the compass
+      // file, so a concurrent compass edit during the envelope creation above
+      // would otherwise be accepted under a stale review while the audit
+      // recorded a version that was no longer current. Same dual-CAS recheck
+      // the Prepare amendment performs immediately before its commit; a change
+      // reclaims only this operation's envelope and refuses without snapshot
+      // mutation.
+      const rechecked = readRecoveryCompass(harnessRoot, snapshot);
+      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
+        throw recoveryRefusal(
+          "stale",
+          `compass ${compass.path} changed while this recovery was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read the recovery view and review again`,
+          { path: compass.path, expected: compass.version, actual: rechecked.version },
+        );
+      }
+      const next: WorkflowSnapshot = {
+        ...snapshot,
+        updated_at: nowIso(),
+        coordination: {
+          // The audit history is taken from disk by value and only APPENDED to:
+          // an earlier recovery entry can never be rewritten or dropped here.
+          ...(snapshot.coordination ?? { coordinator: recorded }),
+          coordinator: { session_id: sessionId, session_file: envelope, bound_at: nowIso() },
+          identity_recoveries: [...audit, entry],
+        },
+      };
+      await commitSnapshot(harnessRoot, workflowId, snapshotPath, next);
+    } catch (error) {
+      if (created && envelope !== "" && envelopeBytes !== "") reclaimRecoveryEnvelope(envelope, envelopeBytes);
+      throw error;
+    }
+    const written = readArtifactBytes(snapshotPath);
+    if (written === undefined) {
+      throw new CoordinationError(
+        "coordination.store",
+        `snapshot ${snapshotPath} is unreadable after this call committed it`,
+        { path: snapshotPath },
+      );
+    }
+    return {
+      replay: false,
+      entry,
+      snapshotVersion: written.version,
+      compassVersion: compass.version,
+      session,
+      envelope,
+    } satisfies RecoveryCommit;
+  });
+
+  const session: CoordinationSession = committed.session ?? {
+    schema_version: 1,
+    role: "coordinator",
+    session_id: committed.entry.session_id,
+    workflow_id: workflowId,
+    harness_root: harnessRoot,
+  };
+  const envelopePath = committed.envelope ?? canonicalTarget(sessionFilePath(harnessRoot, workflowId, "coordinator", committed.entry.session_id));
+  return {
+    ok: true,
+    operation: "recover-coordinator",
+    session,
+    session_file: envelopePath,
+    outcome: "recovered",
+    recovery: {
+      workflowId,
+      priorSessionId: committed.entry.prior_session_id,
+      sessionId: committed.entry.session_id,
+      operationId: committed.entry.operation_id,
+      requestHash: committed.entry.request_hash,
+      replay: committed.replay,
+      snapshotVersion: committed.snapshotVersion,
+      compassVersion: committed.compassVersion,
+      recoveredAt: committed.entry.recovered_at,
+    },
+  };
+}
+
+/**
+ * What one locked recovery section hands back: the audit entry that now
+ * describes the binding, the bytes the caller must record as its tokens, and —
+ * only on a fresh recovery — the envelope and session this call created.
+ */
+type RecoveryCommit = {
+  /** `true` when this call replayed a recorded operation and wrote nothing. */
+  replay: boolean;
+  entry: CoordinationIdentityRecovery;
+  /** `sha256:<64 hex>` of the snapshot bytes after this call (or the current ones on replay). */
+  snapshotVersion: string;
+  /** `sha256:<64 hex>` of the reviewed compass the recovery was authorized against. */
+  compassVersion: string;
+  session?: CoordinationSession;
+  envelope?: string;
+};
+
+/**
+ * The reviewed compass of one recovery call, read through the one compass
+ * reader and re-expressed in this verb's own refusal vocabulary: a missing,
+ * unreadable, borrowed or malformed compass makes the workflow non-recoverable
+ * in Prepare, so the caller sees `not-prepare` (with the underlying code and
+ * message attached) instead of the amendment's own reasons. There is no second
+ * compass parser here.
+ */
+function readRecoveryCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
+  try {
+    return readPrepareCompass(harnessRoot, snapshot);
+  } catch (error) {
+    if (error instanceof CoordinationError && error.code.startsWith("coordination.prepare-amendment.")) {
+      throw recoveryRefusal("not-prepare", error.message, { ...error.details, reason_code: error.code });
+    }
+    throw error;
+  }
+}
+
+/** One required non-empty recovery request field (a request-shape refusal). */
+function recoveryText(value: unknown, field: string): string {
+  if (!isNonEmptyString(value)) {
+    throw recoveryRefusal("invalid-request", `coordinator recovery ${field} is required`, { field });
+  }
+  return value;
+}
+
+/**
+ * The stop assertion: a non-empty list of PUBLIC session ids, validated before
+ * anything is hashed, stored or echoed.
+ *
+ * A rejected entry is NEVER repeated in the refusal. These refusals are a public
+ * projection (§5: public ids, canonical paths and codes), so a credential-like
+ * or path-like value must not travel into a JSON payload, a log line or a
+ * caller's transcript: the refusal keeps the stable code and the rule and
+ * reports only the entry's POSITION (and, for a string, its length).
+ */
+function recoveryStopList(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw recoveryRefusal(
+      "unauthorized",
+      "stoppedSessionIds must name at least the prior holder this recovery replaces \u2014 an empty stop assertion is never an authorization",
+      { actual: Array.isArray(value) ? "array" : value === undefined ? null : typeof value },
+    );
+  }
+  const ids: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (!isNonEmptyString(entry)) {
+      throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id", {
+        index,
+        actual: typeof entry,
+      });
+    }
+    // Every entry is hashed into the request digest and persisted in the
+    // immutable audit, so it must be a PUBLIC session id under the same
+    // single-safe-component/length rule an acquired identity obeys — an
+    // arbitrary string (credential-like or path/payload text) is never stored.
+    try {
+      assertSafeSessionId(entry, "stoppedSessionIds entry");
+    } catch {
+      throw recoveryRefusal(
+        "invalid-request",
+        "every stoppedSessionIds entry must be a public session id \u2014 a single safe path component " +
+          "([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed in this diagnostic",
+        { index, length: entry.length },
+      );
+    }
+    ids.push(entry);
+  }
+  return [...new Set(ids)];
+}
+
+/**
+ * Authenticate the recorded coordinator with the envelope the caller addressed
+ * (§3.3): the pointed file must BE the recorded binding — same canonical path,
+ * same session id, coordinator seat, this workflow, this canonical root — and
+ * the caller's `priorSessionId` must be that same recorded owner. A mismatch in
+ * any of those is `foreign-owner`: the caller does not hold the prior owner's
+ * proof.
+ *
+ * Both branches of this refusal are PUBLIC diagnostics (CLI JSON and the host
+ * tool result), so neither repeats a rejected value nor an envelope path: the
+ * rule, the addressed workflow, the already-public recorded session id and the
+ * mismatching dimensions are reported instead. The recorded id is the one
+ * `showPrepareCoordinatorRecovery` already publishes as `priorSessionId`.
+ */
+function assertPriorRecoveryOwner(
+  harnessRoot: string,
+  workflowId: string,
+  priorSessionPath: string,
+  priorSessionId: string,
+  recorded: CoordinatorBinding,
+): void {
+  const recordedPath = canonicalTarget(recorded.session_file);
+  if (recorded.session_id !== priorSessionId || recordedPath !== priorSessionPath) {
+    const mismatched = [
+      ...(recorded.session_id !== priorSessionId ? ["recorded session id"] : []),
+      ...(recordedPath !== priorSessionPath ? ["recorded envelope"] : []),
+    ];
+    throw recoveryRefusal(
+      "foreign-owner",
+      `the envelope this call addresses is not the coordinator workflow ${workflowId} records ` +
+        `(session ${recorded.session_id}) \u2014 a recovery replaces only the binding it can authenticate; the ` +
+        `addressed envelope path and the caller's session id are not echoed in this diagnostic`,
+      { workflow_id: workflowId, expected_session_id: recorded.session_id, mismatched },
+    );
+  }
+  const prior = readSessionEnvelope(priorSessionPath);
+  const dimensions = [
+    ...(prior.role !== "coordinator" ? ["role"] : []),
+    ...(prior.session_id !== priorSessionId ? ["session id"] : []),
+    ...(prior.workflow_id !== workflowId ? ["workflow"] : []),
+    ...(canonicalizeNearestExisting(prior.harness_root) !== harnessRoot ? ["harness root"] : []),
+  ];
+  if (dimensions.length > 0) {
+    throw recoveryRefusal(
+      "foreign-owner",
+      `the addressed session envelope does not authenticate the coordinator of workflow ${workflowId} in ` +
+        `${harnessRoot} \u2014 the recorded binding cannot be authenticated through it; the envelope path and its ` +
+        `values are not echoed in this diagnostic`,
+      { workflow_id: workflowId, mismatched: dimensions },
+    );
+  }
 }

@@ -34,9 +34,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, basename, join, sep } from "node:path";
 import {
   EXECUTION_PIN_CONFLICT_CODE,
   amendPrepareWorkflow,
@@ -45,17 +45,22 @@ import {
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
+  recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
   resolvePlanScope,
   setCompleteStandaloneMutateGapForTest,
+  setPrepareRecoveryEnvelopeGapForTest,
+  showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
   type CatalogExecutionPin,
   type CoordinationResult,
   type PlanCoordinationView,
+  type PrepareCoordinatorRecoveryView,
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
 } from "../src/coordination.js";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
@@ -64,6 +69,7 @@ import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, ty
 import {
   closeWorkflow,
   recordWorkflowDelivery,
+  stableJson,
   WORKFLOW_SNAPSHOT_FILE,
   writeWorkflowSnapshot,
   type WorkflowSnapshot,
@@ -73,6 +79,11 @@ const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
 const PEER_PLAN_ID = "plan-b";
 const PROJECT_ID = "proj-a";
+/**
+ * The deterministic local identity every fixture-bind acquires. A coordinator
+ * envelope is never created from a generated id, so the fixtures state theirs.
+ */
+const FIXTURE_COORDINATOR_ID = "fixture-coordinator";
 
 type Fixture = {
   root: string;
@@ -272,10 +283,16 @@ async function errorCodeOf(run: () => Promise<unknown>): Promise<string> {
   throw new Error("expected the coordination call to fail");
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensureCoordinator(fixture: Fixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     expect(bound.ok).toBe(true);
     expect(bound.operation).toBe("bind");
     fixture.coordinatorSession = bound.session_file;
@@ -535,12 +552,20 @@ describe("binding", () => {
   test("coordinator bind claims the lifecycle with a 0600 envelope and refuses a second holder", async () => {
     const fixture = makeFixture();
 
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     fixture.coordinatorSession = bound.session_file;
 
     expect(bound.operation).toBe("bind");
     expect(bound.outcome).toBe("bound");
-    expect(bound.session_file).toBe(join(fixture.workflowDir, "sessions", `coordinator-${bound.session.session_id}.json`));
+    expect(bound.session_file).toBe(
+      join(fixture.workflowDir, "sessions", `coordinator-${FIXTURE_COORDINATOR_ID}.json`),
+    );
     expect(bound.session.role).toBe("coordinator");
     expect(bound.session.plan_id).toBeUndefined();
     expect(existsSync(fixture.coordinatorSession)).toBe(true);
@@ -565,7 +590,13 @@ describe("binding", () => {
     // A second coordinator identity is refused and the binding is untouched.
     expect(
       await errorCodeOf(() =>
-        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "second-coordinator",
+        }),
       ),
     ).toBe("coordination.duplicate-holder");
     const after = readJson(fixture.snapshotPath) as { coordination?: { coordinator?: { session_file?: string } } };
@@ -755,15 +786,18 @@ describe("binding", () => {
     expect(readdirSync(sessionsDir).sort()).toEqual(envelopes);
   });
 
-  test("an absent session id keeps the generated UUID identity, and a re-used one never overwrites an envelope", async () => {
+  test("prerequisite identity — an omitted coordinator id writes nothing, and a re-used one never overwrites an envelope", async () => {
+    // A fresh coordinator bind never generates an identity: the engine refuses
+    // before any write, so the workflow keeps no envelope and no sessions dir.
     const fixture = makeFixture();
-    const bound = await bindPlanSession({
-      coordinator: true,
-      workflowId: WORKFLOW_ID,
-      harnessDir: fixture.harness,
-      cwd: fixture.root,
-    });
-    expect(bound.session.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+      ),
+    ).toBe("coordination.identity-missing");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
 
     // An envelope that already occupies the id's role-scoped path is never
     // replaced: the existing exclusive-create refusal reports it instead of
@@ -771,7 +805,7 @@ describe("binding", () => {
     const fresh = makeFixture();
     const orphan = join(fresh.workflowDir, "sessions", "coordinator-host-session-orphan.json");
     writeText(orphan, '{"stray":true}\n');
-    const before = readFileSync(fresh.snapshotPath, "utf8");
+    const freshBefore = readFileSync(fresh.snapshotPath, "utf8");
     expect(
       await errorCodeOf(() =>
         bindPlanSession({
@@ -784,7 +818,55 @@ describe("binding", () => {
       ),
     ).toBe("coordination.session-mismatch");
     expect(readFileSync(orphan, "utf8")).toBe('{"stray":true}\n');
-    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(before);
+    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(freshBefore);
+  });
+
+  test("prerequisite identity — an explicit id is adopted, two same-workflow binds retain one owner, and a foreign root never inherits it", async () => {
+    const fixture = makeFixture();
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(bound.outcome).toBe("bound");
+    expect(bound.session.session_id).toBe("host-session-explicit");
+    expect(readJson(fixture.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // One owner per workflow: a second fresh bind, even naming another id, is
+    // refused and mutates nothing.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "host-session-other",
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+
+    // A second control harness is isolated: the same session id binds a
+    // *different* workflow there and writes nothing into the first root.
+    const other = makeFixture();
+    const foreign = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: other.harness,
+      cwd: other.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(foreign.outcome).toBe("bound");
+    expect(readJson(other.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
   });
 
   test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {
@@ -2896,7 +2978,7 @@ function prepareSnapshotOf(fixture: PrepareFixture): { plans: Array<Record<strin
   return doc as { plans: Array<Record<string, unknown>> } & Record<string, unknown>;
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
     const bound = await bindPlanSession({
@@ -2904,6 +2986,7 @@ async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string
       workflowId: PREPARE_WORKFLOW,
       harnessDir: fixture.harness,
       cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
     });
     expect(bound.ok).toBe(true);
     fixture.coordinatorSession = bound.session_file;
@@ -3596,6 +3679,23 @@ describe("Prepare workflow amendment", () => {
           }),
       },
       {
+        // Missing / non-string pointers are shape violations this boundary owns:
+        // the shared resolver names the pointer form with `path.isAbsolute(file)`
+        // before its own type check, so reaching it with these would surface a
+        // native `TypeError` instead of the refusal vocabulary.
+        name: "file-missing",
+        patch: (fixture) =>
+          preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: undefined })] }),
+      },
+      {
+        name: "file-null",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: null })] }),
+      },
+      {
+        name: "file-not-a-string",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: 42 })] }),
+      },
+      {
         name: "header-id-mismatch",
         prepare: (fixture) => {
           writeText(join(fixture.planDir, `${PREPARE_APPEND}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: `feature/${PREPARE_APPEND}` }));
@@ -4156,7 +4256,13 @@ describe("Prepare workflow amendment", () => {
     // execution path admits a workflow the root never registered.
     expect(readFileSync(fixture.statusPath, "utf8")).toBe(statusBytes);
     const bindRefusal = await prepareRefusalOf(() =>
-      bindPlanSession({ coordinator: true, workflowId: orphanId, harnessDir: fixture.harness, cwd: fixture.root }),
+      bindPlanSession({
+        coordinator: true,
+        workflowId: orphanId,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
     );
     expect(bindRefusal.code).toBe("coordination.workflow-not-found");
 
@@ -4165,6 +4271,1057 @@ describe("Prepare workflow amendment", () => {
     expect(recreate.code).toBe("coordination.version-conflict");
     expect(readFileSync(orphanSnapshotPath, "utf8")).toBe(createdBytes);
   });
+
+  test("a plan-file correction repairs a malformed repository-relative pointer and preserves every other row field", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = prepareSnapshotOf(fixture);
+    const oldRow = before.plans[0]!;
+    const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
+    // The fixture row holds the repository-relative pointer rows registered
+    // before the resolver landed; the correction names that same plan's
+    // canonical file and the exact pointer it replaces.
+    expect(oldRow.file).toBe(`.mstar/plans/${PREPARE_ROW}.md`);
+
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: correctedPath },
+        ],
+      }),
+    );
+
+    expect(amended.ok).toBe(true);
+    expect(amended.view.allowed).toBe(true);
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    const after = prepareSnapshotOf(fixture);
+    // Only the pointer moved: the row keeps its identity, title, status,
+    // metadata and position, and the appended row still lands after it.
+    expect(after.plans[0]).toEqual({ ...oldRow, file: correctedPath });
+    expect(after.plans[0]!.metadata).toEqual(oldRow.metadata);
+    expect(after.plans[1]!.file).toBe(join(fixture.planDir, `${PREPARE_APPEND}.md`));
+    expect(after.plans).toHaveLength(2);
+
+    // A correction is a delta on its own: with the compass declaring only the
+    // registered row it is admitted with an empty append array.
+    const only = makePrepareFixture();
+    await ensurePrepareCoordinator(only);
+    writeText(only.compassPath, readFileSync(only.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const onlyRow = prepareSnapshotOf(only).plans[0]!;
+    const onlyPath = join(only.planDir, `${PREPARE_ROW}.md`);
+
+    const correctedOnly = await amendPrepare(
+      only,
+      preparePatchOf(only, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: onlyPath },
+        ],
+      }),
+    );
+
+    expect(correctedOnly.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(only).plans).toEqual([{ ...onlyRow, file: onlyPath }]);
+
+    // The declared harness-relative spelling is an accepted OLD form too — the
+    // resolver reads it, and the correction canonicalizes it.
+    const declared = makePrepareFixture();
+    await ensurePrepareCoordinator(declared);
+    writeText(declared.compassPath, readFileSync(declared.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const declaredRow = prepareSnapshotOf(declared).plans[0]!;
+    const declaredDoc = prepareSnapshotOf(declared);
+    declaredDoc.plans[0]!.file = `plans/${PREPARE_ROW}.md`;
+    writeJson(declared.snapshotPath, declaredDoc);
+
+    const declaredAmended = await amendPrepare(
+      declared,
+      preparePatchOf(declared, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+        ],
+      }),
+    );
+
+    expect(declaredAmended.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(declared).plans).toEqual([
+      { ...declaredRow, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+    ]);
+  }, 30000);
+
+  test("a plan-file correction refuses an unbindable old or new pointer without writing anything", async () => {
+    const cases: ReadonlyArray<{
+      name: string;
+      prepare?: (fixture: PrepareFixture) => void;
+      correction: (fixture: PrepareFixture) => unknown;
+    }> = [
+      { name: "entry-not-an-object", correction: () => "plan-prepare" },
+      {
+        name: "unexpected-key",
+        correction: (fixture) => ({
+          id: PREPARE_ROW,
+          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          status: "Todo",
+        }),
+      },
+      { name: "missing-id", correction: (fixture) => ({ expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        name: "unsafe-id",
+        correction: (fixture) => ({ id: "../plan-prepare", expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "unknown-row",
+        correction: (fixture) => ({
+          id: PREPARE_UNREVIEWED,
+          expectedFile: `.mstar/plans/${PREPARE_UNREVIEWED}.md`,
+          file: join(fixture.planDir, `${PREPARE_UNREVIEWED}.md`),
+        }),
+      },
+      { name: "expected-file-missing", correction: (fixture) => ({ id: PREPARE_ROW, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        // The exact value is required: a canonical absolute spelling of the
+        // same pointer is not what the row holds, so the observation is stale.
+        name: "expected-file-form-mismatch",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.planDir, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "expected-file-other-value",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-foreign",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.root, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-another-plan",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_APPEND}.md`) }),
+      },
+      {
+        name: "new-file-traversal",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: `../plans/${PREPARE_ROW}.md` }),
+      },
+      {
+        name: "new-file-missing",
+        prepare: (fixture) => rmSync(join(fixture.planDir, `${PREPARE_ROW}.md`)),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-header-mismatch",
+        prepare: (fixture) =>
+          writeText(join(fixture.planDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: "feature/plan-other" })),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // The row's pointer names another plan: a correction repairs a
+        // malformed pointer of the SAME plan, it never rebinds a row.
+        name: "old-pointer-names-another-plan",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/${PREPARE_APPEND}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-same-basename-elsewhere",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/archive/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/archive/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-foreign-absolute",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = join(fixture.root, `${PREPARE_ROW}.md`);
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.root, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // A copied plan document with a matching header, under an unrelated
+        // directory: neither its spelling nor its target is this plan's file.
+        name: "old-pointer-copied-document-with-matching-header",
+        prepare: (fixture) => {
+          const copyDir = join(fixture.planDir, "copy");
+          mkdirSync(copyDir, { recursive: true });
+          writeText(join(copyDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: PREPARE_ROW, workingBranch: `feature/${PREPARE_ROW}` }));
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/copy/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/copy/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+    ];
+
+    for (const correctionCase of cases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      correctionCase.prepare?.(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(fixture, preparePatchOf(fixture, { correctPlanFiles: [correctionCase.correction(fixture)] })),
+      );
+
+      expect(`${correctionCase.name}: ${refusal.code}`).toBe(
+        `${correctionCase.name}: coordination.prepare-amendment.invalid-plan`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+
+    // A correction that would not move the pointer is not a correction: the
+    // already-canonical row refuses as a no-op.
+    const noop = makePrepareFixture();
+    await ensurePrepareCoordinator(noop);
+    const canonical = join(noop.planDir, `${PREPARE_ROW}.md`);
+    const noopDoc = prepareSnapshotOf(noop);
+    noopDoc.plans[0]!.file = canonical;
+    writeJson(noop.snapshotPath, noopDoc);
+    const noopBefore = protectedBytes(noop);
+
+    const noopRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        noop,
+        preparePatchOf(noop, {
+          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: canonical, file: canonical }],
+        }),
+      ),
+    );
+
+    expect(noopRefusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(protectedBytes(noop)).toEqual(noopBefore);
+  }, 30000);
+
+  test("a plan-file correction is gated by the collision, CAS and whole-workflow admission rules", async () => {
+    // `correctPlanFiles` is validated as an array like every other patch key.
+    const malformed = makePrepareFixture();
+    await ensurePrepareCoordinator(malformed);
+    const malformedBefore = protectedBytes(malformed);
+    const malformedRefusal = await prepareRefusalOf(() =>
+      amendPrepare(malformed, preparePatchOf(malformed, { correctPlanFiles: "plan-prepare" })),
+    );
+    expect(malformedRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
+    expect(protectedBytes(malformed)).toEqual(malformedBefore);
+
+    // The same id cannot be appended and corrected in one patch.
+    const overlap = makePrepareFixture();
+    await ensurePrepareCoordinator(overlap);
+    const overlapBefore = protectedBytes(overlap);
+    const overlapRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        overlap,
+        preparePatchOf(overlap, {
+          correctPlanFiles: [
+            {
+              id: PREPARE_APPEND,
+              expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`,
+              file: join(overlap.planDir, `${PREPARE_APPEND}.md`),
+            },
+          ],
+        }),
+      ),
+    );
+    expect(overlapRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(overlap)).toEqual(overlapBefore);
+
+    // …and never twice in one correction list.
+    const duplicate = makePrepareFixture();
+    await ensurePrepareCoordinator(duplicate);
+    const duplicateBefore = protectedBytes(duplicate);
+    const duplicateRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        duplicate,
+        preparePatchOf(duplicate, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+      ),
+    );
+    expect(duplicateRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
+
+    // A stale byte token refuses before any pointer moves.
+    const stale = makePrepareFixture();
+    await ensurePrepareCoordinator(stale);
+    const staleView = await prepareViewOf(stale);
+    const staleBefore = protectedBytes(stale);
+    const staleRefusal = await prepareRefusalOf(() =>
+      amendWith(
+        stale,
+        preparePatchOf(stale, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(stale.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+        { snapshotVersion: `sha256:${"0".repeat(64)}`, compassVersion: staleView.view.compassVersion },
+      ),
+    );
+    expect(staleRefusal.code).toBe("coordination.prepare-amendment.stale");
+    expect(protectedBytes(stale)).toEqual(staleBefore);
+
+    // A prepared/sealed row is never repointed: the whole-workflow admission
+    // refuses before the patch is even read, with the state named.
+    const admissionCases: ReadonlyArray<{
+      name: string;
+      patch: (
+        doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>,
+        fixture: PrepareFixture,
+      ) => void;
+    }> = [
+      { name: "prepared-row", patch: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; } },
+      {
+        name: "sealed-row-lease",
+        patch: (doc, fixture) => {
+          doc.plans[0]!.execution_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            worktree_path: join(fixture.root, "wt-row"),
+            working_branch: `feature/${PREPARE_ROW}`,
+          };
+        },
+      },
+    ];
+
+    for (const admissionCase of admissionCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const doc = prepareSnapshotOf(fixture);
+      admissionCase.patch(doc, fixture);
+      writeJson(fixture.snapshotPath, doc);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(
+          fixture,
+          preparePatchOf(fixture, {
+            appendPlans: [],
+            correctPlanFiles: [
+              { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+            ],
+          }),
+        ),
+      );
+
+      expect(`${admissionCase.name}: ${refusal.code}`).toBe(
+        `${admissionCase.name}: coordination.prepare-amendment.execution-started`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  }, 30000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * JSON Prepare coordinator recovery (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** The replacement coordinator identity every single-recovery case acquires. */
+const RECOVERED_COORDINATOR_ID = "recovered-coordinator";
+/** A second, distinct replacement identity (the supersede/concurrency cases). */
+const RECOVERED_COORDINATOR_ID_2 = "recovered-coordinator-2";
+
+/** The recovery view of the fixture's workflow, read without any session envelope. */
+function recoveryViewOf(fixture: PrepareFixture): Promise<PrepareCoordinatorRecoveryView> {
+  return showPrepareCoordinatorRecovery({
+    cwd: fixture.root,
+    harnessDir: fixture.harness,
+    workflowId: PREPARE_WORKFLOW,
+  });
+}
+
+/** One recovery request carrying this workflow's own reviewed tokens. */
+function recoveryInputOf(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string },
+  overrides: Record<string, unknown> = {},
+): Parameters<typeof recoverPrepareCoordinator>[0] {
+  return {
+    cwd: fixture.root,
+    harnessDir: fixture.harness,
+    identity: {
+      source: "local",
+      sessionId: RECOVERED_COORDINATOR_ID,
+      workflowId: PREPARE_WORKFLOW,
+      role: "coordinator",
+      planId: null,
+    },
+    priorSessionPath: fixture.coordinatorSession,
+    priorSessionId: FIXTURE_COORDINATOR_ID,
+    expectedSnapshotVersion: tokens.snapshot,
+    expectedCompassVersion: tokens.compass,
+    operationId: "op-recover-1",
+    reason: "the prior host session was cancelled and cannot authenticate",
+    authorizationRef: "PM-authorization-20260921",
+    stoppedSessionIds: [FIXTURE_COORDINATOR_ID],
+    ...overrides,
+  } as Parameters<typeof recoverPrepareCoordinator>[0];
+}
+
+/** One replacement identity for the multi-recovery cases. */
+function recoveredIdentity(sessionId: string): Record<string, unknown> {
+  return { source: "local", sessionId, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: null };
+}
+
+/** Where the engine keeps one coordinator envelope (the session-path contract). */
+function coordinatorEnvelopeOf(fixture: PrepareFixture, sessionId: string): string {
+  return join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${sessionId}.json`);
+}
+
+/**
+ * The stored top-level `coordination` block, narrowed by `typeof` before any
+ * member is read (the snapshot JSON is `unknown` at this boundary).
+ */
+function coordinationBlockOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordination = (prepareSnapshotOf(fixture) as Record<string, unknown>).coordination;
+  // Narrowed above; the block is a plain object when present.
+  return typeof coordination === "object" && coordination !== null && !Array.isArray(coordination)
+    ? (coordination as Record<string, unknown>)
+    : {};
+}
+
+/** The stored recovery audit of the fixture's workflow. */
+function recoveryAuditOf(fixture: PrepareFixture): Array<Record<string, unknown>> {
+  const recoveries = coordinationBlockOf(fixture).identity_recoveries;
+  // Narrowed above; the audit is an array when present.
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** The stored coordinator binding of the fixture's workflow. */
+function recordedCoordinatorOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordinator = coordinationBlockOf(fixture).coordinator;
+  // Narrowed above; the binding is a plain object when present.
+  return typeof coordinator === "object" && coordinator !== null && !Array.isArray(coordinator)
+    ? (coordinator as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * A store that fails the next SNAPSHOT put once: the exact envelope-before-
+ * snapshot window §3.3 requires an injectable proof for. Everything else (the
+ * envelope file creation, which does not go through the store) proceeds.
+ */
+class FailOnceSnapshotStore implements ArtifactStore {
+  readonly root: string;
+  private failing = true;
+
+  constructor(private readonly inner: ArtifactStore & { root: string }) {
+    this.root = inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    if (doc.kind === "snapshot" && this.failing) {
+      this.failing = false;
+      throw new Error("injected store failure between the envelope and the snapshot commit");
+    }
+    await this.inner.put(doc);
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+}
+
+/**
+ * A store that fails the next snapshot put once AND replaces the recovery's
+ * newly created envelope with an unrelated session file first — the exact
+ * "path replaced between exclusive creation and cleanup" window. Cleanup must
+ * prove ownership by bytes before it unlinks anything.
+ */
+class ReplaceEnvelopeOnFailureStore implements ArtifactStore {
+  readonly root: string;
+  private failing = true;
+
+  constructor(
+    private readonly inner: ArtifactStore & { root: string },
+    private readonly envelopePath: string,
+    private readonly replacement: string,
+  ) {
+    this.root = inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    if (doc.kind === "snapshot" && this.failing) {
+      this.failing = false;
+      writeText(this.envelopePath, this.replacement);
+      throw new Error("injected store failure between the envelope and the snapshot commit");
+    }
+    await this.inner.put(doc);
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+}
+
+describe("prepare coordinator recovery", () => {
+  test("prepare coordinator recovery view reports the recorded owner and both versions without envelope bytes", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+
+    const view = await recoveryViewOf(fixture);
+
+    expect(view.workflowId).toBe(PREPARE_WORKFLOW);
+    expect(view.priorSessionId).toBe(FIXTURE_COORDINATOR_ID);
+    expect(view.snapshotVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(view.compassVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(view.allowed).toBe(true);
+    expect(view.blockers).toEqual([]);
+    // The read is owner-neutral: no envelope path, body or credential in it.
+    expect(Object.keys(view).sort()).toEqual([
+      "allowed",
+      "blockers",
+      "compassVersion",
+      "priorSessionId",
+      "snapshotVersion",
+      "workflowId",
+    ]);
+    expect(JSON.stringify(view)).not.toContain(`sessions${sep}`);
+    // Read-only: nothing moved.
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 30000);
+
+  test("prepare coordinator recovery replaces the binding under explicit authorization and the old reference refuses", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const planRows = stableJson(prepareSnapshotOf(fixture).plans);
+    const branch = stableJson(prepareSnapshotOf(fixture).branch);
+
+    const result = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.operation).toBe("recover-coordinator");
+    expect(result.recovery.replay).toBe(false);
+    expect(result.recovery.priorSessionId).toBe(FIXTURE_COORDINATOR_ID);
+    expect(result.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID);
+    expect(result.session.session_id).toBe(RECOVERED_COORDINATOR_ID);
+    // The new envelope is role-scoped and exclusive; the old one stays as history.
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    expect(result.session_file).toBe(newEnvelope);
+    expect(readJson(newEnvelope)).toMatchObject({
+      schema_version: 1,
+      role: "coordinator",
+      session_id: RECOVERED_COORDINATOR_ID,
+      workflow_id: PREPARE_WORKFLOW,
+    });
+    expect(existsSync(fixture.coordinatorSession)).toBe(true);
+    expect(recordedCoordinatorOf(fixture)).toMatchObject({
+      session_id: RECOVERED_COORDINATOR_ID,
+      session_file: newEnvelope,
+    });
+
+    // The immutable audit record carries exactly the contract's required fields.
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(1);
+    expect(Object.keys(audit[0]!).sort()).toEqual([
+      "authorization_ref",
+      "compass_version",
+      "operation_id",
+      "prior_session_id",
+      "reason",
+      "recovered_at",
+      "request_hash",
+      "session_id",
+      "snapshot_version_before",
+      "stopped_session_ids",
+      "workflow_id",
+    ]);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-recover-1",
+      workflow_id: PREPARE_WORKFLOW,
+      prior_session_id: FIXTURE_COORDINATOR_ID,
+      session_id: RECOVERED_COORDINATOR_ID,
+      authorization_ref: "PM-authorization-20260921",
+      reason: "the prior host session was cancelled and cannot authenticate",
+      stopped_session_ids: [FIXTURE_COORDINATOR_ID],
+      compass_version: tokens.compassVersion,
+      snapshot_version_before: tokens.snapshotVersion,
+    });
+    expect(audit[0]!.request_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(audit[0]!.recovered_at).toBe(result.recovery.recoveredAt);
+
+    // Every row, branch anchor and the sibling workflow survive byte-for-byte;
+    // the prior envelope file is retained (never deleted, never rewritten).
+    expect(stableJson(prepareSnapshotOf(fixture).plans)).toBe(planRows);
+    expect(stableJson(prepareSnapshotOf(fixture).branch)).toBe(branch);
+    expect(readFileSync(fixture.statusPath, "utf8")).toBe(before.status);
+    expect(readFileSync(fixture.compassPath, "utf8")).toBe(before.compass);
+    expect(readFileSync(fixture.peerSnapshotPath, "utf8")).toBe(before.peer);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+
+    // The old reference is historical: its envelope still names the old owner,
+    // and every Prepare verb now refuses it because the BINDING moved.
+    const oldUse = await prepareRefusalOf(() => prepareViewOf(fixture, fixture.coordinatorSession));
+    expect(oldUse.code).toBe("coordination.session-mismatch");
+    // The replacement session is the live coordinator.
+    const live = await prepareViewOf(fixture, newEnvelope);
+    expect(live.view.allowed).toBe(true);
+    expect(live.session.session_id).toBe(RECOVERED_COORDINATOR_ID);
+  }, 30000);
+
+  test("prepare coordinator recovery refuses foreign, unauthorized, stale and executed requests without mutating", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    // A second coordinator envelope that exists but is NOT the recorded binding:
+    // a valid file the caller could point at, which still proves nothing.
+    const impostorEnvelope = coordinatorEnvelopeOf(fixture, "impostor-session");
+    writeJson(impostorEnvelope, {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "impostor-session",
+      workflow_id: PREPARE_WORKFLOW,
+      harness_root: fixture.harness,
+    });
+
+    const cases: ReadonlyArray<{ name: string; overrides: Record<string, unknown>; code: string }> = [
+      {
+        name: "a prior session id the workflow does not record",
+        overrides: { priorSessionId: "someone-else" },
+        code: "coordination.identity-recovery.foreign-owner",
+      },
+      {
+        name: "a prior envelope that is not the recorded binding",
+        overrides: { priorSessionPath: impostorEnvelope, priorSessionId: "impostor-session" },
+        code: "coordination.identity-recovery.foreign-owner",
+      },
+      {
+        name: "a stop assertion that does not name the recorded holder",
+        overrides: { stoppedSessionIds: ["some-other-session"] },
+        code: "coordination.identity-recovery.unauthorized",
+      },
+      {
+        name: "no stop assertion at all",
+        overrides: { stoppedSessionIds: [] },
+        code: "coordination.identity-recovery.unauthorized",
+      },
+      {
+        name: "no authorization reference",
+        overrides: { authorizationRef: "" },
+        code: "coordination.identity-recovery.invalid-request",
+      },
+      { name: "no reason", overrides: { reason: "" }, code: "coordination.identity-recovery.invalid-request" },
+      { name: "no operation id", overrides: { operationId: "" }, code: "coordination.identity-recovery.invalid-request" },
+      {
+        name: "a stale snapshot token",
+        overrides: { expectedSnapshotVersion: `sha256:${"0".repeat(64)}` },
+        code: "coordination.identity-recovery.stale",
+      },
+      {
+        name: "a stale compass token",
+        overrides: { expectedCompassVersion: `sha256:${"0".repeat(64)}` },
+        code: "coordination.identity-recovery.stale",
+      },
+      {
+        name: "an identity addressing a workflow that records no coordinator binding",
+        overrides: {
+          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_PEER, role: "coordinator", planId: null },
+        },
+        code: "coordination.identity-recovery.not-prepare",
+      },
+      {
+        name: "a plan-scoped identity",
+        overrides: {
+          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: "plan-a" },
+        },
+        code: "coordination.identity-mismatch",
+      },
+      {
+        name: "the recorded owner itself",
+        overrides: { identity: recoveredIdentity(FIXTURE_COORDINATOR_ID) },
+        code: "coordination.identity-recovery.invalid-request",
+      },
+      {
+        name: "an unknown input field",
+        overrides: { force: true },
+        code: "coordination.forbidden-field",
+      },
+    ];
+    for (const recoveryCase of cases) {
+      const failure = await failureOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }, recoveryCase.overrides),
+        ),
+      );
+      const refusal = failure instanceof CoordinationError ? failure : undefined;
+      expect(`${recoveryCase.name}: ${refusal?.code}`).toBe(`${recoveryCase.name}: ${recoveryCase.code}`);
+      // §3.3/§5: a recovery refusal repeats neither a rejected value nor an
+      // envelope path — it carries the code, the already-public ids and the
+      // canonical base. The two foreign-owner cases below are the ones that once
+      // interpolated both envelope paths; the invariant is pinned over every case.
+      const projected = `${failure.message} ${JSON.stringify(refusal?.details ?? {})}`;
+      expect(`${recoveryCase.name}: ${projected.includes(impostorEnvelope)}`).toBe(`${recoveryCase.name}: false`);
+      expect(`${recoveryCase.name}: ${projected.includes(fixture.coordinatorSession)}`).toBe(`${recoveryCase.name}: false`);
+      // The rejected prior session id of the first foreign-owner case is a value
+      // the caller named, not a public record: it is never echoed back either.
+      expect(`${recoveryCase.name}: ${projected.includes("someone-else")}`).toBe(`${recoveryCase.name}: false`);
+      expect(protectedBytes(fixture)).toEqual(before);
+      expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    }
+
+    // An executed row (any row coordination block) is never recovered: the
+    // ORIGINAL all-row admission decides, and nothing is written.
+    const snapshot = prepareSnapshotOf(fixture);
+    (snapshot.plans[0] as Record<string, unknown>).coordination = { revision: 1 };
+    writeJson(fixture.snapshotPath, snapshot);
+    const executed = protectedBytes(fixture);
+    const activeRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(fixture, {
+          snapshot: readArtifactBytes(fixture.snapshotPath)!.version,
+          compass: tokens.compassVersion,
+        }),
+      ),
+    );
+    expect(activeRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    expect(protectedBytes(fixture)).toEqual(executed);
+  }, 60000);
+
+  test("prepare coordinator recovery refuses a concurrent second attempt and a replayed different request", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+
+    const [first, second] = await Promise.allSettled([
+      recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { operationId: "op-recover-2", identity: recoveredIdentity(RECOVERED_COORDINATOR_ID_2) },
+        ),
+      ),
+    ]);
+
+    expect([first, second].filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    const rejected = [first, second].find((entry) => entry.status === "rejected");
+    if (rejected?.status !== "rejected") throw new Error("expected exactly one refused concurrent recovery");
+    // The loser reviewed the pre-recovery bytes, so it is refused as stale (the
+    // same optimistic-concurrency verdict the amendment reports) and writes
+    // nothing at all.
+    expect((rejected.reason as CoordinationError).code).toBe("coordination.identity-recovery.stale");
+    // Exactly one owner and exactly one audit entry: the loser wrote nothing.
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(1);
+    expect(recordedCoordinatorOf(fixture).session_id).toBe(audit[0]!.session_id);
+    const loserId = audit[0]!.session_id === RECOVERED_COORDINATOR_ID ? RECOVERED_COORDINATOR_ID_2 : RECOVERED_COORDINATOR_ID;
+    expect(existsSync(coordinatorEnvelopeOf(fixture, loserId))).toBe(false);
+
+    // A replayed operation id with a DIFFERENT request is not the same
+    // operation: it refuses without moving anything.
+    const boundBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const boundFile = recordedCoordinatorOf(fixture).session_file;
+    const replayDifferent = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          {
+            operationId: audit[0]!.operation_id as string,
+            reason: "a different reason entirely",
+            priorSessionId: audit[0]!.prior_session_id as string,
+          },
+        ),
+      ),
+    );
+    expect(replayDifferent.code).toBe("coordination.identity-recovery.operation-conflict");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(boundBytes);
+    expect(recordedCoordinatorOf(fixture).session_file).toBe(boundFile);
+  }, 60000);
+
+  test("prepare coordinator recovery returns the recorded receipt on an exact retry without revision churn", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const request = recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion });
+
+    const first = await recoverPrepareCoordinator(request);
+    const committedBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const committedVersion = readArtifactBytes(fixture.snapshotPath)!.version;
+    const firstEntry = recoveryAuditOf(fixture)[0]!;
+
+    // The SAME request again — with the tokens it was authorized against, which
+    // its own commit has since superseded.
+    const retry = await recoverPrepareCoordinator(request);
+
+    expect(retry.ok).toBe(true);
+    expect(retry.recovery.replay).toBe(true);
+    expect(retry.recovery.operationId).toBe(first.recovery.operationId);
+    expect(retry.recovery.requestHash).toBe(first.recovery.requestHash);
+    expect(retry.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID);
+    expect(retry.session_file).toBe(first.session_file);
+    // No revision churn: the snapshot bytes are still the winner's.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(committedBytes);
+    expect(readArtifactBytes(fixture.snapshotPath)!.version).toBe(committedVersion);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+
+    // A second, distinct recovery appends EXACTLY one entry and preserves the
+    // whole previous prefix by value.
+    const second = await recoverPrepareCoordinator(
+      recoveryInputOf(
+        fixture,
+        { snapshot: committedVersion, compass: tokens.compassVersion },
+        {
+          operationId: "op-recover-3",
+          identity: recoveredIdentity(RECOVERED_COORDINATOR_ID_2),
+          priorSessionId: RECOVERED_COORDINATOR_ID,
+          priorSessionPath: first.session_file,
+          stoppedSessionIds: [RECOVERED_COORDINATOR_ID],
+        },
+      ),
+    );
+    expect(second.recovery.replay).toBe(false);
+    expect(second.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID_2);
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(2);
+    expect(audit[0]).toEqual(firstEntry);
+
+    // The first operation's replay is no longer this workflow's state.
+    const superseded = await prepareRefusalOf(() => recoverPrepareCoordinator(request));
+    expect(superseded.code).toBe("coordination.identity-recovery.operation-conflict");
+  }, 60000);
+
+  test("prepare coordinator recovery reclaims only its own envelope after an envelope-before-snapshot failure", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    const before = protectedBytes(fixture);
+    const request = recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion });
+
+    // An IO failure between the exclusive envelope creation and the snapshot
+    // commit is NOT a semantic refusal: the call reports failure, never a
+    // success receipt, and reclaims exactly the envelope it created.
+    const failing = new FailOnceSnapshotStore(createFsStore(fixture.harness));
+    setArtifactStore(failing);
+    await expect(recoverPrepareCoordinator(request)).rejects.toThrow(/injected store failure/);
+    expect(existsSync(newEnvelope)).toBe(false);
+    expect(protectedBytes(fixture)).toEqual(before);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+
+    // The retry is lawful: nothing was left behind, and the reviewed tokens
+    // still describe the same authorized request.
+    setArtifactStore(createFsStore(fixture.harness));
+    const retry = await recoverPrepareCoordinator(request);
+    expect(retry.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+
+    // A leftover envelope is reclaimed ONLY when its bytes are exactly the ones
+    // this call would write. Those bytes are the session JSON, so they prove the
+    // same TARGET SESSION — not the same operation.
+    const crashed = makePrepareFixture();
+    await ensurePrepareCoordinator(crashed);
+    const crashedTokens = await recoveryViewOf(crashed);
+    writeText(
+      coordinatorEnvelopeOf(crashed, RECOVERED_COORDINATOR_ID),
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          role: "coordinator",
+          session_id: RECOVERED_COORDINATOR_ID,
+          workflow_id: PREPARE_WORKFLOW,
+          harness_root: crashed.harness,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const reclaimed = await recoverPrepareCoordinator(
+      recoveryInputOf(crashed, { snapshot: crashedTokens.snapshotVersion, compass: crashedTokens.compassVersion }),
+    );
+    expect(reclaimed.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(crashed)).toHaveLength(1);
+
+    // A file that is NOT this operation's envelope is never overwritten.
+    const alien = makePrepareFixture();
+    await ensurePrepareCoordinator(alien);
+    const alienTokens = await recoveryViewOf(alien);
+    const alienEnvelope = coordinatorEnvelopeOf(alien, RECOVERED_COORDINATOR_ID);
+    writeText(alienEnvelope, `${JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "someone-else" })}\n`);
+    const alienBytes = readFileSync(alienEnvelope, "utf8");
+    const refusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(alien, { snapshot: alienTokens.snapshotVersion, compass: alienTokens.compassVersion }),
+      ),
+    );
+    expect(refusal.code).toBe("coordination.identity-recovery.invalid-request");
+    expect(readFileSync(alienEnvelope, "utf8")).toBe(alienBytes);
+    expect(recoveryAuditOf(alien)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery re-checks the reviewed compass before committing and reclaims only its own envelope", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+
+    // A concurrent compass edit lands in the window between this recovery's
+    // exclusive envelope creation and its commit CAS. The snapshot write lock
+    // does not lock the compass file, so without the final recheck the recovery
+    // would commit and record a `compass_version` that was no longer current.
+    setPrepareRecoveryEnvelopeGapForTest(() => {
+      writeText(fixture.compassPath, `${readFileSync(fixture.compassPath, "utf8")}\n`);
+    });
+    let refusal: { code: string; details: Record<string, unknown> };
+    try {
+      refusal = await prepareRefusalOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }),
+        ),
+      );
+    } finally {
+      setPrepareRecoveryEnvelopeGapForTest(undefined);
+    }
+
+    expect(refusal.code).toBe("coordination.identity-recovery.stale");
+    // No snapshot mutation, no audit entry, and only THIS operation's envelope
+    // reclaimed; the prior envelope stays as history.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+    expect(existsSync(newEnvelope)).toBe(false);
+    expect(readdirSync(join(fixture.workflowDir, "sessions"))).toEqual([basename(fixture.coordinatorSession)]);
+
+    // The refusal wrote nothing, so a re-reviewed recovery is lawful.
+    const fresh = await recoveryViewOf(fixture);
+    const retry = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { snapshot: fresh.snapshotVersion, compass: fresh.compassVersion }),
+    );
+    expect(retry.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+  }, 60000);
+
+  test("prepare coordinator recovery never unlinks an envelope that was replaced after its exclusive creation", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    const alien = `${JSON.stringify({ schema_version: 1, role: "plan-pm", session_id: "somebody-else" })}\n`;
+
+    // The snapshot commit fails AND the path this call created exclusively has
+    // since been replaced by an unrelated session file: `created` is only a
+    // historical boolean, so cleanup must compare the CURRENT bytes before it
+    // unlinks anything, and leave the replacement untouched.
+    setArtifactStore(new ReplaceEnvelopeOnFailureStore(createFsStore(fixture.harness), newEnvelope, alien));
+    await expect(
+      recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
+    ).rejects.toThrow(/injected store failure/);
+    setArtifactStore(createFsStore(fixture.harness));
+
+    expect(readFileSync(newEnvelope, "utf8")).toBe(alien);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery refuses a malformed stop-list entry before hashing, storing or echoing it", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    // A stop entry is hashed into the request digest and persisted in the
+    // immutable audit: only public session ids are acceptable, never an
+    // arbitrary string (path-like or credential-like). The refusal is itself a
+    // PUBLIC diagnostic (§5), so it must not repeat the rejected value — the
+    // caller learns the rule and the entry's position/length instead.
+    const rejected = ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"];
+    for (const entry of rejected) {
+      const failure = await failureOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(
+            fixture,
+            { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+            { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, entry] },
+          ),
+        ),
+      );
+      if (!(failure instanceof CoordinationError)) throw failure;
+      const label = `${JSON.stringify(entry).slice(0, 12)}:`;
+      expect(`${label} ${failure.code}`).toBe(`${label} coordination.identity-recovery.invalid-request`);
+      expect(failure.message).toContain("public session id");
+      expect(JSON.stringify({ message: failure.message, details: failure.details })).not.toContain(entry);
+      expect(failure.details).toMatchObject({ index: 1, length: entry.length });
+      expect(protectedBytes(fixture)).toEqual(before);
+      expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    }
+
+    // An empty entry is refused by the same field rule (it is not a session id
+    // at all), and a non-array stop assertion reports its SHAPE rather than the
+    // value it was given.
+    const blank = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, ""] },
+        ),
+      ),
+    );
+    expect(blank.code).toBe("coordination.identity-recovery.invalid-request");
+    const notAList = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: "credential-like-secret" },
+        ),
+      ),
+    );
+    expect(notAList.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(JSON.stringify(notAList.details)).not.toContain("credential-like-secret");
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 60000);
+
+  test("prepare coordinator recovery never runs the JSON writer under an active execution authority", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    // A REAL active execution authority on a genuinely separate control root
+    // (its own Git repo and its own `.mstar`, so the store probe addresses it and
+    // not this fixture's root): the create-only empty-execution initializer needs
+    // an empty execution workspace, which is exactly what such a root is. The
+    // authority veto decides before any payload, token or path is inspected, so
+    // the fixture's reviewed tokens and recorded binding are never reached.
+    const activeRoot = realpathSync(mkdtempSync(join(tmpdir(), "mstar-recovery-active-")));
+    roots.push(activeRoot);
+    git(["init", "-q", "-b", "main"], activeRoot);
+    const activeHarness = join(activeRoot, ".mstar");
+    mkdirSync(activeHarness, { recursive: true });
+    const handle = await initializeStore({ harnessDir: activeHarness });
+    handle.close();
+    await initializeExecutionAuthority({ harnessDir: activeHarness });
+
+    const failure = await failureOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { cwd: activeRoot, harnessDir: activeHarness },
+        ),
+      ),
+    );
+    expect("code" in failure && typeof failure.code === "string" ? failure.code : "").toBe("execution.direct-write-refused");
+    // ... and it points at the existing DB recovery verb instead of aliasing it.
+    expect(failure.message).toContain("session recover");
+    expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 60000);
 });
 
 /* ------------------------------------------------------------------------ *
@@ -4383,7 +5540,13 @@ describe("catalog registration gate — prepare/bind/selection refuse a pending 
     const context = await storeBacked(fixture);
     await seedPendingRegistration(fixture, context, "prepared");
     const refusal = await pinConflictOf(() =>
-      bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+      bindPlanSession({
+        coordinator: true,
+        workflowId: WORKFLOW_ID,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
     );
     expect(refusal.code).toBe("catalog.registration-pending");
     // The refusal is not a repair: nothing moved.

@@ -66,6 +66,7 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseCompassFrontmatter,
+  PlanPathError,
   planQualityBar,
   pushCadenceProbe,
   readCoordinatedArtifact,
@@ -81,6 +82,7 @@ import {
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
   resolveProjectDir,
+  resolveRegisteredPlanFile,
   resolveScaffoldDirs,
   resolveSddExecutionContext,
   resolveSkillRoot,
@@ -2674,6 +2676,37 @@ iterationCommand
         // path agreement — the control harness root resolved above must
         // ALWAYS be pinned as the store root.
         setArtifactStore(createFsStore(harnessDir));
+        // Registered-plan path contract (§4): every row pointer is threaded
+        // through the ONE resolver before registration, so the engine receives
+        // the canonical absolute pointer it persists and a repository-relative
+        // `.mstar/plans/<id>.md` spelling is refused with the actionable
+        // diagnostic (received form, base, expected canonical target, permitted
+        // forms) instead of being stored and later reinterpreted. Rows whose
+        // shape the engine owns are passed through untouched (their own refusal
+        // is authoritative).
+        const resolvedRows = rows.map((entry) => {
+          if (
+            typeof entry.id !== "string" ||
+            entry.id.trim() === "" ||
+            typeof entry.file !== "string" ||
+            entry.file.trim() === ""
+          ) {
+            return entry;
+          }
+          try {
+            return { ...entry, file: resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: entry.id, file: entry.file }).planPath };
+          } catch (error) {
+            if (!(error instanceof PlanPathError)) throw error;
+            const { received, form, base, expected, permitted } = error.details;
+            throw new Error(
+              `plan pointer refused [${error.code}] ${error.message}\n` +
+                `  received: ${JSON.stringify(received ?? null)} (form: ${String(form ?? "unknown")})\n` +
+                `  base: ${String(base ?? harnessDir)}\n` +
+                `  expected canonical target: ${String(expected ?? "")}\n` +
+                `  permitted forms: ${Array.isArray(permitted) ? permitted.join(" | ") : String(permitted ?? "")}`,
+            );
+          }
+        });
         // Contract §3: the shipped entry point registers through the catalog
         // registration journal and reports success only from the committed
         // receipt — a half-registered workflow is never advertised.
@@ -2687,7 +2720,7 @@ iterationCommand
               harnessDir,
               compassRef: options.compassRef!,
               branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
-              rows,
+              rows: resolvedRows,
               ...(options.project !== undefined ? { project: options.project } : {}),
               ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
             },

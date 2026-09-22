@@ -106,12 +106,13 @@
  * readiness checkpoint and `deriveStartAuthority` below — compares the *engine*
  * session id with the *host* session id (`ctx.sessionManager.getSessionId()`);
  * they are one identifier only when the engine was told which one to adopt. The
- * module closes that gap from the host side: the `bash` tool calls of this
- * session are revised to carry the host id in `MSTAR_HOST_SESSION_ID`, which
- * the CLI's `plan bind` consumes as the engine session id. The revision is
- * pure — no engine/harness write, no notice, no state — is confined to `bash`,
- * and the injected key overwrites any caller-supplied value of the same name,
- * so the asserted identity is never model-definable.
+ * module closes that gap from the host side through the host-owned
+ * `mstar_coordinator` tool (`../coordinator-identity.ts`): a coordinator `bind`
+ * derives the native id and the canonical control root from host facts and calls
+ * the engine directly, so the identity is acquired rather than injected. No
+ * environment variable authorizes a coordinator bootstrap, and a managed
+ * coordinator bind attempted through the shell is refused with a redirect to
+ * that tool instead of a silent input revision.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -127,6 +128,14 @@ import {
   validateStatusV2,
 } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
+import {
+  COORDINATOR_TOOL_NAME,
+  bindCoordinatorIdentity,
+  classifyCoordinatorShellCall,
+  recoverCoordinatorIdentity,
+  showCoordinatorRecovery,
+  type CoordinatorIdentityFacts,
+} from "../coordinator-identity";
 import type {
   HandoffBinding,
   HandoffBindingInput,
@@ -145,7 +154,9 @@ export const HANDOFF_CUSTOM_TYPE = "mstar:model-handoff";
  * in the shared notice module; this is its re-export.
  */
 export { HANDOFF_NOTICE_CUSTOM_TYPE } from "../notices";
-/** Tool the PM calls once the direction is locked and at the completion checkpoint. */
+/**
+ * Tool the PM calls once the direction is locked and at the completion checkpoint.
+ */
 const TOOL_NAME = "mstar_model_handoff";
 /** Model role armed at iteration entry (spec §Iteration entry). */
 const SLOW_SPEC = "@slow";
@@ -153,12 +164,6 @@ const SLOW_SPEC = "@slow";
 const RECORD_VERSION = 1;
 /** Root register file inside the harness dir (v2 `status.json`). */
 const STATUS_FILE = "status.json";
-/**
- * The host-injected session-identity channel (plan D1/D2). This extension is
- * its only producer; `plan bind` is its only consumer, and both names come from
- * the plan's frozen interface.
- */
-const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 /** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
 const SESSION_DIR = "sessions";
 
@@ -589,6 +594,26 @@ async function bindingModeFor(workflowId: string, cwd: string): Promise<"reserve
 
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * The canonical control-harness root of the host cwd, or `null` when none is
+ * resolvable. Derived the same way `bindingModeFor` derives it — the main
+ * worktree, then the engine's documented harness precedence — so the identity
+ * adapter and the start classifier can never disagree about which control root
+ * a coordinator bind addresses. Never cached: a root that moves between calls
+ * must refuse rather than bind an identity to a stale path.
+ */
+function resolveControlRoot(cwd: string): string | null {
+  try {
+    const main = readMainWorktree(cwd);
+    if (main === null || !isNonEmpty(main.root)) return null;
+    const resolved = resolveHarnessDir(main.root);
+    if (resolved === null) return null;
+    return canonicalizeNearestExisting(resolved);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1272,11 +1297,21 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const handoffTarget = refreshed.value.handoffTarget;
 
     if (!readiness.ready) {
+      // The checkpoint's typed §5 refinements are forwarded verbatim: they carry
+      // public ids, codes, canonical plan pointers and the next supported
+      // operation — never an envelope path, credential or session payload.
+      const primary = readiness.diagnostics[0];
+      const refined = primary === undefined ? "" : ` (${primary.detail})`;
       return outcome(
         false,
         false,
-        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}. The handoff stays pending and nothing was switched.`,
-        { code: "not-ready", state: "pending", codes: readiness.codes },
+        `Phase 1 is not complete for ${record.binding.workflowId}: ${readiness.codes.join(", ")}${refined}. The handoff stays pending and nothing was switched.${primary === undefined ? "" : ` Next: ${primary.next}.`}`,
+        {
+          code: "not-ready",
+          state: "pending",
+          codes: readiness.codes,
+          diagnostics: readiness.diagnostics,
+        },
       );
     }
 
@@ -1422,6 +1457,61 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     },
   });
 
+  /* ------------------------------------------------- coordinator identity --- */
+
+  /**
+   * The host-derived facts one `mstar_coordinator` call reads. The native
+   * session id, cwd and control root come from the host context; leaf and
+   * scoped-plan entry are the same host ledger/route facts the start classifier
+   * uses. Nothing here is model-supplied.
+   */
+  const coordinatorFacts = (ctx: ExtensionContext): CoordinatorIdentityFacts => ({
+    sessionId: sessionIdOf(ctx),
+    cwd: ctx.cwd,
+    harnessRoot: resolveControlRoot(ctx.cwd),
+    leaf: ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init"),
+    scopedPlanEntry: lastRoute !== null && lastRoute.kind === "scoped-plan",
+  });
+
+  pi.registerTool({
+    name: COORDINATOR_TOOL_NAME,
+    label: "Coordinator identity",
+    description:
+      'Morning Star coordinator identity entry. `{operation:"bind"}` binds this host session as the coordinator of the explicitly named workflow. `{operation:"show-recovery"}` reads the recorded coordinator, both byte versions and the Prepare verdict of one workflow without writing. `{operation:"recover"}` replaces a recorded coordinator binding the prior owner can no longer authenticate, under the audited Prepare-only guards and with an explicit stop assertion. Every operation uses the native session id and the canonical control harness root derived from the host \u2014 never from the call. No operation accepts a session id, root, caller role, authority flag, credential path or force flag; the prior holder and its envelope come from the engine\'s stored binding. This is the only supported managed bootstrap and recovery route; a `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
+    parameters: z
+      .union([
+        z.object({ operation: z.literal("bind"), workflowId: z.string() }).strict(),
+        z.object({ operation: z.literal("show-recovery"), workflowId: z.string() }).strict(),
+        z
+          .object({
+            operation: z.literal("recover"),
+            workflowId: z.string(),
+            expectedSnapshotVersion: z.string(),
+            expectedCompassVersion: z.string(),
+            operationId: z.string(),
+            reason: z.string(),
+            authorizationRef: z.string(),
+            stoppedSessionIds: z.array(z.string()),
+          })
+          .strict(),
+      ])
+      .describe("Coordinator operation: bind | show-recovery | recover"),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const facts = coordinatorFacts(ctx);
+      const result =
+        params.operation === "bind"
+          ? await bindCoordinatorIdentity(params, facts)
+          : params.operation === "show-recovery"
+            ? await showCoordinatorRecovery(params, facts)
+            : await recoverCoordinatorIdentity(params, facts);
+      return {
+        content: [{ type: "text", text: result.text }],
+        details: { mstarCoordinator: result.details, ok: result.ok },
+        isError: result.isError,
+      };
+    },
+  });
+
   /* ------------------------------------------------------------ events --- */
 
   // The host's own input event is the only source of the entry route: it is
@@ -1505,30 +1595,18 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /* --------------------------------------------------- session identity --- */
 
   /**
-   * Host identity into the tool env. The engine mints its own coordinator /
-   * plan-pm session id (`randomUUID()`) unless a caller supplies one, while
-   * every identity comparison on this surface compares it with the *host*
-   * session id — so readiness and the start-authority guards are satisfied only
-   * when the two are one identifier. The CLI closes that gap by adopting
-   * `--session-id`, else this env var; this revision is what puts the host id
-   * there, on the `bash` calls a coordinator runs `plan bind` through.
+   * The one transport refusal on this surface (prerequisite contract §3.2):
+   * a managed coordinator bind attempted through the shell is blocked before
+   * shell execution with a redirect to the host-owned `mstar_coordinator` tool.
    *
-   * A pure input revision: no engine or harness write, no notice, no in-memory
-   * state. It is confined to `bash`, and the injected key **overwrites** any
-   * value the caller supplied under the same name — the identity this extension
-   * asserts is never model-definable. A session with no id has no identity to
-   * associate and nothing is injected.
+   * There is no input revision here — in particular no environment injection:
+   * authority for a coordinator bootstrap is the tool's host-derived identity,
+   * never a model- or environment-definable value. The classifier is bounded to
+   * the two supported shell tool identities and one command shape; every other
+   * call (unrelated command, unknown tool, unrecognized input shape) returns
+   * `undefined`, so an absent or unsupported `env` field can never produce an
+   * invalid input revision. It deliberately does not parse arbitrary shell and
+   * fences no other native code.
    */
-  pi.on("tool_call", (event, ctx) => {
-    if (event.toolName !== "bash") return undefined;
-    const sessionId = sessionIdOf(ctx);
-    if (sessionId === "") return undefined;
-    // The event fires before the host has validated the arguments, so the input
-    // shape is not assumed: a non-object input or `env` simply leaves those
-    // fields out of the revision instead of throwing into the host's
-    // fail-closed handler path (a throwing `tool_call` handler blocks the tool).
-    const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
-    const env: Record<string, unknown> = isPlainObject(input.env) ? input.env : {};
-    return { input: { ...input, env: { ...env, [SESSION_ID_ENV]: sessionId } } };
-  });
+  pi.on("tool_call", (event) => classifyCoordinatorShellCall({ toolName: event.toolName, input: event.input }));
 }
