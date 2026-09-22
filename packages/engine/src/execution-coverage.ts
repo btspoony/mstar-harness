@@ -44,6 +44,9 @@
 import { createHash } from "node:crypto";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { ExecutionError, serializeExecutionValue } from "./execution-store.js";
+// The existing attestation contract (§4.2): a pure validator over `unknown`,
+// reused as-is. C2 never copies its rules and never invents its authority.
+import { validateActivationAttestation } from "./store-activation.js";
 
 // ---------------------------------------------------------------------------
 // The closed inventory (§4.1)
@@ -135,6 +138,15 @@ export type ExecutionCoverageManifest = Readonly<{
      * consumer declaration and only compares the declaration with it.
      */
     consumerProof?: ConsumerDiscoveryProof;
+    /**
+     * C3's trusted host-session discovery for `omp-hidden-entries`: the session
+     * envelopes it discovered and the attestation it pinned. It is built from
+     * the explicit inventory and belongs to the full manifest hash.
+     */
+    hostProof?: Readonly<{
+      sessions: readonly Readonly<{ host: "omp"; sessionId: string; source: CoverageWitness }>[];
+      attestation: CoverageWitness;
+    }>;
   }>[];
   sources: readonly CoverageWitness[];
 }>;
@@ -1069,92 +1081,127 @@ function launchJournalCodec(context: RowContext): unknown {
   return { sources: sourceRefs(context), format: "omp-launch-v1", files };
 }
 
+/** The H2 session-inventory protocol and its closed envelope keys (§4.2, D48). */
+const HOST_INVENTORY_PROTOCOL = "host-hidden-inventory-v1";
+
 /**
- * `omp-hidden-v1`: H1's canonical host-history export is decoded and its
- * identities validated, but §4.2 requires the explicit host inventory and the
- * stop/adoption attestation that H2's evidence-file wrapper carries. That
- * wrapper does not exist yet, so a populated row refuses instead of presenting
- * the export alone as complete retain coverage.
+ * The H1 host-history document embedded in an H2 envelope, decoded under the
+ * released host-history rules: native order, a payload digest recomputed from
+ * the published payload, generation 1, and no diagnostic-bearing entry (a
+ * diagnosed entry publishes no derived fact and is not complete inventory).
+ */
+function hostHistoryRecords(value: unknown, what: string, context: RowContext): unknown[] {
+  const document = expectObject(value, what);
+  expectExactKeys(document, ["version", "document", "records", "diagnostics"], what);
+  if (document.version !== 1 || document.document !== "execution-host-history") {
+    refuse(`${what} is not a version 1 execution-host-history document; an unknown host document is not coverage.`);
+  }
+  const diagnostics = expectArray(document.diagnostics, `${what}.diagnostics`);
+  if (diagnostics.length > 0) {
+    refuse(`${what} carries ${diagnostics.length} diagnostic(s); a diagnosed history is not a complete inventory.`);
+  }
+  const entryIds = new Set<string>();
+  const dedupKeys = new Set<string>();
+  return expectArray(document.records, `${what}.records`).map((entry, index) => {
+    const where = `${what}.records[${index}]`;
+    const record = expectObject(entry, where);
+    expectExactKeys(record, ["index", "entryId", "type", "sessionId", "payloadHash", "payload", "view"], where);
+    if (record.index !== index) refuse(`${where}.index must be ${index}; the native ledger order is the published order.`);
+    const type = expectEnum(record.type, HOST_HISTORY_KINDS, `${where}.type`);
+    const entryId = expectString(record.entryId, `${where}.entryId`);
+    if (entryIds.has(entryId)) refuse(`${context.label}: host-history entry id ${entryId} is recorded twice; a duplicated native entry is not coverage.`);
+    entryIds.add(entryId);
+    const sessionId = expectString(record.sessionId, `${where}.sessionId`);
+    const payloadHash = expectHex64(record.payloadHash, `${where}.payloadHash`);
+    const recomputed = digestOf(record.payload);
+    if (payloadHash !== recomputed) {
+      refuse(`${where}.payloadHash ${payloadHash} does not hash the payload it publishes (${recomputed}); a payload digest is recomputed from the bytes.`);
+    }
+    const view = expectObject(record.view, `${where}.view`);
+    expectExactKeys(
+      view,
+      ["generation", "declaredKind", "declaredAction", "declaredState", "workflowId", "checkpointId", "operationId", "dedupKey", "cancelled", "provenance"],
+      `${where}.view`,
+    );
+    if (view.generation !== 1) refuse(`${where}.view.generation must be 1; generation 1 is the only decoded generation.`);
+    const recordWorkflow = expectString(view.workflowId, `${where}.view.workflowId`);
+    if (recordWorkflow !== context.workflowId) {
+      refuse(`${where} belongs to workflow ${recordWorkflow}, not ${String(context.workflowId)}; a record is never attributed to a sibling workflow.`);
+    }
+    const declaredState = expectEnum(view.declaredState, HOST_HISTORY_STATES, `${where}.view.declaredState`);
+    if (typeof view.cancelled !== "boolean") refuse(`${where}.view.cancelled must be a boolean.`);
+    const checkpointId = view.checkpointId === null ? null : expectString(view.checkpointId, `${where}.view.checkpointId`);
+    const operationId = view.operationId === null ? null : expectString(view.operationId, `${where}.view.operationId`);
+    const dedupKey = view.dedupKey === null ? null : expectString(view.dedupKey, `${where}.view.dedupKey`);
+    if (dedupKey !== (operationId ?? checkpointId)) refuse(`${where}.view.dedupKey must be the operation id or the checkpoint id it dedups on.`);
+    if (declaredState === "handed_off" && dedupKey === null) refuse(`${where} records a one-shot handoff with no dedup identity.`);
+    if (dedupKey !== null) {
+      if (dedupKeys.has(dedupKey)) refuse(`${context.label}: hidden-history dedup identity ${dedupKey} is recorded twice; a replayed entry is not coverage.`);
+      dedupKeys.add(dedupKey);
+    }
+    for (const item of expectArray(view.provenance, `${where}.view.provenance`)) {
+      const field = expectObject(item, `${where}.view.provenance[]`);
+      expectExactKeys(field, ["field", "path"], `${where}.view.provenance[]`);
+      expectString(field.field, `${where}.view.provenance[].field`);
+      expectString(field.path, `${where}.view.provenance[].path`);
+    }
+    return { index, entryId, type, sessionId, payloadHash, workflowId: recordWorkflow, declaredState, cancelled: view.cancelled, checkpointId, dedupKey };
+  });
+}
+
+/**
+ * `omp-hidden-v1`: the H2 session-inventory envelope, one per host session. The
+ * outer document is canonical with a single terminal LF, its embedded H1 export
+ * is hashed over the exact H1 serialization WITHOUT the trailing LF, and the
+ * embedded records are decoded in place — the export is never duplicated.
  */
 function hiddenCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
-    const what = `${context.label} host-history export ${witness.path}`;
+    const what = `${context.label} host-session inventory ${witness.path}`;
     const document = producedDocument(context.bytesOf(witness), what);
-    expectExactKeys(document, ["version", "document", "records", "diagnostics"], what);
-    if (document.version !== 1 || document.document !== "execution-host-history") {
-      refuse(`${what} is not a version 1 execution-host-history export; an unknown host document is not coverage.`);
+    expectExactKeys(document, ["version", "protocol", "workflowId", "host", "hostSessionId", "export"], what);
+    if (document.version !== 1) refuse(`${what}.version must be 1.`);
+    if (document.protocol !== HOST_INVENTORY_PROTOCOL) {
+      refuse(`${what}.protocol must be ${HOST_INVENTORY_PROTOCOL}; an unknown host envelope is not coverage.`);
     }
-    const diagnostics = expectArray(document.diagnostics, `${what}.diagnostics`);
-    if (diagnostics.length > 0) {
+    const workflowId = expectString(document.workflowId, `${what}.workflowId`);
+    if (workflowId !== context.workflowId) {
+      refuse(`${what} belongs to workflow ${workflowId}, not ${String(context.workflowId)}; an envelope is never attributed to a sibling workflow.`);
+    }
+    const host = expectString(document.host, `${what}.host`);
+    const hostSessionId = expectString(document.hostSessionId, `${what}.hostSessionId`);
+    const exported = expectObject(document.export, `${what}.export`);
+    expectExactKeys(exported, ["sha256", "document"], `${what}.export`);
+    const recorded = expectHex64(exported.sha256, `${what}.export.sha256`);
+    const serialized = serializeExecutionValue(exported.document);
+    const recomputed = bytesDigest(new TextEncoder().encode(serialized.slice(0, -1)));
+    if (recorded !== recomputed) {
       refuse(
-        `${what} carries ${diagnostics.length} diagnostic(s); an entry the exporter could not decode publishes no derived fact, so a diagnosed ` +
-          `history is not a complete inventory.`,
+        `${what}.export.sha256 ${recorded} is not the embedded H1 export hashed over its exact serialization without the trailing LF (${recomputed}); ` +
+          `the embedded digest is recomputed, never carried on trust.`,
       );
     }
-    const entryIds = new Set<string>();
-    const dedupKeys = new Set<string>();
-    const records = expectArray(document.records, `${what}.records`).map((entry, index) => {
-      const where = `${what}.records[${index}]`;
-      const record = expectObject(entry, where);
-      expectExactKeys(record, ["index", "entryId", "type", "sessionId", "payloadHash", "payload", "view"], where);
-      if (record.index !== index) refuse(`${where}.index must be ${index}; the native ledger order is the published order.`);
-      const type = expectEnum(record.type, HOST_HISTORY_KINDS, `${where}.type`);
-      const entryId = expectString(record.entryId, `${where}.entryId`);
-      if (entryIds.has(entryId)) refuse(`${context.label}: host-history entry id ${entryId} is recorded twice; a duplicated native entry is not coverage.`);
-      entryIds.add(entryId);
-      const sessionId = expectString(record.sessionId, `${where}.sessionId`);
-      const payloadHash = expectHex64(record.payloadHash, `${where}.payloadHash`);
-      const recomputed = digestOf(record.payload);
-      if (payloadHash !== recomputed) {
-        refuse(
-          `${where}.payloadHash ${payloadHash} does not hash the payload it publishes (${recomputed}); a payload digest is recomputed from the bytes, ` +
-            `never carried on trust.`,
-        );
-      }
-      const view = expectObject(record.view, `${where}.view`);
-      expectExactKeys(
-        view,
-        ["generation", "declaredKind", "declaredAction", "declaredState", "workflowId", "checkpointId", "operationId", "dedupKey", "cancelled", "provenance"],
-        `${where}.view`,
-      );
-      if (view.generation !== 1) refuse(`${where}.view.generation must be 1; generation 1 is the only decoded generation.`);
-      const recordWorkflow = expectString(view.workflowId, `${where}.view.workflowId`);
-      if (recordWorkflow !== context.workflowId) {
-        refuse(`${where} belongs to workflow ${recordWorkflow}, not ${String(context.workflowId)}; a hidden-history record is never attributed to a sibling workflow.`);
-      }
-      const declaredState = expectEnum(view.declaredState, HOST_HISTORY_STATES, `${where}.view.declaredState`);
-      if (typeof view.cancelled !== "boolean") refuse(`${where}.view.cancelled must be a boolean.`);
-      const checkpointId = view.checkpointId === null ? null : expectString(view.checkpointId, `${where}.view.checkpointId`);
-      const operationId = view.operationId === null ? null : expectString(view.operationId, `${where}.view.operationId`);
-      const dedupKey = view.dedupKey === null ? null : expectString(view.dedupKey, `${where}.view.dedupKey`);
-      if (dedupKey !== (operationId ?? checkpointId)) refuse(`${where}.view.dedupKey must be the operation id or the checkpoint id it dedups on.`);
-      if (declaredState === "handed_off" && dedupKey === null) {
-        refuse(`${where} records a one-shot handoff with neither an operation id nor a checkpoint id; the handoff has no dedup identity.`);
-      }
-      if (dedupKey !== null) {
-        if (dedupKeys.has(dedupKey)) refuse(`${context.label}: hidden-history dedup identity ${dedupKey} is recorded twice; a replayed native entry is not coverage.`);
-        dedupKeys.add(dedupKey);
-      }
-      for (const item of expectArray(view.provenance, `${where}.view.provenance`)) {
-        const field = expectObject(item, `${where}.view.provenance[]`);
-        expectExactKeys(field, ["field", "path"], `${where}.view.provenance[]`);
-        expectString(field.field, `${where}.view.provenance[].field`);
-        expectString(field.path, `${where}.view.provenance[].path`);
-      }
-      return { index, entryId, type, sessionId, payloadHash, workflowId: recordWorkflow, declaredState, cancelled: view.cancelled, checkpointId, dedupKey };
-    });
-    const sessions = [...new Set(records.map((record) => record.sessionId))].sort(compareText);
+    const records = hostHistoryRecords(exported.document, `${what} embedded export`, context);
+    const sessions = [...new Set(records.map((record) => (record as { sessionId: string }).sessionId))].sort(compareText);
     if (sessions.length === 0) {
-      refuse(`${what} names no decoded native session; a hidden-history row covers the sessions its export publishes, so an empty export is an absent row.`);
+      refuse(`${what} names no decoded native session; a host envelope covers the sessions its export publishes.`);
     }
-    return { root: witness.root, path: witness.path, sha256: witness.sha256, document: "execution-host-history", count: records.length, sessions, records };
+    return {
+      root: witness.root,
+      path: witness.path,
+      sha256: witness.sha256,
+      workflowId,
+      host,
+      hostSessionId,
+      exportSha256: recorded,
+      count: records.length,
+      sessions,
+      records,
+    };
   });
-  refuse(
-    `${context.label} cannot be populated yet: the retained host export is decoded, but \u00a74.2 also requires the explicit host session inventory and the ` +
-      `stop/adoption attestation, which H2's evidence-file wrapper carries and which no reviewed producer publishes yet. The H1 export alone is not ` +
-      `complete retain coverage.`,
-  );
+  return { sources: sourceRefs(context), format: HOST_INVENTORY_PROTOCOL, files };
 }
+
 
 /** `retained-body-v1`: retained evidence bodies, summarized from their exact bytes. */
 function retainedBodyCodec(context: RowContext): unknown {
@@ -1643,11 +1690,17 @@ export function executionCoverageDigest(receipts: readonly ExecutionCoverageRece
 
 const MANIFEST_KEYS = ["manifestId", "manifestHash", "storeId", "epoch", "surfaces", "sources"] as const;
 
+type HostProof = Readonly<{
+  sessions: readonly Readonly<{ host: "omp"; sessionId: string; source: CoverageWitness }>[];
+  attestation: CoverageWitness;
+}>;
+
 type ManifestSurface = Readonly<{
   surface: ExecutionSurface;
   workflowId: string | null;
   sources: readonly CoverageWitness[];
   consumerProof?: ConsumerDiscoveryProof;
+  hostProof?: HostProof;
 }>;
 
 function expectConsumerProof(value: unknown, what: string): ConsumerDiscoveryProof {
@@ -1686,18 +1739,54 @@ function expectConsumerProof(value: unknown, what: string): ConsumerDiscoveryPro
   return { trees, copies };
 }
 
+function expectHostProof(value: unknown, what: string): HostProof {
+  const record = expectObject(value, what);
+  expectExactKeys(record, ["sessions", "attestation"], what);
+  const sessions = expectArray(record.sessions, `${what}.sessions`).map((entry, index) => {
+    const where = `${what}.sessions[${index}]`;
+    const session = expectObject(entry, where);
+    expectExactKeys(session, ["host", "sessionId", "source"], where);
+    return {
+      host: expectEnum(session.host, ["omp"] as const, `${where}.host`),
+      sessionId: expectString(session.sessionId, `${where}.sessionId`),
+      source: expectWitness(session.source, `${where}.source`),
+    };
+  });
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    if (seen.has(session.sessionId)) refuse(`${what}.sessions names the ${session.host} session ${session.sessionId} twice; one session owns one envelope.`);
+    seen.add(session.sessionId);
+  }
+  return { sessions, attestation: expectWitness(record.attestation, `${what}.attestation`) };
+}
+
 function expectManifestSurface(value: unknown, what: string): ManifestSurface {
   const record = expectObject(value, what);
-  expectKeys(record, ["surface", "workflowId", "sources"], ["consumerProof"], what);
+  expectKeys(record, ["surface", "workflowId", "sources"], ["consumerProof", "hostProof"], what);
   const surface = expectSurface(record.surface, `${what}.surface`);
   const workflowId = expectNullableString(record.workflowId, `${what}.workflowId`);
   expectScope(surface, workflowId, what);
   const sources = expectWitnessList(record.sources, `${what}.sources`);
-  if (record.consumerProof === undefined) return { surface, workflowId, sources };
-  if (SURFACE_CONSUMERS[surface] === undefined) {
-    refuse(`${what} carries a consumer discovery proof for ${surface}, which is not a consumer surface; a non-consumer row never gains this field.`);
+  const parsed: {
+    surface: ExecutionSurface;
+    workflowId: string | null;
+    sources: readonly CoverageWitness[];
+    consumerProof?: ConsumerDiscoveryProof;
+    hostProof?: HostProof;
+  } = { surface, workflowId, sources };
+  if (record.consumerProof !== undefined) {
+    if (SURFACE_CONSUMERS[surface] === undefined) {
+      refuse(`${what} carries a consumer discovery proof for ${surface}, which is not a consumer surface; a non-consumer row never gains this field.`);
+    }
+    parsed.consumerProof = expectConsumerProof(record.consumerProof, `${what}.consumerProof`);
   }
-  return { surface, workflowId, sources, consumerProof: expectConsumerProof(record.consumerProof, `${what}.consumerProof`) };
+  if (record.hostProof !== undefined) {
+    if (surface !== "omp-hidden-entries") {
+      refuse(`${what} carries a host discovery proof for ${surface}; only the host-hidden surface may hold one.`);
+    }
+    parsed.hostProof = expectHostProof(record.hostProof, `${what}.hostProof`);
+  }
+  return parsed;
 }
 
 /**
@@ -1877,6 +1966,11 @@ export function validateExecutionCoverage(
         `${label} carries resultHash ${receipt.resultHash}, but the result recomputed from its bytes is ${recomputed.receipt.resultHash}; a coverage ` +
           `result is recomputed from the named bytes, never asserted by the receipt.`,
       );
+    }
+    if (receipt.surface === "omp-hidden-entries") {
+      validateHostProof(receipt, recomputed.facts, assigned.hostProof, evidence, pinned, label);
+    } else if (assigned.hostProof !== undefined) {
+      refuse(`${label} carries a host discovery proof on a row that is not the host-hidden surface.`);
     }
     if (SURFACE_CONSUMERS[receipt.surface] === undefined) {
       if (assigned.consumerProof !== undefined) {
@@ -2066,6 +2160,85 @@ function insideTree(path: string, root: string, label: string, what: string): st
   if (path === root) refuse(`${label}: the ${what} names the root itself as a witness, which is an entry, not the tree.`);
   if (!path.startsWith(`${root}/`)) refuse(`${label}: a witness of the ${what} lies at ${path}, outside that root.`);
   return path.slice(root.length + 1);
+}
+
+/**
+ * Compare the host discovery proof with the decoded envelopes and the pinned
+ * attestation (§4.2). The proof's envelopes must be exactly the row's assigned
+ * sources, each envelope's identity must match its session, and the attestation
+ * — validated by the EXISTING contract, never a copy — must record every one of
+ * these sessions as stopped or reloaded. Other workflows' sessions may
+ * legitimately appear in that attestation; only this row's entries are required.
+ */
+function validateHostProof(
+  receipt: ExecutionCoverageReceipt,
+  facts: unknown,
+  proof: HostProof | undefined,
+  evidence: ExecutionCoverageEvidence,
+  pinned: ReadonlySet<string>,
+  label: string,
+): void {
+  if (receipt.disposition === "absent") {
+    if (proof !== undefined) refuse(`${label} is absent yet its manifest row carries a host discovery proof; an absent row proves nothing.`);
+    return;
+  }
+  if (proof === undefined) {
+    refuse(`${label} is populated but its manifest row carries no host discovery proof; a hidden-history receipt is never self-certified.`);
+  }
+  const assigned = new Map<string, string>();
+  for (const witness of receipt.sources) assigned.set(coverageWitnessKey(witness.root, witness.path), witness.sha256);
+  const proved = new Map<string, string>();
+  for (const session of proof.sessions) {
+    const key = coverageWitnessKey(session.source.root, session.source.path);
+    if (proved.has(key)) refuse(`${label}: the host proof names the envelope ${key} twice.`);
+    proved.set(key, session.source.sha256);
+  }
+  if (proved.size !== assigned.size) {
+    refuse(`${label} assigns ${assigned.size} session envelope(s) while the host proof names ${proved.size}; the proof and the row's sources are one set.`);
+  }
+  for (const [key, sha256] of proved) {
+    const assignedSha = assigned.get(key);
+    if (assignedSha === undefined) refuse(`${label}: the host proof names ${key}, which the row does not assign as one of its session envelopes.`);
+    if (assignedSha !== sha256) refuse(`${label}: the host proof names ${key} with a digest the assigned bytes do not have.`);
+  }
+  const files = (facts as { files?: ReadonlyArray<{ root: string; path: string; sha256: string; host: string; hostSessionId: string }> } | undefined)?.files ?? [];
+  for (const session of proof.sessions) {
+    const file = files.find((candidate) => candidate.root === session.source.root && candidate.path === session.source.path && candidate.sha256 === session.source.sha256);
+    if (file === undefined) refuse(`${label}: the host proof's session ${session.sessionId} names an envelope the decoded bytes do not carry.`);
+    if (file.host !== session.host) refuse(`${label}: the envelope ${file.path} was produced by host ${file.host}, not the proved ${session.host}.`);
+    if (file.hostSessionId !== session.sessionId) {
+      refuse(`${label}: the envelope ${file.path} carries host session ${file.hostSessionId}, not the proved ${session.sessionId}.`);
+    }
+  }
+  if (receipt.evidence.length !== 1) {
+    refuse(`${label} carries ${receipt.evidence.length} evidence document(s); the host proof pins exactly the attestation document.`);
+  }
+  const attestationWitness = receipt.evidence[0];
+  if (
+    attestationWitness.root !== proof.attestation.root ||
+    attestationWitness.path !== proof.attestation.path ||
+    attestationWitness.sha256 !== proof.attestation.sha256
+  ) {
+    refuse(`${label}: the receipt's evidence document is not the attestation the manifest row proved.`);
+  }
+  const key = coverageWitnessKey(proof.attestation.root, proof.attestation.path);
+  if (!pinned.has(key)) refuse(`${label}: the proved attestation ${key} is not pinned by the manifest; it is not a reviewed input.`);
+  const bytes = evidence.get(key);
+  if (bytes === undefined) refuse(`${label} pins the attestation ${key}, whose bytes were not supplied.`);
+  if (bytesDigest(bytes) !== proof.attestation.sha256) refuse(`${label} pinned attestation ${key} does not hash to its witness.`);
+  const parsed = parseJson(utf8(bytes, `${label} attestation`), `${label} attestation`);
+  let attestation: ReturnType<typeof validateActivationAttestation>;
+  try {
+    attestation = validateActivationAttestation(parsed);
+  } catch (error) {
+    refuse(`${label}: the pinned attestation is not valid under the existing attestation contract (${(error as Error).message}).`);
+  }
+  for (const session of proof.sessions) {
+    const quiesced = attestation.stoppedSessions.some((entry) => entry.host === session.host && entry.sessionId === session.sessionId);
+    if (!quiesced) {
+      refuse(`${label}: the attestation does not record the ${session.host} session ${session.sessionId} as stopped/reloaded; a session that was not quiesced is not coverage.`);
+    }
+  }
 }
 
 function sameWitnesses(left: readonly CoverageWitness[], right: readonly CoverageWitness[]): boolean {

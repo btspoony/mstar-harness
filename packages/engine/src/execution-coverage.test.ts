@@ -98,6 +98,8 @@ type Row = {
   manifestWorkflowId?: string | null;
   /** C3's trusted consumer discovery proof — an independent fixture input. */
   consumerProof?: Record<string, unknown>;
+  /** C3's trusted host-session discovery for the host-hidden surface. */
+  hostProof?: Record<string, unknown>;
 };
 
 /* ------------------------------------------------------------------ fixtures */
@@ -217,39 +219,77 @@ function launchJournalDoc(wf: string): Doc {
   );
 }
 
-function hostHistoryDoc(wf: string): Doc {
+/**
+ * H2's session-inventory envelope plus the attestation it pins. The embedded H1
+ * export is hashed over its exact serialization WITHOUT the trailing LF, and the
+ * envelope file is the row's only source.
+ */
+function hostDocs(wf: string): { envelope: Doc; attestation: Doc } {
+  const sessionId = `sess-${wf}`;
   const payload = { workflowId: wf, state: "pending", operationId: `op-${wf}` };
-  return doc(
+  const exported = {
+    version: 1,
+    document: "execution-host-history",
+    records: [
+      {
+        index: 0,
+        entryId: `entry-${wf}`,
+        type: "mstar:phase2",
+        sessionId,
+        payloadHash: digestOf(payload),
+        payload,
+        view: {
+          generation: 1,
+          declaredKind: "phase2",
+          declaredAction: null,
+          declaredState: "pending",
+          workflowId: wf,
+          checkpointId: null,
+          operationId: `op-${wf}`,
+          dedupKey: `op-${wf}`,
+          cancelled: false,
+          provenance: [{ field: "state", path: "payload.state" }],
+        },
+      },
+    ],
+    diagnostics: [],
+  };
+  const serialized = canonical(exported);
+  const envelope = doc(
     "host",
-    `host-history/${wf}.json`,
+    `host-sessions/${wf}.json`,
     canonical({
       version: 1,
-      document: "execution-host-history",
-      records: [
-        {
-          index: 0,
-          entryId: `entry-${wf}`,
-          type: "mstar:phase2",
-          sessionId: `sess-${wf}`,
-          payloadHash: digestOf(payload),
-          payload,
-          view: {
-            generation: 1,
-            declaredKind: "phase2",
-            declaredAction: null,
-            declaredState: "pending",
-            workflowId: wf,
-            checkpointId: null,
-            operationId: `op-${wf}`,
-            dedupKey: `op-${wf}`,
-            cancelled: false,
-            provenance: [{ field: "state", path: "payload.state" }],
-          },
-        },
-      ],
-      diagnostics: [],
+      protocol: "host-hidden-inventory-v1",
+      workflowId: wf,
+      host: "omp",
+      hostSessionId: sessionId,
+      export: { sha256: sha(serialized.slice(0, -1)), document: exported },
     }),
   );
+  const attestation = doc(
+    "control",
+    `coverage/attestation-${wf}.json`,
+    canonical({
+      version: 1,
+      attestedAt: "2026-09-21T00:00:00.000Z",
+      operator: { actor: "operator", authorizationRef: "ref-1" },
+      consumers: [
+        {
+          entryId: `engine-${wf}`,
+          kind: "coordinator",
+          entrypoint: "packages/engine/dist/engine.js",
+          runtime: "node",
+          runtimeVersion: "24.18.0",
+          version: "3.11.2",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
+    }),
+  );
+  return { envelope, attestation };
 }
 
 /** One R1 consumer manifest plus the bytes its closures name. */
@@ -380,7 +420,20 @@ function workflowRow(surface: ExecutionSurface, workflowId: string): Row {
     return { surface, workflowId, disposition: "retain", docs: [cursorDoc(workflowId)] };
   }
   if (surface === "workflow-omp-launch-journal") return { surface, workflowId, disposition: "retain", docs: [launchJournalDoc(workflowId)] };
-  if (surface === "omp-hidden-entries") return { surface, workflowId, disposition: "absent", docs: [] };
+  if (surface === "omp-hidden-entries") {
+    const { envelope, attestation } = hostDocs(workflowId);
+    return {
+      surface,
+      workflowId,
+      disposition: "retain",
+      docs: [envelope],
+      evidence: attestation,
+      hostProof: {
+        sessions: [{ host: "omp", sessionId: `sess-${workflowId}`, source: witnessOf(envelope) }],
+        attestation: witnessOf(attestation),
+      },
+    };
+  }
   if (surface === "sdd-evidence") return { surface, workflowId, disposition: "retain", docs: [doc("sdd", `${workflowId}/task-1-report.md`, `# ${workflowId} report\n`)] };
   throw new Error(`workflowRow is not defined for ${surface}`);
 }
@@ -452,6 +505,7 @@ function materialize(rows: Row[], options: { digest?: string; coverageManifestHa
       workflowId: row.manifestWorkflowId !== undefined ? row.manifestWorkflowId : row.workflowId,
       sources,
       ...(row.consumerProof === undefined ? {} : { consumerProof: row.consumerProof }),
+      ...(row.hostProof === undefined ? {} : { hostProof: row.hostProof }),
     });
     for (const witness of [...sources, ...evidenceWitnesses]) pinned.set(coverageWitnessKey(witness.root, witness.path), witness);
   }
@@ -521,25 +575,23 @@ function replaceRowDocuments(fixture: Fixture, surface: ExecutionSurface, workfl
   assign(fixture, surface, workflowId, witnesses);
 }
 
-/**
- * Populate a row that has no producer able to build it (the two surfaces whose
- * reviewed producer does not exist yet): the receipt keeps its closed shape and
- * the bytes are the real ones, so the row reaches its own codec instead of the
- * absent-surfaces gate.
- */
-function populateWithoutProducer(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, documents: Doc[], evidence?: Doc): void {
-  const index = rowIndex(fixture, surface, workflowId);
-  const witnesses = documents.map((entry) => overrideDoc(fixture.evidence, entry)).sort(byRootPath);
-  const evidenceWitnesses = evidence === undefined ? [] : [overrideDoc(fixture.evidence, evidence)];
-  setReceipt(fixture, index, {
-    ...fixture.coverage.receipts[index],
-    disposition: "retain",
-    sources: witnesses,
-    evidence: evidenceWitnesses,
-    resultHash: fakeHex(1),
-  });
-  assign(fixture, surface, workflowId, witnesses);
-  if (evidence !== undefined) repin(fixture, evidenceWitnesses);
+function hostProofOf(fixture: Fixture, workflowId: string): Record<string, unknown> {
+  const row = fixture.manifest.surfaces.find((candidate) => candidate.surface === "omp-hidden-entries" && candidate.workflowId === workflowId);
+  if (row?.hostProof === undefined) throw new Error(`fixture bug: no host proof for ${workflowId}`);
+  return row.hostProof as unknown as Record<string, unknown>;
+}
+
+function setHostProof(fixture: Fixture, workflowId: string, proof: Record<string, unknown> | undefined): void {
+  fixture.manifest = {
+    ...fixture.manifest,
+    surfaces: fixture.manifest.surfaces.map((row) =>
+      matches(row, "omp-hidden-entries", workflowId)
+        ? proof === undefined
+          ? { surface: row.surface, workflowId: row.workflowId, sources: row.sources }
+          : { ...row, hostProof: proof as unknown as ManifestRow["hostProof"] }
+        : row,
+    ),
+  };
 }
 
 /** Recompute a row's receipt from its current bytes with the real producer entry point. */
@@ -969,24 +1021,72 @@ describe("execution-coverage", () => {
     refuseLeavingState(empty);
   });
 
-  test("execution-coverage-hidden-entries-await-the-h2-wrapper", () => {
+  test("execution-coverage-host-inventory-is-proved", () => {
+    // The baseline row IS the positive: a real H2 envelope plus the pinned attestation.
     const valid = materialize(buildRows());
     validate(valid);
 
-    // H1's export is real and decoded, but complete retain coverage also needs
-    // H2's inventory/stop-adoption wrapper, which no producer publishes yet.
-    const hidden = materialize(buildRows());
-    populateWithoutProducer(hidden, "omp-hidden-entries", WORKFLOW_A, [hostHistoryDoc(WORKFLOW_A)]);
-    refuseLeavingState(hidden);
+    // No proof: a receipt never chooses its own session set.
+    const noProof = materialize(buildRows());
+    setHostProof(noProof, WORKFLOW_A, undefined);
+    refuseLeavingState(noProof);
 
-    const duplicateEntry = materialize(buildRows());
-    const history = hostHistoryDoc(WORKFLOW_A);
-    const records = (JSON.parse(history.text) as { records: Array<Record<string, unknown>> }).records;
-    populateWithoutProducer(duplicateEntry, "omp-hidden-entries", WORKFLOW_A, [
-      doc("host", history.path, canonical({ ...(JSON.parse(history.text) as Record<string, unknown>), records: [records[0], { ...records[0], index: 1 }] })),
-    ]);
-    refuseLeavingState(duplicateEntry);
+    // A proof entry the row does not assign as a session envelope.
+    const extraSession = materialize(buildRows());
+    const proof = hostProofOf(extraSession, WORKFLOW_A);
+    setHostProof(extraSession, WORKFLOW_A, {
+      ...proof,
+      sessions: [
+        ...(proof.sessions as unknown[]),
+        { host: "omp", sessionId: SESSION_B, source: { root: "host", path: `host-sessions/${WORKFLOW_B}.json`, sha256: fakeHex(61) } },
+      ],
+    });
+    refuseLeavingState(extraSession);
 
+    // The envelope carries a different host session than the proof claims.
+    const foreignSession = materialize(buildRows());
+    const foreignProof = hostProofOf(foreignSession, WORKFLOW_A);
+    setHostProof(foreignSession, WORKFLOW_A, {
+      ...foreignProof,
+      sessions: [{ host: "omp", sessionId: SESSION_B, source: (foreignProof.sessions as Array<Record<string, unknown>>)[0].source }],
+    });
+    refuseLeavingState(foreignSession);
+
+    const { envelope, attestation } = hostDocs(WORKFLOW_A);
+
+    // The pinned attestation does not quiesce this session.
+    const unquiesced = materialize(buildRows());
+    const parsed = JSON.parse(attestation.text) as Record<string, unknown>;
+    const unquiescedDoc = doc("control", attestation.path, canonical({ ...parsed, stoppedSessions: [] }));
+    const unquiescedIndex = rowIndex(unquiesced, "omp-hidden-entries", WORKFLOW_A);
+    const unquiescedWitness = overrideDoc(unquiesced.evidence, unquiescedDoc);
+    setReceipt(unquiesced, unquiescedIndex, { ...unquiesced.coverage.receipts[unquiescedIndex], evidence: [unquiescedWitness] });
+    repin(unquiesced, [unquiescedWitness]);
+    setHostProof(unquiesced, WORKFLOW_A, {
+      sessions: [{ host: "omp", sessionId: SESSION_A, source: witnessOf(envelope) }],
+      attestation: unquiescedWitness,
+    });
+    refuseLeavingState(unquiesced);
+
+    // An attestation the existing contract rejects outright.
+    const invalidAttestation = materialize(buildRows());
+    const invalid = JSON.parse(attestation.text) as Record<string, unknown>;
+    const invalidDoc = doc("control", attestation.path, canonical({ ...invalid, stoppedSessions: [{ sessionId: SESSION_A, host: "omp", state: "running" }] }));
+    const invalidIndex = rowIndex(invalidAttestation, "omp-hidden-entries", WORKFLOW_A);
+    const invalidWitness = overrideDoc(invalidAttestation.evidence, invalidDoc);
+    setReceipt(invalidAttestation, invalidIndex, { ...invalidAttestation.coverage.receipts[invalidIndex], evidence: [invalidWitness] });
+    repin(invalidAttestation, [invalidWitness]);
+    setHostProof(invalidAttestation, WORKFLOW_A, {
+      sessions: [{ host: "omp", sessionId: SESSION_A, source: witnessOf(envelope) }],
+      attestation: invalidWitness,
+    });
+    refuseLeavingState(invalidAttestation);
+
+    // An absent row may not carry a populated proof.
+    const absentWithProof = materialize(buildRows());
+    assign(absentWithProof, "omp-hidden-entries", WORKFLOW_A, []);
+    patchReceipt(absentWithProof, "omp-hidden-entries", WORKFLOW_A, (receipt) => ({ ...receipt, disposition: "absent", sources: [], evidence: [] }));
+    refuseLeavingState(absentWithProof);
   });
 
   test("execution-coverage-assignment-binds-sources-to-a-row", () => {
