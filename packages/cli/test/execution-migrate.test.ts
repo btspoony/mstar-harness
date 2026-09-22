@@ -23,9 +23,11 @@
  * - `refusals`: a missing coverage / attestation / loss confirmation and a
  *   reviewed inventory that does not match the manifest each refuse without
  *   writing authority; an unknown flag is exit 2.
- * - `recovery`: restore-preview inventories a recovery point and restore
- *   replaces the store only under the EXACT approved loss digest; the diagnostic
- *   export carries session rows without identities.
+ * - `recovery`: restore-preview inventories the recovery point and reports the
+ *   authority rows that point predates as the loss (an `execution` domain
+ *   difference at minimum, under the canonical digest), and restore replaces
+ *   the store only under the EXACT approved loss digest; the diagnostic export
+ *   carries session rows without identities.
  * - `route`: the execution verbs live under `store execution`, while
  *   `store activate` remains the issue/catalog barrier.
  */
@@ -558,10 +560,12 @@ describe("mstar store execution \u2014 the operator family over populated input"
     ];
     const recovered = runCli(recoverArgs, fixture, successor);
     expect(recovered.exitCode).toBe(0);
+    // §3.2's active success envelope: `operation_id` and `replayed` are envelope
+    // fields of the receipt, while `data` is the session reference itself.
     expect(jsonOf(recovered).route).toBe("execution");
     expect(jsonOf(recovered).operation).toBe("recover");
     expect(jsonOf(recovered).operation_id).toBe("operator-recover");
-    expect(dataOf(recovered).replayed).toBe(false);
+    expect(jsonOf(recovered).replayed).toBe(false);
     expect(String(dataOf(recovered).sessionId)).toBe(SUCCESSOR_SESSION);
     const recoveredPlan = await planViewOf(fixture);
     // The recovery replaced the COORDINATOR only: the plan's held lease keeps its
@@ -569,7 +573,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     expect(leaseFacts(recoveredPlan)).toEqual({ status: "held", holder: PLAN_SESSION });
     const replayedRecovery = runCli(recoverArgs, fixture, successor);
     expect(replayedRecovery.exitCode).toBe(0);
-    expect(dataOf(replayedRecovery).replayed).toBe(true);
+    expect(jsonOf(replayedRecovery).replayed).toBe(true);
 
     // ── §8: the diagnostic export describes the authority without identities
     const exportPath = join(fixture.root, "operator-export.json");
@@ -821,7 +825,20 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     ], fixture);
     const previewData = dataOf(preview);
     expectSuccess(preview, "restore-preview");
-    expect(previewData.lostOperationIds as string[]).toContain("restore-apply");
+    // The preview DOES report this fixture's loss, in the two shapes §8 uses:
+    // every authority row the point predates is a `differences` entry (the staged
+    // migration rows included, i.e. an `execution` domain entry exists), and the
+    // canonical `lossDigest` covers the whole inventory. `lostOperationIds`
+    // lists COMMITTED DOMAIN OPERATION receipts only — `execution_operations`
+    // rows rendered as `execution:<epoch>:<operationId>` — and a staged store
+    // holds none by construction: staging refuses while that table holds a row
+    // and the migration verbs record into `execution_migrations` instead, so the
+    // apply's own operation id is not (and cannot be) an entry here.
+    const differences = previewData.authorityDifferences as Array<{ domain?: unknown }>;
+    expect(Array.isArray(differences)).toBe(true);
+    expect(differences.length).toBeGreaterThan(0);
+    expect(differences.some((difference) => difference.domain === "execution")).toBe(true);
+    expect(Array.isArray(previewData.lostOperationIds)).toBe(true);
     const lossDigest = String(previewData.lossDigest);
     expect(lossDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(existsSync(previewPath)).toBe(true);
