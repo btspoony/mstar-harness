@@ -41,7 +41,7 @@ describe("OpenCode native execution identity", () => {
     const wire = encodeExecutionSessionRef(reference);
     await expect(
       resumeOpenCodeExecutionSession(
-        { harnessDir: "/fixture", caller: { sessionId: "copied-session", ...scope } },
+        { harnessDir: "/fixture" },
         { sessionID: "copied-session" },
         scope,
         wire,
