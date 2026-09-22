@@ -2849,7 +2849,7 @@ async function seedActiveHandoffAuthority(
       compass_ref: `iterations/${workflowId}/delivery-compass.md`,
       branch: { base: "main", integration: repo.integrationBranch, target: "main" },
       integration_worktree_path: repo.integration,
-      plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "InProgress" }],
+      plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "Todo" }],
     } as never,
     expected: initialized.token,
     operationId: `create-${workflowId}`,

@@ -1384,7 +1384,9 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
           id: planId,
           title: planId,
           file: `plans/${planId}.md`,
-          status: "InProgress",
+          // The DB prepare admission accepts only `Todo`/`Blocked` rows, so a
+          // newly created plan row is `Todo`; the fixture never advances it.
+          status: "Todo",
         },
       ],
     } as never,
