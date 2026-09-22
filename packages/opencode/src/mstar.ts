@@ -101,12 +101,22 @@ type MessagePart = { type: string; text?: string };
 
 /** The only native identity OpenCode exposes to a tool hook. */
 export type OpenCodeHookSession = Readonly<{ sessionID?: unknown }>;
+/** Native OpenCode has no workflow/role binding channel for tool hooks. */
+export type OpenCodeSessionAssociationDecision =
+  | { kind: "unsupported"; capability: "decision-only"; sessionId: string }
+  | { kind: "unavailable"; capability: "decision-only"; reason: string };
 
-/** R1/C3 inventory fact: this hook can decide, but cannot veto OpenCode writes. */
-export const OPENCODE_WRITE_CAPABILITY = Object.freeze({
-  entrypoint: "dist/mstar.js",
-  capability: "decision-only" as const,
-});
+export function openCodeNativeAssociationDecision(input: OpenCodeHookSession): OpenCodeSessionAssociationDecision {
+  const sessionId = input?.sessionID;
+  if (typeof sessionId === "string" && sessionId.trim() !== "") {
+    return { kind: "unsupported", capability: "decision-only", sessionId };
+  }
+  return {
+    kind: "unavailable",
+    capability: "decision-only",
+    reason: "OpenCode did not provide a native sessionID; writer association is unsupported",
+  };
+}
 
 /**
  * Build the engine identity from OpenCode's native per-call session fact.
@@ -1300,6 +1310,13 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const rawPath = args.path;
       const filePath =
         typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
+      const nativeAssociation = openCodeNativeAssociationDecision(input);
+      if (
+        nativeAssociation.kind === "unavailable" &&
+        (input.tool === "write" || input.tool === "edit")
+      ) {
+        defaultStatusLogger("warn", nativeAssociation.reason);
+      }
 
  // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
  // validation on subagent dispatch. OpenCode's `task` tool carries the

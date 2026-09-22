@@ -6,11 +6,10 @@ import {
   type ExecutionSessionRef,
 } from "@mstar-harness/engine";
 import {
-  OPENCODE_WRITE_CAPABILITY,
+  openCodeNativeAssociationDecision,
   openCodeExecutionIdentity,
   resumeOpenCodeExecutionSession,
 } from "../src/mstar.js";
-
 const scope = { workflowId: "wf-opencode", role: "coordinator" as const, planId: null };
 const reference: ExecutionSessionRef = {
   storeId: "11111111-1111-1111-1111-111111111111",
@@ -49,7 +48,15 @@ describe("OpenCode native execution identity", () => {
     ).rejects.toBeInstanceOf(ExecutionError);
   });
 
-  test("reports decision-only capability rather than a hard write fence", () => {
-    expect(OPENCODE_WRITE_CAPABILITY).toEqual({ entrypoint: "dist/mstar.js", capability: "decision-only" });
+  test("reports native association as unsupported decision-only", () => {
+    expect(openCodeNativeAssociationDecision({ sessionID: "native-opencode-session" })).toEqual({
+      kind: "unsupported",
+      capability: "decision-only",
+      sessionId: "native-opencode-session",
+    });
+    expect(openCodeNativeAssociationDecision({})).toMatchObject({
+      kind: "unavailable",
+      capability: "decision-only",
+    });
   });
 });
