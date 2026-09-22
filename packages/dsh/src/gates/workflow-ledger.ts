@@ -23,35 +23,47 @@
  *     the log, upstream `session/src/index.ts:961-995`) gets its snapshot
  *     cold-scanned ONCE on the creation announcement, closing the
  *     late-seeded-session gap. *
- * DEDUPE : ONE DURABLE per-session watermark —
+ * DEDUPE + RECORD IDENTITY : ONE DURABLE per-session cursor —
  * the next expected envelope `seq` (session-log position) — persisted to
  * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` (a small
- * bounded sidecar next to the workflow-dir `agent-flow.jsonl`, written
- * atomically temp-file + rename through the same containment discipline; the
- * root cursor file is NOT read after migration — no read fallback). The
- * watermark is consulted AND advanced by every scan (cold /
- * created-backfill / live): envelopes with `seq` below it were already
- * recorded — across cold+live overlap AND across plugin re-applies (a
- * re-registration no longer re-records the same live sessions). The
- * watermark advances only AFTER the ledger row appended successfully (a failing append leaves the cursor behind, so the
- * row is re-attempted at the next scan, never permanently lost). The in-memory
- * Map is the durable file's mirror (module-level cache keyed by WORKFLOW
- * DIR, bounded by the session cap AND by a workflow-dir count cap — qc3
- * S-4 — so a long-lived process across many workflow ids never grows the
- * cache unbounded); a failed durable write keeps the in-memory mirror
- * advanced (in-process dedupe —) with one warn — a ledger row is
- * never lost and the workflow run is never affected.
+ * bounded sidecar next to the workflow-dir `agent-flow.jsonl`; the retired
+ * harness-root cursor file is NOT read — no fallback). The cursor bounds
+ * every scan (cold / created-backfill / live) and gates display-tail
+ * compaction, but the DEDUP AUTHORITY is the record identity: every row this
+ * consumer records carries a stable `eventId` derived from
+ * `{sessionId, streamId, seq}` where `streamId` is the native log
+ * INCARNATION (never the store epoch, so an epoch change cannot duplicate
+ * history). The cursor store and the append/cursor critical section live in
+ * `agent-flow.ts` (ONE owner for both files): `recordWorkflowEvent` loads a
+ * fresh cursor, looks the event id up in the bounded durable tail, appends,
+ * and writes the cursor atomically under the per-workflow lock. A crash
+ * between the append and the cursor write therefore replays into a FOUND id
+ * with identical bytes and only advances the cursor. A reused log identity
+ * with different bytes and a torn record that could be this event are
+ * advisory refusals (warn, no append, no durable advance — the row stays
+ * eligible). The cursor is consulted here to bound the walk; an unreadable
+ * cursor degrades to in-memory only with one warn (in-process scans stay
+ * deduped; a restart re-reads).
  *
- * INTER-PROCESS SERIALIZATION : the watermark
- * read-modify-write (load fresh → mutate → whole-map save) runs inside the
- * per-workflow write lock shared with the ledger append
+ * EXPLICIT TARGETS (resolver route) : when the host adapter supplies a
+ * {@link ResolveWorkflowLedgerTarget}, the consumer AWAITS it at each event
+ * boundary and uses ONLY the returned explicit target — a `null` or
+ * inconsistent target records nothing and never falls back to the
+ * file-based active set (an absent resolver serves only the pre-activation
+ * route; the consumer cannot infer an active writer). Rows are processed
+ * strictly in order per source stream, so a delayed lookup can never let a
+ * later row advance another stream's cursor.
+ *
+ * INTER-PROCESS SERIALIZATION : the whole append + cursor
+ * read-modify-write runs inside the per-workflow write lock
  * (`withWorkflowDirLock` from agent-flow.ts — the same lockdir pattern as
  * the engine's `withStatusWriteLock`). Steady state is ONE writer per
  * workflow dir; under multi-session shared lifecycle (compass ruling 3)
- * the lock makes the cursor save read-modify-write atomic across
- * processes — a whole-map save can no longer silently clobber another
+ * the lock makes the append/cursor sequence atomic across processes — a
+ * whole-map cursor save can no longer silently clobber another
  * process's just-advanced cursor (the duplicate-row regression mode). The
- * lock is held only around the bounded cursor update, never across scans.
+ * lock is held only around that bounded critical section, never across
+ * scans.
  *
  * Mapping: `tool-workflow/run-start` → `workflow-run`
  * (`agent` = the carrying parent session id), `tool-workflow/agent-start` →
@@ -124,13 +136,11 @@
  * NEVER a refusal path.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import {
+  loadWatermark,
   recordWorkflowEvent,
   resolveAgentFlowWriteTarget,
   truncateLedgerField,
-  withWorkflowDirLock,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
   WORKFLOW_LEDGER_MAX_NAME_LENGTH,
@@ -170,34 +180,6 @@ const TOOL_WORKFLOW_RUN_END = 'tool-workflow/run-end'
 
 /** Depth threshold for the observe-time advisory (P-e / N5): warn at >= 2. */
 const DEPTH_ADVISORY_THRESHOLD = 2
-
-/**
- * The durable watermark file name under the WORKFLOW dir (/ qc3
- * F-301 : `{ "v": 1, "cursors": { "<sessionId>": <nextSeq> } }` —
- * the next expected envelope seq per session id. Written atomically
- * (temp-file + rename) after every recorded workflow row; read lazily per
- * workflow dir (module-level cache). v3 layout: the sidecar lives in the
- * ACTIVE workflow dir (`workflows/<id>/workflow-ledger-cursors.json`) next
- * to the ledger — the root cursor file is NOT read after migration (no read
- * fallback). Absent on first run (silent); a present-but-corrupt file
- * degrades to in-memory-only with one warn.
- */
-export const WORKFLOW_LEDGER_WATERMARK_FILE = 'workflow-ledger-cursors.json'
-/**
- * Session-count cap for ONE watermark file (bounds the sidecar). Eviction
- * prefers sessions that are no longer live; when every entry is live the
- * oldest entry is dropped (documented residual — a later restore of an
- * evicted session re-records its rows; bounded by the cap).
- */
-export const WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS = 256
-/**
- * Workflow-dir count cap for the module-level watermark cache: a long-lived process can touch many workflow ids over its
- * lifetime (each iteration lifecycle creates a new workflow dir) — the
- * cache evicts the OLDEST cached dir when it exceeds this cap. The file is
- * the durable store; the cache is only a mirror, so an evicted dir is
- * re-read (and re-cached) on its next visit — no correctness impact.
- */
-export const WORKFLOW_LEDGER_WATERMARK_MAX_DIRS = 64
 
 /** Consumer log levels the module sink understands. */
 export type WorkflowLedgerLogLevel = 'debug' | 'warn'
@@ -271,7 +253,8 @@ interface AgentsView {
  * is deliberately not part of this view — the scan never copies a whole log.
  */
 interface SessionView {
-  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown }
+  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown; streamId?: unknown }
+  streamId?: unknown
   seq?: unknown
   inheritedEventCount?: unknown
   eventAt?(seq: number): unknown
@@ -344,202 +327,109 @@ function sessionEventAtOf(session: unknown): ((seq: number) => unknown) | undefi
   return typeof eventAt === 'function' ? eventAt.bind(session) : undefined
 }
 
-/* ---------------------------------- durable watermark ---------------------------------- */
-
-/** One loaded watermark: session id → next expected envelope seq (per workflow dir). */
-type Watermark = Map<string, number>
-
 /**
- * Module-level watermark cache — the durable file's in-memory mirror, keyed
- * by WORKFLOW DIR (the file's actual location — a new active workflow id
- * means a different sidecar, so the cache must not leak the previous
- * workflow's cursors). Persists across registrations IN one process (a
- * re-apply sees the same advanced Map); the file provides the cross-restart
- * durability. Bounded: the per-dir Map is capped at
- * `WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS`; the number of dirs is bounded
- * by the resolver's per-workspace cache (a process serves a handful of
- * workspaces — same bound as the ledger's own resolver).
+ * The session log's native INCARNATION id, when the installed surface
+ * carries one (`streamId` on the session or its header). It is deliberately
+ * not the store epoch: the epoch is provenance, while a log rebuild / id
+ * reuse is a DIFFERENT incarnation whose records must stay distinct. The
+ * installed DSh `Session` carries no such member, so the log's incarnation is
+ * the session id itself — a reused id is then detected by the record
+ * identity check (an existing `eventId` with different bytes is refused).
  */
-const watermarkCache = new Map<string, Watermark>()
-
-/**
- * Cache one workflow dir's watermark with a bounded cache: when the cache exceeds {@link WORKFLOW_LEDGER_WATERMARK_MAX_DIRS}
- * the OLDEST cached dir (Map insertion order) is evicted. The file is the
- * durable store — an evicted dir is re-read on its next visit, so eviction
- * never loses a cursor.
- */
-function cacheWatermark(workflowDir: string, watermark: Watermark): void {
-  watermarkCache.set(workflowDir, watermark)
-  while (watermarkCache.size > WORKFLOW_LEDGER_WATERMARK_MAX_DIRS) {
-    const oldest = watermarkCache.keys().next().value
-    if (oldest === undefined) break
-    watermarkCache.delete(oldest)
-  }
+function sessionStreamIdOf(session: unknown, sessionId: string): string {
+  const view = session as SessionView | null | undefined
+  const streamId = view?.streamId ?? view?.header?.streamId
+  return typeof streamId === 'string' && streamId !== '' ? streamId : sessionId
 }
 
-/** The number of workflow dirs currently mirrored in the module-level watermark cache */export function workflowLedgerWatermarkCacheSize(): number {
-  return watermarkCache.size
-}
+/* ---------------------------------- explicit ledger target ---------------------------------- */
 
 /**
- * Load (or return the cached) watermark for one workflow dir. A missing file
- * is the normal first run — silent, empty map. A present-but-corrupt file
- * warns once and degrades to in-memory-only (contained — never throws):
- * in-process re-applies stay deduped, a restart re-records (the file was
- * never durable). Persisted values are validated (integer `nextSeq` in
- * [1, 2^31)) and invalid entries dropped.
- *
- * `fresh` : re-read the FILE and replace the in-memory
- * map — used ONLY under the per-workflow write lock in `advanceWatermark`,
- * so the read-modify-write starts from the other process's last save, not
- * from a stale in-memory view (a whole-map save can no longer clobber a
- * concurrently advanced cursor). A fresh read that cannot reach the file
- * (missing/corrupt) falls back to the in-memory map — the process's own
- * view is never discarded by a degraded read.
+ * One EXPLICIT ledger target for a carrying session — the selection a
+ * native host boundary resolves (F3's `resolveExecutionLedgerTarget`) and F2
+ * consumes at its event boundaries. `workflowDir` is the absolute ACTIVE
+ * workflow dir the rows belong in; `source` says whether that selection came
+ * from the active execution authority (`execution`) or the pre-activation
+ * route (`legacy`), and `epoch` is the execution epoch (`null` for a legacy
+ * target). The epoch is provenance ONLY — it is never part of a record
+ * identity, so an epoch change cannot duplicate history.
  */
-function loadWatermark(workflowDir: string, fresh = false): Watermark {
-  const cached = watermarkCache.get(workflowDir)
-  if (cached !== undefined && !fresh) return cached
-  const watermark: Watermark = new Map()
-  try {
-    const raw = readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
-    const record = asRecord(JSON.parse(raw))
-    const cursors = asRecord(record?.cursors)
-    if (cursors !== undefined) {
-      for (const [sid, next] of Object.entries(cursors)) {
-        // An entry is only written after the first recorded row, so a stored
-        // next-seq below 1 is malformed (drop). 2^31 is the sequence bound.
-        if (
-          typeof next === 'number' &&
-          Number.isInteger(next) &&
-          next >= 1 &&
-          next < WORKFLOW_LEDGER_MAX_SEQ &&
-          sid !== ''
-        ) {
-          watermark.set(sid, next)
-        }
-      }
+export type WorkflowLedgerTarget = Readonly<{
+  workflowId: string
+  workflowDir: string
+  sessionId: string
+  source: 'execution' | 'legacy'
+  epoch: number | null
+}>
+
+/**
+ * The awaited target resolver supplied by the host adapter (H3 wires F3's
+ * `resolveExecutionLedgerTarget`). It may only report a selection the
+ * authority actually holds: a `null` result means "no active writer", and
+ * the consumer then records NOTHING for that session — it never falls back
+ * to the file-based active set to infer one.
+ */
+export type ResolveWorkflowLedgerTarget = (sessionId: string, cwd: string) => Promise<WorkflowLedgerTarget | null>
+
+/** A target is usable only when it is internally consistent and names THIS session. */
+function targetRefusal(target: WorkflowLedgerTarget, sessionId: string): string | undefined {
+  if (target.sessionId !== sessionId) return `target session ${target.sessionId} does not match the carrying session`
+  if (typeof target.workflowDir !== 'string' || target.workflowDir === '') return 'target carries no workflow dir'
+  if (typeof target.workflowId !== 'string' || target.workflowId === '') return 'target carries no workflow id'
+  if (target.source === 'execution') {
+    if (typeof target.epoch !== 'number' || !Number.isInteger(target.epoch) || target.epoch < 1) {
+      return 'execution target carries no valid epoch'
     }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    if (err?.code !== 'ENOENT') {
-      log('warn', `workflow-ledger watermark unreadable for ${workflowDir} — degrading to in-memory-only (restart re-records): ${errorMessage(error)}`)
-    }
-    if (fresh && cached !== undefined) return cached
+  } else if (target.source !== 'legacy') {
+    return `unknown target source ${String(target.source)}`
+  } else if (target.epoch !== null) {
+    return 'legacy target carries an epoch'
   }
-  cacheWatermark(workflowDir, watermark)
-  return watermark
+  return undefined
 }
 
 /**
- * Persist one watermark atomically (write `*.json.tmp` → rename — the same
- * pattern as the ledger's truncating replace, so concurrent readers never
- * observe a torn file). ALWAYS called under the per-workflow write lock
- * (`advanceWatermark` holds it across the fresh load → mutate → save
- * sequence —: the whole-map save is serialized against other
- * processes sharing the lifecycle). A failing write degrades to
- * in-memory-only with one warn: the ledger rows are already appended (never
- * lost); only cross-restart dedupe is lost. Contained — never throws.
+ * Per-native-stream ordering. With an awaited resolver supplied, a row's
+ * target lookup suspends the consumer, so rows for ONE source stream must be
+ * processed strictly in arrival order — a slow lookup for an earlier row can
+ * never let a later row advance the same stream's cursor first. The chains
+ * are keyed by the carrying session (one native log incarnation per session
+ * in DSh) and dropped as soon as a chain drains.
  */
-function saveWatermark(workflowDir: string, watermark: Watermark): void {
-  try {
-    const file = join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE)
-    const tmp = `${file}.tmp`
-    writeFileSync(tmp, JSON.stringify({ v: 1, cursors: Object.fromEntries(watermark) }))
-    renameSync(tmp, file)
-  } catch (error) {
-    log('warn', `workflow-ledger watermark write failed for ${workflowDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
+const streamChains = new Map<string, Promise<void>>()
+/** In-flight stream tasks (the resolver route) — the test seam's drain set. */
+const pendingStreamTasks = new Set<Promise<void>>()
+
+/**
+ * The test seam for the asynchronous (resolver) route: resolves once every
+ * queued per-stream task has settled, including tasks queued by earlier
+ * ones. The synchronous pre-activation route needs no await — its rows are
+ * already recorded when the registration/listener call returns.
+ */
+export async function awaitWorkflowLedgerIdle(): Promise<void> {
+  while (pendingStreamTasks.size > 0) {
+    await Promise.all([...pendingStreamTasks])
   }
 }
 
 /**
- * Advance one session's watermark entry to `nextSeq` and persist. Runs the
- * whole read-modify-write under the per-workflow inter-process lock
- * (same lock as the ledger append): the fresh load
- * starts from the latest durable cursors, so two processes sharing one
- * lifecycle never clobber each other's advances; the session entry is
- * monotonic (`Math.max` — a stale concurrent advance never regresses an
- * already-higher cursor). When a NEW session would push the map past the
- * cap, evict first: prefer an entry whose session is no longer live
- * (`isEvictable` — a live session's cursor must never be dropped, or the
- * next re-apply would re-record its rows); fall back to the oldest entry
- * when every entry is live. The residual of eviction (a later restore of an
- * evicted session re-records) is bounded by the cap and documented in the
- * README.
- *
- * DEGRADED PATH : a lock timeout (another writer stuck
- * for the full timeout — a crashed/stuck peer), a reentrancy error, or a
- * throwing critical section leaves the durable file untouched, but the
- * in-memory mirror is STILL advanced (the same monotonic `Math.max`;
- * eviction skipped — the cap bounds the durable sidecar only), so
- * re-applies in THIS process stay deduped. The durable file lags: the next
- * successful locked advance re-reads it fresh and catches up; a restart
- * reloads the stale file and re-records the outage rows ONCE (the accepted
- * bounded-duplicate mode — the ledger row above was already appended). One
- * warn names the actual state (durable cursor NOT advanced).
- *
- * Exported as the degraded-path test seam: {@link withWorkflowDirLock}'s
- * `lockOpts` (`timeoutMs`) lets a test shorten the otherwise-30 s wait —
- * the consumer itself cannot reach the catch (the ledger append takes the
- * SAME lock and would fail first), so the post-append window is driven
- * directly.
- *
- * @param isEvictable - `true` for a candidate session that is safe to evict
- *   (not live in the sessions store).
- * @param lockOpts - pass-through to {@link withWorkflowDirLock}
- *   (`timeoutMs` / `pollMs` overrides; production callers never set them).
+ * Queue one task behind the prior task of the same source stream. The task
+ * is fully contained here (a throwing scan/consume logs one warn and never
+ * rejects into the chain or a listener).
  */
-export function advanceWatermark(
-  workflowDir: string,
-  sid: string,
-  nextSeq: number,
-  isEvictable: (candidate: string) => boolean,
-  lockOpts: { timeoutMs?: number; pollMs?: number } = {},
-): void {
-  try {
-    withWorkflowDirLock(
-      workflowDir,
-      () => {
-        const watermark = loadWatermark(workflowDir, true)
-        if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
-          let victim: string | undefined
-          for (const key of watermark.keys()) {
-            if (isEvictable(key)) {
-              victim = key
-              break
-            }
-          }
-          victim ??= watermark.keys().next().value as string | undefined
-          if (victim !== undefined) {
-            watermark.delete(victim)
-            log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
-          }
-        }
-        // Monotonic advance: a concurrent process that already pushed this
-        // session's cursor past `nextSeq` must never be regressed.
-        watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
-        saveWatermark(workflowDir, watermark)
-      },
-      lockOpts,
-    )
-  } catch (error) {
-    // the durable write did NOT happen (lock timeout / reentrancy
-    // / throwing critical section). The ledger row above is already
-    // appended — keep the IN-MEMORY mirror advanced (the same monotonic
-    // `Math.max`, idempotent with the locked path) so re-applies in this
-    // process stay deduped, and name the real state in the warn: durable
-    // cursor NOT advanced, in-memory advanced. Recovery: the next
-    // successful locked advance re-reads the file fresh (catches up); a
-    // restart reloads the stale file and re-records outage rows once — the
-    // accepted bounded-duplicate mode.
-    // simplify: degraded-path advance skips the session-cap eviction — the
-    // cap bounds the durable sidecar only; a transient in-memory over-cap
-    // entry is dropped by the next locked fresh load (bounded by the
-    // outage window).
-    const watermark = loadWatermark(workflowDir)
-    watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
-    log('warn', `workflow-ledger watermark durable advance failed for ${workflowDir} — in-memory cursor advanced, durable cursor NOT (restart reloads the file; outage rows re-record once — bounded duplicate): ${errorMessage(error)}`)
-  }
+function enqueueStreamTask(key: string, task: () => Promise<void>): void {
+  const prior = streamChains.get(key) ?? Promise.resolve()
+  const run = prior
+    .then(task)
+    .catch((error) => {
+      log('warn', `workflow-ledger stream task failed (contained — later rows continue): ${errorMessage(error)}`)
+    })
+  streamChains.set(key, run)
+  pendingStreamTasks.add(run)
+  void run.finally(() => {
+    pendingStreamTasks.delete(run)
+    if (streamChains.get(key) === run) streamChains.delete(key)
+  })
 }
 
 /* ---------------------------------- mapping ---------------------------------- */
@@ -677,18 +567,17 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * `tool-workflow/*` rows (covers pre-restart runs — constructor-seeded
  * events never hit the firehose, `firstLiveSeq`); (3) a live
  * `ctx.events.on('session/event', …)` listener filtering the four types.
- * One DURABLE watermark per session id (session-log `seq` position,
- * persisted to `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` —
- * the ACTIVE workflow dir, never the root) — re-applies
- * never duplicate; no other cache. The watermark advances only AFTER a
- * successful ledger append (a failing append leaves the cursor
- * behind so the row is re-attempted at the next scan, never lost). Every
- * read/append is try/catch-contained — including `sessions.list()` itself
- * (one warn, the cold scan skipped, the consumer stays live); the
- * `sessions` service absent → one debug log + consumer disabled (composition
- * without dsh-session). All appends go through `recordWorkflowEvent` (itself
- * fully contained — a failing ledger write never crashes or alters a
- * workflow run).
+ * One DURABLE cursor per session id (session-log `seq` position, persisted to
+ * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` — the ACTIVE
+ * workflow dir, never the root) — re-applies never duplicate; no other cache.
+ * The append + cursor advance is ONE critical section inside
+ * `recordWorkflowEvent` (see its doc), so this consumer never advances a
+ * cursor separately. Every read/append is try/catch-contained — including
+ * `sessions.list()` itself (one warn, the cold scan skipped, the consumer
+ * stays live); the `sessions` service absent → one debug log + consumer
+ * disabled (composition without dsh-session). All appends go through
+ * `recordWorkflowEvent` (itself fully contained — a failing ledger write
+ * never crashes or alters a workflow run).
  *
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver
@@ -698,8 +587,18 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  *   instance; see the module doc "P-c answer observation"). Absent → the
  *   observation hook is disabled (W-B2 tests / compositions without the
  *   workflow gate).
+ * @param resolveTarget - the OPTIONAL awaited explicit-target resolver
+ *   (H3 supplies F3's `resolveExecutionLedgerTarget`). Present → every event
+ *   boundary awaits it and uses ONLY the returned target; absent → the
+ *   pre-activation file-based active set is the only route (this consumer
+ *   never infers an active writer when a resolver IS supplied).
  */
-export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, workflowAskCache?: WorkflowAskCache): void {
+export function registerWorkflowLedger(
+  ctx: Context,
+  resolver: HarnessResolver,
+  workflowAskCache?: WorkflowAskCache,
+  resolveTarget?: ResolveWorkflowLedgerTarget,
+): void {
   // The `sessions` service is absent in compositions without dsh-session —
   // skip + one debug log (documented degrade), never crash.
   const sessions = ctx.get('sessions') as SessionsView | undefined
@@ -766,93 +665,26 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     return verifiedLeaseHolderOf(agent, sessionId, cwd)
   }
 
-  const consume = (session: unknown, envelope: unknown): void => {
-    const sid = sessionIdOf(session)
-    if (sid === undefined) return
-    const row = rowOf(session, envelope)
-    if (row === undefined) return
-    // harnessDir attribution: the carrying (parent) session's workspace
-    // (`header.cwd` structural read). Unresolved workspace (no explicit
-    // config, no session cwd) → no row (consistent with the gates' silent
-    // no-op for unresolvable harness) and the watermark is NOT advanced —
-    // the row is re-evaluated at the next scan, so it records once a
-    // workspace resolves (strictly better than a permanently-lost row).
-    const workspace = sessionCwdOf(session)
-    const harnessDir = resolver.forWorkspace(workspace)
-    if (harnessDir === null) return
-    // D4 binding: this session's durable pick + no-backfill floor, and — for a
-    // LIVE session — its lease holder (the identity the dispatch gate already
-    // verified for this dispatch). An UNREADABLE record is not "no pick": the
-    // row is left alone (no workflow-dir write, no floor write) and
-    // re-evaluated at the next scan rather than attributed to whichever
-    // lifecycle happens to resolve.
-    const holder = leaseHolderOf(sid, workspace)
-    const identity: SessionHint = {
-      sessionId: sid,
-      ...(workspace === undefined ? {} : { cwd: workspace }),
-      ...(holder === undefined ? {} : { leaseHolder: holder }),
-    }
-    let hint = identity
-    let floor = 0
-    if (workspace !== undefined) {
-      const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
-      if (binding.kind === 'unavailable') {
-        log('warn', `workflow-ledger attribution paused for session ${sid} — binding store ${binding.reason} (no ledger write, row stays eligible)`)
-        return
-      }
-      floor = binding.binding?.excludedBeforeSeq ?? 0
-      const selected = binding.binding?.selectedWorkflowId
-      if (selected !== undefined) hint = { ...identity, selectedWorkflowId: selected }
-    }
-    // The exclusion floor: rows the session observed while UNBOUND (below its
-    // pick, or below the floor a former unbound observation persisted) are
-    // intentionally excluded — never replayed, even after a pick/restart.
-    if (row.seq < floor) return
-    // v3 write path: the ledger rows AND the durable watermark live in the
-    // ACTIVE workflow dir this session is BOUND to (`workflows/<id>/` — the
-    // shared active-set resolver; never the root file, never a terminal
-    // snapshot dir).
-    const target = resolveAgentFlowWriteTarget(harnessDir, hint)
-    const workflowDir = target.dir
-    if (workflowDir === null) {
-      // Unbound multi-active — the operator has not picked yet. Nothing is
-      // written into ANY workflow dir, but the observation must not be
-      // backfilled once the pick lands, so the row's next seq becomes this
-      // session's durable exclusion floor (queued to the end of the scan so a
-      // multi-row log costs ONE store write, not one per row). A failed floor
-      // write keeps the row eligible (attribution stays paused — never
-      // acknowledged persistence that did not happen). Other skip reasons (no
-      // active lifecycle, a broken root) are not an operator exclusion and
-      // leave the floor alone.
-      const unbound = target.selection.kind === 'error' && target.selection.code === 'workflow.selection.unbound-multi-active'
-      if (unbound && workspace !== undefined && row.seq + 1 > floor) {
-        observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
-      }
-      return
-    }
-    // Durable watermark: consult + advance (the in-memory Map is the
-    // persisted file's mirror — re-applies and restarts stay deduped).
-    const watermark = loadWatermark(workflowDir)
-    let next = watermark.get(sid) ?? 0
-    // Log-rebuild guard: a log SHORTER than the recorded cursor can only be
-    // a re-created session with a fresh log (id reuse after disposal) —
-    // restart the cursor so the new log's rows are not all skipped. The end
-    // seq is the installed Session's log length (`seq ≡ log.length`); live
-    // logs only grow, so this never misfires on a healthy session. The
-    // EXCLUSION floor above is deliberately NOT reset here: a rebuilt log
-    // must never replay rows the operator's pick already excluded
-    // (`row.seq < floor` returns before this point).
-    const endSeq = sessionEndSeqOf(session)
-    if (endSeq !== undefined && endSeq < next) next = 0
-    if (row.seq < next) return // earlier-scan coverage — already recorded
-    // Record-then-advance : the ledger row is appended FIRST and
-    // the durable watermark advances ONLY on success — a failing append
-    // leaves the cursor behind, so the row is re-attempted at the next scan
-    // (re-apply / restart), never permanently lost. The only residual is one
-    // bounded, visible duplicate row if the process dies between the two fs
-    // calls — the duplicate mode the design already accepts and documents.
-    if (recordWorkflowEvent({ harnessDir, workflowDir, event: row.event })) {
-      advanceWatermark(workflowDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
+  /**
+   * Record one mapped row into an EXPLICITLY resolved workflow dir: the
+   * append + cursor critical section (`recordWorkflowEvent`, which owns the
+   * durable cursor) followed by the contained observations. The source
+   * position is the row's own envelope seq + the session's log incarnation —
+   * the record identity a replay can recognize.
+   */
+  const recordRow = (session: unknown, sid: string, harnessDir: string, row: WorkflowLedgerRow, workflowDir: string): void => {
+    // Record-then-advance is INTERNAL to recordWorkflowEvent now: the row and
+    // its cursor move in one shared-lock critical section, so a crash between
+    // them replays into a found event id and only advances the cursor.
+    if (
+      recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        event: row.event,
+        source: { sessionId: sid, streamId: sessionStreamIdOf(session, sid), seq: row.seq },
+        isEvictable: (candidate) => sessions.get(candidate) === undefined,
+      })
+    ) {
       // P-c answer observation : a
       // run-start that produced a ledger row means the call RAN — the
       // approval waterfall allowed it (or the allow path let it through).
@@ -863,7 +695,7 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       // consulted for non-allowlisted workflow names under `ask`, so
       // allowlisted / ralph entries are no-ops. CONTAINED: a throwing
       // cache record degrades the observation only — the ledger row above
-      // is already appended (and the watermark advanced), the run is
+      // is already appended (and the cursor advanced), the run is
       // unaffected. The key is the UNCAPPED run name (`row.runName` —
       // matches the gate's `meta.name`); the ledger display field is
       // capped separately.
@@ -900,6 +732,113 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
   }
 
   /**
+   * The explicit-target half of one row (the resolver route): await the
+   * supplied resolver at this event boundary, then record into the target it
+   * names. A `null` target means the authority holds no active writer for
+   * this session, and an inconsistent target is refused — NEITHER falls back
+   * to the file-based active set (that would infer an active writer). The
+   * caller runs this on the session's stream chain, so a delayed lookup can
+   * never reorder watermarks.
+   */
+  const consumeWithTarget = async (
+    session: unknown,
+    sid: string,
+    harnessDir: string,
+    workspace: string,
+    row: WorkflowLedgerRow,
+  ): Promise<void> => {
+    let target: WorkflowLedgerTarget | null
+    try {
+      target = await resolveTarget!(sid, workspace)
+    } catch (error) {
+      log('warn', `workflow-ledger target resolution failed for session ${sid} (contained — no ledger write, the row stays eligible): ${errorMessage(error)}`)
+      return
+    }
+    if (target === null) return
+    const refusal = targetRefusal(target, sid)
+    if (refusal !== undefined) {
+      log('warn', `workflow-ledger target refused for session ${sid} — ${refusal} (no ledger write, no file-based fallback)`)
+      return
+    }
+    recordRow(session, sid, harnessDir, row, target.workflowDir)
+  }
+
+  const consume = (session: unknown, envelope: unknown): void | Promise<void> => {
+    const sid = sessionIdOf(session)
+    if (sid === undefined) return
+    const row = rowOf(session, envelope)
+    if (row === undefined) return
+    // harnessDir attribution: the carrying (parent) session's workspace
+    // (`header.cwd` structural read). Unresolved workspace (no explicit
+    // config, no session cwd) → no row (consistent with the gates' silent
+    // no-op for unresolvable harness) and the cursor is NOT advanced — the
+    // row is re-evaluated at the next scan, so it records once a workspace
+    // resolves (strictly better than a permanently-lost row).
+    const workspace = sessionCwdOf(session)
+    const harnessDir = resolver.forWorkspace(workspace)
+    if (harnessDir === null) return
+    // D4 binding: this session's durable pick + no-backfill floor, and — for a
+    // LIVE session — its lease holder (the identity the dispatch gate already
+    // verified for this dispatch). An UNREADABLE record is not "no pick": the
+    // row is left alone (no workflow-dir write, no floor write) and
+    // re-evaluated at the next scan rather than attributed to whichever
+    // lifecycle happens to resolve.
+    const holder = leaseHolderOf(sid, workspace)
+    const identity: SessionHint = {
+      sessionId: sid,
+      ...(workspace === undefined ? {} : { cwd: workspace }),
+      ...(holder === undefined ? {} : { leaseHolder: holder }),
+    }
+    let hint = identity
+    let floor = 0
+    if (workspace !== undefined) {
+      const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
+      if (binding.kind === 'unavailable') {
+        log('warn', `workflow-ledger attribution paused for session ${sid} — binding store ${binding.reason} (no ledger write, row stays eligible)`)
+        return
+      }
+      floor = binding.binding?.excludedBeforeSeq ?? 0
+      const selected = binding.binding?.selectedWorkflowId
+      if (selected !== undefined) hint = { ...identity, selectedWorkflowId: selected }
+    }
+    // The exclusion floor: rows the session observed while UNBOUND (below its
+    // pick, or below the floor a former unbound observation persisted) are
+    // intentionally excluded — never replayed, even after a pick/restart.
+    if (row.seq < floor) return
+    // THE EXPLICIT ROUTE (resolver supplied): the awaited target is the ONLY
+    // selection source. A target needs the carrying workspace, so a cwd-less
+    // session records nothing here (the legacy route below still serves the
+    // pre-activation composition).
+    if (resolveTarget !== undefined) {
+      if (workspace === undefined) return
+      return consumeWithTarget(session, sid, harnessDir, workspace, row)
+    }
+    // PRE-ACTIVATION ROUTE: the ledger rows AND the durable cursor live in
+    // the ACTIVE workflow dir this session is BOUND to (`workflows/<id>/` —
+    // the shared active-set resolver; never the root file, never a terminal
+    // snapshot dir).
+    const target = resolveAgentFlowWriteTarget(harnessDir, hint)
+    const workflowDir = target.dir
+    if (workflowDir === null) {
+      // Unbound multi-active — the operator has not picked yet. Nothing is
+      // written into ANY workflow dir, but the observation must not be
+      // backfilled once the pick lands, so the row's next seq becomes this
+      // session's durable exclusion floor (queued to the end of the scan so a
+      // multi-row log costs ONE store write, not one per row). A failed floor
+      // write keeps the row eligible (attribution stays paused — never
+      // acknowledged persistence that did not happen). Other skip reasons (no
+      // active lifecycle, a broken root) are not an operator exclusion and
+      // leave the floor alone.
+      const unbound = target.selection.kind === 'error' && target.selection.code === 'workflow.selection.unbound-multi-active'
+      if (unbound && workspace !== undefined && row.seq + 1 > floor) {
+        observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
+      }
+      return
+    }
+    recordRow(session, sid, harnessDir, row, workflowDir)
+  }
+
+  /**
    * The scan's EFFECTIVE START for one session: `max(success cursor, D4
    * exclusion floor, fork-lineage cut)` over the workflow dir the session
    * resolves to. Rows below the first two were already recorded (cursor) or
@@ -918,6 +857,11 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
    * even when the workspace is unknown — a cwd-less child still records via
    * `consume` under an explicitly configured `{HARNESS_DIR}`, and returning `0`
    * there would re-record exactly the prefix the cut exists to exclude.
+   *
+   * The durable cursor is NOT part of the bound on the explicit route: there
+   * the workflow dir is known only from an AWAITED target, so the walk starts
+   * from the floor/cut and the record identity (`eventId`) dedupes the rows
+   * that were already recorded.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
     const cut = sessionForkCutOf(session)
@@ -932,6 +876,8 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       log('warn', `workflow-ledger session ${sid} exclusion floor ${floor} is past its log end ${endSeq} — identity/log-rebuild drift, scan skipped (the intentional exclusion record is preserved)`)
       return endSeq
     }
+    const bounded = Math.max(floor, cut)
+    if (resolveTarget !== undefined) return bounded
     const selected = binding.binding?.selectedWorkflowId
     // The SAME hint `consume` builds for this session (identity + lease
     // holder + pick), or the scan would start from a different workflow dir
@@ -943,24 +889,46 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       ...(holder === undefined ? {} : { leaseHolder: holder }),
       ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
     }
-    const bounded = Math.max(floor, cut)
     const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
     if (workflowDir === null) return bounded
     const cursor = loadWatermark(workflowDir).get(sid) ?? 0
     return Math.max(bounded, cursor > endSeq ? 0 : cursor)
   }
 
+  /**
+   * Walk one session's captured log in order, SYNCHRONOUSLY on the
+   * pre-activation route and across awaits on the explicit-target route
+   * (every row is chained behind the previous one, so a suspended lookup can
+   * never reorder the stream's records). The walk reads `eventAt(seq)` for
+   * the captured `[startSeq, endSeq)` — no whole-log copy.
+   */
+  const runWalk = (session: unknown, startSeq: number, endSeq: number, eventAt: (seq: number) => unknown): void | Promise<void> => {
+    let seq = startSeq
+    const next = (): void | Promise<void> => {
+      while (seq < endSeq) {
+        const outcome = consume(session, eventAt(seq))
+        seq += 1
+        if (outcome !== undefined) return outcome.then(next)
+      }
+      return undefined
+    }
+    return next()
+  }
+
   // One session's snapshot pass — the shared body of the cold scan AND the
   // `session/created` backfill (a session created after apply with a seeded
-  // log is scanned exactly once here; the durable watermark keeps it
-  // idempotent across registrations). The walk reads the installed Session
-  // surface: the end seq is captured ONCE (`session.seq`), then `eventAt(i)`
-  // yields envelopes in order to `i < endSeq` — no whole-log copy, and live
-  // events appended after the capture stay the live observer's job. The scan
-  // depth brackets the pass so the queued exclusion floors flush ONCE, after
-  // the last row (see `pendingFloors`); the `finally` keeps the counter
-  // honest even if a read throws.
-  const scanSession = (session: unknown): void => {
+  // log is scanned exactly once here; the durable cursor keeps it idempotent
+  // across registrations). The walk reads the installed Session surface: the
+  // bounds are captured ONCE, synchronously (`session.seq` + the effective
+  // start), then `eventAt(i)` yields envelopes in order to `i < endSeq` — no
+  // whole-log copy, and live events appended after the capture stay the live
+  // observer's job. On the explicit route the CAPTURED bounds are queued on
+  // the session's stream chain, so the scan keeps the exact snapshot it
+  // observed while a suspended target lookup runs, and a live event for the
+  // same log waits behind it. The scan depth brackets the pass so the queued
+  // exclusion floors flush ONCE, after the last row (see `pendingFloors`);
+  // the settle path keeps the counter honest even if a read throws.
+  const scanSession = (session: unknown): void | Promise<void> => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const endSeq = sessionEndSeqOf(session)
@@ -978,12 +946,37 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     const eventAt = sessionEventAtOf(session)
     if (eventAt === undefined) return
     scanDepth += 1
-    try {
-      for (let seq = startSeq; seq < endSeq; seq += 1) consume(session, eventAt(seq))
-    } finally {
+    const settle = (): void => {
       scanDepth -= 1
       if (scanDepth === 0) flushExclusionFloors()
     }
+    if (resolveTarget !== undefined) {
+      // Explicit route: walk the CAPTURED window on the session's chain.
+      // The chain contains throwing walks (one warn, later rows continue).
+      enqueueStreamTask(sid, async () => {
+        try {
+          await runWalk(session, startSeq, endSeq, eventAt)
+        } finally {
+          settle()
+        }
+      })
+      return
+    }
+    let outcome: void | Promise<void>
+    try {
+      outcome = runWalk(session, startSeq, endSeq, eventAt)
+    } catch (error) {
+      settle()
+      throw error
+    }
+    if (outcome === undefined) {
+      settle()
+      return
+    }
+    return outcome.then(settle, (error) => {
+      settle()
+      throw error
+    })
   }
 
   // SESSION-CREATED BACKFILL — registered BEFORE the cold scan :
@@ -1039,7 +1032,15 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
   // per-listener containment: a throwing consume never surfaces.
   ctx.events.on('session/event', (session: unknown, envelope: unknown) => {
     try {
-      consume(session, envelope)
+      if (resolveTarget === undefined) {
+        consume(session, envelope)
+        return
+      }
+      const sid = sessionIdOf(session)
+      if (sid === undefined) return
+      enqueueStreamTask(sid, async () => {
+        await consume(session, envelope)
+      })
     } catch (error) {
       log('warn', `workflow-ledger live consume failed (contained — the workflow run proceeds): ${errorMessage(error)}`)
     }
