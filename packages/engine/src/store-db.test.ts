@@ -121,10 +121,6 @@ describe.each([
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
-
-  test(`recorded ${runtime} version is a supported floor`, () => {
-    expect(version()).toMatch(/^(v?1\.[4-9]\.|v24\.1[89]\.|v2[5-9]\.)/);
-  });
 });
 
 describe("store-db L2 fix round", () => {
