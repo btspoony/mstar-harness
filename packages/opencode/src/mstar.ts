@@ -66,14 +66,27 @@ import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
   composeDispatchGate,
+  decodeExecutionSessionRef,
+  executionContextFor,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
   readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
+  resumeExecutionSession,
+  validateExecutionIdentity,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusV2Doc, StoreRuntimeInfo } from "@mstar-harness/engine";
+import type {
+  EnforcementFlag,
+  ExecutionContext,
+  ExecutionIdentity,
+  ExecutionSessionRef,
+  GateResult,
+  StatusV2Doc,
+  StoreContext,
+  StoreRuntimeInfo,
+} from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +98,52 @@ type FrontmatterAndBody = {
   body: string;
 };
 type MessagePart = { type: string; text?: string };
+
+/** The only native identity OpenCode exposes to a tool hook. */
+export type OpenCodeHookSession = Readonly<{ sessionID?: unknown }>;
+
+/** R1/C3 inventory fact: this hook can decide, but cannot veto OpenCode writes. */
+export const OPENCODE_WRITE_CAPABILITY = Object.freeze({
+  entrypoint: "dist/mstar.js",
+  capability: "decision-only" as const,
+});
+
+/**
+ * Build the engine identity from OpenCode's native per-call session fact.
+ * The spawn target (`subagent`) and model-supplied arguments are deliberately
+ * absent from this path. Missing/unsafe native identity is a refusal, never a
+ * generated or cached substitute.
+ */
+export function openCodeExecutionIdentity(
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+): ExecutionIdentity {
+  const sessionId = input?.sessionID;
+  const identity = {
+    source: "host" as const,
+    sessionId: typeof sessionId === "string" ? sessionId : "",
+    ...scope,
+  };
+  validateExecutionIdentity(identity, scope);
+  return identity;
+}
+
+/**
+ * Decode and resume an OpenCode-bound reference using the native hook session.
+ * The engine re-reads authority, store identity, epoch and active row; this
+ * helper never treats a cached reference or boolean flag as admission.
+ */
+export async function resumeOpenCodeExecutionSession(
+  context: StoreContext,
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+  reference: string | ExecutionSessionRef,
+) {
+  const identity = openCodeExecutionIdentity(input, scope);
+  const executionContext: ExecutionContext = executionContextFor(context, identity);
+  const session = typeof reference === "string" ? decodeExecutionSessionRef(reference) : reference;
+  return resumeExecutionSession(executionContext, session);
+}
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
