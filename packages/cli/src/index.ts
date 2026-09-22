@@ -49,6 +49,7 @@ import {
   findingsCleanupGate,
   GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
+  hasHarnessRootDeclaration,
   isReadOnlyAssignmentRole,
   isTerminalSnapshot,
   IssueError,
@@ -397,33 +398,14 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
- * is a no-op except creating missing pieces. Ordering is normalized as the
- * final step of the gitignore routine: duplicate `.mstar/**` rules are
- * deduped segment-wise \u2014 a trailing duplicate is dropped only when no
- * un-crossable line lies strictly between it and the previously retained
- * broad rule (a custom `!.mstar/…` re-inclusion between two broad rules
- * makes the trailing broad semantically load-bearing: last-match-wins
- * re-ignores the custom path), and a misplaced `.mstar/**` (after one
- * or more canonical `!.mstar/…` re-includes, which gitignore's
- * last-match-wins would shadow) is relocated to sit immediately before the
- * first canonical re-include \u2014 but only when the move crosses no line
- * whose semantics we do not own. The broad rule may cross blank/comment
- * lines, other exact `.mstar/**` duplicates, the 5 canonical negations,
- * and our own `.mstarc` entry; every other line (custom `!.mstar/…`
- * negations, custom `.mstar/<path>` ignores, anything else) is
- * un-crossable. A broad rule already before every canonical negation is
- * correctly placed and never moves, regardless of surrounding custom
- * lines. Infeasible → the file keeps its user-authored order (missing
- * entries were already appended).
+ * is a no-op except creating missing pieces.
+ *
+ * An authored harness-root declaration (`hasHarnessRootDeclaration`) makes
+ * the `.gitignore` author-owned: the fence then writes NO bytes \u2014 no append,
+ * reorder, dedupe or normalization \u2014 and reports it as skipped. The fence
+ * only bootstraps an undeclared file with the canonical snippet; it never
+ * maintains a file that already states its own harness-root policy.
  */
-/** The 5 canonical `!.mstar/…` re-includes (verbatim from the snippet SSOT). */
-const CANONICAL_NEGATIONS: Record<string, true> = {
-  "!.mstar/AGENTS.md": true,
-  "!.mstar/knowledge/": true,
-  "!.mstar/knowledge/**": true,
-  "!.mstar/specs/": true,
-  "!.mstar/specs/**": true,
-};
 
 /**
  * Git top-level of `startDir` (lexical, symlink-safe): mirrors the engine's
@@ -471,17 +453,21 @@ async function runScaffold(pathArg: string | undefined) {
   const created: string[] = [];
   const skipped: string[] = [];
 
- // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
- // snippet literals are `.mstar/**`-based, so the append only makes sense
- // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
- // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
- // and are skipped with an explicit note. The comparison AND the fence target
- // are anchored at the git top-level of `root` (falling back to `root` when
- // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
- // the harness dir against the config file's location, so scaffolding a
- // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
- // `<subdir>/.mstar` and skip the fence while process artifacts stay
- // committable.
+  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
+  // snippet literals are `.mstar/**`-based, so the append only makes sense
+  // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
+  // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
+  // and are skipped with an explicit note. The comparison AND the fence target
+  // are anchored at the git top-level of `root` (falling back to `root` when
+  // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
+  // the harness dir against the config file's location, so scaffolding a
+  // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
+  // `<subdir>/.mstar` and skip the fence while process artifacts stay
+  // committable.
+  //
+  // An authored harness-root declaration makes the file author-owned: the
+  // fence writes NO bytes — no append, reorder, dedupe or normalization. Only
+  // an undeclared file is bootstrapped with the canonical snippet.
   const workspaceRoot = gitWorkspaceRoot(root);
   const harnessKind = detectHarnessKind(harnessDir);
   const mstarDirAtWorkspaceRoot = workspaceRoot.endsWith(path.sep)
@@ -491,301 +477,29 @@ async function runScaffold(pathArg: string | undefined) {
     const gitignorePath = workspaceRoot.endsWith(path.sep)
       ? `${workspaceRoot}.gitignore`
       : `${workspaceRoot}${path.sep}.gitignore`;
-    const snippet = emitGitignoreSnippet("mstar");
     const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-    const snippetLines = snippet.split("\n").map((line) => line.trim());
-    const fenceEntries = snippetLines.filter(
-      (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
-    );
-    const commentLines = snippetLines.filter((line) => line.startsWith("#"));
-    const missing = fenceEntries.filter((entry) => !lines.has(entry));
-    if (missing.length > 0) {
-      const missingComments = commentLines.filter((line) => !lines.has(line));
-      const broadRule = ".mstar/**";
-      const currentLines = current.split(/\r?\n/);
-      const firstNegation = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
-      if (!lines.has(broadRule) && firstNegation !== -1) {
- // gitignore = last matching pattern wins: appending `.mstar/**`
- // after existing `!.mstar/…` re-includes would shadow them. Splice
- // the canonical block start (comments + broad rule + missing
- // re-includes) BEFORE the first negation so the re-includes stay
- // effective. `.mstarc` is a plain ignore (no negations) \u2014 appended
- // at the end when missing.
-        const blockStart = [...missingComments, broadRule, ...missing.filter((entry) => entry.startsWith("!.mstar/"))];
-        currentLines.splice(firstNegation, 0, ...blockStart);
-        let next = currentLines.join("\n");
-        if (missing.includes(".mstarc")) next = `${next}${next.endsWith("\n") ? "" : "\n"}.mstarc\n`;
-        fs.writeFileSync(gitignorePath, next, "utf8");
-      } else {
- // Broad rule present (append missing entries after it) or no
- // negations to shadow (append the whole block) \u2014 both safe.
+    if (hasHarnessRootDeclaration(current)) {
+      skipped.push(".gitignore (author-owned harness-root declaration)");
+    } else {
+      const snippet = emitGitignoreSnippet("mstar");
+      const snippetLines = snippet.split("\n").map((line) => line.trim());
+      const fenceEntries = snippetLines.filter(
+        (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
+      );
+      const commentLines = snippetLines.filter((line) => line.startsWith("#"));
+      const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+      const missing = fenceEntries.filter((entry) => !lines.has(entry));
+      if (missing.length > 0) {
+        const missingComments = commentLines.filter((line) => !lines.has(line));
         const prefix = current && !current.endsWith("\n") ? "\n" : "";
         fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
+        created.push(".gitignore (canonical harness snippet)");
+      } else {
+        skipped.push(".gitignore (canonical harness snippet already present)");
       }
-      created.push(".gitignore (canonical harness snippet)");
-    }
-
- // Unconditional final normalization \u2014 gitignore is last-match-wins, so a
- // misplaced `.mstar/**` (appearing after one or more canonical
- // `!.mstar/…` re-includes, whether pre-existing or just appended) would
- // shadow them. Dedupe is SEGMENTED: a duplicate `.mstar/**` is dropped
- // only when no un-crossable line lies strictly between it and the
- // previously retained broad rule \u2014 a custom `!.mstar/…` re-inclusion
- // between two broad rules makes the trailing broad semantically
- // load-bearing (last-match-wins re-ignores the custom path), so it is
- // retained exactly where it is. The kept (earliest) broad rule is then
- // relocated to sit immediately before the first canonical re-include \u2014
- // but only when the move crosses no line whose semantics we do not own.
- // The broad rule may cross blank/comment lines, other exact
- // `.mstar/**` duplicates, the 5 canonical negations, and our own
- // `.mstarc` entry; every other line (custom `!.mstar/…` negations,
- // custom `.mstar/<path>` ignores, anything else) is un-crossable. A
- // broad rule already before every canonical negation is correctly placed
- // and never moves, regardless of surrounding custom lines. Infeasible →
- // the file keeps its user-authored order (missing entries were already
- // appended above). Every other line stays byte-for-byte. Runs after
- // EVERY branch above.
-    const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
-    const broadIndexes = finalLines
-      .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-      .filter((index) => index !== -1);
-    const canonicalNegationIndexes = finalLines
-      .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-      .filter((index) => index !== -1);
-    const firstCanonicalNegationIndex = canonicalNegationIndexes[0] ?? -1;
-    let normalized = false;
-    if (broadIndexes.length > 0) {
- // Segmented dedupe: drop a duplicate `.mstar/**` only when NO
- // un-crossable line lies strictly between it and the previously
- // retained broad rule. A custom `!.mstar/…` re-inclusion (or any
- // other un-owned line) between two broad rules makes the trailing
- // broad semantically load-bearing \u2014 gitignore's last-match-wins
- // re-ignores the custom path, and deleting the broad would flip
- // that line's meaning. Retained secondary broads stay exactly
- // where they are.
-      let removed = 0;
-      let lastRetainedBroadIndex = broadIndexes[0];
-      for (let i = 1; i < broadIndexes.length; i++) {
-        const candidate = broadIndexes[i] - removed;
-        let crossable = true;
-        for (let j = lastRetainedBroadIndex + 1; j < candidate; j++) {
-          const line = finalLines[j].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          crossable = false;
-          break;
-        }
-        if (crossable) {
-          finalLines.splice(candidate, 1);
-          removed++;
-          normalized = true;
-        } else {
-          lastRetainedBroadIndex = candidate;
-        }
-      }
-      const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
- // A broad rule already before every canonical negation is correctly
- // placed \u2014 never move it, regardless of surrounding custom lines.
- // Only a broad rule AFTER the first canonical negation is misplaced.
-      if (firstCanonicalNegationIndex !== -1 && keptIndex > firstCanonicalNegationIndex) {
- // Feasibility: the move may only cross lines whose semantics we own
- // \u2014 blank/comment lines, other exact `.mstar/**` duplicates, the 5
- // canonical negations, and our own `.mstarc` entry. Any other line
- // (custom `!.mstar/…` negation, custom `.mstar/<path>` ignore, or
- // anything else) between the first canonical negation and the kept
- // rule makes the relocation infeasible \u2014 the file keeps its
- // user-authored order.
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndex; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndex, 0, broadLine);
-          normalized = true;
-        }
-      }
- // Ownership invariant, final pass. Pipeline order matters for
- // one-run convergence:
- // 1. PARTITION \u2014 user-authored targeted `.mstar/…` rules always speak
- // LAST: relocate every targeted user rule (non-canonical
- // `!.mstar/…` re-inclusions and `.mstar/<path>` ignores \u2014 never
- // the bare broad rule, canonical negations, or our own
- // `.mstarc`) to after the fence, preserving their relative order.
- // Gitignore's last-match-wins then resolves every overlap in the
- // user's favor while our tracked results stay re-included.
- // 2. DEDUPE \u2014 after the partition no un-owned line can sit between
- // two broad rules, so any extra `.mstar/**` is redundant: keep
- // the first only.
- // 3. RELOCATE \u2014 a broad rule sitting after the first canonical
- // negation is moved before it when only owned lines lie in
- // between.
- // 4. GUARANTEE \u2014 every canonical negation occurs at least once after
- // the last broad rule (append missing occurrences; duplicates are
- // harmless in gitignore).
-      const isTargetedUserMstarRule = (line: string): boolean => {
-        const trimmed = line.trim();
-        if (trimmed === "" || trimmed.startsWith("#")) return false;
-        if (trimmed === ".mstar/**" || trimmed === ".mstarc") return false;
-        if (CANONICAL_NEGATIONS[trimmed] === true) return false;
-        if (trimmed.startsWith("!.mstar/") || trimmed.startsWith(".mstar/")) return true;
-        return false;
-      };
-      const isOwnedLine = (line: string): boolean => !isTargetedUserMstarRule(line);
-
- // 1. Partition targeted user rules to the tail (with synthesis).
-      const targetedRules = finalLines.filter((line) => isTargetedUserMstarRule(line));
-      if (targetedRules.length > 0) {
-        const owned = finalLines.filter(isOwnedLine);
-        const hadTrailingNewline = owned[owned.length - 1] === "";
-        const ownedBody = hadTrailingNewline ? owned.slice(0, -1) : owned;
- // A contents-level negation like `!.mstar/custom/**` cannot take
- // effect while its parent directory stays excluded by
- // `.mstar/**` \u2014 git prunes excluded directories without descending
- // (this is why the canonical fence pairs `!.mstar/knowledge/` with
- // `!.mstar/knowledge/**`). Synthesize the missing
- // ancestor-directory re-inclusions so the relocated user rule keeps
- // working after the fence.
-        const tail: string[] = [];
-        const ensuredDirs = new Set<string>();
-        const broadPositionsPrePartition = finalLines
-          .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-          .filter((index) => index !== -1);
-        const lastBroadPrePartition =
-          broadPositionsPrePartition[broadPositionsPrePartition.length - 1] ?? -1;
-        for (const rule of targetedRules) {
-          const trimmedRule = rule.trim();
-          if (trimmedRule.startsWith("!") && trimmedRule.endsWith("/**")) {
-            const inner = trimmedRule.slice(1, -3); // e.g. `.mstar/custom`
-            const segments = inner.split("/").slice(1); // drop the harness dir name
-            let prefix = inner.split("/")[0];
-            for (const segment of segments) {
-              prefix += "/" + segment;
-              const dirNegation = "!" + prefix + "/";
- // Idempotency: skip when the dir negation already exists
- // after the last broad rule (synthesized by an earlier run)
- // or is already queued in this pass.
-              const alreadyQueued = ensuredDirs.has(dirNegation);
-              const alreadyPresent =
-                !alreadyQueued &&
-                finalLines.some(
-                  (line, index) =>
-                    index > lastBroadPrePartition && line.trim() === dirNegation,
-                );
-              if (!alreadyQueued && !alreadyPresent) {
-                ensuredDirs.add(dirNegation);
-                tail.push(dirNegation);
-              }
-            }
-          }
-          tail.push(rule);
-        }
-        const rebuilt = [...ownedBody, ...tail];
-        const current =
-          finalLines[finalLines.length - 1] === "" ? finalLines.slice(0, -1) : finalLines;
-        if (rebuilt.join("\n") !== current.join("\n")) {
-          finalLines.length = 0;
-          finalLines.push(...rebuilt);
-          normalized = true;
-        }
-      }
-
- // Recompute broad positions after the partition.
-      const broadAfter = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadAfter.length > 1) {
- // 2. Dedupe: post-partition every line between two broad rules is
- // owned, so extra broad rules are pure redundancy. Removing them
- // can only make canonical re-inclusions effective.
-        const [first, ...duplicates] = broadAfter;
-        let removed = 0;
-        for (const duplicate of duplicates) {
-          finalLines.splice(duplicate - removed, 1);
-          removed++;
-        }
-        if (removed > 0) normalized = true;
-      }
-
- // Recompute once more; relocate a misplaced primary broad rule.
-      const broadIndexesFinal = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      const canonicalNegationIndexesFinal = finalLines
-        .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-        .filter((index) => index !== -1);
-      const firstCanonicalNegationIndexFinal = canonicalNegationIndexesFinal[0] ?? -1;
-      if (
-        broadIndexesFinal.length > 0 &&
-        firstCanonicalNegationIndexFinal !== -1 &&
-        broadIndexesFinal[0] > firstCanonicalNegationIndexFinal
-      ) {
-        const keptIndex = broadIndexesFinal[0];
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndexFinal; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "" || line.startsWith("#")) continue;
-          if (line === ".mstar/**" || line === ".mstarc") continue;
-          if (CANONICAL_NEGATIONS[line] === true) continue;
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndexFinal, 0, broadLine);
-          normalized = true;
-        }
-      }
-
- // 4. Guarantee: every canonical negation occurs at least once AFTER
- // the last broad rule. A retained/misplaced broad sitting between
- // canonical re-inclusions would otherwise shadow them under
- // last-match-wins even though the fence was reported as installed.
-      const broadIndexesLast = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadIndexesLast.length > 0) {
-        const lastBroadIndex = broadIndexesLast[broadIndexesLast.length - 1];
- // Insert missing negations BEFORE the partitioned user tail (the
- // first targeted user rule, if any) \u2014 appending after it would put
- // our negations past the user's rules, and the next run's partition
- // would move the user rules again (flip-flop).
-        let insertIndex = finalLines.findIndex((line) => isTargetedUserMstarRule(line));
-        if (insertIndex === -1) insertIndex = finalLines.length;
-        for (const negation of Object.keys(CANONICAL_NEGATIONS)) {
-          const covered = finalLines.some(
-            (line, index) => index > lastBroadIndex && line.trim() === negation,
-          );
-          if (!covered) {
-            finalLines.splice(insertIndex, 0, negation);
-            insertIndex++;
-            normalized = true;
-          }
-        }
-      }
- // Preserve a trailing newline whenever normalization changed the
- // file (appends land after any newline the original file had).
-      if (normalized && finalLines[finalLines.length - 1] !== "") finalLines.push("");
-    }
-    if (normalized) {
-      fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
-      created.push(".gitignore (canonical harness snippet reordered)");
-    } else if (missing.length === 0) {
-      skipped.push(".gitignore (canonical harness snippet already present)");
     }
   } else {
-    skipped.push(".gitignore (canonical harness snippet) \u2014 custom harness layout manages its own ignore rules");
+    skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
   }
 
  // Minimal {HARNESS_DIR}/AGENTS.md harness-layer rules (tracked result).

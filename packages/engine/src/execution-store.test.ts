@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertExecutionSessionCurrent, resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin } from "./coordination.js";
 import {
@@ -115,6 +116,7 @@ const EXECUTION_COLUMNS: Record<string, string[]> = {
     "retirement_json",
     "created_at",
     "updated_at",
+    "coverage_json",
   ],
 };
 
@@ -290,15 +292,17 @@ function foreignKeys(db: StoreDb, table: string): string[] {
     .sort();
 }
 
-describe("execution-schema: migration 4 (execution-authority)", () => {
+describe("execution-schema: append-only coverage migration", () => {
   describe("migration identity", () => {
-    test("keeps the applied v1\u2013v3 checksums and appends execution-authority as version 4", () => {
+    test("keeps the applied v1–v3 checksums and appends execution coverage as version 5", () => {
       for (const version of [1, 2, 3]) {
         expect(migrationChecksum(MIGRATIONS[version - 1])).toBe(FROZEN_V3_CHECKSUMS[version]);
       }
       expect(MIGRATIONS[3].version).toBe(4);
       expect(MIGRATIONS[3].name).toBe("execution-authority");
-      expect(MIGRATIONS.length).toBe(4);
+      expect(MIGRATIONS[4].version).toBe(5);
+      expect(MIGRATIONS[4].name).toBe("execution-coverage-column");
+      expect(MIGRATIONS.length).toBe(5);
     });
   });
 
@@ -357,13 +361,15 @@ describe("execution-schema: migration 4 (execution-authority)", () => {
           operation_id: "op-1",
           request_hash: "req-hash-1",
         });
-        // The applied rows 1–3 keep their checksums; migration 4 is appended.
+        // The applied rows 1–3 keep their checksums; migrations 4 and 5 append.
         expect(all(db, "select version, name, checksum from schema_version order by version")).toEqual([
           { version: 1, name: "issue-core", checksum: FROZEN_V3_CHECKSUMS[1] },
           { version: 2, name: "catalog-authority", checksum: FROZEN_V3_CHECKSUMS[2] },
           { version: 3, name: "execution-projections", checksum: FROZEN_V3_CHECKSUMS[3] },
           { version: 4, name: "execution-authority", checksum: migrationChecksum(MIGRATIONS[3]) },
+          { version: 5, name: "execution-coverage-column", checksum: migrationChecksum(MIGRATIONS[4]) },
         ]);
+        expect(all(db, "pragma table_info(execution_migrations)").some((row: { name?: unknown }) => row.name === "coverage_json")).toBe(true);
         expect(all(db, "pragma foreign_key_check")).toEqual([]);
         expect(one(db, "pragma integrity_check")).toEqual({ integrity_check: "ok" });
       } finally {
@@ -2351,6 +2357,181 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
       db.close();
     }
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
+  });
+
+  test("resumes an active native identity across explicit coordinator and plan roles without revision change", async () => {
+    const shared = "host-dual-role";
+    const fixture = await createdWorkflow("session-resume", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-resume-coordinator"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath: join(context.harnessDir, "worktrees", "p-1"), workingBranch: "feature/resume-p-1" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const planRef = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-resume-plan"),
+    );
+    const before = sessionRows(context);
+    const resumedCoordinator = await resumeExecutionSession(domainContext(context, coordinator), coordinatorRef.data);
+    const resumedPlan = await resumeExecutionSession(domainContext(context, planPm), planRef.data);
+    expect(resumedCoordinator.data).toEqual(coordinatorRef.data);
+    expect(resumedPlan.data).toEqual(planRef.data);
+    expect(resumedCoordinator.token).toBe(coordinatorRef.token);
+    assertExecutionSessionCurrent(domainContext(context, coordinator), coordinatorRef.data);
+    assertExecutionSessionCurrent(domainContext(context, planPm), planRef.data);
+    expect(sessionRows(context)).toEqual(before);
+    expect(() => assertExecutionSessionCurrent(domainContext(context, planPm), { ...planRef.data, sessionId: "copied" })).toThrow();
+    const foreign = await createdWorkflow("session-resume-foreign", shared);
+    await expect(resumeExecutionSession(domainContext(foreign.context, coordinator), coordinatorRef.data)).rejects.toMatchObject({
+      code: "execution.scope-mismatch",
+    });
+    const revoked = rawDb(storePath(context));
+    try {
+      revoked.prepare("update execution_sessions set state = 'revoked' where workflow_id = 'wf-1' and role = 'plan-pm'").run();
+    } finally {
+      revoked.close();
+    }
+    expect(() => assertExecutionSessionCurrent(domainContext(context, planPm), planRef.data)).toThrow();
+  });
+
+  test("migrated handoff keeps historical submitter association without reviving authorization", async () => {
+    const shared = "host-migrated";
+    const fixture = await createdWorkflow("migrated-handoff", shared);
+    const { context, workflowToken, planTokens, epoch } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-migrated-coordinator"),
+    );
+    preparePlanRow(context, "p-1", {
+      worktreePath: join(context.harnessDir, "worktrees", "p-1"),
+      workingBranch: "feature/migrated-handoff",
+    });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const planRef = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-migrated-plan"),
+    );
+    const handoff = {
+      id: "handoff-migrated",
+      attempt: 1,
+      state: "submitted",
+      submitted_by: shared,
+      submitted_at: TS,
+      source_branch: "feature/migrated-handoff",
+      source_sha: "a".repeat(40),
+      worktree_path: join(context.harnessDir, "worktrees", "p-1"),
+      review_base: "b".repeat(40),
+      review_head: "c".repeat(40),
+      qc: {
+        decision: "approve",
+        reports: [{ path: join(context.harnessDir, "sdd", "migrated-handoff", "qc1.md"), sha256: "d".repeat(64) }],
+        consolidated: { path: join(context.harnessDir, "sdd", "migrated-handoff", "qc.md"), sha256: "e".repeat(64) },
+      },
+      qa: {
+        gate: "mandatory",
+        decision: "pass",
+        report: { path: join(context.harnessDir, "sdd", "migrated-handoff", "qa.md"), sha256: "f".repeat(64) },
+      },
+    };
+    const db = rawDb(storePath(context));
+    try {
+      const stored = one(db, "select coordination_json, state_json from execution_plans where workflow_id = 'wf-1' and plan_id = 'p-1'");
+      const coordination = JSON.parse(String(stored.coordination_json)) as Record<string, unknown>;
+      coordination.progress = { status: "InReview", summary: "historical handoff", evidence_paths: [] };
+      coordination.handoff = handoff;
+      const state = JSON.parse(String(stored.state_json)) as Record<string, unknown>;
+      state.status = "InReview";
+      db.prepare("update execution_plans set coordination_json = ?, state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run(
+        JSON.stringify(coordination),
+        JSON.stringify(state),
+      );
+      db.prepare("update execution_sessions set state = 'suspended' where workflow_id = 'wf-1' and role = 'plan-pm'").run();
+      db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      db.close();
+    }
+
+    const history = await readExecutionState(context);
+    const migratedPlan = history.data.workflows[0]?.plans.find((plan) => plan.plan.id === "p-1");
+    expect(migratedPlan?.coordination?.handoff).toMatchObject({ submitted_by: shared, state: "submitted" });
+    expect(migratedPlan?.session).toBeNull();
+    expect(migratedPlan?.executionLease).toMatchObject({ status: "held", holder_session_id: shared });
+    expect(history.epoch).toBe(epoch + 1);
+
+    await expect(readExecutionPlan(domainContext(context, planPm), planRef.data, "p-1")).rejects.toMatchObject({
+      code: "store.stale-epoch",
+    });
+    const currentPlanToken = history.data.workflows[0]?.planTokens["p-1"];
+    await expect(
+      bindExecutionSession(
+        domainContext(context, planPm),
+        sessionBind("wf-1", "p-1", currentPlanToken as ExecutionToken, "bind-migrated-revival"),
+      ),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+    expect(migratedPlan?.session).toBeNull();
+    const beforeMalformedRows = sessionRows(context);
+    const beforeMalformedFootprint = executionFootprint(context);
+    const malformed = rawDb(storePath(context));
+    try {
+      const row = one(malformed, "select coordination_json from execution_plans where workflow_id = 'wf-1' and plan_id = 'p-1'");
+      const malformedCoordination = JSON.parse(String(row.coordination_json)) as Record<string, unknown>;
+      (malformedCoordination.handoff as Record<string, unknown>).submitted_by = 42;
+      malformed.prepare("update execution_plans set coordination_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run(
+        JSON.stringify(malformedCoordination),
+      );
+    } finally {
+      malformed.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(sessionRows(context)).toEqual(beforeMalformedRows);
+    expect(executionFootprint(context)).toEqual(beforeMalformedFootprint);
+  });
+  test("reads the committed authority after a clean close folded the journal into the store file", async () => {
+
+    // This failure mechanism, made deterministic. This runtime completes a
+    // closed connection's SQLite cleanup — checkpoint every committed frame into
+    // the database file, then remove the now-empty `-wal`/`-shm` pair — when the
+    // closed handle is collected rather than when `close()` returns, so the
+    // shape a store is left in is decided by the garbage collector. On Bun
+    // 1.4.0 a read landing after that cleanup refused `store.corrupt: unable to
+    // open database file`: SQLite reads a WAL database THROUGH its journal, and
+    // a read-only connection can never create the `-wal` it needs. The forced
+    // collection makes the cleanup happen HERE instead of at an arbitrary point
+    // in this file; the authority it folds in must still be served.
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-quiesced-wal", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-quiesced-coordinator"),
+    );
+    const accepted = executionFootprint(context);
+
+    Bun.gc(true);
+    // The precondition this case is about: SQLite's own quiesced shape — every
+    // committed frame in the database file, both sidecars gone — is really on
+    // disk. If a runtime stops leaving it, this fails here rather than passing
+    // the reads below for the wrong reason.
+    expect(existsSync(`${storePath(context)}-wal`)).toBe(false);
+    expect(existsSync(`${storePath(context)}-shm`)).toBe(false);
+
+    // That folded-in state is the whole committed authority, and both reads
+    // serve it: the root graph, and the plan read of the reported case.
+    const root = await readExecutionState(context);
+    expect(root.data.workflows.map((entry) => entry.state.id)).toEqual(["wf-1"]);
+    expect(root.data.workflows[0]?.coordinator).toEqual(coordinatorRef.data);
+    const plan = await readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1");
+    expect(plan.token).toBe(planTokens["p-1"]);
+    expect(plan.data.plan).toMatchObject({ id: "p-1", status: "Todo" });
+    // Repeating the read is not a one-shot: the recorded failure kept refusing.
+    expect((await readExecutionState(context)).token).toBe(root.token);
+    // Read-only: the authority those reads served is the accepted one, unmoved.
+    expect(executionFootprint(context)).toEqual(accepted);
   });
 
   test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {
