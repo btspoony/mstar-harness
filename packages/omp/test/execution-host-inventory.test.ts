@@ -102,7 +102,7 @@ describe("execution host inventory — one session, one workflow, one export", (
     expect(inventory.export.document.records.map((record) => record.entryId)).toEqual(["entry-bind", "entry-checkpoint"]);
   });
 
-  test("the digest names the exact H1 export bytes, and the envelope is canonical with one LF", () => {
+  test("the digest names the H1 export bytes without the framing LF, and the envelope is canonical with one LF", () => {
     const inventory = buildExecutionHostInventory({
       workflowId: WORKFLOW_ID,
       hostSessionId: HOST_SESSION_ID,
@@ -110,13 +110,20 @@ describe("execution host inventory — one session, one workflow, one export", (
     });
 
     const exportBytes = exportExecutionHostHistory(inventory.export.document);
-    expect(inventory.export.sha256).toBe(createHash("sha256").update(exportBytes, "utf8").digest("hex"));
+    // §4.2's one rule (and the repository's ledger-body house rule): the digest
+    // covers the serialized document EXCLUDING its terminal LF. The framing LF is
+    // not part of the body's identity, so the two hashes must differ.
+    expect(exportBytes.endsWith("\n")).toBe(true);
+    const bodyBytes = exportBytes.slice(0, -1);
+    expect(inventory.export.sha256).toBe(createHash("sha256").update(bodyBytes, "utf8").digest("hex"));
     expect(inventory.export.sha256).toBe(historyExportDigest(inventory.export.document));
+    expect(inventory.export.sha256).not.toBe(createHash("sha256").update(exportBytes, "utf8").digest("hex"));
 
     const envelope = exportExecutionHostInventory(inventory);
     expect(envelope.endsWith("\n")).toBe(true);
     expect(envelope.trimEnd().includes("\n")).toBe(false);
     expect(JSON.parse(envelope)).toEqual(inventory);
+    // The envelope digest covers the delivered bytes (framing LF included).
     expect(inventoryDigest(inventory)).toBe(createHash("sha256").update(envelope, "utf8").digest("hex"));
   });
 

@@ -104,12 +104,23 @@ function isNonEmpty(value: unknown): value is string {
 }
 
 /**
- * The digest of one exported history value: sha256 over the exact bytes H1's
- * exporter returns (canonical JSON plus its single terminal LF). Exported so a
- * consumer's recomputation and this producer's digest use one rule.
+ * The digest of one exported history value: sha256 over the canonical bytes
+ * `exportExecutionHostHistory` returns **excluding the single terminal LF**.
+ *
+ * That is the repository's house rule for a ledger body's identity — the
+ * append-only identity index defines a row as the sha256 of the "exact ledger
+ * line bytes excluding the final LF" — and canonical contract §4.2 now states
+ * it as the one rule for `export.sha256`: the serialized document's terminal LF
+ * is framing, and the ENVELOPE's own LF is not part of this digest either. The
+ * slice is exactly one byte (canonical serialization always emits exactly one
+ * terminal LF), never a trim of arbitrary trailing whitespace, so a body that
+ * legitimately ends in `\n` inside a string keeps its bytes.
+ *
+ * Exported so a consumer's recomputation and this producer's digest use one rule.
  */
 export function historyExportDigest(document: ExecutionHostHistory): string {
-  return createHash("sha256").update(exportExecutionHostHistory(document), "utf8").digest("hex");
+  const canonical = exportExecutionHostHistory(document);
+  return createHash("sha256").update(canonical.slice(0, -1), "utf8").digest("hex");
 }
 
 /**
@@ -180,7 +191,12 @@ export function exportExecutionHostInventory(inventory: ExecutionHostInventory):
   return serializeExecutionValue(inventory);
 }
 
-/** sha256 of the exact canonical envelope bytes — the evidence witness digest. */
+/**
+ * sha256 of the exact canonical envelope bytes as delivered — the evidence
+ * witness digest, framing LF included (that byte is part of the FILE this
+ * producer hands over, unlike the terminal LF of the embedded export, which the
+ * §4.2 rule excludes from `export.sha256`).
+ */
 export function inventoryDigest(inventory: ExecutionHostInventory): string {
   return createHash("sha256").update(exportExecutionHostInventory(inventory), "utf8").digest("hex");
 }
