@@ -100,6 +100,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **seam lint**——harness 下 `DESIGN.md` / audit plan / 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。`mstar_iteration_gate` 镜像改用 v3 输入 `snapshot_path`（`{HARNESS_DIR}/workflows/<id>/snapshot.json`——镜像 `mstar iteration gate --workflow <id>`；旧的根 `status_path` 输入随 v1 读取路径移除）。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
+- **插件自有命令**——`/mstar-execution` 在镜像之外注册自己的 `ctx.commands` 条目（hint `{operation JSON}`）：一个封闭 JSON 联合 `adopt`（规范 `exec-session-v1:` 引用，仅在只读 C1 session resume 成功后采纳）、`clear`、或 `run`（在覆写的执行身份下以 shell-free 方式启动原生 argv，并移除全部伪造/legacy 环境键）。身份只来自承载的原生会话自身 header，已知 leaf/subagent seat 在任何解析与 harness 探测之前即对每个操作拒绝，payload 绝不 steer 进模型——这是协作式操作者入口，不是生命周期否决，也不是 OS 进程围栏（`adopt`/`clear` 只写本会话自己的持久 binding 槽位）。
 - **pre-step catalog 行**——每个组合后的 agent 步骤都会追加**一条**统一的 `mstar-engine` catalog 消息：水印（统一 mstar 版本、harness 目录、enforcement）、迭代相位闸门段（解析到 steering compass 时）与工作区状态摘要段（工作区有 `status.json` 时：plan 注册表、open residual、分支/政策锚点、活跃 lease、知识摘要、compass 方向）。该行是 digest 门控的（每 turn 注入一次、变化时才重发），并共享一次按工作区 TTL 缓存的构建（`catalogTtlMs`，默认 60 秒）。
 
 ### Enforcement semantics

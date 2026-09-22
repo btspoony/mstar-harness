@@ -23,7 +23,10 @@ or a custom profile).
   **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**. Each
   command steers its command body into the receiving agent as a USER-source
   message (the mstar workflow prompt — the model executes it as a task, not
-  injected context), returning a success result.
+  injected context), returning a success result. Alongside that mirror the
+  plugin registers ONE command of its own, **`/mstar-execution`** — a closed-JSON
+  operator entry that is **not** steered into the model (§ `/mstar-execution` —
+  native human admission below).
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
@@ -126,7 +129,7 @@ or a custom profile).
 ## Runtime and upgrade
 
 - **Runtime**: Bun-hosted host — the plugin, its gates and its in-process engine all run under dsh's Bun, floor **Bun >=1.4.0** with in-process native `node:sqlite`. Release-surface `enforcement` / `.mstarc` settings (see § Configuration) are gates, not a runtime floor: below-floor or missing-capability refuses actionably instead of degrading to a transport or JSON.
-- **Upgrade / reload**: `dsh plugin --profile web add <spec>` against the published version, or re-run `npx @mstar-harness/cli init --target dsh`; then reload the profile so the composed rows pick up the new build. The bundled `harness-skills/` mirror is a build-time sync — a checkout that has not run `bundle-assets` mounts no skills.
+- **Upgrade / reload**: `dsh plugin --profile web add <spec>` against the published version, or re-run `npx @mstar-harness/cli init --target dsh`; then reload the profile so the composed rows pick up the new build. The bundled `harness-skills/` mirror is a build-time sync — a checkout that has not run `bundle-assets` mounts no skills. The plugin-owned **`/mstar-execution`** command comes from the plugin's own build (it is not part of the `harness-commands/` mirror), so an installed copy only offers it after that build is refreshed and the profile reloaded — a source checkout that has not been built has it neither.
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
 ## Skill loading
@@ -216,13 +219,79 @@ answers, and no tool argument or config key selects one:
 - A missing (`store.not-initialized`) or staged (`store.not-active`) store keeps
   the legacy file authority in force, so those writes still pass through the
   register's own document validator.
-- This reference declares **only what the package ships**. A host-native human
-  execution command (adopt a reference / run argv under an acquired identity)
-  is **not** part of this host's shipped surface, so no association entry is
-  documented for it and none may be assumed: on dsh, association and adoption
-  happen through the shared CLI under an independently acquired identity, as on
-  every other host, and a source file that implements such a command is not an
-  installed capability.
+- This plugin **does** ship one host-native human execution entry: the
+  plugin-owned command **`/mstar-execution`**, registered through the `ctx.commands`
+  service (`registerExecutionSessionCommand` →
+  `ctx.inject(['commands'])` → `commands.register({name:'mstar-execution', …, input:{hint:'{operation JSON}'}})`,
+  `packages/dsh/src/gates/execution-session.ts:127-136`), wired at plugin apply
+  (`packages/dsh/src/index.ts:725`). Its semantics are documented under
+  **§ `/mstar-execution` — native human admission** below.
+
+### `/mstar-execution` — native human admission
+
+A cooperative association/transport boundary the human invokes directly, never a
+model tool and never a fence:
+
+- **Closed JSON input, executed without sending the payload to the model.** The
+  raw input is parsed as JSON by `parseExecutionRequest`
+  (`execution-session.ts:52-71`) into exactly one of three shapes; anything else
+  refuses:
+  `{operation:"adopt", sessionRef}` (only those two keys; `sessionRef` the
+  canonical `exec-session-v1:` wire), `{operation:"clear"}` (no extra fields), or
+  `{operation:"run", workflowId, role:"coordinator"|"plan-pm", planId, argv}`
+  (exactly five keys, non-empty `argv` of non-empty strings, `planId` `null` or a
+  non-empty string). A malformed, mixed or extra-field payload throws
+  (`execution command input must be JSON` / `… must be a closed JSON object` /
+  `adopt requires only a canonical sessionRef` / `clear does not accept extra
+  fields` / `run requires workflowId, role, planId, and a non-empty argv` /
+  `unknown execution operation`). The command's returned text goes to the
+  operator, not into the model's context: the payload is an operator intent, and
+  no model tool path can reach this entry.
+- **Identity comes from the carrying native session only.** `nativeFacts`
+  (`:38-46`) reads `CommandInvocation.agent.session.header` — `header.id` (the
+  session id) and `header.cwd` — and throws `native session identity and cwd are
+  required` when either is missing; nothing is taken from command fields, tool
+  arguments or a spawn target.
+- **Known leaf/subagent seats refuse on every operation, before any parse and
+  before the harness probe** (`:98-104`): `header.origin === 'subagent'` or a
+  positive `header.delegationDepth` throws `known leaf sessions cannot adopt,
+  clear, or launch execution` — a leaf can never obtain a writer seat and can
+  never hand a coordinator identity to a child. Eligibility is taken from these
+  authoritative facts; if it cannot be established the call refuses rather than
+  inferring it.
+- **`adopt` is read-only first.** It decodes the reference, requires
+  `ref.sessionId` to equal the native session id, builds the canonical
+  `ExecutionBinding {version: 1, harnessRoot, session}` and runs the **C1
+  resume** (`resumeExecutionSession`) under a host identity before anything is
+  written; a resumed session/workflow that does not match the native session
+  throws `current execution session admission did not match the native session`,
+  and only then does the F3 slot adoption run
+  (`adoptExecutionBinding`, `workflow-selection.ts`). Success text:
+  `execution binding adopted for <workflowId>`. Adoption mints **no** authority:
+  the engine's own admission did.
+- **`clear` is one explicit slot-clearing write** (`clearExecutionBinding`,
+  `workflow-selection.ts`) that preserves the session's user selection and
+  exclusion floor; a session with nothing to clear throws `no clearable
+  execution binding`. Success text: `execution binding cleared`.
+- **`run` is the host-native launcher.** It validates the requested scope with
+  `executionContextFor` (an invalid scope throws before a child exists), then
+  spawns with `shell: false` (`runExecutionCommand`, `:79-95`) after building the
+  child environment in `identityEnv` (`:72-77`), which **deletes every spoof key**
+  (`MSTAR_EXECUTION_IDENTITY`, `MSTAR_EXECUTION_SESSION_ID`,
+  `MSTAR_HOST_SESSION_ID`, `MSTAR_HARNESS_DIR`, `MSTAR_SESSION_ID`,
+  `MSTAR_CALLER_ID`) and then sets `MSTAR_EXECUTION_IDENTITY` to
+  `serializeExecutionValue({source:"host", sessionId, workflowId, role, planId})` —
+  the engine's canonical identity serialization. The child inherits the session's
+  native id (no local identity is minted), cancellation aborts it (`SIGTERM`),
+  and the result is `success` on exit 0 (text = stdout) or `error` otherwise
+  (text = stderr or `execution exited with code <n>`).
+- **Capability stays decision-only.** This command is not a veto and not an OS
+  process fence: it cannot stop an arbitrary native write, and the plugin's
+  other verdicts (status/store authority, dispatch, lints) remain decision
+  records plus logs — on this host an authority decision is surfaced, not
+  enforced, wherever the host exposes no refusal channel. Model tool paths
+  consume persisted bindings; they never gain authority from a human command
+  payload.
 
 ## Agent-flow ledger
 
@@ -378,6 +447,20 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   invalidation closure) → the next pre-step rebuilds and (digest text change)
   re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
   still bounds non-ledger staleness.
+- **Explicit ledger target (active authority)**: the plugin registers the
+  consumer with F3's explicit resolver — `registerWorkflowLedger(ctx, resolver,
+  adapter.workflowAskCache, resolveExecutionLedgerTarget)`
+  (`packages/dsh/src/index.ts:644`; resolver at
+  `gates/workflow-selection.ts`). Every event boundary awaits it and uses ONLY
+  the returned target: an ACTIVE target requires the session's canonical stored
+  `ExecutionBinding` plus a current SQL session row (`resumeExecutionSession`,
+  with store/epoch agreement) before it may name a workflow dir, so a stale,
+  revoked, missing, corrupt or scope-mismatched witness returns nothing and
+  never falls back to the root or to a newest/only workflow; the legacy
+  file-based target is produced only while no active execution authority exists,
+  and only for a session with no stored execution binding. A `null` or
+  inconsistent target records nothing at all — the consumer never infers an
+  active writer.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
   read / settle / catalog-join listeners), `gates/catalog.ts` (agent-flow line
@@ -539,16 +622,16 @@ through the agent-flow ledger (§ Agent-flow ledger).
 | Surface | Path / invocation |
 |---------|-------------------|
 | Plugin skills | Skill **name** via the mstar skill-local provider (`ctx.skills`); canonical `$DSH_BUNDLED_SKILL_DIR/<name>` |
-| Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (registered from `harness-commands/`) |
+| Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (registered from `harness-commands/`) plus the plugin-owned `/mstar-execution` (closed-JSON operator entry; its payload is never steered to the model) |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
 ## Command delivery (dsh host, updated 2026-08-11)
 
-The dsh web client resolves slash commands against a client-side lexicon driven by the registry's `input.hint`. Every mstar command declares a frontmatter `input` hint (see `commands/*.md`), so the client **claims** it on menu pick: `/name ` is inserted into the composer with the command highlight and the hint as ghost text (e.g. `/iteration-start [direction] [pause]`), the user types follow-up args (or just presses Enter for arg-less commands), and the line submits only on Enter. The handler steers the command body into the receiving agent as a USER-source message, appending the typed args as a `## User input` section when present.
+The dsh web client resolves slash commands against a client-side lexicon driven by the registry's `input.hint`. Every mstar command declares a frontmatter `input` hint (see `commands/*.md`), so the client **claims** it on menu pick: `/name ` is inserted into the composer with the command highlight and the hint as ghost text (e.g. `/iteration-start [direction] [pause]`), the user types follow-up args (or just presses Enter for arg-less commands), and the line submits only on Enter. The handler steers the command body into the receiving agent as a USER-source message, appending the typed args as a `## User input` section when present. The plugin-owned **`/mstar-execution`** declares its own registry hint (`{operation JSON}`) and is the exception to that steering: it is executed by the plugin handler, its payload never reaches the model, and the hint text is a placeholder, not a body to parse.
 
 **Degradation fallback:** when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
 
-**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
+**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity). **`/mstar-execution` is not covered by this fallback**: it has no repo `commands/<name>.md` and no model-facing semantics — a body-less mention of it is not an instruction to the model, and the model must never try to parse, replay or substitute its JSON payload; the operator invokes it through the host command registry.
 
 ## Harness dir and environment
 
