@@ -265,12 +265,12 @@ function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined
   if (value === null || value === undefined) return value === null ? null : undefined
   if (!isPlainObject(value) || value.version !== 1) return undefined
   if (typeof value.harnessRoot !== 'string' || value.harnessRoot === '' || !isPlainObject(value.session)) return undefined
-  const session = value.session
+  const session = value.session as Record<string, unknown>
   if (typeof session.storeId !== 'string' || session.storeId === '' ||
     typeof session.workflowId !== 'string' || session.workflowId === '' ||
     typeof session.sessionId !== 'string' || session.sessionId === '' ||
     (session.role !== 'coordinator' && session.role !== 'plan-pm') ||
-    !Number.isSafeInteger(session.epoch) || session.epoch <= 0 ||
+    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0 ||
     (session.role === 'coordinator' ? session.planId !== null : typeof session.planId !== 'string' || session.planId === '')) return undefined
   return value as ExecutionBinding
 }

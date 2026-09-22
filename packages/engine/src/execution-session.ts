@@ -8,6 +8,18 @@ const SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId", "pl
 
 type SessionScope = Omit<ExecutionCaller, "sessionId">;
 
+/**
+ * Canonical §3.1 host-side binding of an adopted execution session: the
+ * adapter's durable selection record. It is a value shape only — persisting it
+ * grants no authority, and an epoch mismatch invalidates the reference it
+ * carries, never the user's selection.
+ */
+export type ExecutionBinding = Readonly<{
+  version: 1;
+  harnessRoot: string;
+  session: ExecutionSessionRef;
+}>;
+
 function scopeOf(scope: SessionScope): ExecutionIdentityScope {
   return { workflowId: scope.workflowId, role: scope.role, planId: scope.planId };
 }

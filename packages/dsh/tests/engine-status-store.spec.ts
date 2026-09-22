@@ -970,7 +970,7 @@ describe('engine-status snapshot store — execution binding adoption', () => {
     })).toEqual({ kind: 'degraded', reason: 'invalid-execution-binding' })
     expect(readWorkflowSessionBinding(harness, 'session-a', '/workspace')).toMatchObject({
       kind: 'ok',
-      binding: { executionBinding: { storeId: 'store-a', epoch: 4, workflowId: 'wf-a' } },
+      binding: { executionBinding: canonical },
     })
   })
 })

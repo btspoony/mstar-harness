@@ -645,10 +645,12 @@ export function adoptExecutionBinding(
   executionBinding: ExecutionBinding,
 ): boolean {
   if (executionBinding.harnessRoot !== harnessDir || executionBinding.session.sessionId !== sessionId) return false
+  const existing = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (existing.kind === 'unavailable') return false
   const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
     selectedWorkflowId: executionBinding.session.workflowId,
     executionBinding,
-    excludedBeforeSeq: 0,
+    excludedBeforeSeq: existing.binding?.excludedBeforeSeq ?? 0,
   })
   return written.kind === 'written'
 }
@@ -659,7 +661,6 @@ export function clearExecutionBinding(harnessDir: string, sessionId: string, cwd
   if (binding.kind !== 'ok') return false
   return updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
     executionBinding: null,
-    ...(binding.binding?.selectedWorkflowId === undefined ? {} : { selectedWorkflowId: binding.binding.selectedWorkflowId }),
     excludedBeforeSeq: binding.binding?.excludedBeforeSeq ?? 0,
   }).kind === 'written'
 }
@@ -683,7 +684,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
     if (executionBinding !== undefined && executionBinding !== null) return null
     const legacy = resolveActiveWorkflow(harnessDir, hint)
     if (legacy.kind !== 'active') return null
-    const targetDir = join(harnessDir, legacy.dir)
+    const targetDir = join(resolveWorkflowDir(harnessDir, { harnessDir }), legacy.workflowId)
     if (!existsSync(targetDir)) return null
     try {
       if (!statSync(targetDir).isDirectory()) return null
@@ -698,8 +699,8 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
     executionBinding.session.workflowId !== source.workflowId) return null
   try {
     const context = executionContextFor({ harnessDir }, {
-      source: 'local',
-      sessionId: executionBinding.session.sessionId,
+      source: 'host',
+      sessionId,
       workflowId: executionBinding.session.workflowId,
       role: executionBinding.session.role,
       planId: executionBinding.session.planId,
