@@ -24,6 +24,7 @@ import { AGENT_FLOW_FILE, AGENT_FLOW_MAX_EVENTS, readAgentFlow, recordDispatch, 
 import {
   AGENT_FLOW_COMPACTION_FILE,
   AGENT_FLOW_HISTORY_DIR,
+  EXECUTION_MAINTENANCE_LOCKDIR,
   AGENT_FLOW_INDEX_FILE,
   AGENT_FLOW_SIZE_GATE_BYTES,
   advanceWatermark,
@@ -2530,6 +2531,37 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
     }
   })
 
+  it('a torn line whose cut falls INSIDE the eventId is not attributed — the event is recorded once, the fragment stays', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-torn-mid-id-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      // The previous writer died mid-append: its bytes stop INSIDE the id, so
+      // no complete identity ever landed and the fragment cannot be attributed
+      // to this event. The complete row is therefore appended once (refusing
+      // every unattributable fragment would stall the ledger on unrelated
+      // damage), and the fragment is preserved byte-for-byte for diagnosis.
+      const cut = '{"v":1,"ts":1700000000000,"kind":"workflow-run","runId":"run-1","name":"audit","eventId":"wfe1:workflow-run:sess-a:sess-a:0'
+      await writeFile(file, cut)
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-a'),
+        event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
+      })).toBe(true)
+
+      const content = readFileSync(file, 'utf8')
+      // The fragment is untouched and precedes exactly one accepted row.
+      expect(content.startsWith(cut)).toBe(true)
+      expect(content.slice(cut.length).trim().split('\n')).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
+      // The fragment is damage, not an accepted occurrence: the view sees one row.
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('separate log incarnations keep separate identities: the same seq on two streams is two rows', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-identity-stream-')
     try {
@@ -2838,6 +2870,101 @@ describe('agent-flow — durability, legacy bound and archive boundaries (F2)', 
     }
   })
 
+  it('a held execution-maintenance window refuses every write path, and the SAME event records once after it closes', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-maintenance-window-')
+    const priorRunner = process.env.MSTAR_STORE_TEST_RUNNER
+    const priorWait = process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS
+    process.env.MSTAR_STORE_TEST_RUNNER = '1'
+    process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS = '120'
+    try {
+      // The engine's activation/restore window: the maintenance lockdir exists.
+      const maintenance = join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR)
+      await mkdir(maintenance, { recursive: true })
+
+      const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(false)
+      // A live tool-call row is excluded by the same window.
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+
+      // The window closes: the SAME event records exactly once.
+      await rm(maintenance, { recursive: true, force: true })
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
+    } finally {
+      if (priorRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER
+      else process.env.MSTAR_STORE_TEST_RUNNER = priorRunner
+      if (priorWait === undefined) delete process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS
+      else process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS = priorWait
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('two concurrent writers of the SAME workflow dir record one identical event exactly once', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-same-dir-race-')
+    let scriptA = ''
+    let scriptB = ''
+    try {
+      const pkgRoot = join(import.meta.dir, '..')
+      const body = () => [
+        "import { Context, Service } from '@deepseek-ai/cordis'",
+        "import { registerWorkflowLedger } from './src/gates/workflow-ledger.ts'",
+        "import { HarnessResolver } from './src/gates/_shared.ts'",
+        "import { readAgentFlow } from './src/gates/agent-flow.ts'",
+        'class FakeSession {',
+        "  constructor(id, cwd) { this.header = { id, cwd, createdAt: 1700000000000 }; this.log = [] }",
+        '  get seq() { return this.log.length }',
+        '  eventAt(seq) { return this.log[seq] }',
+        '}',
+        'class Registry extends Service {',
+        "  constructor(ctx) { super(ctx, 'sessions') }",
+        '  sessions = new Map()',
+        '  list() { return [...this.sessions.values()] }',
+        '  get(id) { return this.sessions.get(id) }',
+        '}',
+        `const harnessDir = process.argv[2]`,
+        `const gate = process.argv[3]`,
+        'const ctx = new Context()',
+        'const reg = new Registry(ctx)',
+        "const session = new FakeSession('sess-race', harnessDir)",
+        "session.log.push({ type: 'tool-workflow/run-start', seq: 0, time: 1700000000000, data: { runId: 'run-same', name: 'audit' } })",
+        "reg.sessions.set(session.header.id, session)",
+        'let spins = 0',
+        'while (!existsSync(gate) && spins < 20_000_000) spins += 1',
+        'registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))',
+        `console.log(JSON.stringify({ rows: readAgentFlow(join(harnessDir, 'workflows/wf-1'))?.events.length ?? 0 }))`,
+      ].join('\n')
+      scriptA = join(pkgRoot, `.tmp-same-dir-race-a-${process.pid}-${Date.now()}.ts`)
+      scriptB = join(pkgRoot, `.tmp-same-dir-race-b-${process.pid}-${Date.now()}.ts`)
+      const gate = join(root, 'race-gate')
+      await writeFile(scriptA, `import { existsSync } from 'node:fs'\nimport { join } from 'node:path'\n${body()}\n`)
+      await writeFile(scriptB, `import { existsSync } from 'node:fs'\nimport { join } from 'node:path'\n${body()}\n`)
+      const procA = Bun.spawn(['bun', scriptA, harnessDir, gate], { cwd: pkgRoot, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+      const procB = Bun.spawn(['bun', scriptB, harnessDir, gate], { cwd: pkgRoot, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+      await writeFile(gate, 'go\n')
+      const [exitA, exitB] = await Promise.all([procA.exited, procB.exited])
+      const errA = await new Response(procA.stderr).text()
+      const errB = await new Response(procB.stderr).text()
+      expect(errA).toBe('')
+      expect(errB).toBe('')
+      expect([exitA, exitB]).toEqual([0, 0])
+
+      // One row, one identity entry — the second writer recognized the durable
+      // identity instead of appending a second occurrence.
+      expect(readAgentFlow(workflowDir)!.events.map((e) => e.runId)).toEqual(['run-same'])
+      expect(indexRows(workflowDir)).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-race')!.next).toBe(1)
+    } finally {
+      await rm(scriptA, { force: true }).catch(() => {})
+      await rm(scriptB, { force: true }).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('a MALFORMED cursor entry refuses the record and leaves the sidecar bytes alone', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-cursor-entry-bad-')
     try {
@@ -3111,10 +3238,62 @@ describe('workflow-ledger — verified native incarnation (F2 identity)', () => 
 })
 
 describe('workflow-ledger — explicit awaited target (F2 resolver route)', () => {
-  /** Drain the consumer's queued stream tasks (the resolver route is asynchronous). */
+  /** Drain the consumer's queued stream tasks (the resolver route is asynchronous; the seam is test-runner gated). */
   const idle = async (): Promise<void> => {
-    await awaitWorkflowLedgerIdle()
+    const prior = process.env.MSTAR_STORE_TEST_RUNNER
+    process.env.MSTAR_STORE_TEST_RUNNER = '1'
+    try {
+      await awaitWorkflowLedgerIdle()
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER
+      else process.env.MSTAR_STORE_TEST_RUNNER = prior
+    }
   }
+
+  it('the asynchronous drain seam is test-runner gated — an ungated call refuses instead of acting as a hidden knob', async () => {
+    const prior = process.env.MSTAR_STORE_TEST_RUNNER
+    delete process.env.MSTAR_STORE_TEST_RUNNER
+    try {
+      await expect(awaitWorkflowLedgerIdle()).rejects.toThrow()
+    } finally {
+      if (prior !== undefined) process.env.MSTAR_STORE_TEST_RUNNER = prior
+    }
+  })
+
+  it('the resolver route has ONE decision point: a different file-based active set never moves a row', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-target-single-decision-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([], { id: 'sess-a', header: { cwd: root } })
+    sessions.register(parent)
+    // The file-based active set points at a DIFFERENT workflow than the
+    // explicit target; the resolver route must never consult it.
+    const elsewhere = join(harnessDir, 'workflows', 'wf-elsewhere')
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-elsewhere')]),
+      'workflows/wf-elsewhere/snapshot.json': v2Snapshot('wf-elsewhere'),
+    })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, async (sessionId) => ({
+        workflowId: 'wf-1',
+        workflowDir,
+        sessionId,
+        source: 'execution',
+        epoch: 4,
+      }))
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-targeted' }))
+      await idle()
+
+      // The row landed ONLY in the resolver's target dir.
+      expect(readAgentFlow(workflowDir)!.events.map((e) => e.runId)).toEqual(['run-targeted'])
+      expect(readAgentFlow(elsewhere)!.events).toEqual([])
+      expect(existsSync(join(elsewhere, AGENT_FLOW_INDEX_FILE))).toBe(false)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 
   it('awaits the supplied resolver per boundary and records ONLY into the returned target', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-target-explicit-')
