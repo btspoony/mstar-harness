@@ -2655,6 +2655,62 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     }
   });
 
+  test("a completed report-only reconcile refuses a stored handoff state rewritten after its preflight", async () => {
+    const fixture = await lifecycleFixture("reconcile-report-only-state", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-state");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-state", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    const before = planFootprint(fixture.context, OWN_PLAN);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    // The classification sees `completed`; the block is then rewritten into an
+    // adopted-but-uncompleted state with NO revision change, so the plan token
+    // cannot see it and only the transaction's own re-read of the stored handoff
+    // can. Without that re-read the replay would apply the completed decision to
+    // an accepted handoff.
+    let corrupted: Record<string, unknown> | undefined;
+    let corruptedState: Record<string, unknown> | undefined;
+    setReconcileWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select coordination_json from execution_plans where plan_id = ?").get(OWN_PLAN) as {
+          coordination_json: string;
+        };
+        const coordination = JSON.parse(row.coordination_json) as Record<string, unknown>;
+        coordination.handoff = { ...(coordination.handoff as Record<string, unknown>), state: "accepted" };
+        db.prepare("update execution_plans set coordination_json = ? where plan_id = ?").run(
+          JSON.stringify(coordination),
+          OWN_PLAN,
+        );
+      });
+      corrupted = planFootprint(fixture.context, OWN_PLAN);
+      corruptedState = planStateFootprint(fixture.context, OWN_PLAN);
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only-state", {
+          kind: "reconcile",
+          handoffId,
+        }, token),
+      );
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(String(refusal.message)).toContain("requires completed");
+      // The rewrite really left an uncompleted stored handoff on a Done row, and
+      // itself moved no CAS and no receipt.
+      expect(parsedJson(corruptedState!.plan_coordination).handoff).toMatchObject({ state: "accepted" });
+      expect(parsedJson(corruptedState!.plan_state).status).toBe("Done");
+      expect(corrupted!.plan_revision).toBe(before.plan_revision);
+      expect(corrupted!.operations).toBe(before.operations);
+      // The rejection moved nothing at all: the frame rolled back onto exactly
+      // the state it was refused on.
+      expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(corrupted);
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(corruptedState);
+    } finally {
+      setReconcileWitnessGapForTest(undefined);
+    }
+  });
+
   test("an integration branch moved between the completion proof and its commit refuses with no DB mutation", async () => {
     // §4.1 the proof attests the ref state it was read from; the commit window
     // re-reads those exact bytes, so a Git move after the proof cannot ride into

@@ -1784,12 +1784,17 @@ function requirePinnedDeliveryRoute(
 
 /**
  * §E the stored invariants and pinned digests of an already completed standalone
- * plan (spec §E): a `Done` row with no lease and no merge lease, whose completed
- * handoff is coherent and whose recorded QC/QA bytes are still the ones its
- * verdicts were sealed against. Everything here is stored state or a file read
- * and nothing launches a process, so the reconcile transaction can re-run it at
- * the commit boundary (§4.1). Read-only: replay resurrects no ownership and
- * rewrites no timestamp.
+ * plan (spec §E): a COMPLETED handoff on a `Done` row with no lease and no merge
+ * lease, whose recorded QC/QA bytes are still the ones its verdicts were sealed
+ * against. Everything here is stored state or a file read and nothing launches a
+ * process, so the reconcile transaction can re-run it at the commit boundary
+ * (§4.1). Read-only: replay resurrects no ownership and rewrites no timestamp.
+ *
+ * The state is required HERE and not only by the caller's classification: the
+ * stored handoff a replay is applied to is read again inside the transaction,
+ * and a coordination block rewritten into an accepted/merged state without a
+ * revision change would otherwise be replayed as if it were the completion the
+ * decision was made for.
  */
 function assertCompletedReplayInvariants(
   view: ExecutionPlanView,
@@ -1797,6 +1802,7 @@ function assertCompletedReplayInvariants(
   planId: string,
   handoff: PlanHandoff,
 ): void {
+  requireHandoffState(handoff, ["completed"], planId, "reconcile");
   const plan = planRowOf(view);
   if (rowStatusOf(plan) !== "Done") {
     throw new CoordinationError(
