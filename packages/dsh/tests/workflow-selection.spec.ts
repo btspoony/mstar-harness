@@ -38,6 +38,7 @@ import {
   resolveReadWorkflow,
   _terminalStatusCacheHas,
 } from '../src/gates/workflow-selection.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { leaseGateViolations } from '../src/gates/dispatch.ts'
 import { seedHarness, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
 
