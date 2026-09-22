@@ -40,7 +40,18 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  type Stats,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
@@ -2859,6 +2870,14 @@ export type GitCheckout = { head: string; clean: boolean; operation: string | un
 const GIT_READ_TIMEOUT_MS = 10_000;
 
 /**
+ * How much of one path-list read the witness keeps. The sealed proof reads the
+ * whole tracked/ignored list, which exceeds the 1 MiB `execFileSync` default on
+ * a large repository; a read past this ceiling still refuses rather than
+ * producing a partial path list.
+ */
+const GIT_READ_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
  * One own property of an unknown thrown value, read without asserting a shape.
  */
 function propertyOf(value: unknown, key: string): unknown {
@@ -3005,6 +3024,430 @@ export function revalidateGitRefWitness(
         { path: entry.path, expected: entry.sha256, actual },
       );
     }
+  }
+}
+
+/* ------------------------------------------------------------------------ *
+ * §7 the sealed Git proof of one completion candidate (R10)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §7 the refusal vocabulary of one sealed Git proof. The route that seals a
+ * proof names the code it reports when the witnessed state moved, so the commit
+ * window answers with the same code the preflight answers with for the same
+ * observation: `coordination.git-proof` for a delivery source,
+ * `coordination.integration-diverged` for an integration attempt.
+ */
+export type GitProofRefusal = "coordination.git-proof" | "coordination.integration-diverged";
+
+const GIT_PROOF_REFUSALS: Readonly<
+  Record<GitProofRefusal, (message: string, details: Record<string, unknown>) => CoordinationError>
+> = {
+  "coordination.git-proof": gitProof,
+  "coordination.integration-diverged": integrationDiverged,
+};
+
+/** One path Git's own resolution named, exactly as the witness read it. */
+export type GitProofEntry = Readonly<{
+  path: string;
+  kind: "file" | "directory" | "other" | "absent";
+  /** The bytes of a regular file; `null` when there is no content to hash. */
+  sha256: string | null;
+}>;
+
+/** A canonical path Git resolved, with the inode identity that path held. */
+export type GitProofIdentity = GitProofEntry & Readonly<{ dev: number | null; ino: number | null }>;
+
+/** One tracked path's working-tree state: content, mode and symlink target. */
+export type GitProofTracked = Readonly<{
+  path: string;
+  kind: "file" | "symlink" | "directory" | "other" | "absent";
+  /** Observed permission bits; `0` when nothing is there. */
+  mode: number;
+  /** File bytes, or the link target; `null` when there is no content to hash. */
+  sha256: string | null;
+}>;
+
+/** One directory's entry names, without the root `.git` and the ignored entries. */
+export type GitProofDirectory = Readonly<{ path: string; entries: readonly string[] }>;
+
+/** The object store the proof's objects were read from. */
+export type GitProofObjects = Readonly<{
+  dir: string;
+  /** `objects/info/alternates`; a non-empty one refuses at capture. */
+  alternates: GitProofEntry;
+  /** Entries directly under `objects/` — the branching dirs, `info` and `pack`. */
+  dirs: readonly string[];
+  /** Loose object paths (`<xx>/<rest>`); a loose object's name is its content. */
+  loose: readonly string[];
+  /** Entries of `objects/pack`, with the size each entry had. */
+  packs: readonly Readonly<{ name: string; size: number }>[];
+}>;
+
+/**
+ * §7 the sealed Git proof of one completion candidate: every fact the proof
+ * rests on that a concurrent writer can move — the canonical checkout, git and
+ * common-dir identity, `HEAD` and the refs it reads, the index and its shared
+ * index, each tracked path's content/mode/symlink target, the directory entry
+ * lists a new untracked path would change, the conflict sentinels and the
+ * object inventory the pinned objects live in.
+ *
+ * `captureGitProofWitness` reads it through Git and the filesystem BEFORE
+ * SQLite ownership; `revalidateGitProofWitness` re-reads the same facts from the
+ * filesystem with no child process and no await immediately before the commit,
+ * so the proof either commits with the row or not at all. A refs-only witness
+ * cannot prove an unchanged index, worktree or object store, which is what R10
+ * reports.
+ */
+export type GitProofWitness = Readonly<{
+  /** The canonical checkout Git reported for the witnessed worktree. */
+  repository: string;
+  /** The proof route's refusal vocabulary (see `GitProofRefusal`). */
+  refusal: GitProofRefusal;
+  identity: readonly GitProofIdentity[];
+  refs: readonly GitProofEntry[];
+  index: readonly GitProofEntry[];
+  sentinels: readonly GitProofEntry[];
+  tracked: readonly GitProofTracked[];
+  directories: readonly GitProofDirectory[];
+  /** Ignored entries; the cleanliness policy exempts them from the inventory. */
+  excluded: readonly string[];
+  objects: GitProofObjects;
+}>;
+
+/**
+ * One read-only Git read whose bytes are significant (NUL-separated paths).
+ * Unlike `gitRead` its output is a whole path list, so it may exceed the
+ * 1 MiB `execFileSync` default on a large repository.
+ */
+function gitReadRaw(cwd: string, args: readonly string[]): string {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
+      maxBuffer: GIT_READ_MAX_BUFFER,
+    });
+  } catch (error) {
+    if (typeof propertyOf(error, "status") === "number") {
+      throw gitProof(`cannot read ${cwd} (git ${args.join(" ")})`, { path: cwd, command: `git ${args.join(" ")}` });
+    }
+    throw gitUnavailable(cwd, args, error);
+  }
+}
+
+/** `lstat`, or `undefined` when the path cannot be read: both mean "not there". */
+function lstatOrUndefined(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A pinned path's bytes, or the fact that a directory (or nothing) is there. */
+function gitProofEntry(path: string): GitProofEntry {
+  if (!existsSync(path)) return { path, kind: "absent", sha256: null };
+  const stat = statSync(path);
+  if (stat.isFile()) return { path, kind: "file", sha256: sha256Bytes(readFileSync(path)) };
+  return { path, kind: stat.isDirectory() ? "directory" : "other", sha256: null };
+}
+
+/** One canonical path plus the inode it resolved to (a swap is a change). */
+function gitProofIdentity(path: string): GitProofIdentity {
+  const entry = gitProofEntry(path);
+  const stat = lstatOrUndefined(path);
+  return {
+    ...entry,
+    dev: stat === undefined ? null : Number(stat.dev),
+    ino: stat === undefined ? null : Number(stat.ino),
+  };
+}
+
+/** One tracked working-tree path: content, permission bits and symlink target. */
+function gitTrackedProof(root: string, path: string): GitProofTracked {
+  const abs = join(root, path);
+  const stat = lstatOrUndefined(abs);
+  if (stat === undefined) return { path, kind: "absent", mode: 0, sha256: null };
+  const mode = stat.mode & 0o7777;
+  if (stat.isSymbolicLink()) return { path, kind: "symlink", mode, sha256: sha256Bytes(readlinkSync(abs)) };
+  if (stat.isFile()) return { path, kind: "file", mode, sha256: sha256Bytes(readFileSync(abs)) };
+  return { path, kind: stat.isDirectory() ? "directory" : "other", mode, sha256: null };
+}
+
+/**
+ * One directory's entry names under the existing cleanliness policy: the root
+ * `.git` is never an inventory entry, and an ignored entry is not "dirty", so
+ * neither is recorded. Any other added or removed name is a directory-entry
+ * change the revalidation refuses.
+ */
+function gitProofDirEntries(root: string, rel: string, ignored: ReadonlySet<string>): readonly string[] {
+  const abs = rel === "" ? root : join(root, rel);
+  if (!existsSync(abs)) return [];
+  return readdirSync(abs)
+    .filter((name) => !(rel === "" && name === ".git"))
+    .filter((name) => !ignored.has(rel === "" ? name : `${rel}/${name}`))
+    .sort();
+}
+
+/** `objects/pack`, as the pack inventory the proof's objects were read from. */
+function gitProofPacks(objectsDir: string): ReadonlyArray<Readonly<{ name: string; size: number }>> {
+  const packDir = join(objectsDir, "pack");
+  if (!existsSync(packDir)) return [];
+  return readdirSync(packDir)
+    .sort()
+    .map((name) => ({ name, size: statSync(join(packDir, name)).size }));
+}
+
+/**
+ * The loose objects of one store. A loose object's path IS its content hash, so
+ * the inventory is the names alone; a branching dir that disappeared (a prune,
+ * a repack) leaves the list shorter, which is the change the revalidation
+ * refuses. Capture and revalidation share this read so both see one inventory.
+ */
+function gitProofLoose(objectsDir: string, dirs: readonly string[]): readonly string[] {
+  return dirs
+    .filter((name) => /^[0-9a-f]{2}$/.test(name))
+    .flatMap((dir): string[] =>
+      existsSync(join(objectsDir, dir))
+        ? readdirSync(join(objectsDir, dir))
+            .sort()
+            .map((name) => `${dir}/${name}`)
+        : [],
+    );
+}
+
+function sameGitProofNames(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+/**
+ * §7 capture the sealed Git proof of one completion candidate. The checkout
+ * must already be a clean worktree with no unfinished Git operation — the
+ * existing clean policy, established here together with the path list the
+ * witness covers — and unsupported topologies (a nested repository, an
+ * alternate object store) refuse rather than produce a weaker proof.
+ *
+ * `refusal` is the vocabulary of the route that seals the proof; it defaults to
+ * the delivery-source code.
+ */
+export function captureGitProofWitness(cwd: string, refusal: GitProofRefusal = "coordination.git-proof"): GitProofWitness {
+  const refuse = GIT_PROOF_REFUSALS[refusal];
+  const repository = resolve(cwd);
+  const checkout = gitCheckout(repository);
+  if (checkout === undefined) {
+    throw refuse(`${repository} is not a readable Git worktree \u2014 a completion proof needs a real checkout`, {
+      repository,
+    });
+  }
+  if (checkout.operation !== undefined) {
+    throw refuse(`${repository} has an unfinished ${checkout.operation} \u2014 it is never a completion proof`, {
+      repository,
+      operation: checkout.operation,
+    });
+  }
+  if (!checkout.clean) {
+    throw refuse(`${repository} has uncommitted changes \u2014 the completion proof covers a clean worktree only`, {
+      repository,
+      head: checkout.head,
+    });
+  }
+  // `--path-format=absolute` is deliberately not used: it needs Git 2.31, and a
+  // completion must not refuse on an older Git. Every value Git prints is
+  // resolved against the checkout instead.
+  const resolvedPaths = gitRead(repository, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"]);
+  const [rawGitDir, rawCommonDir, rawToplevel] = (resolvedPaths ?? "").split("\n").map((line) => line.trim());
+  if (!isNonEmptyString(rawGitDir) || !isNonEmptyString(rawCommonDir) || !isNonEmptyString(rawToplevel)) {
+    throw gitProof(`cannot resolve the checkout, git dir and common dir of ${repository}`, { repository });
+  }
+  const gitDir = resolve(repository, rawGitDir);
+  const commonDir = resolve(repository, rawCommonDir);
+  const toplevel = resolve(repository, rawToplevel);
+
+  // The ref state the proof was read from: the worktree's `HEAD`, the ref that
+  // names, and the packed table a packed ref resolves through.
+  const refs = [gitProofEntry(gitPathOf(repository, "HEAD")), gitProofEntry(gitPathOf(repository, "packed-refs"))];
+  const symbolic = gitRead(repository, ["rev-parse", "--symbolic-full-name", "HEAD"]);
+  if (isNonEmptyString(symbolic) && symbolic.startsWith("refs/")) {
+    refs.splice(1, 0, gitProofEntry(gitPathOf(repository, symbolic)));
+  }
+
+  // The index and, when the checkout splits it, the shared index it depends on.
+  const index = [gitProofEntry(gitPathOf(repository, "index"))];
+  for (const name of readdirSync(gitDir).filter((entry) => entry.startsWith("sharedindex.")).sort()) {
+    index.push(gitProofEntry(join(gitDir, name)));
+  }
+
+  const sentinels = UNFINISHED_GIT_OPERATIONS.map(([marker]) => gitProofEntry(gitPathOf(repository, marker)));
+
+  const tracked: GitProofTracked[] = [];
+  for (const record of gitReadRaw(repository, ["ls-files", "-z", "--stage"]).split("\0")) {
+    if (record.length === 0) continue;
+    const tab = record.indexOf("\t");
+    if (tab < 0) throw gitProof(`cannot read the tracked path list of ${repository}`, { repository, record });
+    const path = record.slice(tab + 1);
+    const indexMode = record.slice(0, tab).split(" ")[0];
+    if (indexMode === "160000") {
+      throw gitProof(
+        `${repository} tracks ${path} as a nested repository \u2014 a submodule topology is never completion proof`,
+        { repository, path, index_mode: indexMode },
+      );
+    }
+    tracked.push(gitTrackedProof(toplevel, path));
+  }
+
+  // The ignored entries are the boundary of the existing cleanliness policy:
+  // an entry Git already ignores is not "dirty", so it is never an inventory
+  // entry, and an ignored entry that changes alone cannot refuse. The window
+  // re-read deliberately does not evaluate Git's exclusion rules (that would be
+  // a second gitignore engine inside the transaction), so an entry that appears
+  // in the window and was not ignored at capture is treated as untracked and
+  // refuses: the retry re-captures it under the current policy.
+  const excluded = [
+    ...new Set(
+      gitReadRaw(repository, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
+        .split("\0")
+        .filter((name) => name.length > 0)
+        .map((name) => name.replace(/\/+$/, "")),
+    ),
+  ].sort();
+  const ignored = new Set(excluded);
+  const directories = new Set<string>([""]);
+  for (const entry of tracked) {
+    for (let dir = dirname(entry.path); ; dir = dirname(dir)) {
+      directories.add(dir === "." ? "" : dir);
+      if (dir === ".") break;
+    }
+  }
+  const inventory = [...directories].sort().map((path) => ({
+    path,
+    entries: gitProofDirEntries(toplevel, path, ignored),
+  }));
+
+  const objectsPath = gitRead(repository, ["rev-parse", "--git-path", "objects"]);
+  if (!isNonEmptyString(objectsPath)) throw gitProof(`cannot resolve the object store of ${repository}`, { repository });
+  const objectsDir = resolve(repository, objectsPath);
+  if (!existsSync(objectsDir)) {
+    throw gitProof(`the object store ${objectsDir} of ${repository} is missing`, { repository, objects: objectsDir });
+  }
+  const alternatesPath = join(objectsDir, "info", "alternates");
+  const alternates = gitProofEntry(alternatesPath);
+  if (alternates.kind === "file" && alternates.sha256 !== null && readFileSync(alternatesPath, "utf8").trim() !== "") {
+    throw gitProof(
+      `${repository} delegates to an alternate object store (${alternatesPath}) \u2014 an unenumerable alternate topology is never completion proof`,
+      { repository, alternates: alternatesPath },
+    );
+  }
+  const objectsDirs = readdirSync(objectsDir).sort();
+  const loose = gitProofLoose(objectsDir, objectsDirs);
+
+  return {
+    repository: toplevel,
+    refusal,
+    // A primary worktree resolves its checkout, git dir and common dir to the
+    // same path; each path is witnessed once.
+    identity: [...new Set([toplevel, join(toplevel, ".git"), gitDir, commonDir])].map(gitProofIdentity),
+    refs,
+    index,
+    sentinels,
+    tracked,
+    directories: inventory,
+    excluded,
+    objects: { dir: objectsDir, alternates, dirs: objectsDirs, loose, packs: gitProofPacks(objectsDir) },
+  };
+}
+
+/**
+ * §7 revalidate a sealed Git proof immediately before the commit, from the
+ * filesystem alone: no child process, no await, no Git read inside the write
+ * transaction. Every recorded fact is re-read and compared — inode identity,
+ * refs, index and shared index, sentinels, each tracked path's
+ * content/mode/symlink target, each directory's entry names, and the object
+ * inventory — and the first difference refuses with the proof route's own code
+ * and no DB mutation.
+ */
+export function revalidateGitProofWitness(witness: GitProofWitness): void {
+  const refuse = GIT_PROOF_REFUSALS[witness.refusal];
+  const moved = (what: string, details: Record<string, unknown>): never => {
+    throw refuse(`${witness.repository} ${what} changed after the Git proof was read \u2014 nothing commits on a stale witness`, {
+      repository: witness.repository,
+      ...details,
+    });
+  };
+  const assertEntry = (entry: GitProofEntry): void => {
+    const now = gitProofEntry(entry.path);
+    if (now.kind !== entry.kind || now.sha256 !== entry.sha256) {
+      moved(entry.path, {
+        path: entry.path,
+        expected: entry.kind === "file" ? `file:${entry.sha256}` : entry.kind,
+        actual: now.kind === "file" ? `file:${now.sha256}` : now.kind,
+      });
+    }
+  };
+
+  for (const entry of witness.identity) {
+    const stat = lstatOrUndefined(entry.path);
+    const dev = stat === undefined ? null : Number(stat.dev);
+    const ino = stat === undefined ? null : Number(stat.ino);
+    if (dev !== entry.dev || ino !== entry.ino) {
+      moved(entry.path, { path: entry.path, expected: `${entry.dev}:${entry.ino}`, actual: `${dev}:${ino}` });
+    }
+    assertEntry(entry);
+  }
+  for (const entry of witness.refs) assertEntry(entry);
+  for (const entry of witness.index) assertEntry(entry);
+  for (const entry of witness.sentinels) assertEntry(entry);
+
+  for (const entry of witness.tracked) {
+    const now = gitTrackedProof(witness.repository, entry.path);
+    if (now.kind !== entry.kind || now.mode !== entry.mode || now.sha256 !== entry.sha256) {
+      moved(`tracked path ${entry.path}`, {
+        path: entry.path,
+        expected: `${entry.kind}:${entry.mode.toString(8)}:${entry.sha256 ?? "-"}`,
+        actual: `${now.kind}:${now.mode.toString(8)}:${now.sha256 ?? "-"}`,
+      });
+    }
+  }
+
+  const ignored = new Set(witness.excluded);
+  for (const directory of witness.directories) {
+    const now = gitProofDirEntries(witness.repository, directory.path, ignored);
+    if (!sameGitProofNames(now, directory.entries)) {
+      moved(`directory ${directory.path === "" ? "." : directory.path}`, {
+        path: directory.path,
+        expected: directory.entries,
+        actual: now,
+      });
+    }
+  }
+
+  assertEntry(witness.objects.alternates);
+  const objectsDirs = existsSync(witness.objects.dir) ? readdirSync(witness.objects.dir).sort() : [];
+  if (!sameGitProofNames(objectsDirs, witness.objects.dirs)) {
+    moved("object store", {
+      path: witness.objects.dir,
+      expected: witness.objects.dirs,
+      actual: objectsDirs,
+    });
+  }
+  const loose = gitProofLoose(witness.objects.dir, objectsDirs);
+  if (!sameGitProofNames(loose, witness.objects.loose)) {
+    moved("loose object inventory", {
+      path: witness.objects.dir,
+      expected: witness.objects.loose,
+      actual: loose,
+    });
+  }
+  const packs = gitProofPacks(witness.objects.dir);
+  if (
+    packs.length !== witness.objects.packs.length ||
+    packs.some((pack, index) => pack.name !== witness.objects.packs[index]!.name || pack.size !== witness.objects.packs[index]!.size)
+  ) {
+    moved("object pack inventory", {
+      path: join(witness.objects.dir, "pack"),
+      expected: witness.objects.packs,
+      actual: packs,
+    });
   }
 }
 

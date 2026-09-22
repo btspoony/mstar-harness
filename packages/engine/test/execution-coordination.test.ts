@@ -2587,6 +2587,85 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       setCompleteWitnessGapForTest(undefined);
     }
   }, 30000);
+
+  /**
+   * §7/R10 one deterministic drift inside the preflight→commit window: the
+   * sealed Git proof is re-read immediately before the commit, so the drift must
+   * leave the plan exactly where the acceptance left it — still InReview, no
+   * `Done`, no completion receipt, the handoff still accepted and the execution
+   * lease still held.
+   */
+  async function expectCompletionRaceRefused(
+    standalone: LifecycleFixture,
+    label: string,
+    handoffId: string,
+    drift: () => void,
+  ): Promise<void> {
+    const before = planStateFootprint(standalone.context, OWN_PLAN);
+    const footprint = planFootprint(standalone.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(drift);
+    try {
+      const raced = await refusalOf(() =>
+        planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, `complete-race-${label}`, {
+          kind: "complete",
+          handoffId,
+        }),
+      );
+      // The delivery source is not an integration attempt, so the moved proof
+      // reports the same code the same observation reports before the commit.
+      expect(raced.code).toBe("coordination.git-proof");
+      // No revision advances, no operation receipt lands, no lease is released
+      // and no domain change survives.
+      expect(planFootprint(standalone.context, OWN_PLAN)).toEqual(footprint);
+      expect(planStateFootprint(standalone.context, OWN_PLAN)).toEqual(before);
+      expect(
+        parsedJson(rows(standalone.context, `select state_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!.state_json)
+          .status,
+      ).toBe("InReview");
+      expect(
+        parsedJson(rows(standalone.context, `select coordination_json from execution_plans where plan_id = '${OWN_PLAN}'`)[0]!
+          .coordination_json).handoff,
+      ).toMatchObject({ id: handoffId, state: "accepted" });
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  }
+
+  test("complete refuses a tracked file rewritten between the proof and its commit, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-worktree", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-worktree");
+    await expectCompletionRaceRefused(standalone, "drift-worktree", handoffId, () => {
+      writeFileSync(join(standalone.featurePath, "slice.txt"), "rewritten after the proof\n");
+    });
+  }, 30000);
+
+  test("complete refuses an index rewritten between the proof and its commit, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-index", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-index");
+    // The index alone moves: the worktree bytes and the tracked path list stay
+    // exactly as the proof read them, which is what a refs-only witness missed.
+    await expectCompletionRaceRefused(standalone, "drift-index", handoffId, () => {
+      runGit(["update-index", "--chmod=+x", "slice.txt"], standalone.featurePath);
+    });
+  }, 30000);
+
+  test("complete refuses an untracked file created between the proof and its commit, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-untracked", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-untracked");
+    await expectCompletionRaceRefused(standalone, "drift-untracked", handoffId, () => {
+      writeFileSync(join(standalone.featurePath, "untracked.txt"), "appeared after the proof\n");
+    });
+  }, 30000);
+
+  test("complete refuses an object store repacked between the proof and its commit, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-objects", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-objects");
+    // The pinned objects move from loose to packed: nothing the proof read from
+    // the object store is where it read it, so the proof is stale.
+    await expectCompletionRaceRefused(standalone, "drift-objects", handoffId, () => {
+      runGit(["repack", "-ad"], standalone.featurePath);
+    });
+  }, 30000);
 });
 
 describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-owner evidence", () => {
