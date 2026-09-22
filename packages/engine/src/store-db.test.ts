@@ -12,7 +12,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -108,6 +108,45 @@ describe.each([
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * Read-open path: refused store shapes must never gain a journal, and a store
+ * reached through a link is not the canonical store
+ * ------------------------------------------------------------------------ */
+
+describe("store-db read-open repair", () => {
+  test("WAL-shaped bytes that are not a database are refused without a sidecar", async () => {
+    const dir = mkdtempSync(join(ROOT, "wal-shaped-bytes-"));
+    const path = join(dir, "store.db");
+    const bytes = Buffer.alloc(100);
+    bytes.write("this is not a sqlite database", 0, "latin1");
+    // The two bytes the quiesced-WAL shape is recognized by, on a file that is
+    // not a SQLite database at all: the repair must not add a journal for it.
+    bytes[18] = 2;
+    bytes[19] = 2;
+    writeFileSync(path, bytes);
+
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(existsSync(`${path}-wal`)).toBe(false);
+  });
+
+  test("a symlinked store path is refused, and the link target is left alone", async () => {
+    const targetDir = mkdtempSync(join(ROOT, "symlink-target-"));
+    const created = await initializeStore({ harnessDir: targetDir });
+    created.close();
+    const linkDir = mkdtempSync(join(ROOT, "symlink-store-"));
+    const linkPath = join(linkDir, "store.db");
+    symlinkSync(join(targetDir, "store.db"), linkPath);
+    const targetBefore = readdirSync(targetDir).sort().join(" ");
+
+    // Refusing is what proves no authority was served from the link target, and
+    // neither intent leaves a sidecar at the linked path or touches the target.
+    await expect(openStore({ harnessDir: linkDir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(openStore({ harnessDir: linkDir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(existsSync(`${linkPath}-wal`)).toBe(false);
+    expect(readdirSync(targetDir).sort().join(" ")).toBe(targetBefore);
+  });
 });
 
 describe("store-db L2 fix round", () => {

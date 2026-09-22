@@ -16,7 +16,7 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync, type Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
@@ -277,10 +277,62 @@ async function connect(dbPath: string, mode: "read" | "write"): Promise<StoreDb>
   return openConnection(dbPath, mode, DatabaseSync);
 }
 
-/** SQLite's own file header is 100 bytes; offsets 18/19 carry the file format's
- * write/read version, `2` for WAL. */
+/** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
+ * offsets 18/19 the file format's write/read version (`2` for WAL). */
 const DATABASE_HEADER_BYTES = 100;
+const SQLITE_FORMAT_MAGIC = "SQLite format 3\u0000";
 const WAL_FILE_FORMAT_VERSION = 2;
+
+/**
+ * The store's final path must be a regular file. A symlink — or anything else
+ * that is not a regular file — is refused with the store's own `store.corrupt`
+ * refusal BEFORE the header probe and before the driver open, so the canonical
+ * store interface never follows a link out of the resolved control root even
+ * where the driver would happily follow it. A path with no file at all is left
+ * to the caller's own existence check and to the open below, which is where a
+ * missing store is reported.
+ */
+function assertRegularStoreFile(dbPath: string): void {
+  let stats: Stats;
+  try {
+    stats = lstatSync(dbPath);
+  } catch {
+    return;
+  }
+  if (stats.isFile()) return;
+  const kind = stats.isSymbolicLink() ? "a symbolic link" : "not a regular file";
+  throw new StoreError(
+    "store.corrupt",
+    `The store path ${dbPath} is ${kind}. A store is read and written only at its own canonical path ` +
+      `inside the resolved control root; nothing was read or written.`,
+  );
+}
+
+/**
+ * Is this complete SQLite file header the one shape a read-only connection
+ * cannot open on its own: a WAL-format database with no journal beside it?
+ * Decided from the file's own bytes, non-mutating, without a format
+ * interpreter — the magic string, a legal page size, both WAL version bytes, the
+ * three payload fractions and the schema/text-encoding values SQLite itself
+ * writes, plus the page-aligned size every SQLite database file has. Bytes that
+ * merely happen to carry `2` in both version positions are not a database and
+ * get no journal. Whether the file is actually a store (its schema, migration
+ * checksums and identity) stays the caller's content check: this predicate only
+ * settles what the header says.
+ */
+function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
+  if (bytes < DATABASE_HEADER_BYTES) return false;
+  if (header.toString("latin1", 0, 16) !== SQLITE_FORMAT_MAGIC) return false;
+  const pageSize = header.readUInt16BE(16);
+  const legalPageSize = pageSize === 1 ? 65536 : pageSize;
+  if (legalPageSize < 512 || legalPageSize > 65536 || (legalPageSize & (legalPageSize - 1)) !== 0) return false;
+  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION) return false;
+  if (header[21] !== 64 || header[22] !== 32 || header[23] !== 32) return false;
+  // 0 is the legal "no schema recorded yet" value for both fields.
+  if (header.readUInt32BE(44) > 4) return false;
+  if (header.readUInt32BE(56) > 3) return false;
+  return bytes % legalPageSize === 0;
+}
 
 /**
  * Put back the `-wal` file a read-only connection needs when SQLite's own clean
@@ -294,24 +346,26 @@ const WAL_FILE_FORMAT_VERSION = 2;
  * `node:sqlite` creates that empty journal inside its open; Bun 1.4.0 refuses
  * instead, and the shape is not rare: this runtime completes a closed handle's
  * cleanup — checkpoint, then remove the empty sidecars — when the handle is
- * collected, so a read after any writer close can meet it. That is the recorded
- * store-open flake in `execution-store.test.ts`, and the same shape a store
- * copied without its sidecars has.
+ * collected, so a read after any writer close can meet it. The same shape is
+ * what a store file copied without its sidecars has.
  *
  * The database file IS the whole committed state in that shape — a journal is
  * only absent because SQLite's own clean close removed it, or the store file was
  * copied without it — so the empty journal the read needs is created here: never
  * a fabricated frame, and never over an existing file (`wx`), so a writer that
  * created its journal first is left exactly as it is. Every other shape — a
- * rollback-journal store, a store that already has its journal, a file too short
- * or unreadable to be a store — is left untouched and keeps its own refusal.
+ * rollback-journal store, a store that already has its journal, bytes that are
+ * not a database, an unreadable file — is left untouched and keeps its own
+ * refusal, so a refused store never gains a sidecar.
  */
 function ensureJournalForRead(dbPath: string): void {
   if (existsSync(`${dbPath}-wal`)) return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  let bytes: number;
   try {
     const source = openSync(dbPath, "r");
     try {
+      bytes = fstatSync(source).size;
       if (readSync(source, header, 0, header.length, 0) < header.length) return;
     } finally {
       closeSync(source);
@@ -321,7 +375,7 @@ function ensureJournalForRead(dbPath: string): void {
     // as it did before this shape check existed.
     return;
   }
-  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION) return;
+  if (!isWalFormatDatabase(header, bytes)) return;
   let journal: number;
   try {
     journal = openSync(`${dbPath}-wal`, "wx");
@@ -347,9 +401,11 @@ function openConnection(
   // writers without a second argument, readers with the read-only option.
   let db: StoreDb;
   try {
-    // A read-only connection can never create the `-wal` a quiesced WAL store
-    // needs, so the empty journal is put back before the open (see the helper);
-    // a writer creates its own as part of applying `journal_mode=wal`.
+    // The final path must be a regular file inside the control root: neither
+    // intent follows a symlink out of it. A read-only connection can also never
+    // create the `-wal` a quiesced WAL store needs, so that empty journal is put
+    // back before the read open (see the helpers).
+    assertRegularStoreFile(dbPath);
     if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
@@ -1339,7 +1395,10 @@ export type StoreHandle = {
 
 /**
  * Open an existing store for reading or writing. Creates no store: a missing
- * database is a `store.not-initialized` refusal. Readers open with the
+ * database is a `store.not-initialized` refusal. The final path must be a
+ * regular file at the store's own canonical path — a symlink or any other
+ * non-regular file is refused `store.corrupt` before the driver open, so no
+ * intent follows a link out of the resolved control root. Readers open with the
  * read-only option plus `query_only=ON`; a WAL store whose journal SQLite's own
  * clean close removed gets that empty `-wal` back beside it before the open
  * (`ensureJournalForRead`), because a read-only connection cannot create the

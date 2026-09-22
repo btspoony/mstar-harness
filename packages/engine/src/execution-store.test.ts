@@ -2354,9 +2354,9 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
   });
 
   test("reads the committed authority after a clean close folded the journal into the store file", async () => {
-    // R6's mechanism, made deterministic. This runtime completes a closed
-    // connection's SQLite cleanup — checkpoint every committed frame into the
-    // database file, then remove the now-empty `-wal`/`-shm` pair — when the
+    // This failure mechanism, made deterministic. This runtime completes a
+    // closed connection's SQLite cleanup — checkpoint every committed frame into
+    // the database file, then remove the now-empty `-wal`/`-shm` pair — when the
     // closed handle is collected rather than when `close()` returns, so the
     // shape a store is left in is decided by the garbage collector. On Bun
     // 1.4.0 a read landing after that cleanup refused `store.corrupt: unable to
