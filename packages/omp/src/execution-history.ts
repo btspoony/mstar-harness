@@ -423,7 +423,7 @@ function decodeVerifiedRecord(
   if (type !== "mstar:phase2" && type !== "mstar:model-handoff") {
     note(
       "payload-generation-unverified",
-      `no producer or historical schema exists for ${type} in this repository, so its payload is retained as raw evidence only — a legacy schema is never guessed`,
+      `no producer or historical schema exists for ${type} in this repository, so its payload is retained as raw evidence only; a legacy schema is never guessed`,
     );
     return null;
   }
