@@ -5,7 +5,8 @@
  * carries for S6).
  *
  * Run with
- * `bun test packages/engine/src/execution-consumers.test.ts --test-name-pattern 'execution-authority-read'`.
+ * `bun test packages/engine/src/execution-consumers.test.ts --test-name-pattern 'execution-authority-read'`
+ * (the retained-evidence proof is selected by `-t "retained evidence"`).
  *
  * Every case runs the REAL modules against a REAL `node:sqlite` store in a
  * per-test temporary control root: the real `initializeExecutionAuthority` /
@@ -34,13 +35,21 @@
  *   already committed, an authority that becomes unavailable refuses EVERY
  *   authoritative read and never serves the retired file route's leftover bytes
  *   or a projection derived from them.
+ * - `retained evidence …`: SDD evidence bodies stay FILES under the configured
+ *   roots with the byte hashes the handoff record pins, across a fixture
+ *   authority switch and with no copy in the store; a missing body, edited
+ *   bytes and a symlink escape out of the plan's own areas each refuse — none
+ *   of them can become an accepted approval.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
+import { assertEvidenceInsidePlanArea, planAreaRoots } from "./coordination.js";
+import { assertHandoffEvidenceUnchanged, readHandoffEvidence } from "./coordination-transitions.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
@@ -54,6 +63,7 @@ import {
   type ExecutionState,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
+import { resolveSddDir } from "./path.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, type StoreContext } from "./store-db.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
@@ -516,5 +526,148 @@ describe("execution-cross-domain \u2014 an unavailable authority refuses every r
     // pre-state — a rewrite that keeps the old marker fragment must fail here.
     expect(readFileSync(snapshotPath)).toEqual(plantedSnapshot);
     expect(readFileSync(rootRegisterPath)).toEqual(plantedRootRegister);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Retained SDD evidence (S9)
+ * ------------------------------------------------------------------------ */
+
+const RETAINED_PLAN = "20260920-consumers-retained";
+const QC_BODY = "reviewed QC body\n";
+const CONSOLIDATED_BODY = "consolidated QC body\n";
+const QA_BODY = "QA verdict body\n";
+
+/** The three handoff evidence bodies of one plan, under the CONFIGURED SDD
+ * resolution — the same resolution the containment boundary derives its roots
+ * from. */
+function retainedBodies(harnessDir: string): { qc: string; consolidated: string; qa: string } {
+  const sddDir = resolveSddDir(harnessDir, RETAINED_PLAN);
+  mkdirSync(sddDir, { recursive: true });
+  return { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
+}
+
+/** Write one evidence body and return its BYTE digest — what a handoff record
+ * pins. */
+function writeBody(path: string, text: string): string {
+  writeFileSync(path, text, "utf8");
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** The plan session's handoff evidence request: paths and decisions only. */
+function handoffRequest(bodies: { qc: string; consolidated: string; qa: string }): unknown {
+  return {
+    source_sha: "a".repeat(40),
+    review_base: "b".repeat(40),
+    review_head: "c".repeat(40),
+    qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
+    qa: { gate: "mandatory", decision: "pass", report: bodies.qa },
+  };
+}
+
+/** The typed refusal of one synchronous call: its stable code, whatever domain
+ * raised it. */
+function refusalCodeOf(action: () => unknown): string {
+  try {
+    action();
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error) return String(error.code);
+    return "";
+  }
+  throw new Error("expected a refusal");
+}
+
+/**
+ * Evidence stays at the configured SDD roots as FILES with byte hashes, across
+ * an authority switch: the bodies a plan wrote before its store was activated
+ * are still the bytes its handoff record pins afterwards, and the acceptance
+ * gates (containment, existence, digest) are the ones that decide whether that
+ * evidence can be an accepted approval.
+ */
+describe("retained evidence \u2014 SDD bodies and byte hashes across the authority switch", () => {
+  test("retained evidence bodies stay files whose byte hashes survive fixture activation", async () => {
+    // A store that holds an issue/catalog authority and no execution authority
+    // yet: the bodies are written and hashed BEFORE the switch.
+    const context = await legacyStore("retained-evidence-switch");
+    const bodies = retainedBodies(context.harnessDir);
+    const digests = {
+      qc: writeBody(bodies.qc, QC_BODY),
+      consolidated: writeBody(bodies.consolidated, CONSOLIDATED_BODY),
+      qa: writeBody(bodies.qa, QA_BODY),
+    };
+
+    // The switch: the fixture's execution authority becomes ACTIVE.
+    await initializeExecutionAuthority(context);
+    expect(await resolveExecutionReadRoute(context)).toBe("execution");
+
+    // The handoff route's own boundary: containment and existence against the
+    // plan's own areas, derived from the configured resolution.
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_paths)).not.toThrow();
+
+    // The record pins BYTE hashes, and they still describe the files.
+    expect([input.qc_reports[0]!.sha256, input.qc_consolidated.sha256, input.qa_report.sha256]).toEqual([
+      digests.qc,
+      digests.consolidated,
+      digests.qa,
+    ]);
+    expect(readFileSync(bodies.qc, "utf8")).toEqual(QC_BODY);
+    expect(() => assertHandoffEvidenceUnchanged(input, "handoff")).not.toThrow();
+
+    // No blanket blob conversion: the bodies are files, and the active store —
+    // main file and, when present, its write-ahead log — holds no copy of them.
+    const storedBytes = [join(context.harnessDir, "store.db"), join(context.harnessDir, "store.db-wal")]
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path));
+    for (const text of [QC_BODY, CONSOLIDATED_BODY, QA_BODY]) {
+      expect(storedBytes.some((bytes) => bytes.includes(Buffer.from(text)))).toBe(false);
+    }
+  });
+
+  test("retained evidence: a missing body is unavailable and cannot be accepted", async () => {
+    const context = await activeGraph("retained-evidence-missing");
+    const bodies = retainedBodies(context.harnessDir);
+    writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
+
+    rmSync(bodies.qc);
+
+    // Gone is unavailable: the containment boundary refuses the absent body,
+    // and the sealed digest pin cannot be satisfied by it either.
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.evidence-stale");
+    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
+    // The request itself refuses a path with nothing behind it, so a missing
+    // report never reaches an accepted approval.
+    expect(refusalCodeOf(() => readHandoffEvidence(handoffRequest(bodies)))).toBe("coordination.invalid-input");
+  });
+
+  test("retained evidence: changed bytes and a symlink escape cannot count as accepted approval", async () => {
+    const context = await activeGraph("retained-evidence-mutation");
+    const bodies = retainedBodies(context.harnessDir);
+    const qcDigest = writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
+    expect(input.qc_reports[0]!.sha256).toEqual(qcDigest);
+
+    // An edited report is a different body: the pinned byte digest refuses it.
+    writeBody(bodies.qc, `${QC_BODY}edited\n`);
+    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
+
+    // A symlink that resolves outside the plan's own areas is refused by the
+    // containment boundary. The escape is real — the bytes read through the
+    // link are the outside file's — so containment, not the caller's path
+    // spelling, is what stops it.
+    const outside = join(context.harnessDir, "outside-body.md");
+    const outsideText = "a body outside every plan area\n";
+    writeBody(outside, outsideText);
+    const escaped = join(resolveSddDir(context.harnessDir, RETAINED_PLAN), "escaped.md");
+    symlinkSync(outside, escaped);
+    expect(readFileSync(escaped, "utf8")).toEqual(outsideText);
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [escaped]))).toBe("coordination.path-mismatch");
   });
 });
