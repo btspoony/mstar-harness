@@ -29,6 +29,7 @@ import {
   encodeExecutionSessionRef,
   initializeExecutionAuthority,
   initializeStore,
+  openStore,
   readExecutionAuthority,
   serializeExecutionValue,
   type ExecutionIdentity,
@@ -424,17 +425,32 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(jsonOf(stopped).replayed).toBe(false);
     expect(jsonOf(stopped).token).not.toBe(beforeStopToken);
 
-    // The terminal state IS persisted and readable: a terminal lifecycle keeps
-    // its workflow-table row while the SAME transaction drops its root registry
-    // membership (migration contract §4.2: terminal history lives in the
-    // workflow/plan tables without a root registry entry). The whole-register
-    // read is that view; the workflow-SELECTED read is the registry-filtered one
-    // and therefore answers `coordination.workflow-not-found` after a close.
+    // The terminal state IS persisted — witnessed at the store boundary the
+    // engine's own readers use (`openStore`), because EVERY execution-adapter
+    // read is registry-filtered (see the report's gap note): the workflow row
+    // survives in `execution_workflows` while the SAME transaction deleted its
+    // `execution_registry` row.
+    const handle = await openStore(fixture.context, "read");
+    try {
+      const row = handle.db
+        .prepare("select state_json from execution_workflows where workflow_id = ?")
+        .get(WORKFLOW_ID) as { state_json?: unknown } | undefined;
+      if (typeof row?.state_json !== "string") throw new Error("the closed workflow row is gone from execution_workflows");
+      const stored = JSON.parse(row.state_json) as { status?: unknown; ended_at?: unknown };
+      expect(stored.status).toBe("stopped");
+      expect(typeof stored.ended_at).toBe("string");
+      const registered = handle.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(WORKFLOW_ID);
+      expect(registered).toBeUndefined();
+    } finally {
+      handle.close();
+    }
+
     const register = await readExecutionAuthority(fixture.context);
     if (!("workflows" in register.data)) throw new Error("the register read did not return the whole state");
-    const closedRow = register.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
-    expect(closedRow?.state.status).toBe("stopped");
-    expect(typeof closedRow?.state.ended_at).toBe("string");
+    // The adapter's lifecycle view is registry-driven, so the closed workflow is
+    // absent here even though its row persists: the registry membership loss is
+    // what that read reflects.
+    expect(register.data.workflows.some((entry) => entry.state.id === WORKFLOW_ID)).toBe(false);
     expect(register.data.root.workflows.some((entry) => entry.id === WORKFLOW_ID)).toBe(false);
 
     // A closed lifecycle is never reopened: the authority holds no active
