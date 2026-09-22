@@ -346,8 +346,10 @@ export type ExecutionMigrationInventory = Readonly<{
 /**
  * §6: one deferred (2b) surface. `paths` are the paths DISCOVERED for the
  * surface, so `paths.length > 0` holds exactly when `disposition` is
- * `blocked`; a 2a activation barrier requires every surface `absent`
- * (guides/deferred-2b.md "Complete coverage rule").
+ * `blocked`. It is DIAGNOSTIC evidence only: activation no longer requires a
+ * deferred surface to be absent, and the surface is populated instead through
+ * its §4.1 coverage row (validated by the pure validator from the retained
+ * bytes) - a surface that cannot be validated refuses as incomplete coverage.
  */
 export type ExecutionDeferredSurface = {
   surface: string;
@@ -3331,14 +3333,22 @@ function replayActivation(record: MigrationRecord, attestationDigest: string, co
  * It re-reads the recorded staged manifest (never a caller-supplied document),
  * takes the §4.2 maintenance → root → sorted-workflow lock ladder, and inside
  * ONE transaction rechecks the exact witness bytes, the core digest, the
- * deferred coverage classification, an empty pending catalog journal, the store
- * identity, the reviewed schema, the `expectedEpoch` CAS, the operator's own
- * identity, the attestation's coverage of the frozen owner inventory, the
- * staged graph against the reviewed import, and the ABSENCE of every deferred
- * surface. Then it advances the store-wide epoch ONCE, flips the execution
- * authority to `active`, revokes the imported sessions at their own epoch,
- * leaves every imported lease REPRESENTED (never adopted) and records the
- * activation receipt naming the reconciliation that remains.
+ * RECOMPUTED coverage of every discovered surface, an empty pending catalog
+ * journal, the store identity, the reviewed schema, the `expectedEpoch` CAS,
+ * the operator's own identity, the attestation's coverage of the frozen owner
+ * inventory and the staged graph against the reviewed import. Then it advances
+ * the store-wide epoch ONCE, flips the execution authority to `active`, revokes
+ * the imported sessions at their own epoch, leaves every imported lease
+ * REPRESENTED (never adopted) and records the activation receipt naming the
+ * reconciliation that remains.
+ *
+ * The activation precondition is the VALIDATED COVERAGE, not the absence of
+ * populated surfaces: a `deferred` (2b) surface is no longer a barrier input —
+ * it is diagnostic evidence produced by discovery, while the barrier closes the
+ * coverage set through the pure validator (whose per-surface bytes must decode)
+ * and requires that set to be the operator-approved digest and the set recorded
+ * at staging. There is no allow-incomplete flag and none is accepted; a
+ * populated surface that cannot be validated refuses as incomplete coverage.
  *
  * A crash before the commit leaves the staged (JSON-live) authority untouched;
  * a retry of the same pair returns the recorded receipt instead of a second
