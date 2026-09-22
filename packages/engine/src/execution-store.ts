@@ -837,13 +837,18 @@ function readWorkflowView(
     // The row column is the revision; the stored block carries the rest (§2.2).
     const projectedCoordination = { revision: planRevision, ...storedCoordination };
     const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
-    const historicalSessionRow = sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
-    // The handoff validator needs historical association, while the projected
-    // view exposes an authorized session only when that row is currently active.
+    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
+    const submitter = handoff?.submitted_by;
+    const historicalSessionRow =
+      typeof submitter === "string"
+        ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter)
+        : undefined;
+    // Historical association is exact: an arbitrary plan-pm row cannot satisfy
+    // a handoff naming another identity. The active projection remains separate.
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState as PlanRow),
-      sessionBound: historicalSessionRow !== undefined,
+      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (coordinationViolations.length > 0) {
