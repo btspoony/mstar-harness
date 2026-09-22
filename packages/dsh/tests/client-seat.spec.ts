@@ -192,8 +192,8 @@ describe('workflow panel — sidebar seat registration (plugin entry)', () => {
     expect(guide.title()).toBe('Morning Star Workflow')
     expect(guide.description?.()).toBe('Workspace state, plans, and iteration progress')
     locale.setLocale('zh')
-    expect(definition.title('sidebar://mstar-workflow')).toBe('启明星工作流')
-    expect(guide.title()).toBe('启明星工作流')
+    expect(definition.title('sidebar://mstar-workflow')).toBe('晨星工作流')
+    expect(guide.title()).toBe('晨星工作流')
     expect(guide.description?.()).toBe('查看工作区状态、计划与迭代进度')
   })
 

@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Morning Star Harness" width="96">
 
-# [Morning Star (启明星)](https://github.com/btspoony/mstar-harness)
+# [Morning Star (晨星)](https://github.com/btspoony/mstar-harness)
 
 Harness Workflow Engine · Agent Plugin
 
@@ -24,7 +24,7 @@ Harness Workflow Engine · Agent Plugin
 
 </div>
 
-**Morning Star / 启明星** 是面向 harness 工程工作流的 Agent Plugin：TypeScript **Harness Workflow Engine**（`@mstar-harness/engine`）强制执行确定性工作流门禁，`mstar-*` 判断型 skills 驱动多智能体代码交付。
+**Morning Star / 晨星** 是面向 harness 工程工作流的 Agent Plugin：TypeScript **Harness Workflow Engine**（`@mstar-harness/engine`）强制执行确定性工作流门禁，`mstar-*` 判断型 skills 驱动多智能体代码交付。
 
 - **确定性门禁，由 TS 引擎强制执行** —— path/status/lease/dispatch/sdd/iteration/lint 门禁运行在 `@mstar-harness/engine` 中，而非仅靠 prompt 建议
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）

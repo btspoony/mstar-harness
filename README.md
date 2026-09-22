@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Morning Star Harness" width="96">
 
-# [Morning Star](https://github.com/btspoony/mstar-harness)
+# [Morning Star (晨星)](https://github.com/btspoony/mstar-harness)
 
 Harness Workflow Engine · Agent Plugin
 
@@ -24,7 +24,7 @@ English / [中文](README_CN.md)
 [![npm: opencode](https://img.shields.io/npm/dt/@mstar-harness/opencode?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20opencode)](https://www.npmjs.com/package/@mstar-harness/opencode)
 </div>
 
-**Morning Star** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
+**Morning Star / 晨星** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
 
 - **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment

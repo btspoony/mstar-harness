@@ -1,6 +1,6 @@
 # @mstar-harness/opencode
 
-Morning Star (启明星) harness plugin for [OpenCode](https://opencode.ai).
+Morning Star harness plugin for [OpenCode](https://opencode.ai).
 
 Install this package via OpenCode’s `plugin` array — it bundles `mstar-*` skills, role agents, and iteration commands so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the Cursor and Codex plugins.
 

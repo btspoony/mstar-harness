@@ -1,6 +1,6 @@
 # @mstar-harness/omp
 
-Morning Star (启明星) harness plugin for [omp (Oh My Pi)](https://omp.sh).
+Morning Star harness plugin for [omp (Oh My Pi)](https://omp.sh).
 
 Install this package with `omp plugin install` — it bundles the engine **inline** (zero runtime `@mstar-harness/engine` dependency), plus `mstar-*` skills, role agents, iteration commands, and the omp runtime gates (status/dispatch/lease validation), so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the OpenCode, Cursor, and Codex plugins.
 
