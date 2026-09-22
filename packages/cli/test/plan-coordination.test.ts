@@ -2040,8 +2040,14 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
       PLAN_ID,
       "--plan-title",
       `Plan ${PLAN_ID}`,
+      // The CLI-boundary spelling for a plan pointer is harness-relative
+      // (`plans/<id>.md`), exactly as `workflow-register.test.ts` and
+      // `iteration-register.test.ts` pass it: the register producer records
+      // this string on the row AND as the catalog entity's `relativePath`,
+      // whose root is `{PLAN_DIR}` — an absolute value is refused there
+      // (`catalog.path-refused`, `packages/engine/src/catalog.ts:296`).
       "--plan-file",
-      join(fixture.harness, "plans", `${PLAN_ID}.md`),
+      join("plans", `${PLAN_ID}.md`),
       "--delivery-kind",
       "verification/report-only",
       "--completion-policy",
@@ -2055,7 +2061,11 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
     ],
     fixture.root,
   );
-  expect(registered.exitCode).toBe(0);
+  // The refusal text is carried in the expectation, so a failed run reports the
+  // engine's own code instead of only an exit code.
+  expect(`workflow register: exit ${registered.exitCode} (${registered.stderr.trim()})`).toBe(
+    "workflow register: exit 0 ()",
+  );
   expect(registered.stdout).toContain(`workflow register: OK \u2014 ${WORKFLOW_ID} registered`);
   const registeredDoc = readJson(fixture.snapshotPath);
   expect(registeredDoc.delivery_kind).toBe("verification/report-only");
