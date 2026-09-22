@@ -89,9 +89,15 @@
  * unchanged, but evicted lines are first archived — byte-exact, `fsync`ed —
  * into a sealed append-only chunk under
  * `<workflowDir>/agent-flow-history/chunk-NNNNNN.jsonl` BEFORE the tail is
- * rewritten, and a retry after a crash appends only the not-yet-archived
- * remainder (byte comparison at the line boundary), so the same accepted
- * occurrence is never archived twice. DISPLAY RETENTION and DEDUP RETENTION
+ * rewritten. The pair of steps is one TRANSACTION recorded in the transient
+ * `agent-flow-compaction.json` journal: `{version, tailBefore, tailAfter,
+ * archive:{chunk,offset,bytes,sha256}, lines}` with full sha256 fingerprints of
+ * the exact whole tail before and after, so recovery is decidable — the tail
+ * must equal `tailBefore` (then the archive range is made exact and the tail is
+ * replaced with the derivable `tailAfter`) or `tailAfter` with a provably
+ * complete archive range (then the journal is dropped); any other tail is a
+ * refusal, never a guess. Every write path resolves a pending transaction
+ * before appending, so no later compaction can pass an unfinished one. DISPLAY RETENTION and DEDUP RETENTION
  * are separate concerns: a row may leave the live tail as soon as its record
  * id is in the durable identity index, whatever incarnation it belongs to,
  * because the index — not the tail and not the scan bound — proves the record
@@ -194,7 +200,7 @@
  * `recordSubagentLink` / `readAgentFlow` + constants + types) are re-exported
  * verbatim by the entry.
  */
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
@@ -1233,6 +1239,41 @@ function advanceCursorLocked(
  * or performance concerns only, and none of them can lose an accepted id.
  */
 export const AGENT_FLOW_INDEX_FILE = 'agent-flow-ids.jsonl'
+/**
+ * The transient compaction TRANSACTION journal under one workflow dir. It
+ * exists only while one archive/tail transaction is in flight and is durably
+ * removed when that transaction completes, so its presence means "an
+ * unfinished compaction": every write path resolves it before doing anything
+ * else (B can never pass an unfinished A), and coverage/backup entries must
+ * refuse a snapshot while it exists.
+ */
+export const AGENT_FLOW_COMPACTION_FILE = 'agent-flow-compaction.json'
+
+/** The exact whole-file identity of the display tail at one point in time. */
+interface TailFingerprint {
+  bytes: number
+  sha256: string
+}
+
+/**
+ * One compaction transaction: the exact tail state before and after the
+ * eviction, plus the exact archive range the removed prefix occupies. The
+ * next-expected bytes are referenced by hash only — the "after" tail is
+ * derivable from the "before" tail by dropping the first `lines` lines, so the
+ * journal stays minimal and every recovery step is decidable.
+ */
+interface CompactionJournal {
+  version: 1
+  tailBefore: TailFingerprint
+  tailAfter: TailFingerprint
+  archive: { chunk: string; offset: number; bytes: number; sha256: string }
+  lines: number
+}
+
+/** The full sha256 (64 lowercase hex) of one string's UTF-8 bytes. */
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
 
 /** Accepted record id → the content digest of its ledger line. */
 type IdentityIndex = Map<string, string>
@@ -1566,93 +1607,258 @@ function fsyncDirectory(dir: string): void {
 }
 
 /**
- * Archive evicted display lines, byte-exact, and `fsync` them BEFORE the
- * caller rewrites the tail. History is written as SEALED chunks under
- * `<workflowDir>/agent-flow-history/` (`chunk-NNNNNN.jsonl`): evictions keep
- * filling the newest chunk until it reaches the same byte gate as the ledger,
- * then the next eviction starts the following chunk — so the directory grows
- * with the retained VOLUME, not with one file per event, and a sealed chunk is
- * never rewritten.
- *
- * CRASH IDEMPOTENCE: a process death after the chunk `fsync` but before the
- * tail rewrite leaves the batch in BOTH places. The retry therefore appends
- * only the part of the batch that is not already the newest archived bytes (a
- * byte comparison at the line boundary, computed against the chunk that holds
- * them — including the chunk being sealed when the batch rolls into a new one):
- * the same accepted occurrence is archived exactly once, and legacy lines
- * without an identity are handled by the same byte rule. An unreadable chunk
- * THROWS rather than reporting an empty archive, because an empty archive would
- * erase that comparison and duplicate the batch.
- *
- * May throw (fs) — callers contain.
+ * Parse one compaction journal. `undefined` for anything that is not exactly
+ * the contract shape — an unrecognized journal is a refusal, never a guess.
  */
-function archiveHistoryLines(workflowDir: string, lines: readonly string[]): void {
+function parseCompactionJournal(raw: string): CompactionJournal | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  const rec = asRecord(parsed)
+  if (rec === undefined || rec.version !== 1) return undefined
+  const before = asRecord(rec.tailBefore)
+  const after = asRecord(rec.tailAfter)
+  const archive = asRecord(rec.archive)
+  if (before === undefined || after === undefined || archive === undefined) return undefined
+  const fingerprint = (value: Record<string, unknown>): TailFingerprint | undefined => {
+    const bytes = value.bytes
+    const sha256 = value.sha256
+    if (!Number.isSafeInteger(bytes) || (bytes as number) < 0) return undefined
+    if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) return undefined
+    return { bytes: bytes as number, sha256 }
+  }
+  const tailBefore = fingerprint(before)
+  const tailAfter = fingerprint(after)
+  if (tailBefore === undefined || tailAfter === undefined) return undefined
+  const chunk = archive.chunk
+  const offset = archive.offset
+  const bytes = archive.bytes
+  const digest = archive.sha256
+  if (typeof chunk !== 'string' || !/^chunk-\d{6}\.jsonl$/.test(chunk)) return undefined
+  if (!Number.isSafeInteger(offset) || (offset as number) < 0) return undefined
+  if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return undefined
+  if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) return undefined
+  const lines = rec.lines
+  if (!Number.isSafeInteger(lines) || (lines as number) < 1) return undefined
+  // The transaction only ever REMOVES tail bytes.
+  if (tailBefore.bytes <= tailAfter.bytes) return undefined
+  return { version: 1, tailBefore, tailAfter, archive: { chunk, offset: offset as number, bytes: bytes as number, sha256: digest }, lines: lines as number }
+}
+
+/** Read the display tail exactly (`{content, fingerprint}`); a read failure is `undefined`. */
+function readTailState(workflowDir: string): { content: string; fingerprint: TailFingerprint } | undefined {
+  let content: string
+  try {
+    content = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')
+  } catch {
+    return undefined
+  }
+  return { content, fingerprint: { bytes: Buffer.byteLength(content), sha256: sha256Hex(content) } }
+}
+
+/** Whether one tail fingerprint equals a recorded one. */
+function sameFingerprint(actual: TailFingerprint, recorded: TailFingerprint): boolean {
+  return actual.bytes === recorded.bytes && actual.sha256 === recorded.sha256
+}
+
+/** Remove one file durably (fsynced directory afterwards). A missing file is fine. */
+function removeFileDurableSync(file: string): void {
+  try {
+    unlinkSync(file)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  fsyncDirectory(dirname(file))
+}
+
+/**
+ * Make the recorded archive range exact — the archive half of a transaction
+ * whose removal had not been applied. Returns `false` (refusal) on anything
+ * that is not provably this transaction's own bytes.
+ */
+function ensureArchivedLocked(workflowDir: string, journal: CompactionJournal, beforeContent: string): boolean {
+  const beforeLines = beforeContent.replace(/\n$/, '').split('\n')
+  if (beforeLines.length < journal.lines) {
+    log('warn', 'agent-flow compaction journal expects more lines than the tail holds — refusing (the record does not describe this tail)')
+    return false
+  }
+  const batchBytes = `${beforeLines.slice(0, journal.lines).join('\n')}\n`
+  if (Buffer.byteLength(batchBytes) !== journal.archive.bytes || sha256Hex(batchBytes) !== journal.archive.sha256) {
+    log('warn', 'agent-flow compaction journal archive range does not match the removable tail prefix — refusing')
+    return false
+  }
+  const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+  const path = join(dir, journal.archive.chunk)
+  let size: number
+  try {
+    size = statSync(path).size
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err?.code !== 'ENOENT') {
+      log('warn', `agent-flow compaction archive unreadable (${errorMessage(error)}) — refusing`)
+      return false
+    }
+    // No chunk at all: only a transaction that starts at byte 0 may create it.
+    if (journal.archive.offset !== 0) {
+      log('warn', 'agent-flow compaction archive chunk is missing although the transaction did not start at offset 0 — refusing')
+      return false
+    }
+    mkdirSync(dir, { recursive: true })
+    appendFileDurableSync(path, batchBytes)
+    fsyncDirectory(dir)
+    return true
+  }
+  // A chunk whose length is exactly the recorded offset is the legal ZERO-BYTE
+  // prefix of this transaction (the crash cut between the journal and the
+  // append) — it is not "a missing range".
+  if (size === journal.archive.offset) {
+    appendFileDurableSync(path, batchBytes)
+    return true
+  }
+  if (size < journal.archive.offset || size > journal.archive.offset + journal.archive.bytes) {
+    log('warn', `agent-flow compaction archive length ${size} is outside the recorded range — refusing (never overwriting foreign or damaged bytes)`)
+    return false
+  }
+  let present: string
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const buffer = Buffer.allocUnsafe(size - journal.archive.offset)
+      readSync(fd, buffer, 0, buffer.length, journal.archive.offset)
+      present = buffer.toString('utf8')
+    } finally {
+      closeSync(fd)
+    }
+  } catch (error) {
+    log('warn', `agent-flow compaction archive range unreadable (${errorMessage(error)}) — refusing`)
+    return false
+  }
+  if (size - journal.archive.offset === journal.archive.bytes) {
+    if (present !== batchBytes) {
+      log('warn', 'agent-flow compaction archive range does not match the recorded bytes — refusing')
+      return false
+    }
+    return true
+  }
+  // A PARTIAL prefix: acceptable only when it is byte-for-byte this
+  // transaction's own prefix (the interrupted append), never foreign bytes.
+  if (!batchBytes.startsWith(present)) {
+    log('warn', 'agent-flow compaction archive holds bytes that are not this transaction\'s prefix — refusing (never truncating foreign or damaged bytes)')
+    return false
+  }
+  truncateSync(path, journal.archive.offset)
+  appendFileDurableSync(path, batchBytes)
+  return true
+}
+
+/**
+ * Resolve an unfinished compaction transaction (and the precondition of every
+ * write path — no append or compaction may proceed while one is pending).
+ * Returns `false` when the journal cannot be resolved: the caller then refuses,
+ * leaving the journal and the tail exactly as found.
+ */
+function resolveCompactionLocked(workflowDir: string): boolean {
+  const file = join(workflowDir, AGENT_FLOW_COMPACTION_FILE)
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+    log('warn', `agent-flow compaction journal unreadable (${errorMessage(error)}) — refusing: the archive/tail transaction cannot be resolved`)
+    return false
+  }
+  const journal = parseCompactionJournal(raw)
+  if (journal === undefined) {
+    log('warn', 'agent-flow compaction journal is not a recognized transaction — refusing (the journal is left as found for diagnosis)')
+    return false
+  }
+  const tail = readTailState(workflowDir)
+  if (tail === undefined) {
+    log('warn', 'agent-flow compaction journal cannot be resolved: the display tail is unreadable — refusing')
+    return false
+  }
+  if (sameFingerprint(tail.fingerprint, journal.tailBefore)) {
+    if (!ensureArchivedLocked(workflowDir, journal, tail.content)) return false
+    const afterContent = `${tail.content.replace(/\n$/, '').split('\n').slice(journal.lines).join('\n')}\n`
+    const afterFingerprint: TailFingerprint = { bytes: Buffer.byteLength(afterContent), sha256: sha256Hex(afterContent) }
+    if (!sameFingerprint(afterFingerprint, journal.tailAfter)) {
+      log('warn', 'agent-flow compaction journal recorded an after-state that this tail cannot produce — refusing')
+      return false
+    }
+    writeFileDurableSync(join(workflowDir, AGENT_FLOW_FILE), afterContent)
+    removeFileDurableSync(file)
+    return true
+  }
+  if (sameFingerprint(tail.fingerprint, journal.tailAfter)) {
+    // The removal landed; the journal may only be dropped once the archive
+    // range is provably complete.
+    const archivePath = join(workflowDir, AGENT_FLOW_HISTORY_DIR, journal.archive.chunk)
+    let size: number
+    try {
+      size = statSync(archivePath).size
+    } catch (error) {
+      log('warn', `agent-flow compaction archive is unreadable while finishing the transaction (${errorMessage(error)}) — refusing`)
+      return false
+    }
+    if (size !== journal.archive.offset + journal.archive.bytes) {
+      log('warn', `agent-flow compaction archive length ${size} does not complete the recorded range — refusing (a matching tail alone is not proof of a finished transaction)`)
+      return false
+    }
+    let present: string | undefined
+    try {
+      const fd = openSync(archivePath, 'r')
+      try {
+        const buffer = Buffer.allocUnsafe(journal.archive.bytes)
+        readSync(fd, buffer, 0, buffer.length, journal.archive.offset)
+        present = buffer.toString('utf8')
+      } finally {
+        closeSync(fd)
+      }
+    } catch (error) {
+      log('warn', `agent-flow compaction archive range unreadable (${errorMessage(error)}) — refusing`)
+      return false
+    }
+    if (present === undefined || sha256Hex(present) !== journal.archive.sha256) {
+      log('warn', 'agent-flow compaction archive range does not match the recorded bytes — refusing')
+      return false
+    }
+    removeFileDurableSync(file)
+    return true
+  }
+  log('warn', 'agent-flow compaction journal matches neither the recorded before nor after tail — refusing (never guessing a finished transaction)')
+  return false
+}
+
+/**
+ * The archive destination for one batch: the newest chunk, or the next chunk
+ * when that one reached the seal gate. Returns the target plus the byte offset
+ * the batch will occupy (the current size — 0 for a chunk that does not exist
+ * yet). Read-only; the caller records the result in the journal BEFORE writing.
+ */
+function resolveArchiveTarget(workflowDir: string): { chunk: string; path: string; offset: number; created: boolean } {
   const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
   mkdirSync(dir, { recursive: true })
   const sealed = readdirSync(dir).filter((name) => name.startsWith('chunk-') && name.endsWith('.jsonl')).sort()
-  const activeName = sealed.length === 0 ? `chunk-${String(1).padStart(6, '0')}.jsonl` : sealed[sealed.length - 1]!
-  let path = join(dir, activeName)
-  let existing = readChunkLines(path)
-  // A retry may find part (or all) of this batch already archived — append only
-  // the remainder; never archive the same occurrence twice. The overlap is
-  // computed against the chunk that holds the newest archived bytes, i.e.
-  // BEFORE any rollover moves the target.
-  const overlap = archivedOverlap(existing, lines)
-  if (overlap >= lines.length) return
-  const created = existing.length === 0
-  if (existing.length > 0 && statSync(path).size >= AGENT_FLOW_SIZE_GATE_BYTES) {
-    // ROLLOVER: the already-archived prefix of this batch lives in the chunk
-    // being sealed, so the overlap above is what keeps a crash retried across a
-    // rollover exact-once; the new chunk receives only the remainder.
-    path = join(dir, `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`)
-  }
-  const fd = openSync(path, 'a')
+  let chunk = sealed.length === 0 ? `chunk-${String(1).padStart(6, '0')}.jsonl` : sealed[sealed.length - 1]!
+  let path = join(dir, chunk)
+  let size = 0
+  let created = sealed.length === 0
   try {
-    writeSync(fd, `${lines.slice(overlap).join('\n')}\n`)
-    // Fsync the chunk BEFORE the tail rewrite: the display tail is only ever
-    // compacted after its evicted bytes are durable somewhere else.
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
+    size = statSync(path).size
+  } catch {
+    created = true
   }
-  // A newly created chunk needs its directory entry durable too.
-  if (created) fsyncDirectory(dir)
-}
-
-/**
- * The lines of one history chunk — `[]` ONLY when the chunk does not exist
- * yet. Any OTHER read failure throws: an unreadable archive must never be read
- * as an empty one, because an empty one erases the already-archived prefix and
- * duplicates it on the retry.
- */
-function readChunkLines(path: string): string[] {
-  let raw: string
-  try {
-    raw = readFileSync(path, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
+  if (size >= AGENT_FLOW_SIZE_GATE_BYTES) {
+    chunk = `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`
+    path = join(dir, chunk)
+    size = 0
+    created = true
   }
-  return raw === '' ? [] : raw.replace(/\n$/, '').split('\n')
-}
-
-/**
- * The largest `k` such that the chunk's last `k` lines equal the batch's
- * first `k` lines — the already-archived prefix of a crash-retried batch.
- */
-function archivedOverlap(existing: readonly string[], batch: readonly string[]): number {
-  const max = Math.min(existing.length, batch.length)
-  for (let k = max; k >= 1; k -= 1) {
-    let match = true
-    for (let i = 0; i < k; i += 1) {
-      if (existing[existing.length - k + i] !== batch[i]) {
-        match = false
-        break
-      }
-    }
-    if (match) return k
-  }
-  return 0
+  return { chunk, path, offset: size, created }
 }
 
 /**
@@ -1702,11 +1908,14 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
  * The common path stays append-ONLY: the file is `stat`-gated, and only a
  * file that crossed {@link AGENT_FLOW_SIZE_GATE_BYTES} AND holds more than
  * {@link AGENT_FLOW_MAX_EVENTS} lines is compacted. Compaction archives the
- * evictable prefix into an `fsync`ed chunk
- * ({@link archiveHistoryLines}) and only then replaces the tail via an atomic
- * temp-file + `renameSync` write, so concurrent readers never observe a torn
- * file, the display bound holds, and every accepted identity stays durable in
- * the index even after its row leaves the live tail.
+ * evictable prefix into an `fsync`ed chunk and only then replaces the tail via
+ * an atomic temp-file + `renameSync` write, so concurrent readers never observe
+ * a torn file, the display bound holds, and every accepted identity stays
+ * durable in the index even after its row leaves the live tail. Both steps are
+ * ordered by ONE durable compaction journal (see below): the record is durable
+ * before the archive is touched, the archive is durable before the tail is
+ * replaced, and the record is durably removed only once the range is provably
+ * complete.
  */
 function appendLineLocked(workflowDir: string, line: string, index: IdentityIndex | undefined): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
@@ -1719,16 +1928,37 @@ function appendLineLocked(workflowDir: string, line: string, index: IdentityInde
   const lines = content.replace(/\n$/, '').split('\n')
   if (lines.length <= AGENT_FLOW_MAX_EVENTS) return
   const cut = lines.length - AGENT_FLOW_MAX_EVENTS
-  const archive: string[] = []
-  const retained: string[] = []
-  for (const candidate of lines.slice(0, cut)) {
-    if (compactionEvictable(candidate, index)) archive.push(candidate)
-    else retained.push(candidate)
+  // The evicted batch is the CONTIGUOUS leading run of eligible lines (the
+  // eviction stops at the first ineligible one), so the journal can describe it
+  // exactly as "the first `lines` lines of the before tail".
+  let batchLength = 0
+  while (batchLength < cut && compactionEvictable(lines[batchLength]!, index)) batchLength += 1
+  if (batchLength === 0) return
+  const batchBytes = `${lines.slice(0, batchLength).join('\n')}\n`
+  const afterContent = `${lines.slice(batchLength).join('\n')}\n`
+  const target = resolveArchiveTarget(workflowDir)
+  const journal: CompactionJournal = {
+    version: 1,
+    tailBefore: { bytes: Buffer.byteLength(content), sha256: sha256Hex(content) },
+    tailAfter: { bytes: Buffer.byteLength(afterContent), sha256: sha256Hex(afterContent) },
+    archive: {
+      chunk: target.chunk,
+      offset: target.offset,
+      bytes: Buffer.byteLength(batchBytes),
+      sha256: sha256Hex(batchBytes),
+    },
+    lines: batchLength,
   }
-  if (archive.length === 0) return
-  archiveHistoryLines(workflowDir, archive)
-  const tail = [...retained, ...lines.slice(cut)]
-  writeFileDurableSync(file, `${tail.join('\n')}\n`)
+  const journalFile = join(workflowDir, AGENT_FLOW_COMPACTION_FILE)
+  // 1) the transaction record is durable BEFORE the archive is touched…
+  writeFileDurableSync(journalFile, JSON.stringify(journal))
+  // 2) …then the archived bytes…
+  appendFileDurableSync(target.path, batchBytes)
+  if (target.created) fsyncDirectory(dirname(target.path))
+  // 3) …then the display tail…
+  writeFileDurableSync(file, afterContent)
+  // 4) …and finally the completed transaction is removed.
+  removeFileDurableSync(journalFile)
 }
 
 /**
@@ -1751,6 +1981,8 @@ function appendEvent(workflowDir: string, event: AgentFlowEvent, identity?: Agen
   const line = ledgerLineOf(event, identity)
   // Non-reentrant lock: the shared-lock append primitive.
   withWorkflowDirLock(workflowDir, () => {
+    // No append or compaction may pass an unfinished compaction transaction.
+    if (!resolveCompactionLocked(workflowDir)) return
     const read = loadIdentityIndex(workflowDir)
     if (read.kind === 'unreadable') {
       // A damaged authority also breaks the COMPACTION contract (the display
@@ -2021,6 +2253,8 @@ export function recordWorkflowEvent(input: {
     const evictable = input.isEvictable ?? (() => false)
     let accepted = false
     withWorkflowDirLock(workflowDir, () => {
+      // No append or compaction may pass an unfinished compaction transaction.
+      if (!resolveCompactionLocked(workflowDir)) return
       const indexRead = loadIdentityIndex(workflowDir)
       if (indexRead.kind === 'unreadable') {
         log('warn', `workflow record refused — the accepted-identity index is unreadable (${indexRead.reason}); no append, no cursor advance (the row stays eligible)`)

@@ -22,6 +22,7 @@ import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { AGENT_FLOW_FILE, AGENT_FLOW_MAX_EVENTS, readAgentFlow, recordDispatch, recordSettle } from '../src/index.ts'
 import {
+  AGENT_FLOW_COMPACTION_FILE,
   AGENT_FLOW_HISTORY_DIR,
   AGENT_FLOW_INDEX_FILE,
   AGENT_FLOW_SIZE_GATE_BYTES,
@@ -39,6 +40,7 @@ import {
   WORKFLOW_LEDGER_WATERMARK_FILE,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowEventSource } from '../src/gates/agent-flow.ts'
+import { createHash } from 'node:crypto'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import {
   awaitWorkflowLedgerIdle,
@@ -101,6 +103,28 @@ function indexRows(workflowDir: string): Array<{ id: string; d: string }> {
 
 /** A verified-shaped stream id as the consumer derives it (`s1-<32 hex>`). */
 const STREAM_SHAPE = /^s1-[0-9a-f]{32}$/
+
+/** The full sha256 of one string (the compaction journal's fingerprint primitive). */
+const sha256Of = (value: string): string => createHash('sha256').update(value).digest('hex')
+
+/**
+ * A hand-crafted compaction journal for `tailContent`: the test mirrors the
+ * contract's exact derivations (the first `lines` lines are the removed
+ * prefix, the rest is the after tail), so any mismatch with the implementation
+ * surfaces as a refusal rather than a silent pass.
+ */
+function compactionJournalOf(tailContent: string, lines: number, target: { chunk: string; offset: number }): string {
+  const beforeLines = tailContent.replace(/\n$/, '').split('\n')
+  const batch = `${beforeLines.slice(0, lines).join('\n')}\n`
+  const after = `${beforeLines.slice(lines).join('\n')}\n`
+  return JSON.stringify({
+    version: 1,
+    tailBefore: { bytes: Buffer.byteLength(tailContent), sha256: sha256Of(tailContent) },
+    tailAfter: { bytes: Buffer.byteLength(after), sha256: sha256Of(after) },
+    archive: { chunk: target.chunk, offset: target.offset, bytes: Buffer.byteLength(batch), sha256: sha256Of(batch) },
+    lines,
+  })
+}
 
 /** A ledger event line (v1 dispatch — seeded directly into agent-flow.jsonl). */
 const dispatchLine = (ts: number, overrides: Record<string, unknown> = {}): string => JSON.stringify({
@@ -2143,6 +2167,59 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
     }
   })
 
+  it('a compaction that crashes before the tail replace is completed by the NEXT write — exactly once', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-compaction-recover-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'z'.repeat(180)
+      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-crash', 'sess-crash', i, pad))
+      await writeFile(file, `${seeded.join('\n')}\n`)
+      await seedIdentityIndex(workflowDir, seeded)
+      const chunks = listAgentFlowHistoryChunks(workflowDir)
+      expect(chunks).toEqual([])
+
+      // Force the crash cut "archive durable, tail not replaced" by making the
+      // tail's atomic replacement fail: the journal and the archived bytes are
+      // already on disk when the record is refused.
+      const tailTmp = join(workflowDir, `${AGENT_FLOW_FILE}.tmp`)
+      await mkdir(tailTmp, { recursive: true })
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(true)
+      const interrupted = readFileSync(file, 'utf8').trim().split('\n')
+      expect(interrupted).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
+
+      // The next write resolves the unfinished transaction BEFORE appending.
+      await rm(tailTmp, { recursive: true, force: true })
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(1, 'sess-live'),
+        event: { v: 1, ts: T0 + 1001, kind: 'workflow-run', runId: 'run-live-2', name: 'audit' },
+      })).toBe(true)
+
+      // The transaction is gone, the tail is compacted, and every archived
+      // occurrence exists exactly once.
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
+      const tail = readFileSync(file, 'utf8').trim().split('\n')
+      expect(tail).toHaveLength(AGENT_FLOW_MAX_EVENTS + 1)
+      const archive = listAgentFlowHistoryChunks(workflowDir)
+        .map((name) => readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, name), 'utf8'))
+        .join('')
+      expect(archive.split('"runId":"run-0"').length - 1).toBe(1)
+      expect(archive.split('"runId":"run-1"').length - 1).toBe(1)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('an UNINDEXED accepted row (the crash window) stays in the display tail while indexed rows are archived', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-history-pending-')
     try {
@@ -2168,7 +2245,8 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       const tail = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
       const runIds = tail.map((line) => parseLine(line)!.runId)
       // The unindexed row is STILL in the live tail (its dedup window) and the
-      // indexed row left it — archived into history.
+      // indexed row left it — archived into history. The eviction stops at the
+      // first ineligible line, so the archived prefix is contiguous.
       expect(runIds).toContain('run-pending')
       expect(runIds).not.toContain('run-covered')
       expect(runIds[runIds.length - 1]).toBe('run-live')
@@ -2182,38 +2260,181 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
     }
   })
 
-  it('archive-plus-tail compaction is crash-idempotent — a retried batch is never archived twice', async () => {
-    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-history-idempotent-')
+  it('recovery REFUSES to drop the journal when the tail matches the after-state but the archive range is incomplete', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-compaction-after-incomplete-')
+    const priorSink = setAgentFlowLogger(() => {})
     try {
       const file = join(workflowDir, AGENT_FLOW_FILE)
       const T0 = 1_700_000_000_000
-      const pad = 'z'.repeat(180)
-      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-crash', 'sess-crash', i, pad))
-      await writeFile(file, `${seeded.join('\n')}\n`)
-      await seedIdentityIndex(workflowDir, seeded)
-      // The exact state a crash between the chunk `fsync` and the tail rename
-      // leaves behind: the batch is ALREADY archived and still in the tail.
+      const pad = 'g'.repeat(180)
+      const seeded = Array.from({ length: 12 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-g', 'sess-g', i, pad))
+      const before = `${seeded.join('\n')}\n`
+      const journal = compactionJournalOf(before, 2, { chunk: 'chunk-000001.jsonl', offset: 0 })
+      const parsed = JSON.parse(journal) as { tailAfter: { sha256: string } }
+      const afterTail = `${seeded.slice(2).join('\n')}\n`
+      // Self-check: the hand-crafted record must describe exactly this pair.
+      expect(sha256Of(afterTail)).toBe(parsed.tailAfter.sha256)
+      await writeFile(file, afterTail)
       const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, 'chunk-000001.jsonl'), `${seeded.slice(0, 11).join('\n')}\n`)
+      await writeFile(join(dir, 'chunk-000001.jsonl'), 'partial')
+      await writeFile(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), journal)
+      const tailBytes = readFileSync(file, 'utf8')
 
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 5, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+      // A matching after-tail alone is NOT proof of a finished transaction.
+      expect(readFileSync(file, 'utf8')).toBe(tailBytes)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(true)
+      expect(readFileSync(join(dir, 'chunk-000001.jsonl'), 'utf8')).toBe('partial')
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('recovery COMPLETES a transaction whose chunk was never created (offset 0), and refuses a missing chunk at a non-zero offset', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-compaction-zero-offset-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'h'.repeat(180)
+      const seeded = Array.from({ length: 12 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-h', 'sess-h', i, pad))
+      const before = `${seeded.join('\n')}\n`
+      await writeFile(file, before)
+      // The journal only: the crash cut between the record and the append.
+      await writeFile(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), compactionJournalOf(before, 2, { chunk: 'chunk-000001.jsonl', offset: 0 }))
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 5, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(true)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, 'chunk-000001.jsonl'), 'utf8')).toBe(`${seeded.slice(0, 2).join('\n')}\n`)
+      expect(readFileSync(file, 'utf8').trim().split('\n')).toEqual([...seeded.slice(2).map((line) => line), expect.any(String)])
+
+      // A missing chunk whose recorded offset is NOT zero cannot be fabricated.
+      const { root: root2, harnessDir: harnessDir2, workflowDir: workflowDir2 } = await tempHarness('dsh-agentflow-compaction-bad-offset-')
+      try {
+        await writeFile(join(workflowDir2, AGENT_FLOW_FILE), before)
+        await writeFile(join(workflowDir2, AGENT_FLOW_COMPACTION_FILE), compactionJournalOf(before, 2, { chunk: 'chunk-000001.jsonl', offset: 5 }))
+        expect(recordWorkflowEvent({
+          harnessDir: harnessDir2,
+          workflowDir: workflowDir2,
+          source: src(0, 'sess-live'),
+          event: { v: 1, ts: T0 + 5, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+        })).toBe(false)
+        expect(existsSync(join(workflowDir2, AGENT_FLOW_HISTORY_DIR))).toBe(false)
+        expect(existsSync(join(workflowDir2, AGENT_FLOW_COMPACTION_FILE))).toBe(true)
+      } finally {
+        await rm(root2, { recursive: true, force: true })
+      }
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a DAMAGED journal is refused and left as found — no append, no tail rewrite', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-compaction-damaged-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const seeded = Array.from({ length: 3 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-d', 'sess-d', i, 'p'))
+      await writeFile(file, `${seeded.join('\n')}\n`)
+      const tailBytes = readFileSync(file, 'utf8')
+      const damaged = '{"version":1,"tailBefore":{"bytes":'
+      await writeFile(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), damaged)
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 5, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+      expect(readFileSync(file, 'utf8')).toBe(tailBytes)
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), 'utf8')).toBe(damaged)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('byte-identical LEGACY occurrences are archived separately — one copy per removed occurrence', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-legacy-identical-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      // ONE legacy line (no identity at all), repeated: every occurrence is
+      // byte-identical, so only position/transaction binding keeps them apart.
+      const legacy = dispatchLine(T0, { prompt: 'x'.repeat(180) })
+      const tails = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 11 }, () => legacy)
+      await writeFile(file, `${tails.join('\n')}\n`)
+
+      // One identified append evicts the leading run (12 identical legacy rows).
       expect(recordWorkflowEvent({
         harnessDir,
         workflowDir,
         source: src(0, 'sess-live'),
         event: { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
       })).toBe(true)
+      // Then one more append evicts exactly one further occurrence.
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(1, 'sess-live'),
+        event: { v: 1, ts: T0 + 1001, kind: 'workflow-run', runId: 'run-live-2', name: 'audit' },
+      })).toBe(true)
 
-      // The retry archived nothing new and the tail compacted normally: one
-      // accepted occurrence, one archive copy.
-      const chunks = listAgentFlowHistoryChunks(workflowDir)
-      expect(chunks).toEqual(['chunk-000001.jsonl'])
-      const archived = readFileSync(join(dir, chunks[0]!), 'utf8')
-      expect(archived).toBe(`${seeded.slice(0, 11).join('\n')}\n`)
-      const tail = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
-      expect(tail).toHaveLength(AGENT_FLOW_MAX_EVENTS)
-      expect(tail.some((line) => line.includes('"runId":"run-0"'))).toBe(false)
+      const archive = listAgentFlowHistoryChunks(workflowDir)
+        .map((name) => readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, name), 'utf8'))
+        .join('')
+      // 12 + 1 removed occurrences, each archived exactly once — never merged.
+      expect(archive.split(legacy).length - 1).toBe(13)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('recovery REFUSES a tail that matches neither the recorded before nor after state', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-compaction-foreign-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'f'.repeat(180)
+      const seeded = Array.from({ length: 12 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-f', 'sess-f', i, pad))
+      const tail = `${seeded.join('\n')}\n`
+      await writeFile(file, tail)
+      // The journal describes this tail, but the tail on disk no longer matches
+      // either fingerprint (a foreign / tampered state).
+      const journal = compactionJournalOf(tail, 2, { chunk: 'chunk-000001.jsonl', offset: 0 })
+      await writeFile(join(workflowDir, AGENT_FLOW_COMPACTION_FILE), journal)
+      await writeFile(file, `${tail}${seeded[0]!}\n`)
+      const foreignTail = readFileSync(file, 'utf8')
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 5, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+      // Nothing was appended, nothing was replaced and the journal stays.
+      expect(readFileSync(file, 'utf8')).toBe(foreignTail)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(true)
+      expect(listAgentFlowHistoryChunks(workflowDir)).toEqual([])
+    } finally {
+      setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -2629,6 +2850,39 @@ describe('agent-flow — durability, legacy bound and archive boundaries (F2)', 
     }
   })
 
+  it('an UNREADABLE history chunk refuses the compaction and leaves the transaction recorded', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-unreadable-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'q'.repeat(180)
+      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-arch-read', 'sess-arch-read', i, pad))
+      await writeFile(file, `${seeded.join('\n')}\n`)
+      await seedIdentityIndex(workflowDir, seeded)
+      // The active chunk slot exists but cannot be appended to or read.
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(join(dir, 'chunk-000001.jsonl'), { recursive: true })
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+
+      // The display tail was NOT compacted, the new row's identity did not
+      // commit, and the transaction record is there for diagnosis/recovery.
+      expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
+      expect(indexRows(workflowDir)).toHaveLength(AGENT_FLOW_MAX_EVENTS + 10)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(true)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('a live tool-call row is refused while the index is unreadable — no wfc1 exemption, no compaction', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-live-index-damaged-')
     try {
@@ -2648,54 +2902,18 @@ describe('agent-flow — durability, legacy bound and archive boundaries (F2)', 
     }
   })
 
-  it('an UNREADABLE history chunk refuses the compaction instead of duplicating the batch', async () => {
-    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-unreadable-')
-    const priorSink = setAgentFlowLogger(() => {})
-    try {
-      const file = join(workflowDir, AGENT_FLOW_FILE)
-      const T0 = 1_700_000_000_000
-      const pad = 'q'.repeat(180)
-      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-arch-read', 'sess-arch-read', i, pad))
-      await writeFile(file, `${seeded.join('\n')}\n`)
-      await seedIdentityIndex(workflowDir, seeded)
-      // The active chunk slot exists but cannot be read as an archive.
-      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
-      await mkdir(join(dir, 'chunk-000001.jsonl'), { recursive: true })
-
-      expect(recordWorkflowEvent({
-        harnessDir,
-        workflowDir,
-        source: src(0, 'sess-live'),
-        event: { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
-      })).toBe(false)
-
-      // The display tail was NOT compacted (the batch was never archived) and
-      // the new row's identity did not commit.
-      expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
-      expect(indexRows(workflowDir)).toHaveLength(AGENT_FLOW_MAX_EVENTS + 10)
-      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
-    } finally {
-      setAgentFlowLogger(priorSink)
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('a batch that ROLLS INTO A NEW CHUNK is archived exactly once — the sealed prefix is not duplicated', async () => {
+  it('a batch that ROLLS INTO A NEW CHUNK lands there whole — the sealed chunk is untouched', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-rollover-')
     try {
       const file = join(workflowDir, AGENT_FLOW_FILE)
       const T0 = 1_700_000_000_000
       const pad = 'r'.repeat(180)
-      // A = the already-archived prefix (11 rows), X = the rows evicted with it
-      // (20 rows), then filler that keeps the display tail over the bound.
       const archived = Array.from({ length: 11 }, (_, i) => sourcedLine(T0 + i, `run-a-${i}`, 'sess-arch', 'sess-arch', i, pad))
       const evicted = Array.from({ length: 20 }, (_, i) => sourcedLine(T0 + 11 + i, `run-x-${i}`, 'sess-arch', 'sess-arch', 11 + i, pad))
       const filler = Array.from({ length: 490 }, (_, i) => sourcedLine(T0 + 31 + i, `run-fill-${i}`, 'sess-fill', 'sess-fill', i, pad))
       await writeFile(file, `${[...archived, ...evicted, ...filler].join('\n')}\n`)
       await seedIdentityIndex(workflowDir, [...archived, ...evicted, ...filler])
 
-      // The active chunk already holds A at its tail and is over the seal gate,
-      // so this batch must roll into a NEW chunk.
       const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
       await mkdir(dir, { recursive: true })
       const oldChunk = `${Array.from({ length: 400 }, (_, i) => JSON.stringify({ pad: `${pad}${i}` })).join('\n')}\n${archived.join('\n')}\n`
@@ -2711,21 +2929,17 @@ describe('agent-flow — durability, legacy bound and archive boundaries (F2)', 
 
       const chunks = listAgentFlowHistoryChunks(workflowDir)
       expect(chunks).toEqual(['chunk-000001.jsonl', 'chunk-000002.jsonl'])
-      const sealedChunk = readFileSync(join(dir, 'chunk-000001.jsonl'), 'utf8')
+      // The sealed chunk is never rewritten…
+      expect(readFileSync(join(dir, 'chunk-000001.jsonl'), 'utf8')).toBe(oldChunk)
+      // …and the rolled batch carries the whole evicted prefix exactly once.
       const newChunk = readFileSync(join(dir, 'chunk-000002.jsonl'), 'utf8')
-      // The seal gate closed the first chunk, so it is untouched…
-      expect(sealedChunk).toBe(oldChunk)
-      // …and the new chunk carries ONLY the not-yet-archived rows of the batch
-      // (the batch is the first 22 tail lines: the 11 archived rows plus the
-      // first 11 evicted ones).
-      expect(newChunk).toBe(`${evicted.slice(0, 11).join('\n')}\n`)
-      // Exactly one archived copy of every accepted occurrence.
-      expect(newChunk).not.toContain('run-a-0')
-      expect(sealedChunk.split('run-a-0').length - 1).toBe(1)
+      expect(newChunk).toBe(`${[...archived, ...evicted.slice(0, 11)].join('\n')}\n`)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
+
 })
 
 describe('workflow-ledger — verified native incarnation (F2 identity)', () => {
