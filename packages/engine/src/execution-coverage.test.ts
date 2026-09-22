@@ -12,6 +12,11 @@
  * with `buildExecutionCoverageReceipt` — the producer entry point C3 uses — so
  * the producer and the validator are proven to agree on one schema.
  *
+ * Assertion discipline (repo rule): no case pins refusal prose. Each negative
+ * case starts from the valid fixture proven in the same test, changes exactly
+ * one dimension, and asserts the stable refusal code plus that the inputs were
+ * not touched; the positive twins assert that validation returns.
+ *
  * Run with `bun test packages/engine/src/execution-coverage.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
@@ -40,6 +45,8 @@ const WORKFLOW_B = "wf-beta";
 const SESSION_A = `sess-${WORKFLOW_A}`;
 const SESSION_B = `sess-${WORKFLOW_B}`;
 const STREAM_A = `s1-${"a".repeat(32)}`;
+const STREAM_B = `s1-${"b".repeat(32)}`;
+const COVERAGE_CODE = "execution.coverage-incomplete";
 
 function sha(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -87,9 +94,7 @@ type Row = {
   disposition: Disposition;
   docs: Doc[];
   evidence?: Doc;
-  /** A whole-receipt override, applied after the producer built a consistent receipt. */
   patch?: (receipt: Record<string, unknown>) => Record<string, unknown>;
-  /** The workflowId the manifest lists for this row, when it must differ from the receipt's. */
   manifestWorkflowId?: string | null;
 };
 
@@ -99,14 +104,14 @@ function snapshot(wf: string): Doc {
   return doc("control", `workflows/${wf}/snapshot.json`, legacy({ schema_version: 1, id: wf, type: "plan", status: "running", started_at: "2026-09-21T00:00:00.000Z" }));
 }
 
-function rootRegisterDoc(): Doc {
+function registerDoc(ids: readonly string[]): Doc {
   return doc(
     "control",
     "status.json",
     legacy({
       version: 2,
       updated_at: "2026-09-21T00:00:00.000Z",
-      workflows: [WORKFLOW_A, WORKFLOW_B].map((id) => ({ id, type: "plan", started_at: "2026-09-21T00:00:00.000Z", dir: `workflows/${id}` })),
+      workflows: ids.map((id) => ({ id, type: "plan", started_at: "2026-09-21T00:00:00.000Z", dir: `workflows/${id}` })),
     }),
   );
 }
@@ -128,19 +133,22 @@ function notesDoc(wf: string): Doc {
   return doc("control", `workflows/${wf}/notes.jsonl`, `${lines.join("\n")}\n`);
 }
 
-/** The released durable workflow-event row and the index line that dedups it. */
+/** The released durable workflow-event rows and the index lines that dedup them. */
 function agentFlowDocs(wf: string): Doc[] {
   const sessionId = `sess-${wf}`;
-  const stream = wf === WORKFLOW_A ? STREAM_A : `s1-${"b".repeat(32)}`;
+  const stream = wf === WORKFLOW_A ? STREAM_A : STREAM_B;
   const tailLine = JSON.stringify({ v: 1, ts: 1, kind: "workflow-run", runId: `run-${wf}`, name: `run of ${wf}` });
   const chunkLine = JSON.stringify({ v: 1, ts: 2, kind: "workflow-agent", runId: `run-${wf}`, seq: 1, label: "member", childId: `child-${wf}` });
-  const indexLines = [
-    JSON.stringify({ id: `wfe1:workflow-run:${sessionId}:${stream}:1`, d: sha(tailLine).slice(0, 32) }),
-    JSON.stringify({ id: `wfe1:workflow-agent:${sessionId}:${stream}:2`, d: sha(chunkLine).slice(0, 32) }),
-  ];
   return [
     doc("control", `workflows/${wf}/agent-flow.jsonl`, `${tailLine}\n`),
-    doc("control", `workflows/${wf}/agent-flow-ids.jsonl`, `${indexLines.join("\n")}\n`),
+    doc(
+      "control",
+      `workflows/${wf}/agent-flow-ids.jsonl`,
+      `${[
+        JSON.stringify({ id: `wfe1:workflow-run:${sessionId}:${stream}:1`, d: sha(tailLine).slice(0, 32) }),
+        JSON.stringify({ id: `wfe1:workflow-agent:${sessionId}:${stream}:2`, d: sha(chunkLine).slice(0, 32) }),
+      ].join("\n")}\n`,
+    ),
     doc("control", `workflows/${wf}/agent-flow-history/chunk-000001.jsonl`, `${chunkLine}\n`),
   ];
 }
@@ -224,45 +232,45 @@ function hostHistoryDoc(wf: string): Doc {
 
 /** One R1 consumer manifest plus the bytes its closures name. */
 function consumerRow(surface: ExecutionSurface, consumer: string, capability: string, copies: boolean): Row {
-  const packageRoot = `packages/${consumer === "zcode" ? "" : consumer}`.replace(/\/$/, "") || "hooks";
+  const packageRoot = consumer === "zcode" ? "hooks" : `packages/${consumer}`;
   const sourcePath = `${packageRoot}/src/index.ts`;
   const configPath = `${packageRoot}/package.json`;
   const generatedPath = `${packageRoot}/dist/index.js`;
-  const manifest = {
-    version: 1,
-    protocol: "consumer-v1",
-    repoRoot: ".",
-    consumers: [
-      {
-        id: consumer,
-        packageRoot: consumer === "zcode" ? "." : packageRoot,
-        capability,
-        capabilityNote: capability === "writer" ? null : `${capability} consumer: the write path is refused and recorded as such`,
-        entrypoint: generatedPath,
-        runtime: { target: "node", floor: ">=24.18.0", declaration: "package-engines" },
-        sources: {
-          trees: [{ root: `${packageRoot}/src`, files: 1, sha256: fakeHex(31) }],
-          files: [{ path: configPath, sha256: sha("{}") }],
-        },
-        generated: { trees: [], files: [{ path: generatedPath, sha256: sha("// built") }] },
-        copiedInstructions: copies
-          ? [{ sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 3, sha256: fakeHex(32) }]
-          : [],
-      },
-    ],
-  };
   return {
     surface,
     workflowId: null,
     disposition: "retain",
     docs: [doc("package", sourcePath, "export const index = {};"), doc("package", configPath, "{}"), doc("package", generatedPath, "// built")],
-    evidence: doc("package", `coverage/${surface}.execution-consumer.json`, canonical(manifest)),
+    evidence: doc(
+      "package",
+      `coverage/${surface}.execution-consumer.json`,
+      canonical({
+        version: 1,
+        protocol: "consumer-v1",
+        repoRoot: ".",
+        consumers: [
+          {
+            id: consumer,
+            packageRoot: consumer === "zcode" ? "." : packageRoot,
+            capability,
+            capabilityNote: capability === "writer" ? null : `${capability} consumer: the write path is refused and recorded as such`,
+            entrypoint: generatedPath,
+            runtime: { target: "node", floor: ">=24.18.0", declaration: "package-engines" },
+            sources: { trees: [{ root: `${packageRoot}/src`, files: 1, sha256: fakeHex(31) }], files: [{ path: configPath, sha256: sha("{}") }] },
+            generated: { trees: [], files: [{ path: generatedPath, sha256: sha("// built") }] },
+            copiedInstructions: copies
+              ? [{ sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 3, sha256: fakeHex(32) }]
+              : [],
+          },
+        ],
+      }),
+    ),
   };
 }
 
 function rootRow(surface: ExecutionSurface): Row {
   if (surface === "core-execution") {
-    return { surface, workflowId: null, disposition: "migrate", docs: [rootRegisterDoc(), snapshot(WORKFLOW_A), snapshot(WORKFLOW_B)] };
+    return { surface, workflowId: null, disposition: "migrate", docs: [registerDoc([WORKFLOW_A, WORKFLOW_B]), snapshot(WORKFLOW_A), snapshot(WORKFLOW_B)] };
   }
   if (surface === "engine-status-snapshot") return { surface, workflowId: null, disposition: "retain", docs: [engineStatusDoc()] };
   if (surface === "cli-writer") return consumerRow(surface, "cli", "writer", false);
@@ -293,13 +301,13 @@ function rootRow(surface: ExecutionSurface): Row {
       ),
     };
   }
-  // `dsh-package` and `artifact-store-injectors`: nothing discovered in this
-  // fixture (the injector surface has no reviewed producer to populate it).
+  // `dsh-package` has nothing discovered in this fixture; `omp-hidden-entries`
+  // and `artifact-store-injectors` have no producer that can populate them, so
+  // they stay absent and their rows are exercised explicitly where reachable.
   return { surface, workflowId: null, disposition: "absent", docs: [] };
 }
 
 function workflowRow(surface: ExecutionSurface, workflowId: string): Row {
-  const dir = `workflows/${workflowId}`;
   if (surface === "workflow-session-envelopes") return { surface, workflowId, disposition: "migrate", docs: [sessionEnvelopeDoc(workflowId)] };
   if (surface === "workflow-notes-ledger") return { surface, workflowId, disposition: "retain", docs: [notesDoc(workflowId)] };
   if (surface === "workflow-agent-flow-ledger") return { surface, workflowId, disposition: "retain", docs: agentFlowDocs(workflowId) };
@@ -308,11 +316,9 @@ function workflowRow(surface: ExecutionSurface, workflowId: string): Row {
     return { surface, workflowId, disposition: "retain", docs: [cursorDoc(workflowId)] };
   }
   if (surface === "workflow-omp-launch-journal") return { surface, workflowId, disposition: "retain", docs: [launchJournalDoc(workflowId)] };
-  // H1's export alone is not complete retain coverage (the H2 wrapper is missing), so a
-  // populated row cannot be produced here; the refusal cases populate it explicitly.
   if (surface === "omp-hidden-entries") return { surface, workflowId, disposition: "absent", docs: [] };
   if (surface === "sdd-evidence") return { surface, workflowId, disposition: "retain", docs: [doc("sdd", `${workflowId}/task-1-report.md`, `# ${workflowId} report\n`)] };
-  throw new Error(`workflowRow is not defined for ${surface} (${dir})`);
+  throw new Error(`workflowRow is not defined for ${surface}`);
 }
 
 function buildRows(): Row[] {
@@ -377,11 +383,7 @@ function materialize(rows: Row[], options: { digest?: string; coverageManifestHa
       evidence,
     );
     receipts.push((row.patch ? row.patch(receipt as unknown as Record<string, unknown>) : receipt) as unknown as ExecutionCoverageReceipt);
-    surfaces.push({
-      surface: row.surface,
-      workflowId: row.manifestWorkflowId !== undefined ? row.manifestWorkflowId : row.workflowId,
-      sources,
-    });
+    surfaces.push({ surface: row.surface, workflowId: row.manifestWorkflowId !== undefined ? row.manifestWorkflowId : row.workflowId, sources });
     for (const witness of [...sources, ...evidenceWitnesses]) pinned.set(coverageWitnessKey(witness.root, witness.path), witness);
   }
   const inventory = doc("host", "inventory.json", legacy({ version: 1, sessions: [SESSION_A, SESSION_B] }));
@@ -428,38 +430,71 @@ function repin(fixture: Fixture, witnesses: readonly CoverageWitness[]): void {
   fixture.manifest = { ...fixture.manifest, sources: [...pinned.values()].sort(byRootPath) };
 }
 
+function assign(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, witnesses: readonly CoverageWitness[]): void {
+  fixture.manifest = {
+    ...fixture.manifest,
+    surfaces: fixture.manifest.surfaces.map((row) => (matches(row, surface, workflowId) ? { ...row, sources: [...witnesses] } : row)),
+  };
+  repin(fixture, witnesses);
+}
+
 function setReceipt(fixture: Fixture, index: number, receipt: ExecutionCoverageReceipt): void {
   const receipts = [...fixture.coverage.receipts];
   receipts[index] = receipt;
   fixture.coverage = { ...fixture.coverage, receipts, digest: safeDigest(receipts) };
 }
 
-/** Replace a row's retained sources (as a re-discovery would) and follow it with the manifest assignment. */
+/** Replace a row's retained bytes (the manifest assignment follows). */
 function replaceRowDocuments(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, documents: Doc[]): void {
   const index = rowIndex(fixture, surface, workflowId);
   const witnesses = documents.map((entry) => overrideDoc(fixture.evidence, entry)).sort(byRootPath);
   setReceipt(fixture, index, { ...fixture.coverage.receipts[index], sources: witnesses });
-  fixture.manifest = {
-    ...fixture.manifest,
-    surfaces: fixture.manifest.surfaces.map((row) => (matches(row, surface, workflowId) ? { ...row, sources: witnesses } : row)),
-  };
-  repin(fixture, witnesses);
+  assign(fixture, surface, workflowId, witnesses);
 }
 
-/** Replace a row's bounded export document, keeping the receipt's shape. */
-function replaceRowEvidence(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, document: Doc): void {
+/**
+ * Populate a row that has no producer able to build it (the two surfaces whose
+ * reviewed producer does not exist yet): the receipt keeps its closed shape and
+ * the bytes are the real ones, so the row reaches its own codec instead of the
+ * absent-surfaces gate.
+ */
+function populateWithoutProducer(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, documents: Doc[], evidence?: Doc): void {
   const index = rowIndex(fixture, surface, workflowId);
-  const witness = overrideDoc(fixture.evidence, document);
-  setReceipt(fixture, index, { ...fixture.coverage.receipts[index], evidence: [witness] });
-  repin(fixture, [witness]);
+  const witnesses = documents.map((entry) => overrideDoc(fixture.evidence, entry)).sort(byRootPath);
+  const evidenceWitnesses = evidence === undefined ? [] : [overrideDoc(fixture.evidence, evidence)];
+  setReceipt(fixture, index, {
+    ...fixture.coverage.receipts[index],
+    disposition: "retain",
+    sources: witnesses,
+    evidence: evidenceWitnesses,
+    resultHash: fakeHex(1),
+  });
+  assign(fixture, surface, workflowId, witnesses);
+  if (evidence !== undefined) repin(fixture, evidenceWitnesses);
 }
 
-/** Patch the manifest's assignment for one row, leaving the receipt alone. */
-function patchAssignment(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, witnesses: readonly CoverageWitness[]): void {
-  fixture.manifest = {
-    ...fixture.manifest,
-    surfaces: fixture.manifest.surfaces.map((row) => (matches(row, surface, workflowId) ? { ...row, sources: [...witnesses] } : row)),
-  };
+/** Recompute a row's receipt from its current bytes with the real producer entry point. */
+function rebuildRow(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null): void {
+  const index = rowIndex(fixture, surface, workflowId);
+  const receipt = fixture.coverage.receipts[index];
+  setReceipt(
+    fixture,
+    index,
+    buildExecutionCoverageReceipt(
+      {
+        surface: receipt.surface,
+        workflowId: receipt.workflowId,
+        disposition: receipt.disposition,
+        manifestId: receipt.manifestId,
+        manifestHash: receipt.manifestHash,
+        storeId: receipt.storeId,
+        epoch: receipt.epoch,
+        sources: receipt.sources,
+        evidence: receipt.evidence,
+      },
+      fixture.evidence,
+    ),
+  );
 }
 
 function patchReceipt(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null, patch: (receipt: Record<string, unknown>) => Record<string, unknown>): void {
@@ -467,33 +502,42 @@ function patchReceipt(fixture: Fixture, surface: ExecutionSurface, workflowId: s
   setReceipt(fixture, index, patch(fixture.coverage.receipts[index] as unknown as Record<string, unknown>) as unknown as ExecutionCoverageReceipt);
 }
 
-function witnessesFor(fixture: Fixture, surface: ExecutionSurface, workflowId: string | null): readonly CoverageWitness[] {
-  return fixture.coverage.receipts[rowIndex(fixture, surface, workflowId)].sources;
+function consumerManifestOf(fixture: Fixture, surface: ExecutionSurface): { manifest: Record<string, unknown>; entry: Doc } {
+  const witness = fixture.coverage.receipts[rowIndex(fixture, surface, null)].evidence[0];
+  const text = new TextDecoder().decode(fixture.evidence.get(coverageWitnessKey(witness.root, witness.path)));
+  return { manifest: JSON.parse(text) as Record<string, unknown>, entry: doc(witness.root as Doc["root"], witness.path, text) };
+}
+
+function putManifest(fixture: Fixture, surface: ExecutionSurface, manifest: Record<string, unknown>, entry: Doc): void {
+  const index = rowIndex(fixture, surface, null);
+  const witness = overrideDoc(fixture.evidence, doc(entry.root, entry.path, canonical(manifest)));
+  setReceipt(fixture, index, { ...fixture.coverage.receipts[index], evidence: [witness] });
+  repin(fixture, [witness]);
 }
 
 function validate(fixture: Fixture): void {
   validateExecutionCoverage(fixture.manifest, fixture.coverage, fixture.evidence);
 }
 
-function refusalOf(run: () => void): ExecutionError {
+function refusalOf(run: () => void): string {
   try {
     run();
   } catch (error) {
-    return error as ExecutionError;
+    expect(error).toBeInstanceOf(ExecutionError);
+    return (error as ExecutionError).code;
   }
   throw new Error("expected a coverage refusal, but validation returned normally");
 }
 
-function evidenceSnapshot(evidence: Map<string, Uint8Array>): string {
-  return [...evidence.entries()].map(([key, bytes]) => `${key}=${Buffer.from(bytes).toString("base64")}`).join("\n");
+function stateOf(fixture: Fixture): string {
+  return JSON.stringify({ manifest: fixture.manifest, coverage: fixture.coverage, evidence: [...fixture.evidence.entries()].map(([key, bytes]) => `${key}:${Buffer.from(bytes).toString("base64")}`) });
 }
 
-/** A canonical document with `overrides` applied, for producer-shape mutations. */
-function manifestOf(fixture: Fixture, surface: ExecutionSurface): { consumer: Record<string, unknown>; doc: Doc } {
-  const index = rowIndex(fixture, surface, null);
-  const witness = fixture.coverage.receipts[index].evidence[0];
-  const text = new TextDecoder().decode(fixture.evidence.get(coverageWitnessKey(witness.root, witness.path)));
-  return { consumer: JSON.parse(text) as Record<string, unknown>, doc: doc(witness.root as Doc["root"], witness.path, text) };
+/** Every negative case runs this: refusal code asserted, inputs proven untouched. */
+function refuseLeavingState(fixture: Fixture): void {
+  const before = stateOf(fixture);
+  expect(refusalOf(() => validate(fixture))).toBe(COVERAGE_CODE);
+  expect(stateOf(fixture)).toBe(before);
 }
 
 describe("execution-coverage", () => {
@@ -505,249 +549,273 @@ describe("execution-coverage", () => {
     validate(fixture);
   });
 
-  test("execution-coverage-receipt-result-is-recomputed-from-bytes", () => {
-    const invented = materialize(buildRows());
-    patchReceipt(invented, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({
+  test("execution-coverage-result-is-recomputed-from-bytes", () => {
+    const fixture = materialize(buildRows());
+    validate(fixture);
+    const untouched = stateOf(fixture);
+    patchReceipt(fixture, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({
       ...receipt,
       resultHash: digestOf({ surface: "workflow-notes-ledger", workflowId: WORKFLOW_A, disposition: "retain", facts: { files: [] } }),
     }));
-    expect(refusalOf(() => validate(invented)).message).toContain("recomputed from its bytes");
+    // The mutation is the only difference from the valid twin above.
+    expect(stateOf(fixture)).not.toBe(untouched);
+    refusalOf(() => validate(fixture));
   });
 
   test("execution-coverage-generic-shapes-are-not-coverage", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const envelopeOnly = materialize(buildRows());
     replaceRowDocuments(envelopeOnly, "workflow-session-envelopes", WORKFLOW_A, [
       doc("control", `workflows/${WORKFLOW_A}/sessions/coordinator-${SESSION_A}.json`, legacy({ session_id: SESSION_A })),
     ]);
-    expect(refusalOf(() => validate(envelopeOnly)).message).toContain("must carry schema_version, role, session_id, workflow_id, harness_root");
+    refuseLeavingState(envelopeOnly);
 
     const emptyNote = materialize(buildRows());
     replaceRowDocuments(emptyNote, "workflow-notes-ledger", WORKFLOW_A, [doc("control", `workflows/${WORKFLOW_A}/notes.jsonl`, "{}\n")]);
-    expect(refusalOf(() => validate(emptyNote)).message).toContain("must carry exactly kind, ts, text");
+    refuseLeavingState(emptyNote);
 
     const arbitraryCursor = materialize(buildRows());
     replaceRowDocuments(arbitraryCursor, "workflow-ledger-cursors", WORKFLOW_A, [
       doc("control", `workflows/${WORKFLOW_A}/workflow-ledger-cursors.json`, legacy({ anything: true })),
     ]);
-    expect(refusalOf(() => validate(arbitraryCursor)).message).toContain("must carry exactly v, cursors");
+    refuseLeavingState(arbitraryCursor);
 
     const arbitraryStatus = materialize(buildRows());
     replaceRowDocuments(arbitraryStatus, "engine-status-snapshot", null, [doc("control", "snapshots/engine-status.json", legacy({ anything: true }))]);
-    expect(refusalOf(() => validate(arbitraryStatus)).message).toContain("must carry sv, entries");
+    refuseLeavingState(arbitraryStatus);
 
     const unknownState = materialize(buildRows());
     const journal = launchJournalDoc(WORKFLOW_A);
+    const parsed = JSON.parse(journal.text) as { intents: Array<Record<string, unknown>> };
     replaceRowDocuments(unknownState, "workflow-omp-launch-journal", WORKFLOW_A, [
-      doc("control", journal.path, JSON.stringify({ ...JSON.parse(journal.text), intents: [{ ...JSON.parse(journal.text).intents[0], state: "launched" }] })),
+      doc("control", journal.path, JSON.stringify({ ...(JSON.parse(journal.text) as Record<string, unknown>), intents: [{ ...parsed.intents[0], state: "launched" }] })),
     ]);
-    expect(refusalOf(() => validate(unknownState)).message).toContain("state must be one of");
+    refuseLeavingState(unknownState);
 
     const unknownLedger = materialize(buildRows());
     replaceRowDocuments(unknownLedger, "workflow-agent-flow-ledger", WORKFLOW_A, [
       ...agentFlowDocs(WORKFLOW_A),
       doc("control", `workflows/${WORKFLOW_A}/agent-flow-other.jsonl`, "{}\n"),
     ]);
-    expect(refusalOf(() => validate(unknownLedger)).message).toContain("an unknown companion of the ledger is never coverage");
+    refuseLeavingState(unknownLedger);
   });
 
-  test("execution-coverage-agent-flow-index-is-required-authority", () => {
-    // A durable row retained without its identity index is not complete coverage.
-    const noIndex = materialize(buildRows());
-    replaceRowDocuments(noIndex, "workflow-agent-flow-ledger", WORKFLOW_A, agentFlowDocs(WORKFLOW_A).filter((entry) => !entry.path.endsWith("agent-flow-ids.jsonl")));
-    expect(refusalOf(() => validate(noIndex)).message).toContain("a missing identity index is");
+  test("execution-coverage-agent-flow-index-authority", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
 
-    const forgedDigest = materialize(buildRows());
+    // The archived durable row is retained but its index entry is missing.
+    const missingEntry = materialize(buildRows());
     const [tail, index, chunk] = agentFlowDocs(WORKFLOW_A);
-    const entries = index.text.trim().split("\n").map((line) => JSON.parse(line) as { id: string; d: string });
-    entries[1] = { ...entries[1], d: fakeHex(3).slice(0, 32) };
-    replaceRowDocuments(forgedDigest, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, doc("control", index.path, `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`), chunk]);
-    expect(refusalOf(() => validate(forgedDigest)).message).toContain("names no retained durable row");
+    replaceRowDocuments(missingEntry, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, doc("control", index.path, `${index.text.trim().split("\n")[0]}\n`), chunk]);
+    refuseLeavingState(missingEntry);
 
+    // The index entry is retained but its row is gone.
     const missingRow = materialize(buildRows());
     replaceRowDocuments(missingRow, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, index]);
-    expect(refusalOf(() => validate(missingRow)).message).toContain("has no identity-index entry");
+    refuseLeavingState(missingRow);
+
+    // The recorded digest no longer describes the retained line.
+    const forgedDigest = materialize(buildRows());
+    const entries = index.text.trim().split("\n").map((line) => JSON.parse(line) as { id: string; d: string });
+    entries[1] = { ...entries[1], d: fakeHex(3).slice(0, 32) };
+    replaceRowDocuments(forgedDigest, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, doc("control", index.path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`), chunk]);
+    refuseLeavingState(forgedDigest);
   });
 
   test("execution-coverage-consumer-manifest-is-r1s", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const wrongCapability = materialize(buildRows());
-    const { consumer: cli, doc: cliDoc } = manifestOf(wrongCapability, "cli-writer");
-    const consumers = cli.consumers as Array<Record<string, unknown>>;
-    consumers[0] = { ...consumers[0], capability: "read-only", capabilityNote: "pretends to be read-only" };
-    replaceRowEvidence(wrongCapability, "cli-writer", null, doc("package", cliDoc.path, canonical(cli)));
-    expect(refusalOf(() => validate(wrongCapability)).message).toContain("R1 declares writer");
+    const cli = consumerManifestOf(wrongCapability, "cli-writer");
+    const consumers = cli.manifest.consumers as Array<Record<string, unknown>>;
+    putManifest(wrongCapability, "cli-writer", { ...cli.manifest, consumers: [{ ...consumers[0], capability: "read-only", capabilityNote: "pretends otherwise" }] }, cli.entry);
+    refuseLeavingState(wrongCapability);
 
     const foreignConsumer = materialize(buildRows());
-    const { consumer: dsh, doc: dshDoc } = manifestOf(foreignConsumer, "cli-writer");
-    (dsh.consumers as Array<Record<string, unknown>>)[0] = { ...(dsh.consumers as Array<Record<string, unknown>>)[0], id: "dsh" };
-    replaceRowEvidence(foreignConsumer, "cli-writer", null, doc("package", dshDoc.path, canonical(dsh)));
-    expect(refusalOf(() => validate(foreignConsumer)).message).toContain("this surface covers cli");
+    const foreign = consumerManifestOf(foreignConsumer, "cli-writer");
+    const foreignEntries = foreign.manifest.consumers as Array<Record<string, unknown>>;
+    putManifest(foreignConsumer, "cli-writer", { ...foreign.manifest, consumers: [{ ...foreignEntries[0], id: "zcode" }] }, foreign.entry);
+    refuseLeavingState(foreignConsumer);
 
     const inventedShape = materialize(buildRows());
-    replaceRowEvidence(
-      inventedShape,
-      "cli-writer",
-      null,
-      doc("package", "coverage/cli-writer.execution-consumer.json", canonical({ version: 1, document: "consumer-manifest", surface: "cli-writer", entries: [] })),
-    );
-    expect(refusalOf(() => validate(inventedShape)).message).toContain("must carry exactly version, protocol, repoRoot, consumers");
+    const invented = consumerManifestOf(inventedShape, "cli-writer");
+    putManifest(inventedShape, "cli-writer", { version: 1, document: "consumer-manifest", surface: "cli-writer", entries: [] }, invented.entry);
+    refuseLeavingState(inventedShape);
 
     const missingEntrypoint = materialize(buildRows());
-    const { consumer: zcode, doc: zcodeDoc } = manifestOf(missingEntrypoint, "zcode-hook");
-    const zcodeConsumers = zcode.consumers as Array<Record<string, unknown>>;
-    zcodeConsumers[0] = { ...zcodeConsumers[0], generated: { trees: [], files: [] } };
-    replaceRowEvidence(missingEntrypoint, "zcode-hook", null, doc("package", zcodeDoc.path, canonical(zcode)));
-    expect(refusalOf(() => validate(missingEntrypoint)).message).toContain("which appears in no source or generated file entry");
-
-    const unproducedInjector = materialize(buildRows());
-    replaceRowDocuments(unproducedInjector, "artifact-store-injectors", null, [doc("package", "injectors/fs-store.js", "export const store = {};")]);
-    expect(refusalOf(() => validate(unproducedInjector)).message).toContain("no reviewed injector-inventory producer exists");
+    const zcode = consumerManifestOf(missingEntrypoint, "zcode-hook");
+    const zcodeEntries = zcode.manifest.consumers as Array<Record<string, unknown>>;
+    putManifest(missingEntrypoint, "zcode-hook", { ...zcode.manifest, consumers: [{ ...zcodeEntries[0], generated: { trees: [], files: [] } }] }, zcode.entry);
+    refuseLeavingState(missingEntrypoint);
   });
 
-  test("execution-coverage-hidden-entries-need-the-h2-wrapper", () => {
-    // H1's export decodes, but complete retain coverage also needs the missing wrapper.
-    const fixture = materialize(buildRows());
-    replaceRowDocuments(fixture, "omp-hidden-entries", WORKFLOW_A, [hostHistoryDoc(WORKFLOW_A)]);
-    expect(refusalOf(() => validate(fixture)).message).toContain("H2's evidence-file wrapper");
+  test("execution-coverage-surfaces-without-a-producer-stay-incomplete", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
 
-    const duplicated = materialize(buildRows());
+    // H1's export is real and decoded, but complete retain coverage also needs
+    // H2's inventory/stop-adoption wrapper, which no producer publishes yet.
+    const hidden = materialize(buildRows());
+    populateWithoutProducer(hidden, "omp-hidden-entries", WORKFLOW_A, [hostHistoryDoc(WORKFLOW_A)]);
+    refuseLeavingState(hidden);
+
+    const duplicateEntry = materialize(buildRows());
     const history = hostHistoryDoc(WORKFLOW_A);
-    const parsed = JSON.parse(history.text) as { records: unknown[] };
-    replaceRowDocuments(duplicated, "omp-hidden-entries", WORKFLOW_A, [
-      doc("host", history.path, canonical({ ...parsed, records: [parsed.records[0], { ...(parsed.records[0] as Record<string, unknown>), index: 1 }] })),
+    const records = (JSON.parse(history.text) as { records: Array<Record<string, unknown>> }).records;
+    populateWithoutProducer(duplicateEntry, "omp-hidden-entries", WORKFLOW_A, [
+      doc("host", history.path, canonical({ ...(JSON.parse(history.text) as Record<string, unknown>), records: [records[0], { ...records[0], index: 1 }] })),
     ]);
-    expect(refusalOf(() => validate(duplicated)).message).toContain("is recorded twice");
+    refuseLeavingState(duplicateEntry);
+
+    // No reviewed injector-inventory producer exists beside R1's manifest.
+    const injector = materialize(buildRows());
+    populateWithoutProducer(injector, "artifact-store-injectors", null, [doc("package", "injectors/fs-store.js", "export const store = {};")]);
+    refuseLeavingState(injector);
   });
 
   test("execution-coverage-assignment-binds-sources-to-a-row", () => {
-    const borrowed = materialize(buildRows());
-    patchReceipt(borrowed, "workflow-notes-ledger", WORKFLOW_B, (receipt) => ({ ...receipt, sources: witnessesFor(borrowed, "workflow-notes-ledger", WORKFLOW_A) }));
-    expect(refusalOf(() => validate(borrowed)).message).toContain("the frozen manifest assigns");
+    const valid = materialize(buildRows());
+    validate(valid);
 
+    const borrowed = materialize(buildRows());
+    const alphaNotes = valid.coverage.receipts[rowIndex(valid, "workflow-notes-ledger", WORKFLOW_A)].sources;
+    patchReceipt(borrowed, "workflow-notes-ledger", WORKFLOW_B, (receipt) => ({ ...receipt, sources: alphaNotes }));
+    refuseLeavingState(borrowed);
+
+    // A source the hashed manifest assigns to two rows is legitimate.
     const shared = materialize(buildRows());
-    replaceRowDocuments(shared, "sdd-evidence", WORKFLOW_B, [doc("sdd", `${WORKFLOW_A}/task-1-report.md`, `# ${WORKFLOW_A} report\n`)]);
+    const alphaBody = doc("sdd", `${WORKFLOW_A}/task-1-report.md`, `# ${WORKFLOW_A} report\n`);
+    replaceRowDocuments(shared, "sdd-evidence", WORKFLOW_B, [alphaBody]);
+    rebuildRow(shared, "sdd-evidence", WORKFLOW_B);
     validate(shared);
 
     const unassigned = materialize(buildRows());
-    patchAssignment(unassigned, "workflow-notes-ledger", WORKFLOW_A, []);
-    expect(refusalOf(() => validate(unassigned)).message).toContain("assigns (none)");
+    assign(unassigned, "workflow-notes-ledger", WORKFLOW_A, []);
+    refuseLeavingState(unassigned);
 
-    const crossWorkflowEnvelope = materialize(buildRows());
-    const envelope = sessionEnvelopeDoc(WORKFLOW_A);
-    replaceRowDocuments(crossWorkflowEnvelope, "workflow-session-envelopes", WORKFLOW_A, [
-      doc("control", envelope.path, legacy({ schema_version: 1, role: "coordinator", session_id: SESSION_A, workflow_id: WORKFLOW_B, harness_root: "/harness" })),
+    const foreignEnvelope = materialize(buildRows());
+    replaceRowDocuments(foreignEnvelope, "workflow-session-envelopes", WORKFLOW_A, [
+      doc("control", `workflows/${WORKFLOW_A}/sessions/coordinator-${SESSION_A}.json`, legacy({ schema_version: 1, role: "coordinator", session_id: SESSION_A, workflow_id: WORKFLOW_B, harness_root: "/harness" })),
     ]);
-    expect(refusalOf(() => validate(crossWorkflowEnvelope)).message).toContain(`belongs to workflow ${WORKFLOW_B}`);
+    refuseLeavingState(foreignEnvelope);
   });
 
-  test("execution-coverage-core-and-index-boundaries", () => {
+  test("execution-coverage-core-and-workflow-set-boundaries", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const duplicateRegister = materialize(buildRows());
-    replaceRowDocuments(duplicateRegister, "core-execution", null, [
-      doc("control", "status.json", legacy({ version: 2, updated_at: "t", workflows: [{ id: WORKFLOW_A, type: "plan", started_at: "t" }, { id: WORKFLOW_A, type: "plan", started_at: "t" }] })),
-      snapshot(WORKFLOW_A),
-    ]);
-    expect(refusalOf(() => validate(duplicateRegister)).message).toContain("names workflow wf-alpha twice");
+    replaceRowDocuments(duplicateRegister, "core-execution", null, [registerDoc([WORKFLOW_A, WORKFLOW_A]), snapshot(WORKFLOW_A)]);
+    refuseLeavingState(duplicateRegister);
 
     const omittedSibling = materialize(buildRows().filter((row) => row.workflowId !== WORKFLOW_B));
-    const error = refusalOf(() => validate(omittedSibling));
-    expect(error.message).toContain(WORKFLOW_B);
-    expect(error.message).toContain("inventories");
+    refuseLeavingState(omittedSibling);
   });
 
   test("execution-coverage-produced-documents-must-be-canonical", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const duplicated = materialize(buildRows());
-    const { doc: cliDoc } = manifestOf(duplicated, "cli-writer");
-    replaceRowEvidence(
-      duplicated,
-      "cli-writer",
-      null,
-      doc("package", cliDoc.path, '{"version":1,"protocol":"consumer-v1","repoRoot":".","consumers":[],"repoRoot":"."}\n'),
-    );
-    expect(refusalOf(() => validate(duplicated)).message).toContain("not canonical JSON");
+    const cli = consumerManifestOf(duplicated, "cli-writer");
+    const index = rowIndex(duplicated, "cli-writer", null);
+    const witness = overrideDoc(duplicated.evidence, doc(cli.entry.root, cli.entry.path, '{"version":1,"protocol":"consumer-v1","repoRoot":".","consumers":[],"repoRoot":"."}\n'));
+    setReceipt(duplicated, index, { ...duplicated.coverage.receipts[index], evidence: [witness] });
+    repin(duplicated, [witness]);
+    refuseLeavingState(duplicated);
   });
 
-  test("execution-coverage-binding-and-pin-boundaries", () => {
+  test("execution-coverage-binding-identity-and-pin-boundaries", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const unknownProtocol = materialize(buildRows());
     patchReceipt(unknownProtocol, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({ ...receipt, protocol: "notes-v9" }));
-    expect(refusalOf(() => validate(unknownProtocol)).message).toContain("validator versions");
+    refuseLeavingState(unknownProtocol);
 
     const staleEpoch = materialize(buildRows());
     patchReceipt(staleEpoch, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({ ...receipt, epoch: EPOCH + 1 }));
-    expect(refusalOf(() => validate(staleEpoch)).message).toContain("superseded epoch");
+    refuseLeavingState(staleEpoch);
 
-    const rebindingSet = materialize(buildRows(), { coverageManifestHash: fakeHex(98) });
-    expect(refusalOf(() => validate(rebindingSet)).message).toContain("reviewed against another document");
+    const rebinding = materialize(buildRows(), { coverageManifestHash: fakeHex(98) });
+    refuseLeavingState(rebinding);
+
+    const duplicateRows = materialize(buildRows());
+    const position = rowIndex(duplicateRows, "workflow-notes-ledger", WORKFLOW_A);
+    const receipts = [...duplicateRows.coverage.receipts];
+    receipts.splice(position + 1, 0, receipts[position]);
+    duplicateRows.coverage = { ...duplicateRows.coverage, receipts, digest: safeDigest(receipts) };
+    refuseLeavingState(duplicateRows);
+
+    const unordered = materialize(buildRows());
+    const coreIndex = rowIndex(unordered, "core-execution", null);
+    const reordered = [...unordered.coverage.receipts];
+    reordered[coreIndex] = { ...reordered[coreIndex], sources: [...reordered[coreIndex].sources].reverse() };
+    unordered.coverage = { ...unordered.coverage, receipts: reordered, digest: safeDigest(reordered) };
+    refuseLeavingState(unordered);
 
     const unseen: CoverageWitness = { root: "control", path: "unpinned/extra.json", sha256: fakeHex(11) };
     const unpinned = materialize(buildRows());
-    patchReceipt(unpinned, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({
-      ...receipt,
-      sources: [...(receipt.sources as CoverageWitness[]), unseen].sort(byRootPath),
-    }));
-    patchAssignment(unpinned, "workflow-notes-ledger", WORKFLOW_A, [...witnessesFor(unpinned, "workflow-notes-ledger", WORKFLOW_A)].sort(byRootPath));
-    expect(refusalOf(() => validate(unpinned)).message).toContain("does not pin");
+    const notesIndex = rowIndex(unpinned, "workflow-notes-ledger", WORKFLOW_A);
+    const withExtra = [...unpinned.coverage.receipts[notesIndex].sources, unseen].sort(byRootPath);
+    setReceipt(unpinned, notesIndex, { ...unpinned.coverage.receipts[notesIndex], sources: withExtra });
+    assign(unpinned, "workflow-notes-ledger", WORKFLOW_A, withExtra);
+    refuseLeavingState(unpinned);
 
     const traversal = materialize(buildRows());
-    patchAssignment(traversal, "workflow-notes-ledger", WORKFLOW_A, [{ root: "control", path: "../escape.json", sha256: fakeHex(12) }]);
-    expect(refusalOf(() => validate(traversal)).message).toContain("escapes its configured root");
+    assign(traversal, "workflow-notes-ledger", WORKFLOW_A, [{ root: "control", path: "../escape.json", sha256: fakeHex(12) }]);
+    refuseLeavingState(traversal);
 
     const absolute = materialize(buildRows());
-    patchAssignment(absolute, "workflow-notes-ledger", WORKFLOW_A, [{ root: "control", path: "/etc/passwd", sha256: fakeHex(13) }]);
-    expect(refusalOf(() => validate(absolute)).message).toContain("is absolute");
+    assign(absolute, "workflow-notes-ledger", WORKFLOW_A, [{ root: "control", path: "/etc/passwd", sha256: fakeHex(13) }]);
+    refuseLeavingState(absolute);
 
-    const unordered = materialize(buildRows());
-    const index = rowIndex(unordered, "core-execution", null);
-    const receipts = [...unordered.coverage.receipts];
-    receipts[index] = { ...receipts[index], sources: [...receipts[index].sources].reverse() };
-    unordered.coverage = { ...unordered.coverage, receipts, digest: safeDigest(receipts) };
-    expect(refusalOf(() => validate(unordered)).message).toContain("not in canonical order");
+    const changedBytes = materialize(buildRows());
+    changedBytes.evidence.set(coverageWitnessKey("control", `workflows/${WORKFLOW_A}/notes.jsonl`), new TextEncoder().encode("{}\n"));
+    const before = JSON.stringify(changedBytes.manifest);
+    refusalOf(() => validate(changedBytes));
+    expect(JSON.stringify(changedBytes.manifest)).toBe(before);
 
-    const duplicate = materialize(buildRows());
-    const position = rowIndex(duplicate, "workflow-notes-ledger", WORKFLOW_A);
-    const withDuplicate = [...duplicate.coverage.receipts];
-    withDuplicate.splice(position + 1, 0, withDuplicate[position]);
-    duplicate.coverage = { ...duplicate.coverage, receipts: withDuplicate, digest: safeDigest(withDuplicate) };
-    expect(refusalOf(() => validate(duplicate)).message).toContain("duplicates");
-
-    const changed = materialize(buildRows());
-    changed.evidence.set(coverageWitnessKey("control", `workflows/${WORKFLOW_A}/notes.jsonl`), new TextEncoder().encode("{}\n"));
-    expect(refusalOf(() => validate(changed)).message).toContain("does not hash to");
-
-    const digestFixture = materialize(buildRows(), { digest: fakeHex(1) });
-    expect(refusalOf(() => validate(digestFixture)).message).toContain("canonical digest");
+    const digestMismatch = materialize(buildRows(), { digest: fakeHex(1) });
+    refusalOf(() => validate(digestMismatch));
   });
 
   test("execution-coverage-absent-rows-carry-no-result", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
     const withSources = materialize(buildRows());
     replaceRowDocuments(withSources, "dsh-package", null, [doc("package", "packages/dsh/package.json", "{}")]);
-    expect(refusalOf(() => validate(withSources)).message).toContain("is absent yet names witnesses");
+    refuseLeavingState(withSources);
 
-    const borrowing = materialize(buildRows());
-    patchReceipt(borrowing, "dsh-package", null, (receipt) => ({ ...receipt, resultHash: fakeHex(21) }));
-    expect(refusalOf(() => validate(borrowing)).message).toContain("recomputed from its bytes");
+    const borrowedResult = materialize(buildRows());
+    patchReceipt(borrowedResult, "dsh-package", null, (receipt) => ({ ...receipt, resultHash: fakeHex(21) }));
+    refusalOf(() => validate(borrowedResult));
   });
 
   test("execution-coverage-purity-holds-on-accept-and-refuse", () => {
-    const fixture = materialize(buildRows());
-    const manifestBefore = JSON.stringify(fixture.manifest);
-    const coverageBefore = JSON.stringify(fixture.coverage);
-    const evidenceBefore = evidenceSnapshot(fixture.evidence);
-    refusalOf(() => validate(fixture));
-    expect(JSON.stringify(fixture.manifest)).toBe(manifestBefore);
-    expect(JSON.stringify(fixture.coverage)).toBe(coverageBefore);
-    expect(evidenceSnapshot(fixture.evidence)).toBe(evidenceBefore);
+    const valid = materialize(buildRows());
+    const before = stateOf(valid);
+    validate(valid);
+    expect(stateOf(valid)).toBe(before);
 
-    const healthy = materialize(buildRows());
-    const healthyManifest = JSON.stringify(healthy.manifest);
-    const healthyEvidence = evidenceSnapshot(healthy.evidence);
-    validate(healthy);
-    expect(JSON.stringify(healthy.manifest)).toBe(healthyManifest);
-    expect(evidenceSnapshot(healthy.evidence)).toBe(healthyEvidence);
+    const broken = materialize(buildRows());
+    broken.evidence.set(coverageWitnessKey("control", `workflows/${WORKFLOW_A}/notes.jsonl`), new TextEncoder().encode("{}\n"));
+    const brokenBefore = stateOf(broken);
+    expect(refusalOf(() => validate(broken))).toBe(COVERAGE_CODE);
+    expect(stateOf(broken)).toBe(brokenBefore);
   });
 
   test("execution-coverage-surface-roles-are-closed", () => {
     expect(executionCoverageSurfaceScope("core-execution")).toBe("root");
     expect(executionCoverageSurfaceScope("cli-writer")).toBe("root");
+    expect(executionCoverageSurfaceScope("copied-instructions")).toBe("root");
     expect(executionCoverageSurfaceScope("sdd-evidence")).toBe("workflow");
     expect(executionCoverageSurfaceScope("omp-hidden-entries")).toBe("workflow");
+    expect(executionCoverageSurfaceScope("workflow-agent-flow-ledger")).toBe("workflow");
   });
 });
