@@ -87,10 +87,17 @@ function makeHarnessProject(): { project: string; harness: string; statusPath: s
   return { project, harness, statusPath };
 }
 
-/** A launcher script that runs the checkout's real CLI (the child command). */
+/**
+ * A launcher script running the checkout's real CLI exactly the way the CLI's
+ * own suite does (`<runtime> run <src-entry> …`), so a fixture failure means
+ * the consumer's argv, not a launcher difference.
+ */
 function makeCliLauncher(project: string): string {
   const launcher = join(project, "mstar-launcher");
-  writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI_ENTRY)} "$@"\n`);
+  writeFileSync(
+    launcher,
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} run ${JSON.stringify(CLI_ENTRY)} "$@"\n`,
+  );
   chmodSync(launcher, 0o755);
   return launcher;
 }
@@ -183,13 +190,13 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
   });
 
   test("the coordinator register read is a real CLI invocation that really exits 0", () => {
-    const { harness } = makeHarnessProject();
+    const { project } = makeHarnessProject();
     const result = runOpenCodeExecutionCli(["status", "validate"], nativeIdentity, {
-      command: makeCliLauncher(harness),
+      command: makeCliLauncher(project),
       env: ambientEnv(nativeIdentity),
-      // No root env key: the child's cwd is the only root signal this verb has,
-      // and the CLI's own `resolveProcessHarnessDir` walk must find it.
-      cwd: harness,
+      // No root env key: the CLI walks UP from its cwd, so the workspace root
+      // (the directory holding `.mstar`) is the only root signal it gets.
+      cwd: project,
     });
     // An invented flag on this verb would exit 2 with a commander usage error:
     // the real exit code IS the argv contract this consumer must speak.
@@ -199,11 +206,11 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
   });
 
   test("the plan-scope authority read keeps the CLI's own usage refusal on a legacy harness", () => {
-    const { harness } = makeHarnessProject();
+    const { project, harness } = makeHarnessProject();
     const result = runOpenCodeExecutionCli(
       ["plan", "show", "--workflow", planScope.workflowId, "--plan", planScope.planId, "--json", "--harness", harness],
       { source: "host", sessionId: reference.sessionId, ...planScope },
-      { command: makeCliLauncher(harness), env: ambientEnv(nativeIdentity) },
+      { command: makeCliLauncher(project), env: ambientEnv(nativeIdentity), cwd: project },
     );
     // The route decision is the real one: no ACTIVE execution authority here,
     // so the CLI refuses in its own words instead of printing an empty view.
@@ -212,8 +219,8 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
   });
 
   test("a gated write consults the real CLI and never claims a false refusal or a fence", async () => {
-    const { harness, statusPath } = makeHarnessProject();
-    process.env[OPENCODE_EXECUTION_CLI_ENV] = makeCliLauncher(harness);
+    const { project, statusPath } = makeHarnessProject();
+    process.env[OPENCODE_EXECUTION_CLI_ENV] = makeCliLauncher(project);
     process.env[EXECUTION_IDENTITY_ENV] = serializeExecutionValue(nativeIdentity);
 
     try {

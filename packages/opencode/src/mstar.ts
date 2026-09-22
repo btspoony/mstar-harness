@@ -343,6 +343,20 @@ function openCodeConsultPlan(association: OpenCodeAssociation & { kind: "bound" 
   return { argv: ["status", "validate"], proof: "register-read" };
 }
 
+/** Default harness layout names: their PARENT is the directory a CLI walks up from. */
+const HARNESS_LAYOUT_NAMES = new Set([".mstar", ".agents", ".plans", "plans"]);
+
+/**
+ * The cwd one consultation runs from. A CLI resolves the process harness root
+ * by walking UP from its cwd, so the parent of a layout-named harness dir is
+ * the workspace root that resolution expects; a custom-layout root is its own
+ * starting point.
+ */
+function openCodeConsultCwd(root: string | null): string | undefined {
+  if (root === null) return undefined;
+  return HARNESS_LAYOUT_NAMES.has(path.basename(root)) ? path.dirname(root) : root;
+}
+
 /**
  * The gated-write consultation: with a bound native association this consumer
  * really invokes the shared CLI (the writer) under the native identity and
@@ -363,8 +377,9 @@ function consultSharedCliForGatedWrite(association: OpenCodeAssociation, targetP
   const plan = openCodeConsultPlan(association, root);
   // The root reaches the CLI explicitly: `--harness` where the verb accepts it
   // (see `openCodeConsultPlan`) and, for the argument-less register read, the
-  // child's own cwd. No environment variable decides the target.
-  const result = runOpenCodeExecutionCli(plan.argv, association.identity, { cwd: root ?? undefined });
+  // child's own cwd — the workspace root that the CLI's upward probe expects.
+  // No environment variable decides the target.
+  const result = runOpenCodeExecutionCli(plan.argv, association.identity, { cwd: openCodeConsultCwd(root) });
   const code = result.envelope?.code;
   const proofNote =
     plan.proof === "session-authorized"
