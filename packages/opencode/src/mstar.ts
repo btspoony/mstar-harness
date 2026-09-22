@@ -30,6 +30,16 @@
  * when it exists and cannot be read) — canonical and symlinked targets alike.
  * This host has no refusal channel, so every one of those verdicts is a
  * decision record + error log, never an OS/tool fence.
+ * Native execution association (S15): the tool hook's native `sessionID` is
+ * the authoritative session fact, and the scope (workflow / role / plan) can
+ * only come from an independently acquired `MSTAR_EXECUTION_IDENTITY` — never
+ * from tool arguments. A bound association makes this consumer consult the
+ * SHARED CLI (the writer) under that native identity and report its
+ * authoritative outcome; a missing native session or missing scope is an
+ * explicit operational exclusion. The shared CLI owns every mutation and every
+ * refusal: this plugin advertises `decision-only` for the write hook because
+ * `tool.execute.before` cannot stop a tool call, and nothing here claims a
+ * fence, a stopped writer, or a cached/boolean success.
  * Never throws raw exceptions in either mode — OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  * `Promise<void>` with no refusal channel, so hard mode is surfaced as the
@@ -74,6 +84,7 @@ import {
   resolveHarnessDir,
   resolveRepoEnforcement,
   resumeExecutionSession,
+  serializeExecutionValue,
   validateExecutionIdentity,
   validateStatus,
 } from "@mstar-harness/engine";
@@ -89,6 +100,7 @@ import type {
 } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 type JsonPrimitive = string | number | boolean | null;
@@ -101,21 +113,186 @@ type MessagePart = { type: string; text?: string };
 
 /** The only native identity OpenCode exposes to a tool hook. */
 export type OpenCodeHookSession = Readonly<{ sessionID?: unknown }>;
-/** Native OpenCode has no workflow/role binding channel for tool hooks. */
-export type OpenCodeSessionAssociationDecision =
-  | { kind: "unsupported"; capability: "decision-only"; sessionId: string }
-  | { kind: "unavailable"; capability: "decision-only"; reason: string };
+/**
+ * The active identity channel (§3.2): the value a launcher overwrites from
+ * native host facts. This consumer reproduces the producer form with the
+ * engine's own canonical serializer — there is no second codec here.
+ */
+export const EXECUTION_IDENTITY_ENV = "MSTAR_EXECUTION_IDENTITY";
+/** The legacy pre-activation channel: an active identity never comes from it. */
+export const LEGACY_SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
-export function openCodeNativeAssociationDecision(input: OpenCodeHookSession): OpenCodeSessionAssociationDecision {
-  const sessionId = input?.sessionID;
-  if (typeof sessionId === "string" && sessionId.trim() !== "") {
-    return { kind: "unsupported", capability: "decision-only", sessionId };
-  }
+/** The shared CLI entrypoint this consumer's writer transport invokes. */
+export const OPENCODE_EXECUTION_CLI = "mstar";
+
+/**
+ * The channel overrides one invocation must install: the identity overwritten
+ * from native facts, and the legacy keys removed so a stale value (or a
+ * inherited root) can never reach the child.
+ */
+export function openCodeExecutionEnvOverrides(identity: ExecutionIdentity): Record<string, string | undefined> {
   return {
-    kind: "unavailable",
-    capability: "decision-only",
-    reason: "OpenCode did not provide a native sessionID; writer association is unsupported",
+    [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(identity),
+    [LEGACY_SESSION_ID_ENV]: undefined,
+    MSTAR_HARNESS_DIR: undefined,
   };
+}
+
+/** The scope an independently acquired ambient identity addresses, or null. */
+export function openCodeAmbientScope(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<ExecutionIdentity, "workflowId" | "role" | "planId"> | null {
+  const raw = env[EXECUTION_IDENTITY_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  return {
+    workflowId: record.workflowId as string,
+    role: record.role as ExecutionIdentity["role"],
+    planId: (record.planId ?? null) as string | null,
+  };
+}
+
+/** One OpenCode association verdict: a real bound identity, or exclusion. */
+export type OpenCodeAssociation =
+  | { kind: "bound"; identity: ExecutionIdentity; capability: "decision-only" }
+  | { kind: "unavailable"; capability: "decision-only"; reason: string; operationallyExcluded: true };
+
+/**
+ * Associate the native hook session with an independently acquired scope. The
+ * native `sessionID` is the authoritative session fact and overwrites whatever
+ * the ambient identity carried; the scope (workflow/role/plan) can only come
+ * from that ambient channel, never from tool arguments. A missing native
+ * session, a missing scope, or a scope that fails the C1 rules is an explicit
+ * operational exclusion — never a success-shaped warning and never a guess.
+ */
+export function openCodeAssociation(
+  input: OpenCodeHookSession,
+  env: NodeJS.ProcessEnv = process.env,
+): OpenCodeAssociation {
+  const sessionId = input?.sessionID;
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `${LEGACY_SESSION_ID_ENV}/native session missing: OpenCode supplied no sessionID, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  const scope = openCodeAmbientScope(env);
+  if (scope === null) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `no independently acquired scope in ${EXECUTION_IDENTITY_ENV}, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  try {
+    const identity = openCodeExecutionIdentity(input, scope);
+    return { kind: "bound", identity, capability: "decision-only" };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `native association refused: ${(error as Error).message}`,
+      operationallyExcluded: true,
+    };
+  }
+}
+
+/** The result of one shared-CLI invocation under the native identity. */
+export type OpenCodeCliResult = Readonly<{
+  status: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  envelope: Record<string, unknown> | null;
+}>;
+
+/**
+ * Invoke the shared CLI as this consumer's writer/reader transport, carrying
+ * the identity acquired from native facts in the overwritten channel. The CLI
+ * (not this hook) owns every mutation; a refusal keeps the CLI's own exit code
+ * and envelope, and nothing here is upgraded into a fence.
+ */
+export function runOpenCodeExecutionCli(
+  argv: readonly string[],
+  identity: ExecutionIdentity,
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenCodeCliResult {
+  const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
+  const overrides = openCodeExecutionEnvOverrides(identity);
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  const child = spawnSync(options.command ?? OPENCODE_EXECUTION_CLI, [...argv], {
+    cwd: options.cwd,
+    env,
+    encoding: "utf8",
+  });
+  const stdout = typeof child.stdout === "string" ? child.stdout : "";
+  const stderr = typeof child.stderr === "string" ? child.stderr : "";
+  let envelope: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(stdout.trim());
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      envelope = parsed as Record<string, unknown>;
+    }
+  } catch {
+    envelope = null;
+  }
+  // Node and Bun spell the same child outcome differently; read both once
+  // through one named shape instead of casting per access.
+  const outcome = child as { signal?: string | null; signalCode?: string | null; exitCode?: number | null };
+  return {
+    status: child.status ?? outcome.exitCode ?? null,
+    signal: outcome.signalCode ?? outcome.signal ?? null,
+    stdout,
+    stderr,
+    envelope,
+  };
+}
+
+/**
+ * The gated-write consultation: with a bound native association this consumer
+ * really invokes the shared CLI (the writer) under the native identity and
+ * reports its authoritative outcome; with no association it states the explicit
+ * operational exclusion. It never claims the hook stopped anything, and a
+ * refusal keeps the CLI's own code — a missing or stale context is never
+ * reported as success.
+ */
+function consultSharedCliForGatedWrite(association: OpenCodeAssociation): void {
+  if (association.kind === "unavailable") {
+    defaultStatusLogger(
+      "warn",
+      `native execution association unavailable — this consumer is operationally excluded for authorized writes (${association.reason}); the write is NOT stopped`,
+    );
+    return;
+  }
+  const { identity } = association;
+  const argv =
+    identity.role === "coordinator"
+      ? ["status", "validate", "--workflow", identity.workflowId, "--json"]
+      : ["plan", "show", "--workflow", identity.workflowId, "--plan", String(identity.planId), "--json"];
+  const result = runOpenCodeExecutionCli(argv, identity);
+  const code = result.envelope?.code;
+  if (result.status === 0 && result.envelope?.ok === true) {
+    defaultStatusLogger("info", `shared CLI ${argv[0]} read ok under the native session (decision-only; not a fence)`);
+    return;
+  }
+  defaultStatusLogger(
+    "warn",
+    `shared CLI ${argv[0]} refused this session's authority (${String(code ?? result.signal ?? result.status)}); ` +
+      "the association is not current — the write is NOT stopped",
+  );
 }
 
 /**
@@ -1310,13 +1487,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const rawPath = args.path;
       const filePath =
         typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
-      const nativeAssociation = openCodeNativeAssociationDecision(input);
-      if (
-        nativeAssociation.kind === "unavailable" &&
-        (input.tool === "write" || input.tool === "edit")
-      ) {
-        defaultStatusLogger("warn", nativeAssociation.reason);
-      }
+      const nativeAssociation = openCodeAssociation(input);
 
  // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
  // validation on subagent dispatch. OpenCode's `task` tool carries the
@@ -1372,6 +1543,9 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: consult the shared CLI under the
+        // native association (positive path) or state the explicit exclusion.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation);
       } else if (input.tool === "edit") {
  // Classify the target FIRST : the dir-resolvers loader is
  // cached, so the kind check is cheap — the synchronous file read +
@@ -1435,6 +1609,8 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: same positive CLI consultation path.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation);
       }
     },
 
