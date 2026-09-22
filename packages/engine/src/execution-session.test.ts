@@ -24,6 +24,17 @@ describe("execution session transport", () => {
     expect(decodeExecutionSessionRef(wire)).toEqual(ref);
     expect(() => decodeExecutionSessionRef(`${wire}AA`)).toThrow();
   });
+  test("rejects noncanonical pad bits and invalid UTF-8 bytes", () => {
+    const wire = encodeExecutionSessionRef(ref);
+    const encoded = wire.slice("exec-session-v1:".length);
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const last = encoded.length - 1;
+    const index = alphabet.indexOf(encoded[last] ?? "");
+    const padBits = `${encoded.slice(0, last)}${alphabet[(index & 0b111100) | 1]}`;
+    expect(() => decodeExecutionSessionRef(`exec-session-v1:${padBits}`)).toThrow();
+    const invalidUtf8 = Buffer.from([0xff]).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    expect(() => decodeExecutionSessionRef(`exec-session-v1:${invalidUtf8}`)).toThrow();
+  });
 
   test("rejects copied, stale-shaped, and extra-field references", () => {
     const decoded = { ...ref, extra: true };

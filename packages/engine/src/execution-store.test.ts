@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin } from "./coordination.js";
 import {
@@ -2358,6 +2359,31 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
   });
 
+  test("resumes an active native identity across explicit coordinator and plan roles without revision change", async () => {
+    const shared = "host-dual-role";
+    const fixture = await createdWorkflow("session-resume", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-resume-coordinator"),
+    );
+    preparePlanRow(context, "p-1", { worktreePath: join(context.harnessDir, "worktrees", "p-1"), workingBranch: "feature/resume-p-1" });
+    const planPm = planPmCaller("wf-1", shared, "p-1");
+    const planRef = await bindExecutionSession(
+      domainContext(context, planPm),
+      sessionBind("wf-1", "p-1", planTokens["p-1"], "bind-resume-plan"),
+    );
+    const before = sessionRows(context);
+    const resumedCoordinator = await resumeExecutionSession(domainContext(context, coordinator), coordinatorRef.data);
+    const resumedPlan = await resumeExecutionSession(domainContext(context, planPm), planRef.data);
+    expect(resumedCoordinator.data).toEqual(coordinatorRef.data);
+    expect(resumedPlan.data).toEqual(planRef.data);
+    expect(resumedCoordinator.token).toBe(coordinatorRef.token);
+    expect(resumedPlan.token).toBe(planRef.token);
+    expect(sessionRows(context)).toEqual(before);
+  });
+
   test("migrated handoff keeps historical submitter association without reviving authorization", async () => {
     const shared = "host-migrated";
     const fixture = await createdWorkflow("migrated-handoff", shared);
@@ -2434,6 +2460,18 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
       ),
     ).rejects.toMatchObject({ code: "execution.session-unavailable" });
     expect(migratedPlan?.session).toBeNull();
+    const malformed = rawDb(storePath(context));
+    try {
+      const row = one(malformed, "select coordination_json from execution_plans where workflow_id = 'wf-1' and plan_id = 'p-1'");
+      const malformedCoordination = JSON.parse(String(row.coordination_json)) as Record<string, unknown>;
+      (malformedCoordination.handoff as Record<string, unknown>).submitted_by = 42;
+      malformed.prepare("update execution_plans set coordination_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run(
+        JSON.stringify(malformedCoordination),
+      );
+    } finally {
+      malformed.close();
+    }
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "coordination.invalid-transition" });
   });
   test("reads the committed authority after a clean close folded the journal into the store file", async () => {
 
