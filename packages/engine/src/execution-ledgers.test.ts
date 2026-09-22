@@ -12,12 +12,31 @@
  * order, the canonical versioned record format, append order, once-only
  * accepted records across concurrency and crash replay, refusal of an
  * unreconcilable tail without discarding accepted bytes, stale/revoked
- * authority refusal, target trust (symlink) refusal, the workflow file lock,
- * the untouched inline row notes, and the normalized coverage facts C3 pins.
+ * authority refusal with no directory side effect, target trust (symlink)
+ * refusal, the workflow file lock, the untouched inline row notes, and the
+ * normalized coverage facts C3 pins.
+ *
+ * Resource discipline: the one fixture the ordinary cases share is built once
+ * in `beforeAll`, and each case resets the retained bytes it needs with `seed`.
+ * `node:sqlite` on this runtime releases a connection's descriptors only when
+ * the connection object is collected, so a store per case would exhaust the
+ * descriptor table of this process and turn a later store open into a spurious
+ * `SQLITE_CANTOPEN`; the cases that genuinely need their own store (authority
+ * mutation, a missing/symlinked body dir, the lock probe) each build one.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -92,7 +111,7 @@ type Fixture = {
   /** A second, distinct active session of the same workflow (raw plan-pm row). */
   planSession: ExecutionSessionRef;
   planContext: ExecutionContext;
-  /** Plant the retained file bytes an append under test must respect. */
+  /** Plant the exact retained bytes an append under test must respect. */
   seed: (input: { ledger?: string; snapshot?: string }) => void;
 };
 
@@ -119,7 +138,11 @@ function createdSnapshot(): WorkflowSnapshot {
   } as unknown as WorkflowSnapshot;
 }
 
-/** One real active authority with a created workflow and two distinct active sessions. */
+/**
+ * One real active authority with a created workflow and two distinct active
+ * sessions. The retained workflow dir is NOT created here: the cases that need
+ * it plant it through `seed`, so "no directory side effect" stays observable.
+ */
 async function notesFixture(label: string): Promise<Fixture> {
   const harnessDir = mkdtempSync(join(ROOT, `${label}-`));
   const context: StoreContext = { harnessDir };
@@ -182,6 +205,12 @@ async function notesFixture(label: string): Promise<Fixture> {
   };
 }
 
+/** The one fixture the ordinary cases share; each case resets it with `seed`. */
+let shared: Fixture;
+beforeAll(async () => {
+  shared = await notesFixture("shared");
+});
+
 function note(id: string, text: string, overrides: Partial<WorkflowNote> = {}): WorkflowNote {
   return { version: 1, id, workflowId: WF, sessionId: COORDINATOR_ID, kind: "note", ts: TS, text, ...overrides };
 }
@@ -199,12 +228,8 @@ function lineOf(record: WorkflowNote): string {
   })}\n`;
 }
 
-function sha256OfLine(line: string): string {
-  return createHash("sha256").update(Buffer.from(line, "utf8")).digest("hex");
-}
-
-function bytesOrNull(path: string): Buffer | null {
-  return existsSync(path) ? readFileSync(path) : null;
+function sha256OfText(text: string): string {
+  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 }
 
 /** Every LF-terminated line of the retained bytes, in order. */
@@ -256,29 +281,26 @@ function rawRun(context: StoreContext, sql: string): void {
  * ------------------------------------------------------------------------ */
 
 describe("execution-ledgers: canonical location and retained bytes", () => {
-  test("resolves the canonical notes.jsonl path under the control root", async () => {
-    const fixture = await notesFixture("location");
-    expect(workflowNotesLedgerPath(fixture.context, WF)).toBe(join(fixture.harnessDir, "workflows", WF, "notes.jsonl"));
-    expect(bytesOrNull(fixture.ledgerPath)).toBeNull();
+  test("resolves the canonical notes.jsonl path under the control root", () => {
+    expect(workflowNotesLedgerPath(shared.context, WF)).toBe(join(shared.harnessDir, "workflows", WF, "notes.jsonl"));
   });
 
   test("appends one versioned record after the preserved legacy bytes and never rewrites history", async () => {
-    const fixture = await notesFixture("append");
-    fixture.seed({ ledger: LEGACY_LINE, snapshot: LEGACY_SNAPSHOT });
-    const snapshotPath = join(fixture.workflowDir, "snapshot.json");
+    shared.seed({ ledger: LEGACY_LINE, snapshot: LEGACY_SNAPSHOT });
+    const snapshotPath = join(shared.workflowDir, "snapshot.json");
     const snapshotBefore = readFileSync(snapshotPath);
 
-    const first = await appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "first note"));
+    const first = await appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "first note"));
     expect(first).toEqual({ id: "note-1", replayed: false });
 
-    const after = readFileSync(fixture.ledgerPath);
+    const after = readFileSync(shared.ledgerPath);
     expect(after.subarray(0, LEGACY_LINE.length).toString("utf8")).toBe(LEGACY_LINE);
     expect(completeLines(after)).toEqual([LEGACY_LINE.slice(0, -1), lineOf(note("note-1", "first note")).slice(0, -1)]);
 
     // Same id, same body: a replay — no second line, no byte change.
-    const replay = await appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "first note"));
+    const replay = await appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "first note"));
     expect(replay).toEqual({ id: "note-1", replayed: true });
-    expect(readFileSync(fixture.ledgerPath).equals(after)).toBe(true);
+    expect(readFileSync(shared.ledgerPath).equals(after)).toBe(true);
 
     // The inline PlanRow notes of the retained snapshot are a distinct core
     // field: this writer never touches them.
@@ -288,42 +310,36 @@ describe("execution-ledgers: canonical location and retained bytes", () => {
   });
 
   test("keeps each distinct bound session's provenance in one ledger", async () => {
-    const fixture = await notesFixture("sessions");
-    fixture.seed({});
-    await appendWorkflowNote(fixture.coordContext, fixture.session, note("coordinator-note", "from the coordinator"));
+    shared.seed({ ledger: "" });
+    await appendWorkflowNote(shared.coordContext, shared.session, note("coordinator-note", "from the coordinator"));
     await appendWorkflowNote(
-      fixture.planContext,
-      fixture.planSession,
+      shared.planContext,
+      shared.planSession,
       note("plan-note", "from the plan session", { sessionId: PLAN_PM_ID }),
     );
     const facts = normalizeWorkflowNotesCoverage({
       workflowId: WF,
-      path: fixture.ledgerPath,
-      bytes: readFileSync(fixture.ledgerPath),
+      path: shared.ledgerPath,
+      bytes: readFileSync(shared.ledgerPath),
     });
     expect(facts.acceptedIds).toEqual(["coordinator-note", "plan-note"]);
     expect(facts.records.map((record) => record.record.sessionId)).toEqual([COORDINATOR_ID, PLAN_PM_ID]);
     expect(facts.records.map((record) => record.record.workflowId)).toEqual([WF, WF]);
   });
 
-  test("appends only into an already-retained workflow dir and never materializes one", async () => {
-    const fixture = await notesFixture("no-root");
-    fixture.seed({});
-    await appendWorkflowNote(fixture.coordContext, fixture.session, note("note-root", "retained workflow dir only"));
-    expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
-    expect(existsSync(fixture.workflowDir)).toBe(true);
-    expect(existsSync(fixture.ledgerPath)).toBe(true);
+  test("a fresh workflow's first note creates only its own body dir", async () => {
+    // A workflow created through the DB route has no retained dir yet.
+    const fresh = await notesFixture("fresh-workflow");
+    expect(existsSync(fresh.workflowDir)).toBe(false);
 
-    // A workflow with no retained dir is refused, not silently materialized:
-    // the file/registration route owns that dir, and an active-epoch append
-    // manufacturing one would recreate the retired root.
-    const absent = await notesFixture("absent-workflow-dir");
-    const refusal = await refusalOf(() =>
-      appendWorkflowNote(absent.coordContext, absent.session, note("note-absent", "no retained dir")),
-    );
-    expect(refusal.code).toBe("execution-ledgers.target-untrusted");
-    expect(existsSync(absent.workflowDir)).toBe(false);
-    expect(existsSync(join(absent.harnessDir, "status.json"))).toBe(false);
+    const accepted = await appendWorkflowNote(fresh.coordContext, fresh.session, note("note-first", "first note"));
+    expect(accepted).toEqual({ id: "note-first", replayed: false });
+    expect(existsSync(fresh.workflowDir)).toBe(true);
+    expect(completeLines(readFileSync(fresh.ledgerPath))).toEqual([lineOf(note("note-first", "first note")).slice(0, -1)]);
+    // The body dir holds the retained ledger and nothing else: no snapshot, no
+    // session envelope, no root register, no authority file.
+    expect(readdirSync(fresh.workflowDir)).toEqual(["notes.jsonl"]);
+    expect(existsSync(join(fresh.harnessDir, "status.json"))).toBe(false);
   });
 });
 
@@ -333,26 +349,24 @@ describe("execution-ledgers: canonical location and retained bytes", () => {
 
 describe("execution-ledgers: identity, dedup and crash boundaries", () => {
   test("same id with a changed body conflicts and leaves every byte untouched", async () => {
-    const fixture = await notesFixture("conflict");
-    fixture.seed({});
-    await appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "original body"));
-    const before = readFileSync(fixture.ledgerPath);
+    shared.seed({ ledger: "" });
+    await appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "original body"));
+    const before = readFileSync(shared.ledgerPath);
     const refusal = await refusalOf(() =>
-      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "changed body")),
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "changed body")),
     );
     expect(refusal.code).toBe("execution-ledgers.id-conflict");
-    expect(readFileSync(fixture.ledgerPath).equals(before)).toBe(true);
+    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
   });
 
   test("an accepted id recorded twice refuses the append", async () => {
-    const fixture = await notesFixture("duplicate-id");
-    fixture.seed({ ledger: `${lineOf(note("note-dup", "body"))}${lineOf(note("note-dup", "other body"))}` });
-    const before = readFileSync(fixture.ledgerPath);
+    shared.seed({ ledger: `${lineOf(note("note-dup", "body"))}${lineOf(note("note-dup", "other body"))}` });
+    const before = readFileSync(shared.ledgerPath);
     const refusal = await refusalOf(() =>
-      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-new", "fresh")),
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-new", "fresh")),
     );
     expect(refusal.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(fixture.ledgerPath).equals(before)).toBe(true);
+    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
   });
 
   test("a crash-cut partial line of the same record is reconciled into exactly one accepted line", async () => {
@@ -360,79 +374,73 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
     const full = lineOf(target);
 
     // A crash after the JSON bytes but before the LF.
-    const unterminated = await notesFixture("crash-replay");
-    unterminated.seed({ ledger: `${LEGACY_LINE}${full.slice(0, -1)}` });
-    const completed = await appendWorkflowNote(unterminated.coordContext, unterminated.session, target);
+    shared.seed({ ledger: `${LEGACY_LINE}${full.slice(0, -1)}` });
+    const completed = await appendWorkflowNote(shared.coordContext, shared.session, target);
     expect(completed).toEqual({ id: "note-crash", replayed: false });
-    const bytes = readFileSync(unterminated.ledgerPath);
+    const bytes = readFileSync(shared.ledgerPath);
     expect(bytes.subarray(0, LEGACY_LINE.length).toString("utf8")).toBe(LEGACY_LINE);
     expect(completeLines(bytes)).toEqual([LEGACY_LINE.slice(0, -1), full.slice(0, -1)]);
     expect(bytes.toString("utf8").endsWith("\n")).toBe(true);
 
     // A crash in the middle of the same record's bytes.
-    const partial = await notesFixture("crash-replay-partial");
-    partial.seed({ ledger: `${LEGACY_LINE}${full.slice(0, 24)}` });
-    const reconciled = await appendWorkflowNote(partial.coordContext, partial.session, target);
+    shared.seed({ ledger: `${LEGACY_LINE}${full.slice(0, 24)}` });
+    const reconciled = await appendWorkflowNote(shared.coordContext, shared.session, target);
     expect(reconciled).toEqual({ id: "note-crash", replayed: false });
-    expect(completeLines(readFileSync(partial.ledgerPath))).toEqual([LEGACY_LINE.slice(0, -1), full.slice(0, -1)]);
+    expect(completeLines(readFileSync(shared.ledgerPath))).toEqual([LEGACY_LINE.slice(0, -1), full.slice(0, -1)]);
 
     // The same retry again is a plain replay: the accepted record is not duplicated.
-    const retried = await appendWorkflowNote(partial.coordContext, partial.session, target);
+    const retried = await appendWorkflowNote(shared.coordContext, shared.session, target);
     expect(retried).toEqual({ id: "note-crash", replayed: true });
-    expect(completeLines(readFileSync(partial.ledgerPath))).toHaveLength(2);
+    expect(completeLines(readFileSync(shared.ledgerPath))).toHaveLength(2);
   });
 
   test("an unterminated tail that is not this record's partial refuses without discarding bytes", async () => {
-    const fixture = await notesFixture("tail");
     const seedText = `${LEGACY_LINE}{"version":1,"id":"zz-other"`;
-    fixture.seed({ ledger: seedText });
-    const before = readFileSync(fixture.ledgerPath);
+    shared.seed({ ledger: seedText });
+    const before = readFileSync(shared.ledgerPath);
     const refusal = await refusalOf(() =>
-      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "body")),
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
     );
     expect(refusal.code).toBe("execution-ledgers.tail-unreconciled");
-    expect(readFileSync(fixture.ledgerPath).equals(before)).toBe(true);
-    expect(readFileSync(fixture.ledgerPath).toString("utf8")).toBe(seedText);
+    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
+    expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(seedText);
   });
 
   test("a foreign or malformed retained line refuses the append", async () => {
-    const foreign = await notesFixture("foreign");
-    foreign.seed({ ledger: `${LEGACY_LINE}${JSON.stringify({ kind: "something-else", payload: 1 })}\n` });
-    const before = readFileSync(foreign.ledgerPath);
-    const foreignRefusal = await refusalOf(() =>
-      appendWorkflowNote(foreign.coordContext, foreign.session, note("note-1", "body")),
+    shared.seed({ ledger: `${LEGACY_LINE}${JSON.stringify({ kind: "something-else", payload: 1 })}\n` });
+    const before = readFileSync(shared.ledgerPath);
+    const foreign = await refusalOf(() =>
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
     );
-    expect(foreignRefusal.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(foreign.ledgerPath).equals(before)).toBe(true);
+    expect(foreign.code).toBe("execution-ledgers.ledger-foreign");
+    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
 
-    const malformed = await notesFixture("malformed");
-    malformed.seed({ ledger: `${LEGACY_LINE}not json at all\n` });
-    const malformedBefore = readFileSync(malformed.ledgerPath);
-    const malformedRefusal = await refusalOf(() =>
-      appendWorkflowNote(malformed.coordContext, malformed.session, note("note-1", "body")),
+    shared.seed({ ledger: `${LEGACY_LINE}not json at all\n` });
+    const malformedBefore = readFileSync(shared.ledgerPath);
+    const malformed = await refusalOf(() =>
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
     );
-    expect(malformedRefusal.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(malformed.ledgerPath).equals(malformedBefore)).toBe(true);
+    expect(malformed.code).toBe("execution-ledgers.ledger-foreign");
+    expect(readFileSync(shared.ledgerPath).equals(malformedBefore)).toBe(true);
   });
 
   test("concurrent distinct accepted records each appear exactly once in append order", async () => {
-    const fixture = await notesFixture("concurrent");
-    fixture.seed({});
+    shared.seed({ ledger: "" });
     const [first, second] = await Promise.all([
-      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-a", "alpha")),
-      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-b", "beta")),
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-a", "alpha")),
+      appendWorkflowNote(shared.coordContext, shared.session, note("note-b", "beta")),
     ]);
     expect(first.replayed).toBe(false);
     expect(second.replayed).toBe(false);
-    const lines = completeLines(readFileSync(fixture.ledgerPath));
+    const lines = completeLines(readFileSync(shared.ledgerPath));
     expect(lines).toHaveLength(2);
     expect(new Set(lines)).toEqual(
       new Set([lineOf(note("note-a", "alpha")).slice(0, -1), lineOf(note("note-b", "beta")).slice(0, -1)]),
     );
     const facts = normalizeWorkflowNotesCoverage({
       workflowId: WF,
-      path: fixture.ledgerPath,
-      bytes: readFileSync(fixture.ledgerPath),
+      path: shared.ledgerPath,
+      bytes: readFileSync(shared.ledgerPath),
     });
     // The file's own order IS the accepted append order, with no duplicate id.
     const ids = lines.map((line) => {
@@ -449,31 +457,30 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
  * ------------------------------------------------------------------------ */
 
 describe("execution-ledgers: stale authority, scope and target trust", () => {
-  test("a stale epoch or a revoked session refuses before any byte is written", async () => {
-    const staleEpoch = await notesFixture("stale-epoch");
-    staleEpoch.seed({});
-    rawRun(staleEpoch.context, "update store_meta set authority_epoch = authority_epoch + 1 where id = 1");
-    const staleRefusal = await refusalOf(() =>
-      appendWorkflowNote(staleEpoch.coordContext, staleEpoch.session, note("note-1", "stale epoch")),
-    );
-    expect(staleRefusal.code).toBe("store.stale-epoch");
-    expect(bytesOrNull(staleEpoch.ledgerPath)).toBeNull();
+  test("a revoked session or a stale epoch refuses before any byte is written", async () => {
+    const fixture = await notesFixture("revoked-and-stale");
+    fixture.seed({ ledger: LEGACY_LINE });
 
-    const revoked = await notesFixture("revoked");
-    revoked.seed({});
     rawRun(
-      revoked.context,
+      fixture.context,
       `update execution_sessions set state = 'revoked' where workflow_id = '${WF}' and session_id = '${COORDINATOR_ID}'`,
     );
-    const revokedRefusal = await refusalOf(() =>
-      appendWorkflowNote(revoked.coordContext, revoked.session, note("note-1", "revoked session")),
+    const revoked = await refusalOf(() =>
+      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "revoked session")),
     );
-    expect(revokedRefusal.code).toBe("execution.session-unavailable");
-    expect(bytesOrNull(revoked.ledgerPath)).toBeNull();
+    expect(revoked.code).toBe("execution.session-unavailable");
+    expect(readFileSync(fixture.ledgerPath).toString("utf8")).toBe(LEGACY_LINE);
+
+    rawRun(fixture.context, "update store_meta set authority_epoch = authority_epoch + 1 where id = 1");
+    const stale = await refusalOf(() =>
+      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "stale epoch")),
+    );
+    expect(stale.code).toBe("store.stale-epoch");
+    expect(readFileSync(fixture.ledgerPath).toString("utf8")).toBe(LEGACY_LINE);
   });
 
-  test("provenance that is not the bound session's own scope refuses before any IO", async () => {
-    const fixture = await notesFixture("scope");
+  test("an unauthorized, mismatched or stale call refuses before any IO or directory side effect", async () => {
+    const fixture = await notesFixture("no-side-effect");
     const foreignWorkflow = await refusalOf(() =>
       appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "body", { workflowId: "other-workflow" })),
     );
@@ -493,7 +500,15 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
     );
     expect(versionRefusal.code).toBe("execution-ledgers.record-invalid");
 
+    // A stale epoch on a workflow with NO retained dir: the guard runs before
+    // the body dir is created, so a refused session leaves no side effect.
+    rawRun(fixture.context, "update store_meta set authority_epoch = authority_epoch + 1 where id = 1");
+    const stale = await refusalOf(() =>
+      appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "stale epoch")),
+    );
+    expect(stale.code).toBe("store.stale-epoch");
     expect(existsSync(fixture.workflowDir)).toBe(false);
+    expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
   });
 
   test("a symlinked workflow dir or ledger leaf refuses instead of writing through the link", async () => {
@@ -521,20 +536,19 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
   });
 
   test("holds the per-workflow file lock around read, dedup and append", async () => {
-    const fixture = await notesFixture("workflow-lock");
-    fixture.seed({ ledger: LEGACY_LINE });
-    const lockDir = join(fixture.workflowDir, ".status-write.lockdir");
+    shared.seed({ ledger: LEGACY_LINE });
+    const lockDir = join(shared.workflowDir, ".status-write.lockdir");
     mkdirSync(lockDir);
     try {
       const blocked = await withEnv({ MSTAR_EXECUTION_LEDGER_LOCK_WAIT_MS: "60" }, () =>
-        refusalOf(() => appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "blocked"))),
+        refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "blocked"))),
       );
       expect(blocked.message).toContain(".status-write.lockdir");
-      expect(readFileSync(fixture.ledgerPath).toString("utf8")).toBe(LEGACY_LINE);
+      expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(LEGACY_LINE);
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
-    const accepted = await appendWorkflowNote(fixture.coordContext, fixture.session, note("note-1", "after release"));
+    const accepted = await appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "after release"));
     expect(accepted).toEqual({ id: "note-1", replayed: false });
   });
 });
@@ -563,7 +577,7 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(facts.acceptedIds).toEqual(["note-1", "note-2"]);
     expect(facts.records.map((record) => record.lineIndex)).toEqual([1, 2]);
     expect(facts.records[0]!.record).toEqual(first);
-    expect(facts.records[0]!.sha256).toBe(sha256OfLine(lineOf(first).slice(0, -1)));
+    expect(facts.records[0]!.sha256).toBe(sha256OfText(lineOf(first).slice(0, -1)));
 
     // Historical identity is (source-file-sha256, line-index) and the line hash
     // is over the exact line bytes excluding the final LF.
@@ -573,7 +587,7 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(historical.bytes).toBe(LEGACY_LINE.length - 1);
     expect(historical.format).toBe("legacy-note");
     expect(historical.record).toEqual({ kind: "note", ts: LEGACY_NOTE_TS, text: "legacy migrated note" });
-    expect(historical.sha256).toBe(sha256OfLine(LEGACY_LINE.slice(0, -1)));
+    expect(historical.sha256).toBe(sha256OfText(LEGACY_LINE.slice(0, -1)));
   });
 
   test("reports an absent ledger, an unaccepted tail and duplicated ids instead of hiding them", () => {
@@ -592,7 +606,7 @@ describe("execution-ledgers: normalized coverage facts", () => {
     });
     expect(withTail.format).toBe("versioned");
     expect(withTail.acceptedIds).toEqual(["note-1"]);
-    expect(withTail.tail).toEqual({ sha256: sha256OfLine(tailText), bytes: tailText.length });
+    expect(withTail.tail).toEqual({ sha256: sha256OfText(tailText), bytes: tailText.length });
 
     const withDuplicate = normalizeWorkflowNotesCoverage({
       workflowId: WF,

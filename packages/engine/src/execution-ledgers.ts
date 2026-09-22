@@ -31,19 +31,23 @@
  * `appendWorkflowNote` takes the **maintenance exclusion** first and the
  * **per-workflow file lock** second (contract §4.3 order: maintenance → root →
  * workflow → local ledger → SQL; this writer takes no root lock and no SQL
- * write), then runs read → classify → dedup and finally C1's synchronous
- * current-session assertion, and only then the fsynced append. The assertion is
- * the last step before the byte-level mutation and there is no `await` between
- * the two, so a stale epoch, a revoked session or a foreign caller can never
- * land a line. Append success means fsynced bytes; nothing here is advertised
- * as a distributed transaction with the DB.
+ * write). Inside them the sequence is: prove the control root → resolve (and, if
+ * genuinely absent and already authorized, materialize) the retained workflow
+ * body dir → read → classify → dedup → C1's synchronous current-session
+ * assertion → fsynced append. That assertion is the last step before the
+ * byte-level mutation and there is no `await` between the two, so a stale
+ * epoch, a revoked session or a foreign caller can never land a line. Append
+ * success means fsynced bytes; nothing here is advertised as a distributed
+ * transaction with the DB.
  *
- * This writer creates exactly one file — the ledger line — inside a workflow
- * dir that must already exist. It never materializes the control root, a root
- * register or the retained workflow dir: those belong to the file/registration
- * route, and `assertNoLegacyExecutionSources` reads every entry of a workflow
- * dir as a live legacy execution source, so an active-epoch append manufacturing
- * one would be recreating the retired root rather than retaining a body.
+ * This writer never materializes the control root, a root register or any
+ * authority/snapshot file: the control root must already exist (as a real
+ * directory), and the only thing an append may create is the retained
+ * per-workflow **body dir** of the session's own workflow plus the one ledger
+ * line inside it — and only AFTER the current-session guard has authorized the
+ * call, so a stale, revoked or foreign session leaves no directory side effect.
+ * No `status.json`, no `snapshot.json` and no other business file is ever
+ * created here.
  *
  * ## Crash and replay semantics (S3)
  *
@@ -391,12 +395,8 @@ function commitNoteLine(path: string, keepBytes: number | null, line: Buffer, cr
 
 /**
  * One directory this writer needs to already be a real directory: never a
- * symlink, never a non-directory and never materialized by this append. The
- * retained workflow tree — like the control root and its root register — is
- * created by the file/registration route, and under an active authority an
- * append is not that route: `assertNoLegacyExecutionSources` reads every entry
- * of a workflow dir as a live legacy execution source, so manufacturing one
- * here would be recreating the root the active route retired.
+ * symlink and never a non-directory. The control root is never materialized —
+ * an append retains a body, it does not re-scaffold the harness.
  */
 function assertRealDirectory(path: string, what: string): void {
   let info: Stats | null = null;
@@ -408,7 +408,7 @@ function assertRealDirectory(path: string, what: string): void {
   if (info === null) {
     throw new ExecutionLedgerError(
       "execution-ledgers.target-untrusted",
-      `${what} at ${path} does not exist; the active route appends only into an already-retained workflow dir and never creates one.`,
+      `${what} at ${path} does not exist; a retained body append never creates it.`,
     );
   }
   if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -417,6 +417,39 @@ function assertRealDirectory(path: string, what: string): void {
       `${what} at ${path} is not a real directory (a symlink or a non-directory is not a retained ledger home).`,
     );
   }
+}
+
+/**
+ * Resolve the retained per-workflow **body dir** before the append. It must be
+ * a real directory or genuinely absent; a symlink or a non-directory refuses
+ * (the write could otherwise land outside the control root).
+ *
+ * When it is absent, the authorized current session is proven BEFORE anything
+ * is created: an authorized session may materialize its own workflow's body dir
+ * (durably — the dir, then its parent entry, is fsynced), while a stale,
+ * revoked, foreign or mismatched session refuses with no directory side effect
+ * at all. Only the body dir is created — never a snapshot, a root register or
+ * any other authority file, and never a second workflow's dir.
+ */
+function prepareWorkflowBodyDir(context: ExecutionContext, session: ExecutionSessionRef, dir: string): void {
+  let info: Stats | null = null;
+  try {
+    info = lstatSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (info !== null) {
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-untrusted",
+        `the retained workflow dir at ${dir} is not a real directory (a symlink or a non-directory is not a retained ledger home).`,
+      );
+    }
+    return;
+  }
+  assertExecutionSessionCurrent(context, session);
+  mkdirSync(dir, { recursive: true });
+  fsyncDirectory(dirname(dir));
 }
 
 /**
@@ -472,18 +505,14 @@ async function withExecutionMaintenanceLock<T>(context: StoreContext, fn: () => 
   return withStatusWriteLock(key, fn, { timeoutMs: ledgerLockWaitMs() });
 }
 
-/**
- * The per-workflow file lock — the existing status-lock primitive applied to
- * the ledger's own directory (`<workflow dir>/.status-write.lockdir`), so
- * `read → classify → dedup → append` of one workflow is one critical section
- * shared with every other snapshot/ledger writer of that workflow. Neither the
- * control root nor the retained workflow dir is created here.
+/*
+ * The per-workflow file lock around the append is `withStatusWriteLock` on the
+ * ledger path itself: its lockdir lands in `<workflow dir>` (dirname of the
+ * ledger), i.e. the same per-workflow status lock every snapshot/ledger writer
+ * of that workflow takes, and it is removed again on release. It is acquired
+ * only after the body dir exists, and every read/classify/dedup/append step of
+ * one workflow runs inside it.
  */
-async function withWorkflowLedgerLock<T>(context: StoreContext, ledgerPath: string, fn: () => Promise<T>): Promise<T> {
-  assertRealDirectory(controlRootOf(context), "the control root");
-  assertRealDirectory(dirname(ledgerPath), "the retained workflow dir");
-  return withStatusWriteLock(ledgerPath, fn, { timeoutMs: ledgerLockWaitMs() });
-}
 
 /* ------------------------------------------------------------------------ *
  * Append (§5)
@@ -514,11 +543,15 @@ function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNote): void
  * Append one note to the workflow's retained ledger, or replay an already
  * accepted record id.
  *
- * Active route only: the current-session assertion runs inside the locks, after
- * the retained bytes have been read and classified, and immediately before the
- * fsynced append — so a stale epoch, a revoked/suspended session, a foreign
- * caller or a mismatched scope refuses with the store's own codes (or this
- * module's) and leaves every retained byte in place.
+ * Active route only. Inside the maintenance exclusion the order is: prove the
+ * control root exists → resolve the retained workflow body dir (creating it only
+ * after the current-session guard has authorized a genuinely absent one) → take
+ * the per-workflow lock → read the retained bytes → classify → dedup → the SAME
+ * synchronous current-session guard again, immediately before the fsynced
+ * append. A stale epoch, a revoked/suspended session, a foreign caller or a
+ * mismatched scope therefore refuses with the store's own codes (or this
+ * module's), every retained byte stays in place, and an unauthorized session
+ * leaves no directory side effect behind.
  */
 export async function appendWorkflowNote(
   context: ExecutionContext,
@@ -528,20 +561,26 @@ export async function appendWorkflowNote(
   assertNoteScope(session, note);
   const line = Buffer.from(`${canonicalNoteLine(note)}\n`, "utf8");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
-  return withExecutionMaintenanceLock(context, () =>
-    withWorkflowLedgerLock(context, ledgerPath, async () => {
-      const retained = readLedgerBytes(ledgerPath);
-      const scan = retained === null ? null : scanLedger(retained);
-      const decision = scan === null ? ({ kind: "append", reconcileTail: false } as const) : decideAppend(scan, note);
-      // The final synchronous identity check, immediately before the mutation.
-      assertExecutionSessionCurrent(context, session);
-      const keepBytes = scan !== null && decision.reconcileTail ? scan.completeBytes : null;
-      if (decision.kind === "append" || keepBytes !== null) {
-        commitNoteLine(ledgerPath, keepBytes, line, retained === null);
-      }
-      return { id: note.id, replayed: decision.kind === "replay" };
-    }),
-  );
+  return withExecutionMaintenanceLock(context, async () => {
+    assertRealDirectory(controlRootOf(context), "the control root");
+    prepareWorkflowBodyDir(context, session, dirname(ledgerPath));
+    return withStatusWriteLock(
+      ledgerPath,
+      async () => {
+        const retained = readLedgerBytes(ledgerPath);
+        const scan = retained === null ? null : scanLedger(retained);
+        const decision = scan === null ? ({ kind: "append", reconcileTail: false } as const) : decideAppend(scan, note);
+        // The final synchronous identity check, immediately before the mutation.
+        assertExecutionSessionCurrent(context, session);
+        const keepBytes = scan !== null && decision.reconcileTail ? scan.completeBytes : null;
+        if (decision.kind === "append" || keepBytes !== null) {
+          commitNoteLine(ledgerPath, keepBytes, line, retained === null);
+        }
+        return { id: note.id, replayed: decision.kind === "replay" };
+      },
+      { timeoutMs: ledgerLockWaitMs() },
+    );
+  });
 }
 
 /* ------------------------------------------------------------------------ *
