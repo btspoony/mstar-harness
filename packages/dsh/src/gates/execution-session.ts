@@ -50,8 +50,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function parseRequest(raw: string): ExecutionRequest {
-  let value: unknown
+export function parseExecutionRequest(raw: string): ExecutionRequest {
   try { value = JSON.parse(raw) } catch { throw new Error('execution command input must be JSON') }
   if (!isRecord(value) || typeof value.operation !== 'string') throw new Error('execution command input must be a closed JSON object')
   if (value.operation === 'clear') {
@@ -96,9 +95,8 @@ export function runExecutionCommand(argv: readonly string[], env: NodeJS.Process
 }
 
 async function handleExecutionCommand(invocation: CommandInvocation, resolver: HarnessResolver): Promise<CommandResult> {
-  const request = parseRequest(invocation.rawInput.trim())
+  const request = parseExecutionRequest(invocation.rawInput.trim())
   const facts = nativeFacts(invocation)
-  if (facts.leaf) throw new Error('leaf sessions cannot adopt, clear, or launch coordinator execution')
   const harnessDir = resolver.forWorkspace(facts.cwd)
   if (harnessDir === null) throw new Error('execution harness is unavailable for this native session')
   if (request.operation === 'clear') {
