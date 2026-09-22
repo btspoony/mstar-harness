@@ -146,7 +146,8 @@ export function requireExecutionIdentity(
  * § Shared active-flag shape (exit 2, before any IO)
  * ------------------------------------------------------------------------ */
 
-function requireFlagValue(raw: string | undefined, flag: string, verb: string, what: string): string {
+/** One required flag value: the shared usage refusal of every active/execution verb in this package. */
+export function requireFlagValue(raw: string | undefined, flag: string, verb: string, what: string): string {
   if (raw === undefined || raw.trim() === "") {
     throw new SddScriptError(`usage: ${verb} requires ${flag} <${what}>`, 2);
   }

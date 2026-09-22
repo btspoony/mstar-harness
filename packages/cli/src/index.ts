@@ -180,6 +180,7 @@ import {
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { registerStoreCommands } from "./store-migrate";
+import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { runDashboard } from "./dashboard";
 import { validateAgentPlugin } from "./agent-plugins";
@@ -6406,6 +6407,14 @@ registerCatalogCommands(program);
 // engine store boundary and the migration transport (contract §2/§7).
 registerStoreCommands(program);
 
+// `mstar store execution` — the EXECUTION operator family (contract §3.2/§6/§7),
+// attached to the `store` group registered just above: the group's owner module
+// is outside this round's file set, and commander aborts the whole CLI on a
+// duplicate command name, so the family joins that group instead of creating a
+// second one. It is the EXECUTION route: `store activate` remains the
+// issue/catalog barrier and is never aliased to execution activation.
+registerExecutionMigrationCommands(program);
+
 /**
  * `mstar catalog reconcile` — the recovery verb contract §2 lists and P2
  * deferred (the journal it recovers is P3's). Attached to the EXISTING
@@ -6574,7 +6583,11 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // `--json` the invocation still gets the A2 failure object on stdout.
   if (error instanceof CommanderError) {
     if (process.argv.includes("--json")) {
-      const payload = planUsageFailurePayload(process.argv, error.message) ?? issueUsageFailurePayload(process.argv, error.message) ?? catalogUsageFailurePayload(process.argv, error.message);
+      const payload =
+        planUsageFailurePayload(process.argv, error.message) ??
+        issueUsageFailurePayload(process.argv, error.message) ??
+        catalogUsageFailurePayload(process.argv, error.message) ??
+        executionMigrationUsageFailurePayload(process.argv, error.message);
       if (payload !== null) console.log(payload);
     }
     process.exitCode = error.exitCode === 0 ? 0 : 2;
