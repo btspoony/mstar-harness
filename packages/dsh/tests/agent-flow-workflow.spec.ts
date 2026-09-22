@@ -2407,15 +2407,19 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
     const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
     const indexPath = join(workflowDir, AGENT_FLOW_INDEX_FILE)
     try {
-      // A DANGLING SYMLINK at the index slot: the read stage sees no index
-      // ("absent") while the committed append cannot land (ENOENT through the
-      // link) — a real write-stage failure, not a read refusal.
-      symlinkSync(join(workflowDir, 'missing-index-target'), indexPath)
+      // A symlink whose TARGET sits in a NON-EXISTENT directory: the read stage
+      // sees no index ("absent"), while the committed append cannot land
+      // (ENOENT — the parent directory cannot be created by an open) — a real
+      // write-stage failure, not a read refusal and not a create-through-link.
+      symlinkSync(join(workflowDir, 'missing-index-dir', 'index.jsonl'), indexPath)
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(false)
       // The row IS in the ledger (the append cannot be taken back), but its
       // identity did NOT commit and no scan bound was written.
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
       expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      // The injected target directory was never created — the append failed
+      // instead of materializing a target through the link.
+      expect(existsSync(join(workflowDir, 'missing-index-dir'))).toBe(false)
 
       // The retry recognizes the row by identity, indexes it and advances the
       // bound: still ONE row, ONE identity entry.
