@@ -25,9 +25,9 @@ A third legacy document still exists — the project register `{PROJECT_DIR}/<pr
 
 Enumeration reflects what exists: listing a kind prints its stored keys, one per line ascending, with no header, and an empty kind prints nothing and exits `0`. A missing backing file lists as empty rather than erroring.
 
-## Versioned replacement
+## Versioned replacement (pre-activation store face)
 
-A coordinated replacement is two commands, and the token from the first is the only thing the second accepts.
+A coordinated replacement is two commands, and the token from the first is the only thing the second accepts. This is the **pre-activation** writer for those documents: on a harness whose execution authority is active, the same documents are owned by the coordination verbs (`mstar plan …`, `mstar workflow …`, `mstar status workflow-close`), which take the scope's full execution token instead, and a bare store-face replacement refuses there.
 
 ```sh
 # 1. read the bytes and their version
@@ -41,7 +41,7 @@ mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --fi
 - The versioned read requires the local store. An injected module store refuses with `coordination.local-store-required`, because no same-host compare-and-swap is promised on a pluggable store — the coordination surface will not pretend a remote module gives it one.
 - The write replaces; it never merges. A token that no longer matches the bytes refuses with `coordination.version-conflict`: someone wrote in between, the edit is lost, and the recovery is to read again and re-apply against the new bytes.
 - A protected kind without a token refuses with `coordination.expected-version-required` — a bare put on those kinds is a usage error, not a fast path.
-- Replacing a coordinated snapshot also needs its coordinator envelope; the command checks the session's role, so a plan envelope refuses. The session path must be absolute — a relative one is a usage error, because the engine compares canonical targets.
+- Replacing a coordinated snapshot also needs its bound coordinator envelope; the command checks the session's role, so a plan envelope refuses. The session path must be absolute — a relative one is a usage error, because the engine compares canonical targets.
 - After a successful replacement, read again. The token was consumed by the write that used it.
 
 ## Lifecycle close
@@ -52,11 +52,21 @@ Closing one finished lifecycle is a single verb whose work has a fixed order:
 2. write the terminal snapshot under the snapshot lock;
 3. unregister the root entry, idempotently.
 
+```sh
+# active: the coordinator's own reference plus the workflow's full execution token
+mstar status workflow-close --workflow <id> --session-ref <wire> \
+  --expect <full-execution-token> --operation <id> --reason <text> [--harness <absolute-path>] [--json]
+
+# pre-activation only (refused on an ACTIVE authority)
+mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]
+```
+
 Everything that can go wrong is checked before step 2, so a refusal leaves both documents byte-identical:
 
 - dangling leases or unfinished plan rows refuse;
 - incomplete or absent delivery evidence for the registered kind refuses, and the snapshot stays running with its root entry still registered;
-- a **coordinated** workflow refuses a session-less close — it reports that the snapshot is coordinated and that the close needs the coordinator envelope, rather than reporting the plan rows. Only that workflow's own coordinator can close it; a plan envelope is not sufficient. An uncoordinated workflow closes with or without the flag.
+- a **coordinated** workflow refuses a session-less close — it reports that the snapshot is coordinated and that the close needs the authority that owns it. Only that workflow's own coordinator can close it; a plan session's reference is not sufficient. On the active route the close carries its own reason and takes no `--ended-at` (the pre-activation form's `--ended-at` belongs to the file write, and an active call that states it is a usage refusal).
+- An uncoordinated workflow closes with or without the coordinator's authority.
 
 Failure between steps 2 and 3 is reported as a partial close. A re-run finishes it, and a fully closed retry rewrites nothing. The close verb is the lifecycle route for a finished workflow: the protected snapshot refuses the generic delete face, and the removed residual-archival command fails and names the issue disposition that replaced it.
 
@@ -64,8 +74,8 @@ Failure between steps 2 and 3 is reported as a partial close. A re-run finishes 
 
 Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above is migration history and no command maintains it. The capture contract, its authorization and the migration mapping live in **`mstar-project-governance`「Issue capture」** — this file only names the transport.
 
-- **Capture** is plan-scoped (`mstar plan issue-add`, active plan session: row revision as `--expect`; the report names the DB-assigned issue ids and revisions) or unscoped (`mstar issue add`). A recurrence appends an occurrence to the existing issue instead of opening a second one.
-- **Close** is a separate authorized act with a terminal disposition: `mstar plan issue-close` on the plan's own linked issue (`--issue`, `--disposition`, `--expect-issue`), or `mstar issue close|waive|duplicate|supersede` unscoped. Each mutation is CAS-guarded by the issue revision.
+- **Capture** is plan-scoped (`mstar plan issue-add`; active: the plan's full execution token as `--expect` plus `--session-ref`/`--operation`, pre-activation: the row revision as `--expect`; the report names the DB-assigned issue ids and revisions) or unscoped (`mstar issue add`). A recurrence appends an occurrence to the existing issue instead of opening a second one.
+- **Close** is a separate authorized act with a terminal disposition: `mstar plan issue-close` on the plan's own linked issue (`--issue`, `--disposition`, `--expect-issue`), or `mstar issue close|waive|duplicate|supersede` unscoped. Each mutation is CAS-guarded by the issue revision, which stays an integer on every transport.
 - **The retired verbs are refusals, not aliases.** The old plan-side `residual-add` / `residual-close` verbs and the status-family `backlog-register` / `backlog-close` verbs still parse, refuse, write nothing, and name the issue verb that replaced them. There is no write-through compatibility path and no second store for closed findings.
 - **Reading is not a rollup of the registers.** `mstar status tech-debt` prints the store's open-issue rollup and `mstar status findings-cleanup <plan-id>` enforces the plan's mode over its **linked open issues**; a missing, corrupt or staged store refuses (exit 1) instead of reporting an empty rollup.
 
@@ -92,6 +102,7 @@ mstar store retire --manifest <path>          # moves the reviewed legacy source
 
 The protected writes are authorized, not merely gated:
 
-- every coordinated document is written only through an engine-generated session envelope for its own role and scope, re-checked inside the lock;
-- the envelope is not a credential a caller declares — it is obtained from the bind verb, and it stays with the coordinator. Handing one to a leaf executor, or restating a revision token in a leaf's assignment, is a scope violation regardless of intent;
+- every coordinated document is written only through the transport that owns it — the scope's execution token plus an independently acquired caller identity on the active route, or the engine-generated session envelope for its own role and scope on the pre-activation route — re-checked inside the lock either way;
+- **a reference and a token are not credentials a caller declares or forwards.** The active reference is a lookup into stored session rows; it grants nothing without the independently acquired caller the engine compares in its own transaction. Both the reference and every token stay with the coordinator or PM session: handing one to a leaf executor, or restating a token in a leaf's assignment, is a scope violation regardless of intent;
+- **no resume stands in for recovery**, and no recovery stands in for a fresh bind: a stopped owner is replaced by the recovery verb that owns its authority, never by a copied id, a restarted launcher or a hand-edited record;
 - the store face's own escape hatches are narrowed: an injected store cannot serve the coordinated surface, and the protected kinds refuse the direct faces entirely.

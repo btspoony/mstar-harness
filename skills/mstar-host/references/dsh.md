@@ -200,6 +200,30 @@ when the workspace has a `status.json`. The row is digest-gated (once per
 turn, re-injected only when it changed) over one per-workspace TTL-cached
 build (`catalogTtlMs`, default 60 s).
 
+### Execution authority in this host (source state)
+
+The engine's own route (`resolveExecutionReadRoute`) decides which authority
+answers, and no tool argument or config key selects one:
+
+- While the control harness's execution authority is **ACTIVE**, the plugin's
+  gates select the lifecycle they are about from the **DB authority** with
+  explicit identities — never a newest/only guess, never a fallback to the
+  retired `status.json` / snapshot bytes — and a write to a retired
+  coordination document is refused **unconditionally** (`execution.direct-write-refused`),
+  canonical path and symlink alias alike. A register write while an active store
+  answers is refused as migration history; a register write while the authority
+  cannot be read at all fails closed.
+- A missing (`store.not-initialized`) or staged (`store.not-active`) store keeps
+  the legacy file authority in force, so those writes still pass through the
+  register's own document validator.
+- This reference declares **only what the package ships**. A host-native human
+  execution command (adopt a reference / run argv under an acquired identity)
+  is **not** part of this host's shipped surface, so no association entry is
+  documented for it and none may be assumed: on dsh, association and adoption
+  happen through the shared CLI under an independently acquired identity, as on
+  every other host, and a source file that implements such a command is not an
+  installed capability.
+
 ## Agent-flow ledger
 
 The plugin records ACTUAL subagent dispatch and real-completion settle events —
@@ -224,18 +248,56 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   `{HARNESS_DIR}/workflows/<id>/agent-flow.jsonl` (JSON Lines, one event per
   line; harness dirs are gitignored by convention) — never the harness root:
   with no active lifecycle the record is SKIPPED with a one-time warn. The
-  append and the size-gated truncating read-modify-write form ONE critical
-  section behind a per-workflow lockdir, so a second dsh session sharing the
-  active lifecycle cannot silently drop the other writer's lines (steady state
-  stays one writer per workflow dir); any loss only under-reports actual flow
-  in the panel, never a gate impact. After each append the file truncates to
-  the most recent **500** events; truncation is size-gated (≈500 lines'
-  typical size — small files stay append-only) and performed as an atomic
-  temp-file rename. The catalog read returns the latest-first view with a
-  default window of **50** and a role × outcome summary. A MISSING file reads
-  as the empty view ("no actual dispatches yet" — recording starts at plan
-  merge); an unreadable file is absent evidence; malformed lines are skipped,
-  never fatal.
+  append, the durable identity commit and the scan-bound advance form ONE
+  critical section behind a per-workflow lockdir (`recordWorkflowEvent`), so a
+  second dsh session sharing the active lifecycle cannot silently drop the other
+  writer's lines (steady state stays one writer per workflow dir); any loss here
+  only under-reports actual flow in the panel, never a gate impact. The catalog
+  read returns the latest-first view with a default window of **50** and a role ×
+  outcome summary. A MISSING ledger file reads as the empty view ("no actual
+  dispatches yet" — recording starts at plan merge); an unreadable file is
+  absent evidence; malformed lines are skipped, never fatal.
+- **Record identity, dedup authority and the durable cursor**: every new row
+  carries a stable `eventId`. Durable workflow events carry the verified source
+  position `{sessionId, streamId, seq}` and the id
+  `wfe1:<kind>:<sessionId>:<streamId>:<seq>`, where `streamId` is the log's
+  verified native **incarnation** — derived from the durable session header's
+  creation stamp, never the store epoch and never a file mtime — so a session
+  cross or a rebuilt log cannot collide. Live tool-call rows
+  (`dispatch` / `settle` / `subagent-link` / `workflow-verdict`) carry
+  `wfc1:<sessionId>:<callId>:<kind>` only when the seam supplies BOTH the
+  carrying session id and a call id; a row without them is recorded **without**
+  an id, never as `wfc1::`. Rows predating this keep their exact bytes and
+  line-offset identity — they simply carry no `eventId`. The **dedup authority
+  is the durable accepted-identity index** (`agent-flow-ids.jsonl`, one fsynced
+  line per accepted row), which survives tail compaction and cursor eviction;
+  the cursor sidecar (`workflow-ledger-cursors.json`, version 2 `{next, stream}`
+  with version-1 read compatibility) is reduced to a per-incarnation **scan
+  bound**. A MISSING index is a legitimate first run only while no retained
+  history chunk holds an index-scoped (`wfe1:`) accepted row — a history of only
+  live tool-call rows or legacy rows still proceeds — while an unreadable or
+  damaged history/index refuses instead of reading as "no history", a session
+  whose log head cannot be read records **nothing** rather than inventing an
+  incarnation, and an event id already present with different bytes is an
+  advisory refusal (no append, no cursor advance).
+- **Bounded display tail + archived history**: the 500-event display bound is
+  unchanged, but evicted lines are archived byte-exact into `fsync`ed sealed
+  chunks under `<workflowDir>/agent-flow-history/chunk-NNNNNN.jsonl` **before**
+  the tail is rewritten. The pair is one transaction recorded in the transient
+  `agent-flow-compaction.json` journal (`tailBefore`/`tailAfter` full-file
+  sha256, the exact archive range and the removed line count): the record is
+  durable before the archive is touched, the archive before the tail is
+  replaced, and the record is durably removed only once the range is provably
+  complete. Every write path resolves an unfinished transaction first, so no
+  later compaction can pass an unfinished one; a tail matching neither state —
+  or a matching after-state with an incomplete archive range — is refused rather
+  than guessed. Display retention and dedup retention are separate: a row may
+  leave the live tail as soon as its record id is in the durable identity index,
+  whatever incarnation it belongs to, because that index — not the tail and not
+  the scan bound — proves the record can never be appended again. Rows without a
+  source keep their bytes and are archived by line position. This is the host's
+  own display/ledger behaviour; it is evidence about what happened, never
+  authority, and never a lifecycle register.
 - **Settle = real completion pairing, never faked**: `tools/post-execute`
   IS part of the
   verified dsh-tools registry surface (`runPostExecute` dispatches the
