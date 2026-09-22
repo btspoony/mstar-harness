@@ -115,6 +115,7 @@ const EXECUTION_COLUMNS: Record<string, string[]> = {
     "retirement_json",
     "created_at",
     "updated_at",
+    "coverage_json",
   ],
 };
 
@@ -290,15 +291,17 @@ function foreignKeys(db: StoreDb, table: string): string[] {
     .sort();
 }
 
-describe("execution-schema: migration 4 (execution-authority)", () => {
+describe("execution-schema: append-only coverage migration", () => {
   describe("migration identity", () => {
-    test("keeps the applied v1\u2013v3 checksums and appends execution-authority as version 4", () => {
+    test("keeps the applied v1–v3 checksums and appends execution coverage as version 5", () => {
       for (const version of [1, 2, 3]) {
         expect(migrationChecksum(MIGRATIONS[version - 1])).toBe(FROZEN_V3_CHECKSUMS[version]);
       }
       expect(MIGRATIONS[3].version).toBe(4);
       expect(MIGRATIONS[3].name).toBe("execution-authority");
-      expect(MIGRATIONS.length).toBe(4);
+      expect(MIGRATIONS[4].version).toBe(5);
+      expect(MIGRATIONS[4].name).toBe("execution-coverage-column");
+      expect(MIGRATIONS.length).toBe(5);
     });
   });
 
@@ -357,13 +360,15 @@ describe("execution-schema: migration 4 (execution-authority)", () => {
           operation_id: "op-1",
           request_hash: "req-hash-1",
         });
-        // The applied rows 1–3 keep their checksums; migration 4 is appended.
+        // The applied rows 1–3 keep their checksums; migrations 4 and 5 append.
         expect(all(db, "select version, name, checksum from schema_version order by version")).toEqual([
           { version: 1, name: "issue-core", checksum: FROZEN_V3_CHECKSUMS[1] },
           { version: 2, name: "catalog-authority", checksum: FROZEN_V3_CHECKSUMS[2] },
           { version: 3, name: "execution-projections", checksum: FROZEN_V3_CHECKSUMS[3] },
           { version: 4, name: "execution-authority", checksum: migrationChecksum(MIGRATIONS[3]) },
+          { version: 5, name: "execution-coverage-column", checksum: migrationChecksum(MIGRATIONS[4]) },
         ]);
+        expect(all(db, "pragma table_info(execution_migrations)").some((row: { name?: unknown }) => row.name === "coverage_json")).toBe(true);
         expect(all(db, "pragma foreign_key_check")).toEqual([]);
         expect(one(db, "pragma integrity_check")).toEqual({ integrity_check: "ok" });
       } finally {
