@@ -75,7 +75,7 @@ import {
   retainedInventoryPath,
   type BackupReceipt,
 } from "./store-activation.js";
-import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-recovery-"));
@@ -462,12 +462,16 @@ describe("execution-restore", () => {
     expect(corrupt.code).toBe("store.activation-stale");
     expect(corrupt.message).toMatch(/integrity_check|verif|not a SQLite|unreadable/);
 
-    // A copy written by a NEWER build is not a recovery point for this one.
+    // A copy written by a NEWER build is not a recovery point for this one. The
+    // future version is DERIVED from this build's own migration list, so a new
+    // append-only migration (the coverage column) can never collide with the
+    // fixture's "newer build" row.
     const tooNewPath = join(world.harness, "archived", "recovery", "too-new-point.db");
     writeFileSync(tooNewPath, readFileSync(point.backupPath));
     rawRun(
       tooNewPath,
-      "insert into schema_version(version, name, checksum, applied_at) values (5, 'future-authority', 'deadbeef', ?)",
+      "insert into schema_version(version, name, checksum, applied_at) values (?, 'future-authority', 'deadbeef', ?)",
+      MIGRATIONS.length + 1,
       TS,
     );
     const tooNew = await refusalOf(() => previewExecutionRestore(world.context, tooNewPath));
@@ -1296,6 +1300,18 @@ function recordsOf(path: string): string[] {
   return records;
 }
 
+/**
+ * The live store's authority generation, read through the engine's own read
+ * adapter: the LOGICAL state a refusal must leave untouched. A WAL-mode
+ * database's main-file bytes are not that proof — SQLite's own last clean close
+ * folds the `-wal` into the file — so a byte comparison would report the store's
+ * cleanup as a write.
+ */
+async function liveAuthority(context: StoreContext): Promise<{ token: string; epoch: number }> {
+  const state = await readExecutionState(context);
+  return { token: state.token, epoch: state.epoch };
+}
+
 describe("Phase 2b - retained accepted bodies and the loss-aware restore", () => {
   test("Phase 2b freezes the retained bodies with the point and preserves append-only accepted history", async () => {
     const world = await recoveryWorld("phase2b-append");
@@ -1353,18 +1369,20 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     const world = await recoveryWorld("phase2b-interrupted");
     const bodies = plantBodies(world);
     const point = await recoveryPoint(world, "interrupted-point");
-    const liveBytes = sha256OfFile(world.dbPath);
+    const liveState = await liveAuthority(world.context);
     const pointBytes = sha256OfFile(point.backupPath);
     const clean = readFileSync(bodies.notes);
 
     // An unterminated record the point never recorded: no accepted identity, so
-    // no hash reconciles it, and both stores plus every body stay in place.
+    // no hash reconciles it, and both stores plus every body stay in place — the
+    // live authority generation unmoved (a logical proof, not the WAL store's
+    // main-file bytes).
     writeFileSync(bodies.notes, `${readFileSync(bodies.notes, "utf8")}{"version":1`);
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toContain("salvage scope");
     expect(refusal.message).toContain("notes.jsonl");
-    expect(sha256OfFile(world.dbPath)).toBe(liveBytes);
+    expect(await liveAuthority(world.context)).toEqual(liveState);
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
 
     // An interrupted tail the POINT recorded is carried by exact hash instead of
@@ -1480,14 +1498,14 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     // §5: a present compaction journal refuses the freeze AND the preview, with
     // the store and every body left exactly where they are.
     writeFileSync(join(bodyDirOf(world), "agent-flow-compaction.json"), `${JSON.stringify({ version: 1, lines: 1 })}\n`);
-    const liveBytes = sha256OfFile(world.dbPath);
+    const liveState = await liveAuthority(world.context);
     const frozenHere = await refusalOf(() => recoveryPoint(world, "compaction-point"));
     expect(frozenHere.code).toBe("store.activation-stale");
     expect(frozenHere.message).toContain("agent-flow-compaction.json");
-    expect(sha256OfFile(world.dbPath)).toBe(liveBytes);
+    expect(await liveAuthority(world.context)).toEqual(liveState);
     const previewRefusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(previewRefusal.code).toBe("store.activation-stale");
     expect(previewRefusal.message).toContain("agent-flow-compaction.json");
-    expect(sha256OfFile(world.dbPath)).toBe(liveBytes);
+    expect(await liveAuthority(world.context)).toEqual(liveState);
   });
 });

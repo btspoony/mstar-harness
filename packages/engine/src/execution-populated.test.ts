@@ -206,6 +206,18 @@ function rawGet<T>(dbPath: string, sql: string): T | undefined {
   }
 }
 
+/**
+ * The live store's own authority generation, read through the engine's read
+ * adapter: the LOGICAL state a refusal must leave untouched. A WAL-mode
+ * database's main-file bytes cannot stand in for that proof — its own last clean
+ * close folds the `-wal` into the file and rewrites it — so a byte comparison
+ * would report the store's own cleanup as a write.
+ */
+async function liveAuthority(context: StoreContext): Promise<{ token: string; epoch: number }> {
+  const state = await readExecutionState(context);
+  return { token: state.token, epoch: state.epoch };
+}
+
 /** The typed refusal of one call: its stable code and message. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
   try {
@@ -799,28 +811,30 @@ describe("populated refusals", () => {
       archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: 1, sha256: "c".repeat(64) },
       lines: 1,
     });
-    const liveBytes = sha256OfFile(fixture.dbPath);
+    const liveState = await liveAuthority(fixture.context);
     const target = join(fixture.harness, "archived", "backups", "compaction-point.db");
     const frozen = await refusalOf(() => backupStore(fixture.context, { out: target }));
     expect(frozen.code).toBe("store.activation-stale");
     expect(frozen.message).toContain("agent-flow-compaction.json");
-    // Nothing was written: neither the image nor its inventory document, and no
-    // body or store byte moved.
+    // Nothing was written: neither the image nor its inventory document, and the
+    // live authority generation is unmoved. The proof is the store's LOGICAL
+    // state — a WAL-mode database's main-file bytes are NOT evidence of "no
+    // write", because its own last clean close folds the journal into the file.
     expect(existsSync(target)).toBe(false);
     expect(existsSync(retainedInventoryPath(target))).toBe(false);
-    expect(sha256OfFile(fixture.dbPath)).toBe(liveBytes);
+    expect(await liveAuthority(fixture.context)).toEqual(liveState);
 
     // An unfinished compaction in a workflow the point was taken without also
     // refuses the preview, with both stores and every body left in place.
     const clean = await activePopulated("populated-compaction-clean");
     const point = await backupStore(clean.context, { out: join(clean.harness, "archived", "backups", "clean-point.db") });
-    const cleanLiveBytes = sha256OfFile(clean.dbPath);
+    const cleanState = await liveAuthority(clean.context);
     const pointBytes = sha256OfFile(point.backupPath);
     writeJson(join(clean.workflowDir, "agent-flow-compaction.json"), { version: 1 });
     const preview = await refusalOf(() => previewExecutionRestore(clean.context, point.backupPath));
     expect(preview.code).toBe("store.activation-stale");
     expect(preview.message).toContain("agent-flow-compaction.json");
-    expect(sha256OfFile(clean.dbPath)).toBe(cleanLiveBytes);
+    expect(await liveAuthority(clean.context)).toEqual(cleanState);
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
   });
 
@@ -869,18 +883,20 @@ describe("populated refusals", () => {
   test("populated refusals: an interrupted append refuses with every artifact retained and an explicit salvage scope", async () => {
     const fixture = await activePopulated("populated-interrupted");
     const point = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "interrupted-point.db") });
-    const liveStoreBytes = sha256OfFile(fixture.dbPath);
+    const liveState = await liveAuthority(fixture.context);
     const pointBytes = sha256OfFile(point.backupPath);
     const notesBytes = readFileSync(fixture.notesPath);
 
     // An unterminated record the point never recorded: no accepted identity, so
-    // no hash reconciles it, and every artifact stays where it is.
+    // no hash reconciles it, and every artifact stays where it is — the live
+    // authority generation unmoved (a logical proof, not the main file's bytes),
+    // the point byte-identical, and the body left exactly as the writer left it.
     writeFileSync(fixture.notesPath, `${readFileSync(fixture.notesPath, "utf8")}{"version":1,"id":"note-half"`);
     const refusal = await refusalOf(() => previewExecutionRestore(fixture.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toContain("salvage scope");
     expect(refusal.message).toContain("notes.jsonl");
-    expect(sha256OfFile(fixture.dbPath)).toBe(liveStoreBytes);
+    expect(await liveAuthority(fixture.context)).toEqual(liveState);
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
 
     // An interrupted tail the POINT recorded is carried: the same state, decided

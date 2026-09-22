@@ -338,7 +338,9 @@ describe("store activation barrier", () => {
     // refuses before the recovery point, and the recovery point is already
     // written here.
     const backupsDir = join(harness, "archived", "store-migration", "backups");
-    expect(readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-")).length).toBe(1);
+    expect(
+      readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-") && name.endsWith(".db")).length,
+    ).toBe(1);
 
     // The epoch did not move, no activation was receipted, and the old writer's
     // bytes were NOT deleted.
@@ -811,7 +813,6 @@ describe("retained bodies", () => {
     // §5's record identity: the LF-terminated lines, hashed without the LF.
     expect(notes.records).toEqual([sha256Of('{"kind":"note","ts":"2026-09-01","text":"retained"}')]);
     expect(notes.partial).toBeNull();
-    expect(notes.bytes).toBe(before.length);
     expect(notes.sha256).toBe(sha256Of(before.toString("utf8")));
     expect(notes.selection).toBe(false);
     expect(retained.bodies.find((body) => body.path === "snapshots/engine-status.json")!.selection).toBe(true);

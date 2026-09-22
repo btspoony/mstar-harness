@@ -610,9 +610,16 @@ const ENGINE_STATUS_BODY = "snapshots/engine-status.json";
 export type RetainedBodyCheckpoint = Readonly<{
   /** Control-root-relative canonical path. */
   path: string;
-  bytes: number;
+  /** SHA-256 of the body's whole byte content. */
   sha256: string;
+  /**
+   * The ordered SHA-256 of every LF-terminated line's bytes (the LF excluded,
+   * exactly §5's identity-index rule) — the append-only record identity for the
+   * ledgers, and the byte checkpoint for the single-document bodies. This, not a
+   * size, is what a restore compares.
+   */
   records: readonly string[];
+  /** SHA-256 of an unterminated trailing line, `null` when the body ends clean. */
   partial: string | null;
   /** True when this body carries the durable selection/cache facts (§6 F3). */
   selection: boolean;
@@ -641,8 +648,7 @@ function retainedInventoryDigest(inventory: Omit<RetainedBodyInventory, "digest"
         revision: inventory.revision,
         bodies: inventory.bodies.map((body) => ({
           path: body.path,
-          bytes: body.bytes,
-          sha256: body.sha256,
+            sha256: body.sha256,
           records: [...body.records],
           partial: body.partial,
           selection: body.selection,
@@ -704,7 +710,6 @@ function checkpointRetainedBody(root: string, relativeBodyPath: string, selectio
   }
   return {
     path: relativeBodyPath,
-    bytes: bytes.length,
     sha256: sha256Bytes(bytes),
     records,
     partial: start < bytes.length ? sha256Bytes(bytes.subarray(start)) : null,
@@ -853,10 +858,6 @@ function requireRetainedInventory(value: unknown, what: string): RetainedBodyInv
     const body = candidate as Record<string, unknown>;
     const path = body.path;
     if (typeof path !== "string" || path.trim() === "") throw invalid(`body ${index} carries no path`);
-    const byteCount = body.bytes;
-    if (typeof byteCount !== "number" || !Number.isSafeInteger(byteCount) || byteCount < 0) {
-      throw invalid(`body ${index} carries bytes ${JSON.stringify(byteCount)}`);
-    }
     const sha256 = body.sha256;
     if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) throw invalid(`body ${index} carries no byte digest`);
     if (!Array.isArray(body.records)) throw invalid(`body ${index} carries a malformed accepted-record list`);
@@ -873,7 +874,7 @@ function requireRetainedInventory(value: unknown, what: string): RetainedBodyInv
     }
     const selection = body.selection;
     if (typeof selection !== "boolean") throw invalid(`body ${index} carries no selection flag`);
-    bodies.push({ path, bytes: byteCount, sha256, records, partial, selection });
+    bodies.push({ path, sha256, records, partial, selection });
   }
   const inventory: Omit<RetainedBodyInventory, "digest"> = {
     version: RETAINED_BODY_PROTOCOL_VERSION,
