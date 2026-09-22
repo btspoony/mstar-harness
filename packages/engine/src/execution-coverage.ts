@@ -161,7 +161,7 @@ const SURFACE_PROTOCOLS: Readonly<Record<ExecutionSurface, Protocol>> = {
   "workflow-omp-launch-journal": "omp-launch-v2",
   "omp-hidden-entries": "omp-hidden-v1",
   "sdd-evidence": "retained-body-v1",
-  "artifact-store-injectors": "consumer-v1",
+  "artifact-store-injectors": "retained-body-v1",
   "cli-writer": "consumer-v1",
   "engine-cli-package": "consumer-v1",
   "dsh-package": "consumer-v1",
@@ -1239,12 +1239,62 @@ function consumerCodec(context: RowContext): unknown {
   return { sources: sourceRefs(context), format: "consumer-v1", manifest };
 }
 
-/** `consumer-v1` for the injected store inventory: no reviewed producer exists yet. */
+/** The closed operator injector inventory: version, protocol and the module set. */
+const INJECTOR_INVENTORY_KEYS = ["version", "protocol", "injectors"] as const;
+
+/**
+ * `retained-body-v1` for `artifact-store-injectors`: the operator's explicit
+ * inventory of deployed injected stores (contract §4.2). The document names the
+ * module bytes and the body-only capability; a module's identity is its
+ * `(root, path)`, the assigned source set must be exactly that module set with
+ * full sha256 equality, and an empty inventory is discovery-absent evidence —
+ * never a populated retained row.
+ */
 function injectorCodec(context: RowContext): unknown {
-  refuse(
-    `${context.label} cannot be populated yet: no reviewed injector-inventory producer exists beside R1's consumer manifest, and \u00a74.2's deployed ` +
-      `injector inventory is not a shape this module may invent.`,
-  );
+  if (context.evidence.length !== 1) {
+    refuse(`${context.label} carries ${context.evidence.length} evidence document(s); an injected store inventory carries exactly one inventory document.`);
+  }
+  const what = `${context.label} injector inventory`;
+  const document = producedDocument(context.bytesOf(context.evidence[0]), what);
+  expectExactKeys(document, INJECTOR_INVENTORY_KEYS, what);
+  if (document.version !== 1) refuse(`${what}.version must be 1.`);
+  if (document.protocol !== "injector-inventory-v1") refuse(`${what}.protocol must be injector-inventory-v1; this module decodes no other injector inventory.`);
+  const declared = expectArray(document.injectors, `${what}.injectors`);
+  if (declared.length === 0) {
+    refuse(`${what} lists no injected store; an empty inventory is discovery evidence for an absent row, never a populated retained row.`);
+  }
+  const modules = new Map<string, CoverageWitness>();
+  declared.forEach((entry, index) => {
+    const where = `${what}.injectors[${index}]`;
+    const item = expectObject(entry, where);
+    expectExactKeys(item, ["module", "capability"], where);
+    if (item.capability !== "body-only") {
+      refuse(`${where}.capability must be body-only; a deployed injected store is body-only storage and never declares another authority.`);
+    }
+    const module = expectWitness(item.module, `${where}.module`);
+    const key = coverageWitnessKey(module.root, module.path);
+    if (modules.has(key)) refuse(`${what} lists the injector module ${key} twice; one deployed module is one entry.`);
+    modules.set(key, module);
+  });
+  for (const [key, module] of modules) {
+    if (!context.sources.some((candidate) => candidate.root === module.root && candidate.path === module.path && candidate.sha256 === module.sha256)) {
+      refuse(`${what} names the injector module ${key}, which is not an assigned source witness of this receipt with that sha256.`);
+    }
+  }
+  const surplus = context.sources.filter((witness) => !modules.has(coverageWitnessKey(witness.root, witness.path)));
+  if (surplus.length > 0) {
+    refuse(
+      `${context.label} assigns source witness(es) ${surplus.map((witness) => coverageWitnessKey(witness.root, witness.path)).join(", ")} that the ` +
+        `injector inventory does not list; the retained module set is exact.`,
+    );
+  }
+  return {
+    sources: sourceRefs(context),
+    format: "injector-inventory-v1",
+    modules: [...modules.entries()]
+      .sort((left, right) => compareText(left[0], right[0]))
+      .map(([key, module]) => ({ key, root: module.root, path: module.path, sha256: module.sha256, capability: "body-only" })),
+  };
 }
 
 const RECOVERY_INVENTORY_KEYS = ["version", "document", "backup", "schemaVersion", "integrity", "coverageDigest", "recoveryGeneration"] as const;

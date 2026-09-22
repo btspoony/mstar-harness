@@ -301,9 +301,25 @@ function rootRow(surface: ExecutionSurface): Row {
       ),
     };
   }
+  if (surface === "artifact-store-injectors") {
+    // The operator's explicit inventory: one deployed body-only module, whose
+    // bytes are the row's assigned source.
+    const module = doc("package", "injectors/fs-store.js", "export const store = {};");
+    return {
+      surface,
+      workflowId: null,
+      disposition: "retain",
+      docs: [module],
+      evidence: doc(
+        "package",
+        "coverage/injector-inventory.json",
+        canonical({ version: 1, protocol: "injector-inventory-v1", injectors: [{ module: witnessOf(module), capability: "body-only" }] }),
+      ),
+    };
+  }
   // `dsh-package` has nothing discovered in this fixture; `omp-hidden-entries`
-  // and `artifact-store-injectors` have no producer that can populate them, so
-  // they stay absent and their rows are exercised explicitly where reachable.
+  // has no producer that can populate it, so it stays absent and its row is
+  // exercised explicitly in the hidden-history case below.
   return { surface, workflowId: null, disposition: "absent", docs: [] };
 }
 
@@ -653,7 +669,49 @@ describe("execution-coverage", () => {
     refuseLeavingState(missingEntrypoint);
   });
 
-  test("execution-coverage-surfaces-without-a-producer-stay-incomplete", () => {
+  test("execution-coverage-injector-inventory-is-exact", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
+    // The listed module bytes changed since the inventory was written.
+    const changed = materialize(buildRows());
+    changed.evidence.set(coverageWitnessKey("package", "injectors/fs-store.js"), new TextEncoder().encode("export const store = { changed: true };"));
+    refuseLeavingState(changed);
+
+    const listed = { module: witnessOf(doc("package", "injectors/fs-store.js", "export const store = {};")), capability: "body-only" };
+
+    const unknownCapability = materialize(buildRows());
+    const capabilityEntry = consumerManifestOf(unknownCapability, "artifact-store-injectors");
+    putManifest(unknownCapability, "artifact-store-injectors", { version: 1, protocol: "injector-inventory-v1", injectors: [{ ...listed, capability: "writer" }] }, capabilityEntry.entry);
+    refuseLeavingState(unknownCapability);
+
+    const duplicateModule = materialize(buildRows());
+    const duplicateEntry = consumerManifestOf(duplicateModule, "artifact-store-injectors");
+    putManifest(duplicateModule, "artifact-store-injectors", { version: 1, protocol: "injector-inventory-v1", injectors: [listed, listed] }, duplicateEntry.entry);
+    refuseLeavingState(duplicateModule);
+
+    // An unlisted module assigned beside the listed one (surplus source).
+    const surplus = materialize(buildRows());
+    replaceRowDocuments(surplus, "artifact-store-injectors", null, [
+      doc("package", "injectors/fs-store.js", "export const store = {};"),
+      doc("package", "injectors/other-store.js", "export const other = {};"),
+    ]);
+    refuseLeavingState(surplus);
+
+    // A listed module that is not assigned at all.
+    const unassigned = materialize(buildRows());
+    const unassignedEntry = consumerManifestOf(unassigned, "artifact-store-injectors");
+    putManifest(unassigned, "artifact-store-injectors", { version: 1, protocol: "injector-inventory-v1", injectors: [{ module: { root: "package", path: "injectors/missing.js", sha256: fakeHex(41) }, capability: "body-only" }] }, unassignedEntry.entry);
+    refuseLeavingState(unassigned);
+
+    // An empty inventory is discovery-absent evidence, not a retained row.
+    const empty = materialize(buildRows());
+    const emptyEntry = consumerManifestOf(empty, "artifact-store-injectors");
+    putManifest(empty, "artifact-store-injectors", { version: 1, protocol: "injector-inventory-v1", injectors: [] }, emptyEntry.entry);
+    refuseLeavingState(empty);
+  });
+
+  test("execution-coverage-hidden-entries-await-the-h2-wrapper", () => {
     const valid = materialize(buildRows());
     validate(valid);
 
@@ -671,10 +729,6 @@ describe("execution-coverage", () => {
     ]);
     refuseLeavingState(duplicateEntry);
 
-    // No reviewed injector-inventory producer exists beside R1's manifest.
-    const injector = materialize(buildRows());
-    populateWithoutProducer(injector, "artifact-store-injectors", null, [doc("package", "injectors/fs-store.js", "export const store = {};")]);
-    refuseLeavingState(injector);
   });
 
   test("execution-coverage-assignment-binds-sources-to-a-row", () => {
