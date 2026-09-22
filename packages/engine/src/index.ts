@@ -916,20 +916,28 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// Execution migration: the executable §6 protocol (stages R1–R3). R1 landed
+// Execution migration: the executable §6 protocol (stages R1-R3). R1 landed
 // the read-only preview and the staged apply: `previewExecutionMigration` reads
-// the legacy workspace as evidence and returns the canonical, content-addressed
-// manifest;
-// `applyExecutionMigration` stages every core row plus the manifest record in
-// one transaction against a verified recovery point, and never activates.
-// R2 adds the three separate crash-safe steps: `activateExecutionMigration`
-// performs the single all-or-nothing cutover behind the deferred-surface
-// barrier, `retireExecutionSources` moves the exact core sources into
-// manifest-addressed history under a resumable per-item ledger, and
-// `abortExecutionMigration` returns a STAGED manifest to legacy without
-// touching active data. `executionManifestHash` is exported so a caller can
-// hand the reviewed hash back verbatim. ADDITIVE export — the engine package's
-// exports map is the only reachable surface for consumers.
+// the legacy workspace as evidence (plus the explicit operator inventory named
+// by `inventoryPath`) and returns the canonical, content-addressed version 2
+// manifest with its exact per-surface source assignment;
+// `applyExecutionMigration` stages every core row plus the manifest record and
+// the validated coverage in one transaction against a verified recovery point,
+// and never activates. R2 adds the three separate crash-safe steps:
+// `activateExecutionMigration` takes the §4.2 maintenance → root → workflow lock
+// ladder and RECOMPUTES the coverage from the named bytes, requiring it to equal
+// BOTH the digest the operator approved and the set recorded at staging, before
+// it performs the single store-wide all-or-nothing cutover (one epoch advance,
+// imported references revoked, held ownership represented); a deferred (2b)
+// surface is diagnostic evidence only and is never an activation
+// precondition. `retireExecutionSources` moves the exact core sources and the
+// `retire`-disposition session envelopes into manifest-addressed history under a
+// resumable, fsynced per-item ledger, and `abortExecutionMigration` returns a
+// STAGED manifest to legacy without touching active data.
+// `collectExecutionCoverage` is the read-only coverage collector,
+// `executionManifestHash` is exported so a caller can hand the reviewed hash
+// back verbatim. ADDITIVE export - the engine package's exports map is the only
+// reachable surface for consumers.
 export type {
   ExecutionDeferredSurface,
   ExecutionManifest,
