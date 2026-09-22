@@ -33,6 +33,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import pc from "picocolors";
 import {
+  CoordinationError,
   SddScriptError,
   amendPrepareWorkflow,
   assertSafeSessionId,
@@ -54,6 +55,7 @@ import {
   showPrepareWorkflow,
   type BindPlanSessionInput,
   type ClosureEvidence,
+  type CoordinationOperation,
   type CoordinationResult,
   type ExecutionPlanView,
   type ExecutionSessionRef,
@@ -659,7 +661,32 @@ async function runVerb(
 type ActivePlanFlags = { ref: ExecutionSessionRef; expected: ExecutionToken; operationId: string };
 
 /**
- * Read the active transport flags of one plan verb (contract §3.2). Exactly one
+ * The CLI's row-operation union is the FILE route's (it still registers
+ * `repair-delivery-source`), while the DB authority publishes the closed union
+ * minus that legacy-only member. This guard is the narrowing between them: it
+ * excludes exactly that member, so no cast is needed at the DB call site and
+ * the engine's own union stays untouched.
+ */
+function isExecutionPlanOperation(operation: PlanCoordinationOperation): operation is CoordinationOperation {
+  return operation.kind !== "repair-delivery-source";
+}
+
+/**
+ * The refusal of a row operation the DB authority does not implement. It is the
+ * engine's own shape for that verdict (`coordination.unknown-operation`), raised
+ * before any store work, so the active route reports the same code and exit
+ * class it would if the call had reached the published dispatcher.
+ */
+function unsupportedActiveOperation(operation: PlanCoordinationOperation): CoordinationError {
+  return new CoordinationError(
+    "coordination.unknown-operation",
+    `${operation.kind} is not a coordination operation`,
+    { operation: operation.kind },
+  );
+}
+
+/**
+ * Read the active flags of one plan verb (contract §3.2). Exactly one
  * transport may be addressed: the pre-activation `--session` file, or the active
  * `--session-ref` + full-execution `--expect` + `--operation`. A missing
  * address, a partial active set and a mix of both transports are usage refusals
@@ -763,6 +790,7 @@ async function mutate(
   const planId = activePlanIdOf(options, active.ref, verb);
   const workflowId = active.ref.workflowId;
   const concrete = operation(options);
+  if (!isExecutionPlanOperation(concrete)) throw unsupportedActiveOperation(concrete);
   const identity = requireExecutionIdentity(
     { workflowId, role: active.ref.role, planId: active.ref.planId },
     `plan ${verb}`,
