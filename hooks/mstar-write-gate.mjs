@@ -7,7 +7,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 import { readFileSync as readFileSync3, readlinkSync, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative4, resolve } from "node:path";
 
-// packages/engine/dist/engine.js
+// ../../packages/engine/dist/engine.js
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
