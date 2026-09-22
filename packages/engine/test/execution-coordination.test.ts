@@ -31,6 +31,7 @@ import {
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
   setCompleteWitnessGapForTest,
+  setReconcileWitnessGapForTest,
   withExecutionPlanAuthority,
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
@@ -2569,11 +2570,15 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     const fixture = await lifecycleFixture("complete-report-only-drift", "report-only");
     const handoffId = await acceptedAttempt(fixture, "report-only-drift");
     const before = planStateFootprint(fixture.context, OWN_PLAN);
+    // The SELF-CONSISTENT rewrite: both the registered policy and the fulfilment
+    // record it is compared against move together, so a rule that only checks the
+    // pair against itself would commit. The pinned policy refuses instead.
     setCompleteWitnessGapForTest(() => {
       withRaw(fixture.context, (db) => {
         const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
         const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
         snapshot.completion_policy = "changed policy";
+        snapshot.delivery = { completion: { policy: "changed policy", evidence: "acceptance.md" } };
         db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
       });
     });
@@ -2583,9 +2588,69 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
         handoffId,
       }));
       expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(String(refusal.message)).toContain("completion policy pinned");
       expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(before);
     } finally {
       setCompleteWitnessGapForTest(undefined);
+    }
+  });
+
+  test("report-only completion refuses a delivery route changed after its preflight", async () => {
+    const fixture = await lifecycleFixture("complete-report-only-route", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-route");
+    const before = planStateFootprint(fixture.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+        const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
+        snapshot.delivery_kind = "development";
+        snapshot.branch = { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
+        delete snapshot.completion_policy;
+        delete snapshot.delivery;
+        db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() => planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-route", {
+        kind: "complete",
+        handoffId,
+      }));
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(before);
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  });
+
+  test("a completed report-only reconcile revalidates the pinned QC/QA digests inside its transaction", async () => {
+    const fixture = await lifecycleFixture("reconcile-report-only-digests", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-digests");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-digests", {
+      kind: "complete",
+      handoffId,
+    });
+    const completedAt = done.data.coordination!.handoff!.completed_at;
+    const state = planStateFootprint(fixture.context, OWN_PLAN);
+    const footprint = planFootprint(fixture.context, OWN_PLAN);
+    // The report is rewritten AFTER the replay's own preflight read, so only the
+    // transaction's re-read of the pinned digests can see it: the plan token and
+    // the workflow header are both unchanged in this window.
+    setReconcileWitnessGapForTest(() => {
+      writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# rewritten after the replay preflight\n");
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only-digests", {
+          kind: "reconcile",
+          handoffId,
+        }, await planTokenOf(fixture, OWN_PLAN)),
+      );
+      expect(refusal.code).toBe("coordination.evidence-stale");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(state);
+      expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(footprint);
+      expect(parsedJson(state.plan_coordination).handoff).toMatchObject({ state: "completed", completed_at: completedAt });
+    } finally {
+      setReconcileWitnessGapForTest(undefined);
     }
   });
 
