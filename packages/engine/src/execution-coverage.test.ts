@@ -133,40 +133,40 @@ function notesDoc(wf: string): Doc {
   return doc("control", `workflows/${wf}/notes.jsonl`, `${lines.join("\n")}\n`);
 }
 
-/** The released durable workflow-event rows and the index lines that dedup them. */
-function agentFlowDocs(wf: string): Doc[] {
+/** One durable ledger line: the released kind fields plus the source tuple whose id it derives. */
+function durableLine(wf: string, kind: string, seq: number, extra: Record<string, unknown> = {}): string {
   const sessionId = `sess-${wf}`;
   const stream = wf === WORKFLOW_A ? STREAM_A : STREAM_B;
-  // The released durable row: the event kind plus the source tuple whose
-  // recomputation the ledger's identity is (F2 `workflowEventId`).
-  const tailLine = JSON.stringify({
+  const base: Record<string, unknown> = {
     v: 1,
-    ts: 1,
-    kind: "workflow-run",
+    ts: seq,
+    kind,
     runId: `run-${wf}`,
-    name: `run of ${wf}`,
-    eventId: `wfe1:workflow-run:${sessionId}:${stream}:1`,
-    source: { sessionId, streamId: stream, seq: 1 },
-  });
-  const chunkLine = JSON.stringify({
-    v: 1,
-    ts: 2,
-    kind: "workflow-agent",
-    runId: `run-${wf}`,
-    seq: 1,
-    label: "member",
-    childId: `child-${wf}`,
-    eventId: `wfe1:workflow-agent:${sessionId}:${stream}:2`,
-    source: { sessionId, streamId: stream, seq: 2 },
-  });
+    ...(kind === "workflow-run" ? { name: `run of ${wf}` } : {}),
+    ...(kind === "workflow-agent" ? { seq: 1, label: "member", childId: `child-${wf}` } : {}),
+    eventId: `wfe1:${kind}:${sessionId}:${stream}:${seq}`,
+    source: { sessionId, streamId: stream, seq },
+  };
+  return JSON.stringify({ ...base, ...extra });
+}
+
+/**
+ * The released durable workflow rows and the index lines that dedup them. The
+ * tail also keeps one LEGACY durable row — written before identities existed,
+ * carrying neither `eventId` nor `source` — which is accepted and never indexed.
+ */
+function agentFlowDocs(wf: string): Doc[] {
+  const legacyLine = JSON.stringify({ v: 1, ts: 0, kind: "workflow-run", runId: `legacy-${wf}`, name: `legacy run of ${wf}` });
+  const tailLine = durableLine(wf, "workflow-run", 1);
+  const chunkLine = durableLine(wf, "workflow-agent", 2);
   return [
-    doc("control", `workflows/${wf}/agent-flow.jsonl`, `${tailLine}\n`),
+    doc("control", `workflows/${wf}/agent-flow.jsonl`, `${legacyLine}\n${tailLine}\n`),
     doc(
       "control",
       `workflows/${wf}/agent-flow-ids.jsonl`,
       `${[
-        JSON.stringify({ id: `wfe1:workflow-run:${sessionId}:${stream}:1`, d: sha(tailLine).slice(0, 32) }),
-        JSON.stringify({ id: `wfe1:workflow-agent:${sessionId}:${stream}:2`, d: sha(chunkLine).slice(0, 32) }),
+        JSON.stringify({ id: JSON.parse(tailLine).eventId as string, d: sha(tailLine).slice(0, 32) }),
+        JSON.stringify({ id: JSON.parse(chunkLine).eventId as string, d: sha(chunkLine).slice(0, 32) }),
       ].join("\n")}\n`,
     ),
     doc("control", `workflows/${wf}/agent-flow-history/chunk-000001.jsonl`, `${chunkLine}\n`),
@@ -582,6 +582,13 @@ describe("execution-coverage", () => {
     expect(fixture.manifest.surfaces.length).toBe(25);
     expect(new Set(fixture.manifest.surfaces.map((row) => row.surface)).size).toBe(18);
     expect(fixture.coverage.receipts.length).toBe(25);
+    // The fixture's agent-flow tail also holds a legacy durable row (no eventId,
+    // no source): it is accepted, never indexed and never re-identified.
+    const tailText = new TextDecoder().decode(fixture.evidence.get(coverageWitnessKey("control", `workflows/${WORKFLOW_A}/agent-flow.jsonl`)));
+    expect(tailText.split("\n").filter((line) => line.trim() !== "").length).toBe(2);
+    const legacyTail = JSON.parse(tailText.split("\n")[0]) as Record<string, unknown>;
+    expect(legacyTail.eventId).toBeUndefined();
+    expect(legacyTail.source).toBeUndefined();
     validate(fixture);
   });
 
@@ -671,14 +678,38 @@ describe("execution-coverage", () => {
 
     // The durable source tuple changed while the carried id stayed put.
     const tupleDrift = materialize(buildRows());
-    const drifted = JSON.parse(tail.text.trim()) as Record<string, unknown>;
-    const driftedSource = drifted.source as Record<string, unknown>;
     replaceRowDocuments(tupleDrift, "workflow-agent-flow-ledger", WORKFLOW_A, [
-      doc("control", tail.path, `${JSON.stringify({ ...drifted, source: { ...driftedSource, seq: 3 } })}\n`),
+      doc("control", tail.path, `${durableLine(WORKFLOW_A, "workflow-run", 1, { source: { sessionId: SESSION_A, streamId: STREAM_A, seq: 3 } })}\n`),
       index,
       chunk,
     ]);
     refuseLeavingState(tupleDrift);
+
+    // Only one of the two identity fields: neither a legacy row nor an identified one.
+    const partialId = materialize(buildRows());
+    replaceRowDocuments(partialId, "workflow-agent-flow-ledger", WORKFLOW_A, [
+      doc("control", tail.path, `${durableLine(WORKFLOW_A, "workflow-run", 1, { source: undefined })}\n`),
+      index,
+      chunk,
+    ]);
+    refuseLeavingState(partialId);
+
+    const partialSource = materialize(buildRows());
+    replaceRowDocuments(partialSource, "workflow-agent-flow-ledger", WORKFLOW_A, [
+      doc("control", tail.path, `${durableLine(WORKFLOW_A, "workflow-run", 1, { eventId: undefined })}\n`),
+      index,
+      chunk,
+    ]);
+    refuseLeavingState(partialSource);
+
+    // F2's durable position bound: seq is an integer in [0, 2^31).
+    const beyondBound = materialize(buildRows());
+    replaceRowDocuments(beyondBound, "workflow-agent-flow-ledger", WORKFLOW_A, [
+      doc("control", tail.path, `${durableLine(WORKFLOW_A, "workflow-run", 2 ** 31)}\n`),
+      index,
+      chunk,
+    ]);
+    refuseLeavingState(beyondBound);
 
     // Companions of two workflow dirs are not one retained ledger.
     const foreignDir = materialize(buildRows());
