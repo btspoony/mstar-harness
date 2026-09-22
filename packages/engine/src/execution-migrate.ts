@@ -105,12 +105,16 @@
  * retry of the same pair returns the recorded receipt instead of a second
  * epoch bump.
  *
- * Three preconditions are the barrier rather than decoration:
+ * Two preconditions are the barrier rather than decoration:
  *
- * - **every deferred surface must be ABSENT.** Guides/deferred-2b.md
- *   "Complete coverage rule": 2a accepts a deferred surface only when the
- *   discovery proves it absent, so a real envelope-bearing workspace stays
- *   staged. There is no allow-incomplete flag, and none is accepted;
+ * - **the §4.1 coverage must be CLOSED and unchanged.** The barrier recomputes
+ *   every surface receipt from the named bytes, closes the set through C2's
+ *   validator (the per-row source assignment, the host/consumer discovery
+ *   proofs and the operator attestation's stopped/reloaded coverage) and
+ *   requires it to be BOTH the digest the operator approved and the set
+ *   recorded at staging. A populated surface is activated on VALIDATED
+ *   coverage instead of being blocked for being populated; there is no
+ *   allow-incomplete flag, and none is accepted;
  * - **the attestation must cover the frozen owner inventory.** The owners the
  *   import recorded (the session envelopes it witnessed) are exactly the
  *   sessions the attestation must name as stopped/reloaded — a missing one is
@@ -169,6 +173,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   renameSync,
   writeFileSync,
   type Dirent,
@@ -193,6 +198,7 @@ import {
   type WorkflowEntry,
 } from "./status.js";
 import {
+  isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   rowValidationRoute,
   validateWorkflowSnapshot,
@@ -217,19 +223,114 @@ import {
   withExecutionTransaction,
   type ExecutionTransaction,
 } from "./execution-store.js";
+// §4.1 the pure coverage substrate (C2). C3 owns every byte of IO around it —
+// safe reads, symlink/canonical-root checks, fresh bytes — and hands the
+// bytes in; the validator recomputes every fact from those bytes.
+import {
+  EXECUTION_COVERAGE_SURFACES,
+  buildExecutionCoverageReceipt,
+  coverageWitnessKey,
+  executionCoverageDigest,
+  executionCoverageSurfaceScope,
+  validateExecutionCoverage,
+  type ConsumerDiscoveryProof,
+  type CoverageWitness,
+  type ExecutionCoverageEvidence,
+  type ExecutionCoverageManifest,
+  type ExecutionCoverageSet,
+  type ExecutionSurface,
+} from "./execution-coverage.js";
 
-/** Transport version of the execution migration manifest (§6). */
-export const EXECUTION_MIGRATION_MANIFEST_VERSION = 1;
+/** Transport version of the execution migration manifest (§6/§4.1): v2 adds the coverage discovery. */
+export const EXECUTION_MIGRATION_MANIFEST_VERSION = 2;
 
-/** §6: the operator's input to preview and apply. */
-export type ExecutionMigrationInput = { context: StoreContext; operationId: string; operator: string };
+/**
+ * The historical §6 manifest generation. A v1 document stays READABLE for
+ * diagnostics, but it carries no surface discovery and therefore no coverage,
+ * so it is never mutated in place: a staged v1 manifest is aborted and
+ * re-previewed under a fresh v2 manifest (§4.1).
+ */
+export const EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION = 1;
+
+/** The explicit operator inventory generation C3 discovers the non-control roots from (§4.2). */
+export const EXECUTION_MIGRATION_INVENTORY_VERSION = 2;
+
+/**
+ * §6/§4.2: the operator's input to preview, apply and coverage collection. The
+ * inventory path is explicit because C3 discovers host/package/injector roots
+ * ONLY from the named file — it never scans a user home or a credentials store,
+ * and it never guesses a package root from the control root's layout.
+ */
+export type ExecutionMigrationInput = {
+  context: StoreContext;
+  operationId: string;
+  operator: string;
+  inventoryPath: string;
+};
 
 /** §6: one source byte witness the manifest is reviewed against. */
 export type ExecutionSourceWitness = {
   path: string;
   sha256: string;
-  kind: "root" | "workflow" | "session-envelope" | "deferred";
+  kind: "root" | "workflow" | "session-envelope" | "deferred" | "inventory" | "host-envelope" | "evidence";
 };
+
+/**
+ * §4.1 the C3-owned host-session discovery proof for `omp-hidden-entries`: the
+ * explicit inventory's sessions plus the operator attestation C3 pinned. C2
+ * only compares the row's assigned envelopes with this trusted proof.
+ */
+export type HostDiscoveryProof = NonNullable<ExecutionCoverageManifest["surfaces"][number]["hostProof"]>;
+
+/**
+ * §4.1 one discovered surface identity. `sources` is the exact canonical
+ * `(root, path, sha256)` witness set C3's canonical discovery assigned to this
+ * `(surface, workflowId)`; `evidence` names the row's evidence documents (a
+ * consumer manifest, an injector inventory, a recovery inventory, the operator
+ * attestation) and is part of the same frozen manifest hash. A row's sources
+ * are never selected by a receipt or by a guessed path convention.
+ */
+export type ExecutionManifestSurface = Readonly<{
+  surface: ExecutionSurface;
+  workflowId: string | null;
+  sources: readonly CoverageWitness[];
+  evidence: readonly CoverageWitness[];
+  consumerProof?: ConsumerDiscoveryProof;
+  hostProof?: HostDiscoveryProof;
+}>;
+
+/** §4.2 the canonical configured roots every witness path is relative to. */
+export type ExecutionMigrationRoots = Readonly<{
+  control: string;
+  sdd: string;
+  host: string;
+  package: string;
+}>;
+
+/** §4.2 one explicit host-session evidence pointer: one export per declared `(host, sessionId)`. */
+export type ExecutionMigrationHostSession = Readonly<{
+  workflowId: string;
+  host: "omp";
+  sessionId: string;
+  envelope: string;
+  attestation: string;
+}>;
+
+/**
+ * §4.2 the explicit operator inventory: the configured non-control roots, the
+ * per-workflow native-session evidence and the explicit package/injector/recovery
+ * inputs. Every path is absolute and every fact is an input, never inferred.
+ */
+export type ExecutionMigrationInventory = Readonly<{
+  version: typeof EXECUTION_MIGRATION_INVENTORY_VERSION;
+  roots: Readonly<{ sdd: string; host: string; package: string }>;
+  hostSessions: readonly ExecutionMigrationHostSession[];
+  sddEvidence: readonly Readonly<{ workflowId: string; path: string }>[];
+  consumers: readonly Readonly<{ surface: ExecutionSurface; path: string }>[];
+  injectors: readonly string[];
+  injectorInventory: string | null;
+  backup: Readonly<{ image: string; inventory: string }> | null;
+}>;
 
 /**
  * §6: one deferred (2b) surface. `paths` are the paths DISCOVERED for the
@@ -244,18 +345,26 @@ export type ExecutionDeferredSurface = {
 };
 
 /**
- * §6: the reviewable manifest. `id` is content-derived (the digest of every
- * field above it), so re-previewing an unchanged workspace yields the same
- * manifest, the same id and the same hash.
+ * §4.1/§6: the reviewable version-2 manifest. `id` is content-derived (the
+ * digest of every field above it), so re-previewing an unchanged workspace
+ * yields the same manifest, the same id and the same hash.
+ *
+ * Version 2 adds the canonical configured roots and the exact discovered
+ * surface identities with their per-row source assignment, their evidence
+ * documents and C3's own consumer/host discovery proofs. The full manifest
+ * hash therefore covers DISCOVERY, not receipts, which avoids a circular
+ * digest: a receipt binds this frozen document afterwards.
  */
 export type ExecutionManifest = {
-  version: 1;
+  version: 2;
   id: string;
   storeId: string;
   epoch: number;
   schemaVersion: number;
   /** The canonical control harness root this manifest was reviewed against. */
   root: string;
+  /** The canonical configured roots every surface witness path is relative to. */
+  roots: ExecutionMigrationRoots;
   sources: ExecutionSourceWitness[];
   /** Digest of the core content the import writes: root bytes, snapshot bytes, sealed inputs. */
   coreHash: string;
@@ -267,7 +376,32 @@ export type ExecutionManifest = {
    * explicit "no pending catalog operation was outstanding" witness.
    */
   pendingCatalogOperations: string[];
+  /** The exact discovered surface identities, in canonical surface/workflow order. */
+  surfaces: ExecutionManifestSurface[];
 };
+
+/**
+ * The historical version-1 manifest. It is read for diagnostics — the recorded
+ * phase, identity and hashes stay authoritative for retirement of an already
+ * activated v1 manifest — but it carries no surface discovery, so it is never
+ * mutated in place and never activates a fresh coverage claim.
+ */
+type ExecutionManifestV1 = {
+  version: typeof EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION;
+  id: string;
+  storeId: string;
+  epoch: number;
+  schemaVersion: number;
+  root: string;
+  sources: ExecutionSourceWitness[];
+  coreHash: string;
+  deferred: ExecutionDeferredSurface[];
+  catalogRevision: number;
+  pendingCatalogOperations: string[];
+};
+
+/** Either recorded manifest generation. */
+export type ExecutionManifestDocument = ExecutionManifest | ExecutionManifestV1;
 
 /** §6: one reviewed manifest's recorded phase. */
 export type ExecutionMigrationReceipt = {
@@ -277,26 +411,36 @@ export type ExecutionMigrationReceipt = {
 };
 
 /**
- * §6: the apply request — the reviewed manifest, its hash and a verified
- * recovery point, in exactly the §6 shape. `applyExecutionMigration` declares
- * that intersection literally; this alias exists so callers can name it.
+ * §6 item 2: the apply request — the reviewed manifest, its hash, a verified
+ * recovery point and the validated coverage set of that exact document, in the
+ * §6/§4.2 shape. `applyExecutionMigration` declares that intersection
+ * literally; this alias exists so callers can name it.
  */
 export type ExecutionMigrationApplyInput = ExecutionMigrationInput & {
   manifest: ExecutionManifest;
   manifestHash: string;
   backup: BackupReceipt;
+  coverage: ExecutionCoverageSet;
 };
 
 /**
  * §6 item 3: the activation request — the recorded manifest's identity (never
  * its document: the barrier re-reads the staged record and hashes it itself),
- * the epoch the reviewer observed, and the operator attestation.
+ * the epoch the reviewer observed, the operator attestation and the digest of
+ * the coverage that was validated for that manifest.
  */
 export type ExecutionMigrationActivationInput = ExecutionMigrationInput & {
   manifestId: string;
   manifestHash: string;
   expectedEpoch: number;
   attestation: ActivationAttestation;
+  coverageDigest: string;
+};
+
+/** §4.2 `collectExecutionCoverage`: the frozen manifest plus its explicit inventory. */
+export type ExecutionMigrationCoverageInput = ExecutionMigrationInput & {
+  manifest: ExecutionManifest;
+  inventoryPath: string;
 };
 
 /** §6 item 4: the retirement request — which recorded manifest's core sources move. */
@@ -350,7 +494,7 @@ function sameBytesDigest(a: string, b: string): boolean {
  * either and the live world, always refuses; neither side is re-derived from
  * the other.
  */
-export function executionManifestHash(manifest: ExecutionManifest): string {
+export function executionManifestHash(manifest: ExecutionManifestDocument): string {
   return digestOf(manifest);
 }
 
@@ -364,6 +508,14 @@ function resolveMigrationInput(input: ExecutionMigrationInput | undefined, verb:
     );
   }
   assertOperationId(input.operationId);
+  if (!isNonEmptyString(input.inventoryPath) || input.inventoryPath.trim() === "") {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `${verb} requires the explicit inventory path (a nonblank string): the host/package/injector roots and the per-workflow ` +
+        `native-session evidence are named by that document, and the migration never scans a home directory or a credentials store ` +
+        `for them.`,
+    );
+  }
   if (!isNonEmptyString(input.operator) || input.operator.trim() === "") {
     throw new ExecutionError(
       "execution.scope-mismatch",
@@ -431,16 +583,36 @@ function legacyBinding(value: unknown): LegacyBinding | null {
 
 const SESSION_DIR = "sessions";
 const LEGACY_WRITE_LOCK_DIR = ".status-write.lockdir";
-const WORKFLOW_DEFERRED_FILES: ReadonlyArray<{ surface: string; file: string }> = [
-  { surface: "workflow-notes-ledger", file: "notes.jsonl" },
-  { surface: "workflow-agent-flow-ledger", file: "agent-flow.jsonl" },
-  { surface: "workflow-ledger-cursors", file: "workflow-ledger-cursors.json" },
-  { surface: "workflow-omp-launch-journal", file: "omp-launches.json" },
-];
-const SESSION_SURFACE = "workflow-session-envelopes";
+/** §4.1 workflow surface slugs this module discovers beyond the core authority. */
+const SESSION_SURFACE: ExecutionSurface = "workflow-session-envelopes";
+const AGENT_FLOW_SURFACE: ExecutionSurface = "workflow-agent-flow-ledger";
+const NOTES_SURFACE: ExecutionSurface = "workflow-notes-ledger";
+const CURSOR_SURFACE: ExecutionSurface = "workflow-ledger-cursors";
+const LAUNCH_SURFACE: ExecutionSurface = "workflow-omp-launch-journal";
 const LEGACY_LOCK_SURFACE = "legacy-write-lock";
-const ENGINE_STATUS_SURFACE = "engine-status-snapshot";
+const ENGINE_STATUS_SURFACE: ExecutionSurface = "engine-status-snapshot";
 const ENGINE_STATUS_FILE = "snapshots/engine-status.json";
+/**
+ * §5: the transient ledger compaction journal. A present one means an UNFINISHED
+ * before/after tail transaction, so discovery refuses it BEFORE any receipt is
+ * built or any row is staged — it is never an ignorable sidecar and never a
+ * nineteenth surface.
+ */
+const AGENT_FLOW_COMPACTION_FILE = "agent-flow-compaction.json";
+const AGENT_FLOW_TAIL_FILE = "agent-flow.jsonl";
+const AGENT_FLOW_INDEX_FILE = "agent-flow-ids.jsonl";
+const AGENT_FLOW_HISTORY_DIR = "agent-flow-history";
+const AGENT_FLOW_CHUNK = /^chunk-\d{6}\.jsonl$/;
+/** §4.1 the retained files each workflow surface owns, beyond its session envelopes. */
+const WORKFLOW_SURFACE_FILES: ReadonlyArray<{ surface: ExecutionSurface; file: string }> = [
+  { surface: NOTES_SURFACE, file: "notes.jsonl" },
+  { surface: AGENT_FLOW_SURFACE, file: AGENT_FLOW_TAIL_FILE },
+  { surface: CURSOR_SURFACE, file: "workflow-ledger-cursors.json" },
+  { surface: LAUNCH_SURFACE, file: "omp-launches.json" },
+];
+const WORKFLOW_LAYOUT_DEFAULT = "workflows";
+/** §4.1 the configured-root order every witness list sorts by. */
+const ROOT_ORDER: readonly CoverageWitness["root"][] = ["control", "sdd", "host", "package"];
 
 /** One discovered plan row, with the ownership the legacy row records. */
 type DiscoveredPlan = {
@@ -454,7 +626,14 @@ type DiscoveredPlan = {
 };
 
 type DiscoveredWorkflow = {
-  entry: WorkflowEntry;
+  /** The root-register entry of a REGISTERED lifecycle; `null` for terminal history. */
+  entry: WorkflowEntry | null;
+  /**
+   * §2.2 registry membership is what selects an ACTIVE lifecycle. A terminal
+   * (unregistered) workflow dir is imported into the workflow/plan tables as
+   * history and never becomes root-registry membership.
+   */
+  registered: boolean;
   workflowId: string;
   dir: string;
   snapshotPath: string;
@@ -462,12 +641,23 @@ type DiscoveredWorkflow = {
   snapshot: WorkflowSnapshot;
   coordinator: LegacyBinding | null;
   plans: DiscoveredPlan[];
+  /** Every session envelope file the workflow's own `sessions/` dir holds. */
+  envelopes: string[];
+  /** The subset of `envelopes` a recorded binding references. */
+  referencedEnvelopes: ReadonlySet<string>;
+  /** The retained files of every §4.1 workflow surface, by surface slug. */
+  surfaceFiles: ReadonlyMap<ExecutionSurface, readonly string[]>;
+  /** Legacy write-lock dirs the workflow dir holds. */
+  lockDirs: readonly string[];
 };
 
 type DiscoveredSources = {
   root: string;
+  roots: ExecutionMigrationRoots;
   rootPath: string;
   rootDoc: StatusV2Doc;
+  inventoryPath: string;
+  inventory: ExecutionMigrationInventory;
   workflows: DiscoveredWorkflow[];
   witnesses: ExecutionSourceWitness[];
   deferred: ExecutionDeferredSurface[];
@@ -479,6 +669,18 @@ type DiscoveredSources = {
    */
   owners: DiscoveredOwner[];
   coreHash: string;
+  /** §4.1 the exact discovered surface identities, in canonical surface/workflow order. */
+  surfaces: ExecutionManifestSurface[];
+  /** Every pinned witness key (`${root}:${path}`) → the file its bytes were read from. */
+  witnessPaths: ReadonlyMap<string, string>;
+  /** Link entries whose witness bytes are the link target, not a file's contents. */
+  linkBytes: ReadonlyMap<string, Uint8Array>;
+  /**
+   * §4.2 discovery evidence that proves an ABSENT row (an explicitly empty
+   * deployment inventory) and is therefore pinned without being assigned to any
+   * row's sources.
+   */
+  pinnedExtras: readonly CoverageWitness[];
 };
 
 /** One discovered session identity, in canonical (workflow, coordinator-then-plans) order. */
@@ -494,15 +696,223 @@ function deferredSurface(name: string, paths: readonly string[]): ExecutionDefer
   return { surface: name, paths: discovered, disposition: discovered.length > 0 ? "blocked" : "absent" };
 }
 
-/** A discovered file's byte witness; an unreadable discovered file blocks coverage rather than passing absent. */
-function witnessOf(path: string, kind: ExecutionSourceWitness["kind"]): ExecutionSourceWitness {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(path);
-  } catch (error) {
-    throw incomplete(`${path} exists but cannot be read (${(error as Error).message}), so deferred coverage cannot be claimed.`);
+/**
+ * §4.2 one real file as a surface witness: it must resolve inside a configured
+ * root (never through a prefix guess), its root-relative path must be canonical
+ * and traversal-free, and its bytes are read once here. A symlink is refused:
+ * a link can resolve somewhere the configured root does not own.
+ */
+function coverageWitnessOf(rootName: CoverageWitness["root"], rootDir: string, path: string, what: string): CoverageWitness {
+  const canonicalRoot = canonicalPath(rootDir);
+  const canonical = canonicalPath(path);
+  if (!isPathWithin(canonicalRoot, canonical) || canonical === canonicalRoot) {
+    throw conflict(
+      `${what} at ${path} does not resolve inside its configured root ${canonicalRoot}; a surface witness is never a path outside ` +
+        `the root it is configured under.`,
+    );
   }
-  return { path, sha256: sha256Of(bytes), kind };
+  const relativePath = relative(canonicalRoot, canonical)
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== "")
+    .join("/");
+  if (relativePath === "" || relativePath.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw conflict(`${what} at ${path} has no canonical root-relative path; nothing was staged.`);
+  }
+  const bytes = readSourceBytes(path, what, `${what} at ${path} is missing`);
+  return { root: rootName, path: relativePath, sha256: sha256Of(bytes) };
+}
+
+/** The accumulator of one discovery pass: byte witnesses plus the files they came from. */
+type DiscoveryLedger = {
+  witnesses: ExecutionSourceWitness[];
+  /** (`${root}:${path}`) → the file the witness bytes were read from. */
+  witnessPaths: Map<string, string>;
+  /** (`${root}:${path}`) → link-target bytes, for a witness that names a link entry. */
+  linkBytes: Map<string, Uint8Array>;
+};
+
+/** One discovered file, recorded once per witness key. */
+function recordWitness(
+  ledger: DiscoveryLedger,
+  rootName: CoverageWitness["root"],
+  rootDir: string,
+  path: string,
+  kind: ExecutionSourceWitness["kind"],
+): CoverageWitness {
+  const witness = coverageWitnessOf(rootName, rootDir, path, `the ${kind} source`);
+  const key = coverageWitnessKey(witness.root, witness.path);
+  const prior = ledger.witnessPaths.get(key);
+  if (prior === undefined) {
+    ledger.witnessPaths.set(key, path);
+    ledger.witnesses.push({ path, sha256: witness.sha256, kind });
+    return witness;
+  }
+  if (canonicalPath(prior) !== canonicalPath(path)) {
+    throw conflict(`two discovered files claim the witness ${key}; a witness path names ONE file under ONE configured root.`);
+  }
+  return witness;
+}
+
+function compareWitnesses(left: CoverageWitness, right: CoverageWitness): number {
+  const leftKey = coverageWitnessKey(left.root, left.path);
+  const rightKey = coverageWitnessKey(right.root, right.path);
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+/** A row's witness list, in the canonical (root, path) order C2 requires. */
+function canonicalWitnessList(witnesses: readonly CoverageWitness[], what: string): CoverageWitness[] {
+  const sorted = [...witnesses].sort(compareWitnesses);
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (compareWitnesses(sorted[index - 1], sorted[index]) === 0) {
+      throw conflict(`${what} lists the witness ${coverageWitnessKey(sorted[index].root, sorted[index].path)} twice; a duplicated assignment refuses.`);
+    }
+  }
+  return sorted;
+}
+
+/** The configured root one explicit inventory path belongs to. */
+function configuredRootOf(roots: ExecutionMigrationRoots, path: string, what: string): { root: CoverageWitness["root"]; dir: string } {
+  let best: { root: CoverageWitness["root"]; dir: string } | null = null;
+  for (const rootName of ROOT_ORDER) {
+    const dir = roots[rootName];
+    if (!isPathWithin(dir, path)) continue;
+    if (best !== null && canonicalPath(best.dir).length === canonicalPath(dir).length) {
+      throw conflict(
+        `${what} at ${path} lies under two equally specific configured roots (${best.root} and ${rootName}); a witness belongs to ` +
+          `exactly one root, and the roots are never overlapping aliases.`,
+      );
+    }
+    if (best === null || canonicalPath(dir).length > canonicalPath(best.dir).length) best = { root: rootName, dir };
+  }
+  if (best === null) {
+    throw conflict(
+      `${what} at ${path} lies under none of the configured roots (${ROOT_ORDER.map((name) => `${name}=${roots[name]}`).join(", ")}); ` +
+        `an inventory path is never accepted from outside the roots the manifest pins.`,
+    );
+  }
+  return best;
+}
+
+/**
+ * §4.2 the explicit operator inventory. It is a CLOSED canonical document: the
+ * configured non-control roots, the per-workflow native-session evidence and the
+ * explicit package/injector/recovery inputs. Nothing here is inferred, and an
+ * unknown key refuses instead of being ignored.
+ */
+function readInventoryFile(path: string): { inventory: ExecutionMigrationInventory; bytes: Buffer } {
+  const what = `the execution-migration inventory at ${path}`;
+  const bytes = readSourceBytes(path, what, `${what} is missing; the explicit inventory is the only source of the host/package/injector roots`);
+  let document: unknown;
+  try {
+    document = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw conflict(`${what} is not valid JSON (${(error as Error).message}).`);
+  }
+  if (!isPlainObject(document)) throw conflict(`${what} is not a JSON object.`);
+  const allowed = ["version", "roots", "hostSessions", "sddEvidence", "consumers", "injectors", "injectorInventory", "backup"];
+  const unknownKeys = Object.keys(document).filter((key) => !allowed.includes(key));
+  if (unknownKeys.length > 0) {
+    throw conflict(`${what} carries unknown field(s) ${unknownKeys.join(", ")}; the inventory is a closed schema, never an open-ended assertion.`);
+  }
+  for (const required of ["version", "roots", "hostSessions", "sddEvidence", "consumers", "injectors"] as const) {
+    if (!Object.prototype.hasOwnProperty.call(document, required)) {
+      throw conflict(`${what} is missing ${required}; every inventory field is explicit input, and none is defaulted.`);
+    }
+  }
+  if (document.version !== EXECUTION_MIGRATION_INVENTORY_VERSION) {
+    throw conflict(`${what}.version must be ${EXECUTION_MIGRATION_INVENTORY_VERSION}.`);
+  }
+  const requireAbsolute = (value: unknown, label: string): string => {
+    if (!isNonEmptyString(value) || !isAbsolute(value)) {
+      throw conflict(`${what}.${label} must be an absolute path; an inventory path is never resolved against a cwd.`);
+    }
+    return value;
+  };
+  const rootDoc = document.roots;
+  if (!isPlainObject(rootDoc)) throw conflict(`${what}.roots must be an object.`);
+  const rootKeys = Object.keys(rootDoc);
+  const missingRoots = ["sdd", "host", "package"].filter((key) => !rootKeys.includes(key));
+  const extraRoots = rootKeys.filter((key) => !["sdd", "host", "package"].includes(key));
+  if (missingRoots.length > 0 || extraRoots.length > 0) {
+    throw conflict(
+      `${what}.roots must carry exactly sdd, host and package` +
+        `${missingRoots.length > 0 ? `; it is missing ${missingRoots.join(", ")}` : ""}` +
+        `${extraRoots.length > 0 ? `; it carries unknown root(s) ${extraRoots.join(", ")}` : ""}; the control root is derived, never declared.`,
+    );
+  }
+  const roots = {
+    sdd: requireAbsolute(rootDoc.sdd, "roots.sdd"),
+    host: requireAbsolute(rootDoc.host, "roots.host"),
+    package: requireAbsolute(rootDoc.package, "roots.package"),
+  };
+  const asArray = (value: unknown, label: string): unknown[] => {
+    if (!Array.isArray(value)) throw conflict(`${what}.${label} must be an array.`);
+    return value;
+  };
+  const exact = (value: unknown, label: string, keys: readonly string[]): Record<string, unknown> => {
+    if (!isPlainObject(value)) throw conflict(`${what}.${label} must be an object.`);
+    const missing = keys.filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
+    const extra = Object.keys(value).filter((key) => !keys.includes(key));
+    if (missing.length > 0 || extra.length > 0) {
+      throw conflict(
+        `${what}.${label} must carry exactly ${keys.join(", ")}` +
+          `${missing.length > 0 ? `; it is missing ${missing.join(", ")}` : ""}` +
+          `${extra.length > 0 ? `; it carries unknown field(s) ${extra.join(", ")}` : ""}.`,
+      );
+    }
+    return value;
+  };
+  const hostSessions = asArray(document.hostSessions, "hostSessions").map((entry, index) => {
+    const label = `hostSessions[${index}]`;
+    const record = exact(entry, label, ["workflowId", "host", "sessionId", "envelope", "attestation"]);
+    if (record.host !== "omp") throw conflict(`${what}.${label}.host must be omp; this producer inventory covers the omp host session evidence.`);
+    if (!isNonEmptyString(record.workflowId)) throw conflict(`${what}.${label}.workflowId must be a nonblank workflow id.`);
+    if (!isNonEmptyString(record.sessionId)) throw conflict(`${what}.${label}.sessionId must be a nonblank native session id.`);
+    return {
+      workflowId: record.workflowId,
+      host: "omp" as const,
+      sessionId: record.sessionId,
+      envelope: requireAbsolute(record.envelope, `${label}.envelope`),
+      attestation: requireAbsolute(record.attestation, `${label}.attestation`),
+    };
+  });
+  const sddEvidence = asArray(document.sddEvidence, "sddEvidence").map((entry, index) => {
+    const label = `sddEvidence[${index}]`;
+    const record = exact(entry, label, ["workflowId", "path"]);
+    if (!isNonEmptyString(record.workflowId)) throw conflict(`${what}.${label}.workflowId must be a nonblank workflow id.`);
+    return { workflowId: record.workflowId, path: requireAbsolute(record.path, `${label}.path`) };
+  });
+  const consumers = asArray(document.consumers, "consumers").map((entry, index) => {
+    const label = `consumers[${index}]`;
+    const record = exact(entry, label, ["surface", "path"]);
+    if (typeof record.surface !== "string" || !(EXECUTION_COVERAGE_SURFACES as readonly string[]).includes(record.surface)) {
+      throw conflict(`${what}.${label}.surface must be one of the 18 closed execution surfaces; an unknown surface is not coverage.`);
+    }
+    return { surface: record.surface as ExecutionSurface, path: requireAbsolute(record.path, `${label}.path`) };
+  });
+  const injectors = asArray(document.injectors, "injectors").map((entry, index) => requireAbsolute(entry, `injectors[${index}]`));
+  let injectorInventory: string | null = null;
+  if (document.injectorInventory !== null && document.injectorInventory !== undefined) {
+    injectorInventory = requireAbsolute(document.injectorInventory, "injectorInventory");
+  }
+  let backup: { image: string; inventory: string } | null = null;
+  if (document.backup !== null && document.backup !== undefined) {
+    const record = exact(document.backup, "backup", ["image", "inventory"]);
+    backup = { image: requireAbsolute(record.image, "backup.image"), inventory: requireAbsolute(record.inventory, "backup.inventory") };
+  }
+  return {
+    bytes,
+    inventory: {
+      version: EXECUTION_MIGRATION_INVENTORY_VERSION,
+      roots,
+      hostSessions,
+      sddEvidence,
+      consumers,
+      injectors,
+      injectorInventory,
+      backup,
+    },
+  };
 }
 
 /**
@@ -591,22 +1001,26 @@ function readSessionSource(
 }
 
 /**
- * The deferred-surface inventory of one registered workflow dir. Every entry is
- * classified: the core snapshot, the sessions dir, a named deferred surface, or
- * a held/leaked legacy write lockdir. An unclassified entry is
+ * The §4.1 surface inventory of one workflow dir. Every entry is classified:
+ * the core snapshot, the sessions dir, a named retained file, the agent-flow
+ * companions, or a held/leaked legacy write lockdir. An unclassified entry is
  * `execution.coverage-incomplete` — the inventory never skips what it cannot
- * name.
+ * name — and a present compaction journal refuses outright (§5).
  */
-function scanWorkflowDir(
-  dir: string,
-  workflowId: string,
-  referencedEnvelopes: ReadonlySet<string>,
-): { deferred: ExecutionDeferredSurface[]; witnesses: ExecutionSourceWitness[] } {
+function scanWorkflowDir(dir: string, workflowId: string): {
+  envelopes: string[];
+  surfaceFiles: Map<ExecutionSurface, string[]>;
+  lockDirs: string[];
+  deferred: ExecutionDeferredSurface[];
+} {
   const sessions: string[] = [];
   const lockPaths: string[] = [];
-  const files = new Map<string, string[]>();
-  const witnesses: ExecutionSourceWitness[] = [];
-
+  const files = new Map<ExecutionSurface, string[]>();
+  const push = (surface: ExecutionSurface, path: string): void => {
+    const list = files.get(surface);
+    if (list === undefined) files.set(surface, [path]);
+    else list.push(path);
+  };
   for (const entry of directoryEntries(dir, `the workflow dir of ${workflowId}`)) {
     if (entry.name === WORKFLOW_SNAPSHOT_FILE) continue;
     if (entry.name === SESSION_DIR) {
@@ -617,12 +1031,10 @@ function scanWorkflowDir(
         if (!nested.isFile()) {
           throw incomplete(
             `workflows/${workflowId}/${SESSION_DIR}/${nested.name} is neither a regular file nor a directory entry this ` +
-              `inventory classifies (a symlink or a nested directory), so deferred coverage cannot be claimed.`,
+              `inventory classifies (a symlink or a nested directory), so coverage cannot be claimed.`,
           );
         }
-        const nestedPath = join(dir, SESSION_DIR, nested.name);
-        sessions.push(nestedPath);
-        if (!referencedEnvelopes.has(nestedPath)) witnesses.push(witnessOf(nestedPath, "deferred"));
+        sessions.push(join(dir, SESSION_DIR, nested.name));
       }
       continue;
     }
@@ -630,36 +1042,502 @@ function scanWorkflowDir(
       lockPaths.push(join(dir, entry.name));
       continue;
     }
-    const known = WORKFLOW_DEFERRED_FILES.find((candidate) => candidate.file === entry.name);
+    if (entry.name === AGENT_FLOW_COMPACTION_FILE) {
+      throw conflict(
+        `workflows/${workflowId}/${AGENT_FLOW_COMPACTION_FILE} is present: this workflow's agent-flow ledger holds an ` +
+          `UNFINISHED compaction transaction. The journal pins the exact before/after tail bytes and the removed archive ` +
+          `range (\u00a75), so it is not an ignorable sidecar: until that transaction is resolved the retained ledger is in ` +
+          `flight. Nothing was staged, and no coverage receipt was built.`,
+      );
+    }
+    if (entry.name === AGENT_FLOW_HISTORY_DIR) {
+      if (!entry.isDirectory()) {
+        throw incomplete(`workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR} is not a directory, so the sealed history chunks cannot be classified.`);
+      }
+      for (const nested of directoryEntries(join(dir, AGENT_FLOW_HISTORY_DIR), `the agent-flow history dir of ${workflowId}`)) {
+        if (!nested.isFile() || !AGENT_FLOW_CHUNK.test(nested.name)) {
+          throw incomplete(
+            `workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR}/${nested.name} is not a sealed history chunk ` +
+              `(chunk-NNNNNN.jsonl); an unknown companion of the retained ledger blocks coverage.`,
+          );
+        }
+        push(AGENT_FLOW_SURFACE, join(dir, AGENT_FLOW_HISTORY_DIR, nested.name));
+      }
+      continue;
+    }
+    if (entry.name === AGENT_FLOW_INDEX_FILE) {
+      push(AGENT_FLOW_SURFACE, join(dir, entry.name));
+      continue;
+    }
+    const known = WORKFLOW_SURFACE_FILES.find((candidate) => candidate.file === entry.name);
     if (known === undefined) {
       throw incomplete(
         `workflows/${workflowId}/${entry.name} is not a source this inventory classifies. Every entry of a registered ` +
-          `workflow dir must be the core snapshot or a named deferred surface; an unclassified entry blocks coverage ` +
+          `workflow dir must be the core snapshot or a named \u00a74.1 surface; an unclassified entry blocks coverage ` +
           `rather than being skipped.`,
       );
     }
-    const surfacePath = join(dir, entry.name);
-    files.set(known.surface, [surfacePath]);
-    // A directory or symlink where a ledger file belongs still occupies the
-    // surface; it is reported blocked rather than treated as absent, and only a
-    // real file is hashed as a witness.
-    if (entry.isFile()) witnesses.push(witnessOf(surfacePath, "deferred"));
+    push(known.surface, join(dir, known.file));
+  }
+  const deferred: ExecutionDeferredSurface[] = [deferredSurface(SESSION_SURFACE, sessions)];
+  for (const known of WORKFLOW_SURFACE_FILES) deferred.push(deferredSurface(known.surface, files.get(known.surface) ?? []));
+  deferred.push(deferredSurface(LEGACY_LOCK_SURFACE, lockPaths));
+  return { envelopes: sessions, surfaceFiles: files, lockDirs: lockPaths, deferred };
+}
+
+/** One workflow dir read as a lifecycle: the core snapshot, its ownership, its envelopes and its retained surfaces. */
+function readDiscoveredWorkflow(input: {
+  ledger: DiscoveryLedger;
+  roots: ExecutionMigrationRoots;
+  root: string;
+  entry: WorkflowEntry | null;
+  registered: boolean;
+  workflowId: string;
+  dir: string;
+  owners: DiscoveredOwner[];
+  deferred: ExecutionDeferredSurface[];
+  seenDirs: Map<string, string>;
+}): DiscoveredWorkflow {
+  const { ledger, roots, root, entry, registered, workflowId, dir, owners, deferred, seenDirs } = input;
+  const priorHolder = seenDirs.get(dir);
+  if (priorHolder !== undefined) {
+    throw conflict(
+      `workflows ${priorHolder} and ${workflowId} share the workflow dir ${dir}. Two lifecycles cannot share one snapshot ` +
+        `home, and one lock cannot serialize both; nothing was staged.`,
+    );
+  }
+  seenDirs.set(dir, workflowId);
+  let dirInfo: Stats;
+  try {
+    dirInfo = lstatSync(dir);
+  } catch {
+    throw conflict(`workflow ${workflowId} records dir ${dir}, which does not exist.`);
+  }
+  if (dirInfo.isSymbolicLink() || !dirInfo.isDirectory()) {
+    throw conflict(`workflow ${workflowId}'s dir ${dir} is not a real directory under the control root.`);
   }
 
-  // Fixed surface order, one entry per known surface, so the same workspace
-  // always reads back the same inventory.
-  const deferred: ExecutionDeferredSurface[] = [deferredSurface(SESSION_SURFACE, sessions)];
-  for (const known of WORKFLOW_DEFERRED_FILES) deferred.push(deferredSurface(known.surface, files.get(known.surface) ?? []));
-  deferred.push(deferredSurface(LEGACY_LOCK_SURFACE, lockPaths));
-  return { deferred, witnesses };
+  const snapshotSource = readSnapshotSource(dir, workflowId);
+  const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
+  if (snapshotWitness.sha256 !== snapshotSource.sha256) {
+    throw conflict(`the snapshot of workflow ${workflowId} changed while it was read; nothing was staged.`);
+  }
+
+  const coordinator = legacyBinding(snapshotSource.snapshot.coordination?.coordinator);
+  if (snapshotSource.snapshot.coordination !== undefined && coordinator === null) {
+    throw conflict(`workflow ${workflowId} carries a coordinator block that is not a complete session binding.`);
+  }
+  const referenced: string[] = [];
+  if (coordinator !== null) {
+    const envelope = readSessionSource(
+      coordinator,
+      { workflowId, role: "coordinator", planId: null, dir, root },
+      `workflow ${workflowId}'s coordinator binding`,
+    );
+    referenced.push(envelope.path);
+    owners.push({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
+  }
+
+  const plans: DiscoveredPlan[] = [];
+  const seenPlans = new Set<string>();
+  const scope = { workflowId, dir, root };
+  for (const row of snapshotSource.snapshot.plans) {
+    const planRow = row as Record<string, unknown>;
+    const planId = rowPlanId(row);
+    if (!isNonEmptyString(planId)) throw conflict(`workflow ${workflowId} lists a plan row with no canonical plan id.`);
+    if (seenPlans.has(planId)) throw conflict(`workflow ${workflowId} lists plan ${planId} twice \u2014 a plan row is one identity.`);
+    seenPlans.add(planId);
+    const block = isPlainObject(planRow.coordination) ? planRow.coordination : undefined;
+    const session = block === undefined ? null : legacyBinding(block.session);
+    if (block !== undefined && block.session !== undefined && session === null) {
+      throw conflict(`plan ${planId} of workflow ${workflowId} carries a session binding that is not complete.`);
+    }
+    if (session !== null) {
+      const envelope = readSessionSource(session, { ...scope, role: "plan-pm", planId }, `plan ${planId}`);
+      referenced.push(envelope.path);
+      owners.push({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
+    }
+    const leaseValue = planRow.execution_lease;
+    if (leaseValue !== undefined) {
+      const leaseGate = validateExecutionLease(leaseValue);
+      if (!leaseGate.ok) {
+        throw conflict(
+          `plan ${planId} of workflow ${workflowId} holds an execution lease that does not validate ` +
+            `(${leaseGate.violations.map((violation) => `${violation.code}: ${violation.message}`).join("; ")}).`,
+        );
+      }
+    }
+    plans.push({
+      planId,
+      row: planRow,
+      pin: suppliedCatalogPin(planRow, workflowId, planId),
+      session,
+      lease: isPlainObject(leaseValue) ? leaseValue : null,
+    });
+  }
+
+  const scan = scanWorkflowDir(dir, workflowId);
+  // Every envelope file is a source of the workflow's session surface, whether a
+  // recorded binding references it or not: an unreferenced envelope is
+  // historical evidence this surface owns, never an unclassified stranger.
+  for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
+  deferred.push(...scan.deferred);
+
+  return {
+    entry,
+    registered,
+    workflowId,
+    dir,
+    snapshotPath: snapshotSource.path,
+    snapshotSha: snapshotSource.sha256,
+    snapshot: snapshotSource.snapshot,
+    coordinator,
+    plans,
+    envelopes: scan.envelopes,
+    referencedEnvelopes: new Set(referenced),
+    surfaceFiles: scan.surfaceFiles,
+    lockDirs: scan.lockDirs,
+  };
+}
+
+/** One R1 consumer declaration, read ONLY for the roots and copies C3 must verify. */
+type ConsumerDeclaration = Readonly<{
+  id: string;
+  sourceTrees: readonly string[];
+  generatedTrees: readonly string[];
+  declaredFiles: readonly Readonly<{ path: string; sha256: string }>[];
+  copies: readonly Readonly<{ sourceRoot: string; targetRoot: string; mode: "copy" | "merge" }>[];
+}>;
+
+function readConsumerDeclaration(path: string, what: string): ConsumerDeclaration {
+  const bytes = readSourceBytes(path, what, `${what} is missing`);
+  let document: unknown;
+  try {
+    document = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw conflict(`${what} is not valid JSON (${(error as Error).message}).`);
+  }
+  if (!isPlainObject(document)) throw conflict(`${what} is not a JSON object.`);
+  if (document.version !== 1 || document.protocol !== "consumer-v1") {
+    throw conflict(`${what} is not a version 1 consumer-v1 manifest; the consumer surfaces decode no other producer manifest.`);
+  }
+  const consumers = document.consumers;
+  if (!Array.isArray(consumers) || consumers.length !== 1) {
+    throw conflict(`${what} must carry exactly one consumer entry; the R1 producer writes one manifest per consumer.`);
+  }
+  const entry = consumers[0];
+  if (!isPlainObject(entry) || !isNonEmptyString(entry.id)) throw conflict(`${what}.consumers[0] must name its consumer id.`);
+  const readSet = (value: unknown, label: string): { trees: string[]; files: Array<{ path: string; sha256: string }> } => {
+    if (!isPlainObject(value)) throw conflict(`${what}.${label} must be an object.`);
+    if (!Array.isArray(value.trees)) throw conflict(`${what}.${label}.trees must be an array.`);
+    if (!Array.isArray(value.files)) throw conflict(`${what}.${label}.files must be an array.`);
+    return {
+      trees: value.trees.map((tree, index) => {
+        if (!isPlainObject(tree) || !isNonEmptyString(tree.root)) throw conflict(`${what}.${label}.trees[${index}].root must be a nonblank relative tree root.`);
+        return tree.root;
+      }),
+      files: value.files.map((file, index) => {
+        if (!isPlainObject(file) || !isNonEmptyString(file.path) || !isNonEmptyString(file.sha256)) {
+          throw conflict(`${what}.${label}.files[${index}] must carry a path and a sha256.`);
+        }
+        return { path: file.path, sha256: file.sha256 };
+      }),
+    };
+  };
+  const sources = readSet(entry.sources, "consumers[0].sources");
+  const generated = readSet(entry.generated, "consumers[0].generated");
+  if (!Array.isArray(entry.copiedInstructions)) throw conflict(`${what}.consumers[0].copiedInstructions must be an array.`);
+  const copies = entry.copiedInstructions.map((copy, index) => {
+    const label = `consumers[0].copiedInstructions[${index}]`;
+    if (!isPlainObject(copy) || !isNonEmptyString(copy.sourceRoot) || !isNonEmptyString(copy.targetRoot)) {
+      throw conflict(`${what}.${label} must name its sourceRoot and targetRoot.`);
+    }
+    if (copy.mode !== "copy" && copy.mode !== "merge") throw conflict(`${what}.${label}.mode must be copy or merge.`);
+    return { sourceRoot: copy.sourceRoot, targetRoot: copy.targetRoot, mode: copy.mode as "copy" | "merge" };
+  });
+  return { id: entry.id, sourceTrees: sources.trees, generatedTrees: generated.trees, declaredFiles: [...sources.files, ...generated.files], copies };
+}
+
+/** One real tree closure: every entry under `treeRoot`, with a link witness naming the link's target. */
+function walkTreeEntries(input: {
+  ledger: DiscoveryLedger;
+  rootName: CoverageWitness["root"];
+  rootDir: string;
+  treeRoot: string;
+  what: string;
+}): Map<string, CoverageWitness> {
+  const { ledger, rootName, rootDir, treeRoot, what } = input;
+  const absoluteRoot = join(rootDir, treeRoot);
+  let info: Stats;
+  try {
+    info = lstatSync(absoluteRoot);
+  } catch {
+    throw conflict(`${what} tree ${treeRoot} is missing under its configured root ${rootDir}.`);
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw conflict(`${what} tree ${treeRoot} is not a real directory under its configured root ${rootDir}.`);
+  }
+  const entries = new Map<string, CoverageWitness>();
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of directoryEntries(dir, `${what} tree ${treeRoot}`)) {
+      const path = join(dir, entry.name);
+      const suffix = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(path, suffix);
+        continue;
+      }
+      const relativePath = `${treeRoot}/${suffix}`;
+      if (entry.isSymbolicLink()) {
+        // A link is an ENTRY of the tree, and its fact is the target it records:
+        // the witness names the exact link target, never a resolved file.
+        const bytes = Buffer.from(readlinkSync(path), "utf8");
+        const witness = { root: rootName, path: relativePath, sha256: sha256Of(bytes) } as CoverageWitness;
+        const key = coverageWitnessKey(witness.root, witness.path);
+        ledger.witnessPaths.set(key, path);
+        ledger.linkBytes.set(key, bytes);
+        entries.set(suffix, witness);
+        continue;
+      }
+      if (!entry.isFile()) {
+        throw conflict(`${what} tree ${treeRoot} carries ${entry.name}, which is neither a regular file, a directory nor a link; an unclassifiable entry is never coverage.`);
+      }
+      const witness = recordWitness(ledger, rootName, rootDir, path, "deferred");
+      if (witness.path !== relativePath) {
+        throw conflict(`${what} tree ${treeRoot} entry ${path} does not have the canonical root-relative path ${relativePath}.`);
+      }
+      entries.set(suffix, witness);
+    }
+  };
+  walk(absoluteRoot, "");
+  return entries;
+}
+
+/** The C3 tree digest: sha256 over the canonical, suffix-sorted entry closure. */
+function treeDigestOf(entries: ReadonlyMap<string, CoverageWitness>): string {
+  const list = [...entries.entries()]
+    .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+    .map(([suffix, witness]) => ({ path: suffix, sha256: witness.sha256 }));
+  return digestOf(list);
+}
+
+/**
+ * §4.1 C3's consumer discovery proof, derived from REAL bytes: the declared
+ * tree roots are walked, every entry is hashed as read (a link hashes its
+ * target), and the declared copy pairs are proven — exact equality for `copy`,
+ * source-subset equality for `merge`. The declaration supplies the roots and the
+ * declared file list; it never supplies the proof, and a declared file whose
+ * real bytes disagree with its digest refuses here.
+ */
+function consumerDiscoveryProof(input: {
+  ledger: DiscoveryLedger;
+  packageRoot: string;
+  declaration: ConsumerDeclaration;
+  what: string;
+}): { proof: ConsumerDiscoveryProof; sources: CoverageWitness[] } {
+  const { ledger, packageRoot, declaration, what } = input;
+  const sources = new Map<string, CoverageWitness>();
+  const trees: ConsumerDiscoveryProof["trees"] = [];
+  const addTree = (treeRoot: string, kind: "source" | "generated"): void => {
+    const entries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot, what: `${what} ${kind}` });
+    for (const witness of entries.values()) sources.set(coverageWitnessKey(witness.root, witness.path), witness);
+    trees.push({
+      consumerId: declaration.id,
+      kind,
+      root: "package",
+      path: treeRoot,
+      files: entries.size,
+      sha256: treeDigestOf(entries),
+      witnesses: [...entries.values()].sort(compareWitnesses),
+    });
+  };
+  for (const treeRoot of declaration.sourceTrees) addTree(treeRoot, "source");
+  for (const treeRoot of declaration.generatedTrees) addTree(treeRoot, "generated");
+
+  const copies: ConsumerDiscoveryProof["copies"] = [];
+  for (const copy of declaration.copies) {
+    const sourceEntries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot: copy.sourceRoot, what: `${what} copy source` });
+    const targetEntries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot: copy.targetRoot, what: `${what} copy target` });
+    for (const witness of [...sourceEntries.values(), ...targetEntries.values()]) {
+      sources.set(coverageWitnessKey(witness.root, witness.path), witness);
+    }
+    for (const [suffix, source] of sourceEntries) {
+      const target = targetEntries.get(suffix);
+      if (target === undefined) {
+        throw conflict(`${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} has no target entry for ${suffix}; a copy is never partial.`);
+      }
+      if (target.sha256 !== source.sha256) {
+        throw conflict(`${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} carries different bytes for ${suffix} on each side.`);
+      }
+    }
+    if (copy.mode === "copy" && targetEntries.size !== sourceEntries.size) {
+      throw conflict(
+        `${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} declares mode copy but the target carries ` +
+          `${targetEntries.size} entry(ies) against ${sourceEntries.size} source entry(ies); a copy target holds exactly the source set.`,
+      );
+    }
+    const ordered = [...sourceEntries.entries()].sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0));
+    copies.push({
+      consumerId: declaration.id,
+      root: "package",
+      sourceRoot: copy.sourceRoot,
+      targetRoot: copy.targetRoot,
+      mode: copy.mode,
+      files: sourceEntries.size,
+      sha256: digestOf(ordered.map(([suffix, witness]) => ({ path: suffix, sha256: witness.sha256 }))),
+      sourceWitnesses: ordered.map((entry) => entry[1]),
+      targetWitnesses: ordered.map(([suffix]) => targetEntries.get(suffix) as CoverageWitness),
+    });
+  }
+
+  for (const file of declaration.declaredFiles) {
+    const witness = coverageWitnessOf("package", packageRoot, join(packageRoot, file.path), `${what} declared file`);
+    if (witness.sha256 !== file.sha256) {
+      throw conflict(
+        `${what} declares file ${file.path} with sha256 ${file.sha256}, but the bytes under the configured package root hash to ` +
+          `${witness.sha256}; a declared closure is verified against the bytes it names, never trusted.`,
+      );
+    }
+    sources.set(coverageWitnessKey(witness.root, witness.path), witness);
+    const key = coverageWitnessKey(witness.root, witness.path);
+    if (!ledger.witnessPaths.has(key)) {
+      ledger.witnessPaths.set(key, join(packageRoot, file.path));
+      ledger.witnesses.push({ path: join(packageRoot, file.path), sha256: witness.sha256, kind: "deferred" });
+    }
+  }
+
+  return { proof: { trees, copies }, sources: [...sources.values()].sort(compareWitnesses) };
+}
+
+/** §4.1 the seven R1 consumer surfaces an explicit consumer manifest may populate. */
+const CONSUMER_SURFACES: readonly ExecutionSurface[] = [
+  "cli-writer",
+  "engine-cli-package",
+  "dsh-package",
+  "omp-package",
+  "opencode-plugin",
+  "zcode-hook",
+  "copied-instructions",
+];
+
+/** One explicit inventory path recorded under the configured root that owns it. */
+function witnessForPath(
+  ledger: DiscoveryLedger,
+  roots: ExecutionMigrationRoots,
+  path: string,
+  what: string,
+  kind: ExecutionSourceWitness["kind"],
+): CoverageWitness {
+  const target = configuredRootOf(roots, path, what);
+  return recordWitness(ledger, target.root, target.dir, path, kind);
+}
+
+/** A produced coverage document must be canonical §3.1 JSON with one terminal LF. */
+function readProducedDocument(path: string, what: string): Record<string, unknown> {
+  const bytes = readSourceBytes(path, what, `${what} at ${path} is missing`);
+  const text = bytes.toString("utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw conflict(`${what} is not JSON (${(error as Error).message}).`);
+  }
+  if (serializeExecutionValue(parsed) !== text) {
+    throw conflict(
+      `${what} is not canonical JSON with one terminal LF; a produced coverage document is byte-stable, so an ambiguous or ` +
+        `duplicated member is refused rather than resolved by the reader.`,
+    );
+  }
+  if (!isPlainObject(parsed)) throw conflict(`${what} must be a plain JSON object; free-text or scalar evidence is never accepted.`);
+  return parsed;
+}
+
+/** §4.2 the deployed injected-store inventory, verified against the module bytes it names. */
+function verifyInjectorInventory(path: string, modules: readonly CoverageWitness[], what: string): void {
+  const document = readProducedDocument(path, what);
+  if (document.version !== 1 || document.protocol !== "injector-inventory-v1") {
+    throw conflict(`${what} must be a version 1 injector-inventory-v1 document; the retained module set is decoded from no other protocol.`);
+  }
+  if (!Array.isArray(document.injectors)) throw conflict(`${what}.injectors must be an array.`);
+  const declared = new Map<string, string>();
+  document.injectors.forEach((entry, index) => {
+    const label = `${what}.injectors[${index}]`;
+    if (!isPlainObject(entry)) throw conflict(`${label} must be an object.`);
+    if (entry.capability !== "body-only") {
+      throw conflict(`${label}.capability must be body-only; a deployed injected store never declares another authority.`);
+    }
+    const module = entry.module;
+    if (
+      !isPlainObject(module) ||
+      typeof module.root !== "string" ||
+      !ROOT_ORDER.includes(module.root as CoverageWitness["root"]) ||
+      !isNonEmptyString(module.path) ||
+      !isNonEmptyString(module.sha256)
+    ) {
+      throw conflict(`${label}.module must carry one of the configured roots (${ROOT_ORDER.join(", ")}), a root-relative path and a sha256.`);
+    }
+    const key = coverageWitnessKey(module.root as CoverageWitness["root"], module.path);
+    if (declared.has(key)) throw conflict(`${what}.injectors lists the module ${key} twice; one deployed module is one entry.`);
+    declared.set(key, module.sha256);
+  });
+  for (const module of modules) {
+    const key = coverageWitnessKey(module.root, module.path);
+    const recorded = declared.get(key);
+    if (recorded === undefined) {
+      throw conflict(`${what} does not list the deployed injector module ${key}; the operator document and the inventory are one module set.`);
+    }
+    if (recorded !== module.sha256) {
+      throw conflict(`${what} records the module ${key} with sha256 ${recorded}, but the deployed bytes hash to ${module.sha256}.`);
+    }
+  }
+  if (declared.size !== modules.length) {
+    throw conflict(`${what} lists ${declared.size} module(s) while ${modules.length} deployed module(s) were inventoried; the retained set is exact.`);
+  }
+}
+
+/** §4.1 the recovery inventory, verified against the backup image it describes. */
+function verifyRecoveryInventory(path: string, image: CoverageWitness, what: string): void {
+  const document = readProducedDocument(path, what);
+  if (document.version !== 1 || document.document !== "recovery-inventory") {
+    throw conflict(`${what} must be a version 1 recovery-inventory document.`);
+  }
+  if (document.integrity !== "verified") {
+    throw conflict(`${what}.integrity must be verified; only a verified backup image is a recovery point.`);
+  }
+  const backup = document.backup;
+  if (!isPlainObject(backup) || !isNonEmptyString(backup.path) || !isNonEmptyString(backup.sha256)) {
+    throw conflict(`${what}.backup must name its path and sha256.`);
+  }
+  if (backup.path !== image.path) {
+    throw conflict(`${what} describes the backup ${backup.path}, not the inventoried image ${image.path}; the document and the image are one recovery point.`);
+  }
+  if (backup.sha256 !== image.sha256) {
+    throw conflict(`${what} records backup sha256 ${backup.sha256}, but the inventoried image hashes to ${image.sha256}.`);
+  }
+}
+
+/** §4.1 the row order C2's closed inventory requires: surface order, then null before named workflows. */
+function compareSurfaceRows(left: Readonly<{ surface: ExecutionSurface; workflowId: string | null }>, right: Readonly<{ surface: ExecutionSurface; workflowId: string | null }>): number {
+  const bySurface = EXECUTION_COVERAGE_SURFACES.indexOf(left.surface) - EXECUTION_COVERAGE_SURFACES.indexOf(right.surface);
+  if (bySurface !== 0) return bySurface < 0 ? -1 : 1;
+  if (left.workflowId === right.workflowId) return 0;
+  if (left.workflowId === null) return -1;
+  if (right.workflowId === null) return 1;
+  return left.workflowId < right.workflowId ? -1 : 1;
+}
+
+function rowLabel(surface: ExecutionSurface, workflowId: string | null): string {
+  return workflowId === null ? surface : `${surface} of workflow ${workflowId}`;
 }
 
 /**
  * The single read-only discovery pass: the root register, every registered
- * workflow snapshot, every referenced session envelope and the full deferred
- * surface inventory, with byte witnesses and the core digest. Writes nothing.
+ * workflow snapshot, every registered AND terminal/unregistered workflow dir,
+ * every referenced and unreferenced session envelope, every retained §4.1
+ * surface file, and the explicit inventory's host/package/injector inputs, with
+ * byte witnesses, the §4.1 per-row source assignment and the core digest.
+ * Writes nothing, reads no home directory and touches no credentials.
  */
-function discoverExecutionSources(context: StoreContext): DiscoveredSources {
+function discoverExecutionSources(context: StoreContext, input: { inventoryPath: string }): DiscoveredSources {
   const root = controlRootOf(context);
   const rootPath = join(root, "status.json");
   if (!existsSync(rootPath)) {
@@ -675,9 +1553,6 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
   } catch (error) {
     throw conflict(`the root register ${rootPath} is not valid JSON (${(error as Error).message}).`);
   }
-  // The root gate is the canonical v2 validator with the harness dir known, so
-  // it already enforces the removal-at-terminal invariant: every listed entry's
-  // snapshot exists PHYSICALLY under the harness and is non-terminal.
   const rootGate = validateStatusV2(rootDoc as StatusV2Doc, { harnessDir: root });
   if (!rootGate.ok) {
     throw conflict(
@@ -686,11 +1561,32 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
     );
   }
   const doc = rootDoc as StatusV2Doc;
-  const witnesses: ExecutionSourceWitness[] = [{ path: rootPath, sha256: sha256Of(rootBytes), kind: "root" }];
+
+  const inventoryPath = input.inventoryPath;
+  const { inventory, bytes: inventoryBytes } = readInventoryFile(inventoryPath);
+  const roots: ExecutionMigrationRoots = {
+    control: root,
+    sdd: canonicalPath(inventory.roots.sdd),
+    host: canonicalPath(inventory.roots.host),
+    package: canonicalPath(inventory.roots.package),
+  };
+  const distinct = new Set(ROOT_ORDER.map((name) => canonicalPath(roots[name])));
+  if (distinct.size !== ROOT_ORDER.length) {
+    throw conflict(
+      `the configured roots are not distinct directories (${ROOT_ORDER.map((name) => `${name}=${roots[name]}`).join(", ")}); a witness ` +
+        `path would belong to more than one root, and a root is never an alias of another.`,
+    );
+  }
+
+  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map(), linkBytes: new Map() };
   const deferred: ExecutionDeferredSurface[] = [];
   const workflows: DiscoveredWorkflow[] = [];
   const owners: DiscoveredOwner[] = [];
   const seenDirs = new Map<string, string>();
+  const seenIds = new Set<string>();
+  const pinnedExtras: CoverageWitness[] = [];
+
+  recordWitness(ledger, "control", roots.control, rootPath, "root");
 
   for (const entry of doc.workflows) {
     const entryGate = validateWorkflowEntry(entry);
@@ -703,115 +1599,269 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
     const workflowId = entry.id;
     const dir = join(root, entry.dir);
     if (!isPathWithin(root, dir) || dir === root) {
-      throw conflict(
-        `workflow ${workflowId} records dir ${JSON.stringify(entry.dir)}, which does not stay inside the control root ${root}.`,
-      );
+      throw conflict(`workflow ${workflowId} records dir ${JSON.stringify(entry.dir)}, which does not stay inside the control root ${root}.`);
     }
-    const priorHolder = seenDirs.get(dir);
-    if (priorHolder !== undefined) {
-      throw conflict(
-        `workflows ${priorHolder} and ${workflowId} both record the workflow dir ${entry.dir}. Two lifecycles cannot share ` +
-          `one snapshot home, and one lock cannot serialize both; nothing was staged.`,
-      );
-    }
-    seenDirs.set(dir, workflowId);
-    let dirInfo: Stats;
-    try {
-      dirInfo = lstatSync(dir);
-    } catch {
-      throw conflict(`workflow ${workflowId} records dir ${entry.dir}, which does not exist at ${dir}.`);
-    }
-    if (dirInfo.isSymbolicLink() || !dirInfo.isDirectory()) {
-      throw conflict(`workflow ${workflowId}'s dir ${dir} is not a real directory under the control root.`);
-    }
+    workflows.push(
+      readDiscoveredWorkflow({ ledger, roots, root, entry, registered: true, workflowId, dir, owners, deferred, seenDirs }),
+    );
+    seenIds.add(workflowId);
+  }
 
-    const snapshotSource = readSnapshotSource(dir, workflowId);
-    witnesses.push({ path: snapshotSource.path, sha256: snapshotSource.sha256, kind: "workflow" });
-
-    const coordinator = legacyBinding(snapshotSource.snapshot.coordination?.coordinator);
-    if (snapshotSource.snapshot.coordination !== undefined && coordinator === null) {
-      throw conflict(`workflow ${workflowId} carries a coordinator block that is not a complete session binding.`);
-    }
-    const envelopes: ExecutionSourceWitness[] = [];
-    if (coordinator !== null) {
-      envelopes.push(
-        readSessionSource(
-          coordinator,
-          { workflowId, role: "coordinator", planId: null, dir, root },
-          `workflow ${workflowId}'s coordinator binding`,
-        ),
-      );
-      owners.push({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
-    }
-
-    const plans: DiscoveredPlan[] = [];
-    const seenPlans = new Set<string>();
-    const scope = { workflowId, dir, root };
-    for (const row of snapshotSource.snapshot.plans) {
-      const planRow = row as Record<string, unknown>;
-      const planId = rowPlanId(row);
-      if (!isNonEmptyString(planId)) throw conflict(`workflow ${workflowId} lists a plan row with no canonical plan id.`);
-      if (seenPlans.has(planId)) throw conflict(`workflow ${workflowId} lists plan ${planId} twice \u2014 a plan row is one identity.`);
-      seenPlans.add(planId);
-      const block = isPlainObject(planRow.coordination) ? planRow.coordination : undefined;
-      const session = block === undefined ? null : legacyBinding(block.session);
-      if (block !== undefined && block.session !== undefined && session === null) {
-        throw conflict(`plan ${planId} of workflow ${workflowId} carries a session binding that is not complete.`);
+  // §4.2 terminal/unregistered history: the configured workflow layouts are
+  // enumerated so a workflow dir the root register no longer lists
+  // (removal-at-terminal) is CLASSIFIED rather than ignored. Every entry of a
+  // layout is accounted for, and an unregistered dir whose snapshot is not
+  // terminal is a registry-invariant violation, not history.
+  const layouts = new Set<string>([join(root, WORKFLOW_LAYOUT_DEFAULT)]);
+  for (const entry of doc.workflows) {
+    const dir = join(root, entry.dir);
+    if (isPathWithin(root, dir) && dir !== root) layouts.add(dirname(dir));
+  }
+  for (const layout of [...layouts].sort()) {
+    if (layout === root || !existsSync(layout)) continue;
+    for (const entry of directoryEntries(layout, `the configured workflow layout ${layout}`)) {
+      if (!entry.isDirectory()) {
+        throw incomplete(
+          `${layout}/${entry.name} is not a workflow directory; every entry of the configured workflow layout is classified, ` +
+            `so an unknown entry blocks coverage instead of being skipped.`,
+        );
       }
-      if (session !== null) {
-        envelopes.push(readSessionSource(session, { ...scope, role: "plan-pm", planId }, `plan ${planId}`));
-        owners.push({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
+      const dir = join(layout, entry.name);
+      if (seenDirs.has(dir)) continue;
+      const workflowId = entry.name;
+      if (seenIds.has(workflowId)) {
+        throw conflict(
+          `workflow id ${workflowId} is claimed by a registered lifecycle and by the unregistered dir ${dir}; one lifecycle ` +
+            `identity has one home, and nothing was staged.`,
+        );
       }
-      const leaseValue = planRow.execution_lease;
-      if (leaseValue !== undefined) {
-        const leaseGate = validateExecutionLease(leaseValue);
-        if (!leaseGate.ok) {
-          throw conflict(
-            `plan ${planId} of workflow ${workflowId} holds an execution lease that does not validate ` +
-              `(${leaseGate.violations.map((violation) => `${violation.code}: ${violation.message}`).join("; ")}).`,
-          );
-        }
-      }
-      plans.push({
-        planId,
-        row: planRow,
-        pin: suppliedCatalogPin(planRow, workflowId, planId),
-        session,
-        lease: isPlainObject(leaseValue) ? leaseValue : null,
+      const workflow = readDiscoveredWorkflow({
+        ledger,
+        roots,
+        root,
+        entry: null,
+        registered: false,
+        workflowId,
+        dir,
+        owners,
+        deferred,
+        seenDirs,
       });
+      if (workflow.snapshot.id !== workflowId) {
+        throw conflict(`the unregistered workflow dir ${dir} carries a snapshot of workflow ${workflow.snapshot.id}; a terminal history dir names its own lifecycle.`);
+      }
+      if (!isTerminalSnapshot(workflow.snapshot)) {
+        throw conflict(
+          `the workflow dir ${dir} is not listed by the root register and its snapshot status is ` +
+            `${JSON.stringify(workflow.snapshot.status)}. Registry membership is what selects an ACTIVE lifecycle, so an ` +
+            `unregistered non-terminal lifecycle is a registry-invariant violation and is never imported as history.`,
+        );
+      }
+      workflows.push(workflow);
+      seenIds.add(workflowId);
     }
-
-    const scan = scanWorkflowDir(dir, workflowId, new Set(envelopes.map((witness) => witness.path)));
-    witnesses.push(...envelopes, ...scan.witnesses);
-    deferred.push(...scan.deferred);
-    workflows.push({
-      entry,
-      workflowId,
-      dir,
-      snapshotPath: snapshotSource.path,
-      snapshotSha: snapshotSource.sha256,
-      snapshot: snapshotSource.snapshot,
-      coordinator,
-      plans,
-    });
   }
 
   const engineStatusPath = join(root, ENGINE_STATUS_FILE);
+  let engineStatusWitness: CoverageWitness | null = null;
   if (existsSync(engineStatusPath)) {
-    // The harness-level execution-status file is a deferred surface like any
-    // other, so a present one is witnessed by its bytes too.
-    witnesses.push(witnessOf(engineStatusPath, "deferred"));
+    engineStatusWitness = recordWitness(ledger, "control", roots.control, engineStatusPath, "deferred");
     deferred.push(deferredSurface(ENGINE_STATUS_SURFACE, [engineStatusPath]));
   } else {
     deferred.push(deferredSurface(ENGINE_STATUS_SURFACE, []));
   }
 
+  const inventoryWitness = witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
+  if (inventoryWitness.sha256 !== sha256Of(inventoryBytes)) {
+    throw conflict(`the inventory ${inventoryPath} changed while it was read; nothing was staged.`);
+  }
+
+  // ── the explicit host-session inventory (§4.2) ────────────────────────────
+  const hiddenRows = new Map<string, { sessions: Array<{ host: "omp"; sessionId: string; source: CoverageWitness }>; attestation: CoverageWitness | null }>();
+  const seenHostSessions = new Set<string>();
+  for (const declaration of inventory.hostSessions) {
+    if (!seenIds.has(declaration.workflowId)) {
+      throw conflict(
+        `the inventory declares the ${declaration.host} native session ${declaration.sessionId} for workflow ` +
+          `${declaration.workflowId}, which no discovered workflow owns; an unreferenced envelope is never folded into a sibling.`,
+      );
+    }
+    const duplicate = `${declaration.workflowId}\u0000${declaration.sessionId}`;
+    if (seenHostSessions.has(duplicate)) {
+      throw conflict(`the inventory declares the ${declaration.host} session ${declaration.sessionId} of workflow ${declaration.workflowId} twice; one native session owns one export.`);
+    }
+    seenHostSessions.add(duplicate);
+    const envelope = witnessForPath(ledger, roots, declaration.envelope, `the host session envelope of ${declaration.sessionId}`, "host-envelope");
+    const attestation = witnessForPath(ledger, roots, declaration.attestation, `the operator attestation of ${declaration.sessionId}`, "evidence");
+    const row = hiddenRows.get(declaration.workflowId) ?? { sessions: [], attestation: null };
+    if (row.sessions.some((session) => session.sessionId === declaration.sessionId)) {
+      throw conflict(`workflow ${declaration.workflowId} names the ${declaration.host} session ${declaration.sessionId} twice; a host proof names each session once.`);
+    }
+    row.sessions.push({ host: declaration.host, sessionId: declaration.sessionId, source: envelope });
+    if (row.attestation !== null && (row.attestation.root !== attestation.root || row.attestation.path !== attestation.path)) {
+      throw conflict(
+        `workflow ${declaration.workflowId} pins two different attestation documents ` +
+          `(${coverageWitnessKey(row.attestation.root, row.attestation.path)} and ${coverageWitnessKey(attestation.root, attestation.path)}); ` +
+          `the stop/adoption evidence is ONE operator document per workflow.`,
+      );
+    }
+    row.attestation = attestation;
+    hiddenRows.set(declaration.workflowId, row);
+  }
+
+  // ── the explicit SDD evidence inventory (§4.1 sdd-evidence) ───────────────
+  const sddRows = new Map<string, CoverageWitness[]>();
+  for (const declaration of inventory.sddEvidence) {
+    if (!seenIds.has(declaration.workflowId)) {
+      throw conflict(`the inventory declares SDD evidence for workflow ${declaration.workflowId}, which no discovered workflow owns.`);
+    }
+    const witness = witnessForPath(ledger, roots, declaration.path, `the SDD evidence of ${declaration.workflowId}`, "evidence");
+    sddRows.set(declaration.workflowId, [...(sddRows.get(declaration.workflowId) ?? []), witness]);
+  }
+
+  // ── the explicit consumer manifests (§4.1 consumer-v1 surfaces) ───────────
+  const consumerRows = new Map<ExecutionSurface, { sources: CoverageWitness[]; proof: ConsumerDiscoveryProof; evidence: CoverageWitness }>();
+  for (const declaration of inventory.consumers) {
+    if (!CONSUMER_SURFACES.includes(declaration.surface)) {
+      throw conflict(`${inventoryPath} names ${declaration.surface} as a consumer surface; only the R1 consumer surfaces carry a consumer-v1 manifest.`);
+    }
+    if (consumerRows.has(declaration.surface)) {
+      throw conflict(`${inventoryPath} names two consumer manifests for ${declaration.surface}; one surface covers one declared consumer.`);
+    }
+    const what = `the ${declaration.surface} consumer manifest`;
+    const evidence = witnessForPath(ledger, roots, declaration.path, what, "evidence");
+    const parsed = readConsumerDeclaration(declaration.path, what);
+    const { proof, sources } = consumerDiscoveryProof({ ledger, packageRoot: roots.package, declaration: parsed, what });
+    consumerRows.set(declaration.surface, { sources, proof, evidence });
+  }
+
+  // ── the explicit injected-store inventory (§4.2 retained ArtifactStore) ───
+  let injectorRow: { sources: CoverageWitness[]; evidence: CoverageWitness } | null = null;
+  if (inventory.injectors.length > 0) {
+    if (inventory.injectorInventory === null) {
+      throw conflict(
+        `${inventoryPath} lists ${inventory.injectors.length} deployed injector module(s) but names no ` +
+          `injectorInventory document; the retained module set is never implicit.`,
+      );
+    }
+    const modules = inventory.injectors.map((path) =>
+      witnessForPath(ledger, roots, path, `the deployed injector module ${path}`, "deferred"),
+    );
+    const evidence = witnessForPath(ledger, roots, inventory.injectorInventory, "the injector inventory document", "evidence");
+    verifyInjectorInventory(inventory.injectorInventory, modules, "the injector inventory document");
+    injectorRow = { sources: modules, evidence };
+  } else if (inventory.injectorInventory !== null) {
+    // An explicitly EMPTY deployment inventory is discovery-absent evidence: it
+    // is pinned as a witness, but it never fabricates a populated retained row.
+    pinnedExtras.push(witnessForPath(ledger, roots, inventory.injectorInventory, "the empty injector inventory document", "evidence"));
+  }
+
+  // ── the explicit recovery point (§4.1 backup-recovery) ────────────────────
+  let backupRow: { sources: CoverageWitness[]; evidence: CoverageWitness } | null = null;
+  if (inventory.backup !== null) {
+    const image = witnessForPath(ledger, roots, inventory.backup.image, "the backup image", "deferred");
+    const evidence = witnessForPath(ledger, roots, inventory.backup.inventory, "the recovery inventory document", "evidence");
+    verifyRecoveryInventory(inventory.backup.inventory, image, "the recovery inventory document");
+    backupRow = { sources: [image], evidence };
+  }
+
+  // ── the §4.1 rows: the closed inventory, each row carrying the sources C3 assigned ──
+  type RowDraft = {
+    surface: ExecutionSurface;
+    workflowId: string | null;
+    sources: CoverageWitness[];
+    evidence: CoverageWitness[];
+    consumerProof?: ConsumerDiscoveryProof;
+    hostProof?: HostDiscoveryProof;
+  };
+  const drafts = new Map<string, RowDraft>();
+  const rowOf = (surface: ExecutionSurface, workflowId: string | null): RowDraft => {
+    const key = `${surface}\u0000${workflowId ?? ""}`;
+    const existing = drafts.get(key);
+    if (existing !== undefined) return existing;
+    const created: RowDraft = { surface, workflowId, sources: [], evidence: [] };
+    drafts.set(key, created);
+    return created;
+  };
+  for (const surface of EXECUTION_COVERAGE_SURFACES) {
+    if (executionCoverageSurfaceScope(surface) === "root") rowOf(surface, null);
+  }
+  for (const workflow of workflows) {
+    for (const surface of EXECUTION_COVERAGE_SURFACES) {
+      if (executionCoverageSurfaceScope(surface) === "workflow") rowOf(surface, workflow.workflowId);
+    }
+  }
+
+  const coreRow = rowOf("core-execution", null);
+  coreRow.sources.push(recordWitness(ledger, "control", roots.control, rootPath, "root"));
+  for (const workflow of workflows) {
+    coreRow.sources.push(recordWitness(ledger, "control", roots.control, workflow.snapshotPath, "workflow"));
+  }
+  if (engineStatusWitness !== null) rowOf(ENGINE_STATUS_SURFACE, null).sources.push(engineStatusWitness);
+  for (const [surface, row] of consumerRows) {
+    const target = rowOf(surface, null);
+    target.sources.push(...row.sources);
+    target.evidence.push(row.evidence);
+    target.consumerProof = row.proof;
+  }
+  if (injectorRow !== null) {
+    const target = rowOf("artifact-store-injectors", null);
+    target.sources.push(...injectorRow.sources);
+    target.evidence.push(injectorRow.evidence);
+  }
+  if (backupRow !== null) {
+    const target = rowOf("backup-recovery", null);
+    target.sources.push(...backupRow.sources);
+    target.evidence.push(backupRow.evidence);
+  }
+  for (const workflow of workflows) {
+    const envelopeRow = rowOf(SESSION_SURFACE, workflow.workflowId);
+    for (const path of workflow.envelopes) {
+      envelopeRow.sources.push(recordWitness(ledger, "control", roots.control, path, "session-envelope"));
+    }
+    for (const [surface, paths] of workflow.surfaceFiles) {
+      const target = rowOf(surface, workflow.workflowId);
+      for (const path of paths) target.sources.push(recordWitness(ledger, "control", roots.control, path, "deferred"));
+    }
+    const hidden = hiddenRows.get(workflow.workflowId);
+    if (hidden !== undefined) {
+      if (hidden.attestation === null) {
+        throw conflict(`workflow ${workflow.workflowId} declares host sessions without an operator attestation; the stop/adoption witness is required input.`);
+      }
+      const target = rowOf("omp-hidden-entries", workflow.workflowId);
+      for (const session of [...hidden.sessions].sort((left, right) => (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0))) {
+        target.sources.push(session.source);
+      }
+      target.evidence.push(hidden.attestation);
+      target.hostProof = {
+        sessions: [...hidden.sessions].sort((left, right) => (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)),
+        attestation: hidden.attestation,
+      };
+    }
+    const sdd = sddRows.get(workflow.workflowId);
+    if (sdd !== undefined) rowOf("sdd-evidence", workflow.workflowId).sources.push(...sdd);
+  }
+
+  const surfaces: ExecutionManifestSurface[] = [...drafts.values()]
+    .map((draft) => ({
+      surface: draft.surface,
+      workflowId: draft.workflowId,
+      sources: canonicalWitnessList(draft.sources, `${rowLabel(draft.surface, draft.workflowId)} sources`),
+      evidence: canonicalWitnessList(draft.evidence, `${rowLabel(draft.surface, draft.workflowId)} evidence`),
+      ...(draft.consumerProof === undefined ? {} : { consumerProof: draft.consumerProof }),
+      ...(draft.hostProof === undefined ? {} : { hostProof: draft.hostProof }),
+    }))
+    .sort(compareSurfaceRows);
+
   return {
     root,
+    roots,
     rootPath,
     rootDoc: doc,
+    inventoryPath,
+    inventory,
     workflows,
-    witnesses,
+    witnesses: ledger.witnesses,
     deferred,
     owners,
     coreHash: digestOf({
@@ -823,7 +1873,184 @@ function discoverExecutionSources(context: StoreContext): DiscoveredSources {
         inputs: workflow.plans.map((plan) => ({ planId: plan.planId, inputHash: executionInputHash(plan.row, plan.planId) })),
       })),
     }),
+    surfaces,
+    pinnedExtras,
+    witnessPaths: ledger.witnessPaths,
+    linkBytes: ledger.linkBytes,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Coverage collection (§4.1/§4.2)
+// ---------------------------------------------------------------------------
+
+/** Every witness a frozen version-2 manifest pins: row sources, row evidence and the discovery extras. */
+function pinnedWitnessesOf(manifest: ExecutionManifest, extras: readonly CoverageWitness[]): CoverageWitness[] {
+  const pinned = new Map<string, CoverageWitness>();
+  for (const row of manifest.surfaces) {
+    for (const witness of [...row.sources, ...row.evidence]) {
+      pinned.set(coverageWitnessKey(witness.root, witness.path), witness);
+    }
+  }
+  for (const witness of extras) pinned.set(coverageWitnessKey(witness.root, witness.path), witness);
+  return [...pinned.values()].sort(compareWitnesses);
+}
+
+/**
+ * §4.1 C2's small manifest view, built from the frozen version-2 document. C2
+ * compares the receipts with THIS trusted view: the rows carry C3's own
+ * per-row assignment and proofs, and the pinned witness list is derived from the
+ * manifest's own rows plus the discovery evidence that proves an absent row.
+ */
+function coverageManifestView(
+  manifest: ExecutionManifest,
+  manifestHash: string,
+  pinned: readonly CoverageWitness[],
+): ExecutionCoverageManifest {
+  return {
+    manifestId: manifest.id,
+    manifestHash,
+    storeId: manifest.storeId,
+    epoch: manifest.epoch,
+    surfaces: manifest.surfaces.map((row) => ({
+      surface: row.surface,
+      workflowId: row.workflowId,
+      sources: row.sources,
+      ...(row.consumerProof === undefined ? {} : { consumerProof: row.consumerProof }),
+      ...(row.hostProof === undefined ? {} : { hostProof: row.hostProof }),
+    })),
+    sources: pinned,
+  };
+}
+
+/**
+ * The evidence bytes of every pinned witness: each is read once, hashed once,
+ * and a witness whose bytes moved since discovery refuses rather than being
+ * re-derived. A link witness hands in the exact link target discovery recorded.
+ */
+function coverageEvidenceOf(discovered: DiscoveredSources, witnesses: readonly CoverageWitness[]): ExecutionCoverageEvidence {
+  const evidence = new Map<string, Uint8Array>();
+  for (const witness of witnesses) {
+    const key = coverageWitnessKey(witness.root, witness.path);
+    const link = discovered.linkBytes.get(key);
+    if (link !== undefined) {
+      if (sha256Of(Buffer.from(link)) !== witness.sha256) {
+        throw conflict(`the link witness ${key} changed since discovery; nothing was staged.`);
+      }
+      evidence.set(key, link);
+      continue;
+    }
+    const path = discovered.witnessPaths.get(key);
+    if (path === undefined) {
+      throw conflict(`the witness ${key} has no discovered file; coverage is recomputed from named bytes, never from a path alone.`);
+    }
+    const bytes = readSourceBytes(path, `the witness ${key}`, `${key} is missing`);
+    if (sha256Of(bytes) !== witness.sha256) {
+      throw conflict(`the witness ${key} changed since discovery; nothing was staged.`);
+    }
+    evidence.set(key, bytes);
+  }
+  return evidence;
+}
+
+/**
+ * §3.3 the session-envelope row's archive decision: a row whose envelopes are
+ * ALL unreferenced by a recorded binding is historical evidence with no DB
+ * association, so retirement archives it; a row holding at least one referenced
+ * envelope is associated (suspended) with a DB row and stays a read-only
+ * witness until the operator decides.
+ */
+function envelopeRowRetires(discovered: DiscoveredSources, workflowId: string): boolean {
+  const workflow = discovered.workflows.find((candidate) => candidate.workflowId === workflowId);
+  if (workflow === undefined || workflow.envelopes.length === 0) return false;
+  return workflow.envelopes.every((path) => !workflow.referencedEnvelopes.has(canonicalPath(path)));
+}
+
+/** §4.1 one row's disposition, derived from discovery — never from a receipt or a path convention. */
+function coverageDisposition(discovered: DiscoveredSources, row: ExecutionManifestSurface): "absent" | "retain" | "migrate" | "retire" {
+  if (row.sources.length === 0) return "absent";
+  if (row.surface === "core-execution") return "migrate";
+  if (row.surface === "workflow-session-envelopes" && row.workflowId !== null) {
+    return envelopeRowRetires(discovered, row.workflowId) ? "retire" : "migrate";
+  }
+  return "retain";
+}
+
+/**
+ * §4.1/§4.2 the coverage of one frozen manifest over one discovery pass. The
+ * rows must still be the manifest's own, every receipt is RECOMPUTED from the
+ * bytes its row names through C2's producer entry point, and C2's closed
+ * validator then checks the frozen manifest, the exact-set inventory, the
+ * per-row source assignment, the host/consumer proofs and the operator
+ * attestation. Nothing here is asserted by a receipt, and no caller-supplied
+ * callback can substitute an assertion for bytes.
+ */
+function coverageFromDiscovery(input: {
+  discovered: DiscoveredSources;
+  manifest: ExecutionManifest;
+  manifestHash: string;
+}): { set: ExecutionCoverageSet; manifestView: ExecutionCoverageManifest; evidence: ExecutionCoverageEvidence } {
+  const { discovered, manifest, manifestHash } = input;
+  if (serializeExecutionValue(discovered.surfaces) !== serializeExecutionValue(manifest.surfaces)) {
+    throw conflict(
+      "the frozen manifest's surface discovery no longer holds the reviewed bytes (a surface, its assigned source witnesses, its " +
+        "evidence or its proof changed). Re-preview the migration; nothing was staged.",
+    );
+  }
+  const pinned = pinnedWitnessesOf(manifest, discovered.pinnedExtras);
+  const manifestView = coverageManifestView(manifest, manifestHash, pinned);
+  const evidence = coverageEvidenceOf(discovered, pinned);
+  const receipts = manifest.surfaces.map((row) =>
+    buildExecutionCoverageReceipt(
+      {
+        surface: row.surface,
+        workflowId: row.workflowId,
+        disposition: coverageDisposition(discovered, row),
+        manifestId: manifest.id,
+        manifestHash,
+        storeId: manifest.storeId,
+        epoch: manifest.epoch,
+        sources: row.sources,
+        evidence: row.evidence,
+      },
+      evidence,
+    ),
+  );
+  const set: ExecutionCoverageSet = {
+    version: 1,
+    manifestId: manifest.id,
+    manifestHash,
+    receipts,
+    digest: executionCoverageDigest(receipts),
+  };
+  validateExecutionCoverage(manifestView, set, evidence);
+  return { set, manifestView, evidence };
+}
+
+/**
+ * `collectExecutionCoverage` — §4.2 the read-only coverage collection of one
+ * reviewed manifest. It re-runs the discovery the preview ran, refuses a
+ * manifest whose rows are no longer the discovered world, recomputes every
+ * receipt from the named bytes and closes the set through C2's validator. It
+ * takes no lock, writes nothing and mutates no source.
+ */
+export async function collectExecutionCoverage(input: ExecutionMigrationCoverageInput): Promise<ExecutionCoverageSet> {
+  const resolved = resolveMigrationInput(input, "coverage collection");
+  const manifest = input.manifest;
+  if (!manifest || manifest.version !== EXECUTION_MIGRATION_MANIFEST_VERSION || !Array.isArray(manifest.surfaces)) {
+    throw conflict(
+      `coverage collection requires a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} manifest; only the current discovery carries surface rows.`,
+    );
+  }
+  const root = controlRootOf(resolved.context);
+  if (canonicalPath(manifest.root) !== root) {
+    throw conflict(`the manifest was reviewed for control root ${manifest.root}, not ${root}; nothing was collected.`);
+  }
+  if (canonicalPath(input.inventoryPath) !== canonicalPath(resolved.inventoryPath)) {
+    throw conflict("the coverage request carries two different inventory paths; one request names one discovery.");
+  }
+  const discovered = discoverExecutionSources(resolved.context, { inventoryPath: resolved.inventoryPath });
+  return coverageFromDiscovery({ discovered, manifest, manifestHash: executionManifestHash(manifest) }).set;
 }
 
 // ---------------------------------------------------------------------------
@@ -866,7 +2093,7 @@ function catalogRevisionOf(db: StoreDb): number {
  * active).
  */
 export async function previewExecutionMigration(input: ExecutionMigrationInput): Promise<ExecutionManifest> {
-  const { context } = resolveMigrationInput(input, "preview");
+  const { context, inventoryPath } = resolveMigrationInput(input, "preview");
   const handle = await openStore(context, "read");
   try {
     const execution = handle.execution;
@@ -891,7 +2118,7 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
           `resolved with the legacy reconcile while JSON still owns execution (\u00a77); nothing was staged.`,
       );
     }
-    const discovered = discoverExecutionSources(context);
+    const discovered = discoverExecutionSources(context, { inventoryPath });
     // §7 the pin half of the inventory: the frozen selections and any committed
     // catalog binding must agree, checked here so a disagreement is a preview
     // verdict rather than a surprise at apply time.
@@ -902,11 +2129,13 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
       epoch: handle.epoch,
       schemaVersion: handle.schemaVersion,
       root: discovered.root,
+      roots: discovered.roots,
       sources: discovered.witnesses,
       coreHash: discovered.coreHash,
       deferred: discovered.deferred,
       catalogRevision,
       pendingCatalogOperations: pending,
+      surfaces: discovered.surfaces,
     };
     return { ...body, id: `exec-${digestOf(body).slice(0, 32)}` };
   } finally {
@@ -1038,7 +2267,11 @@ function requireReviewedManifest(
   context: StoreContext,
 ): ExecutionManifest {
   if (!manifest || manifest.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) {
-    throw conflict("the manifest is missing or carries an unsupported version; re-run the preview and review it.");
+    throw conflict(
+      `apply requires a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} manifest. A version ${EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION} ` +
+        `document is history: it carries no surface discovery and no coverage, so it is never staged or mutated in place. Abort the ` +
+        `recorded v1 staging explicitly and re-preview the workspace under the current generation; nothing was staged.`,
+    );
   }
   if (typeof manifestHash !== "string" || manifestHash.trim() === "") {
     throw conflict("the apply request must carry the reviewed manifest hash; nothing was staged.");
@@ -1252,6 +2485,13 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
   delete header.plans;
   delete header.coordination;
   delete header.integration_merge_lease;
+  // P4's immutable recovery audit is PROVENANCE, never authority: the coordinator
+  // binding lives in execution_sessions (here as a suspended row), so the audit
+  // is carried into the imported workflow state verbatim and nothing in the read
+  // path consults it. Dropping it would silently lose the record of a recovery
+  // that actually happened.
+  const recoveries = snapshot.coordination?.identity_recoveries;
+  if (recoveries !== undefined) header.identity_recoveries = recoveries;
   const headerGate = validateWorkflowSnapshot({ ...header, plans: [] });
   if (!headerGate.ok) {
     throw conflict(
@@ -1270,7 +2510,13 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
     // back verbatim. `now` is used only for the migration's own receipt and
     // apply bookkeeping.
     .run(workflowId, JSON.stringify(header), snapshot.started_at, snapshot.updated_at);
-  tx.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+  // §2.2/§4.2 registry membership is what selects an ACTIVE lifecycle, so a
+  // terminal workflow dir the register no longer lists is imported as HISTORY:
+  // its workflow/plan rows and sealed inputs land, and no root membership is
+  // invented for it.
+  if (workflow.registered && entry !== null) {
+    tx.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+  }
 
   if (workflow.coordinator !== null) {
     insertSession(tx, { workflowId, role: "coordinator", planId: null, binding: workflow.coordinator });
@@ -1374,10 +2620,8 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
  * left exactly as it was, existing issue/catalog rows and revisions are
  * untouched, and imported sessions are suspended.
  */
-export async function applyExecutionMigration(
-  input: ExecutionMigrationInput & { manifest: ExecutionManifest; manifestHash: string; backup: BackupReceipt },
-): Promise<ExecutionMigrationReceipt> {
-  const { context } = resolveMigrationInput(input, "apply");
+export async function applyExecutionMigration(input: ExecutionMigrationApplyInput): Promise<ExecutionMigrationReceipt> {
+  const { context, inventoryPath } = resolveMigrationInput(input, "apply");
   const manifest = requireReviewedManifest(input.manifest, input.manifestHash, context);
   // §6 item 2: the recovery point is re-verified against the reviewed authority
   // and the bytes it names BEFORE any lock is taken or any byte is written.
@@ -1392,7 +2636,7 @@ export async function applyExecutionMigration(
   // runs again inside the transaction and every witness is compared against the
   // reviewed manifest, so a register that changed between the two cannot reach
   // the rows.
-  const prelock = discoverExecutionSources(context);
+  const prelock = discoverExecutionSources(context, { inventoryPath });
   const workflowLocks = [...prelock.workflows]
     .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
     .map((workflow) => join(workflow.dir, WORKFLOW_SNAPSHOT_FILE));
@@ -1403,7 +2647,7 @@ export async function applyExecutionMigration(
       () =>
         withAllLocks(workflowLocks, () =>
           withExecutionTransaction(context, (tx) => {
-            const discovered = discoverExecutionSources(context);
+            const discovered = discoverExecutionSources(context, { inventoryPath });
             // §7: a non-committed catalog operation blocks staging outright —
             // the shared rule below compares the reviewed claim, but a journal
             // that is genuinely pending refuses whatever the manifest claims.
@@ -1442,10 +2686,22 @@ export async function applyExecutionMigration(
             if (tx.execution.authorityState === "active") {
               throw conflict("the execution authority is ACTIVE; a manifest stages into a legacy or staged authority only.");
             }
+            // §4.1/§4.2 the coverage boundary: the reviewed set is recomputed
+            // from the SAME discovered bytes under the locks and must be the
+            // caller's set and the manifest's own discovery. A missing, forged or
+            // drifted receipt refuses with nothing staged.
+            const coverage = coverageFromDiscovery({ discovered, manifest, manifestHash: input.manifestHash });
+            if (serializeExecutionValue(coverage.set) !== serializeExecutionValue(input.coverage)) {
+              throw conflict(
+                `the supplied coverage of manifest ${manifest.id} is not the set recomputed from this workspace (supplied digest ` +
+                  `${input.coverage.digest}, recomputed ${coverage.set.digest}). Coverage is recomputed from the named bytes at every ` +
+                  `boundary; nothing was staged.`,
+              );
+            }
 
             const recorded = tx.db
-              .prepare("select manifest_hash, phase from execution_migrations where manifest_id = ?")
-              .get(manifest.id) as { manifest_hash?: unknown; phase?: unknown } | undefined;
+              .prepare("select manifest_hash, phase, coverage_json from execution_migrations where manifest_id = ?")
+              .get(manifest.id) as { manifest_hash?: unknown; phase?: unknown; coverage_json?: unknown } | undefined;
             if (recorded !== undefined) {
               if (recorded.manifest_hash !== input.manifestHash) {
                 throw conflict(
@@ -1457,6 +2713,16 @@ export async function applyExecutionMigration(
                 throw conflict(
                   `manifest ${manifest.id} is recorded ${String(recorded.phase)}; only a staged manifest re-applies ` +
                     `idempotently, and an aborted one needs a re-preview under a new manifest.`,
+                );
+              }
+              const stagedCoverage = readRecordedCoverage(
+                recorded.coverage_json,
+                `execution_migrations(${manifest.id}).coverage_json`,
+              );
+              if (stagedCoverage === null || serializeExecutionValue(stagedCoverage) !== serializeExecutionValue(coverage.set)) {
+                throw conflict(
+                  `the staged record of manifest ${manifest.id} carries a coverage set this workspace does not recompute; the ` +
+                    `recorded receipts are not the reviewed ones. Abort the staging and re-preview; nothing was staged.`,
                 );
               }
               return { manifestId: manifest.id, phase: "staged" as const, replayed: true };
@@ -1497,10 +2763,10 @@ export async function applyExecutionMigration(
             }
             tx.db
               .prepare(
-                "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, activation_receipt_json, " +
-                  "retirement_json, created_at, updated_at) values (?, ?, 'staged', ?, null, null, ?, ?)",
+                "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, coverage_json, activation_receipt_json, " +
+                  "retirement_json, created_at, updated_at) values (?, ?, 'staged', ?, ?, null, null, ?, ?)",
               )
-              .run(manifest.id, input.manifestHash, serializeExecutionValue(manifest), now, now);
+              .run(manifest.id, input.manifestHash, serializeExecutionValue(manifest), serializeExecutionValue(coverage.set), now, now);
             // §2.2 the root revision advances ONCE (registry membership and the
             // authority state both changed in this one transaction) and the store
             // revision advances once for the multi-domain write. The epoch does
@@ -1534,11 +2800,46 @@ type MigrationRecord = {
   manifestId: string;
   manifestHash: string;
   phase: ExecutionMigrationReceipt["phase"];
-  manifest: ExecutionManifest;
+  manifest: ExecutionManifestDocument;
+  /**
+   * §4.1 the coverage recorded with the staging. `null` for a historical v1
+   * record, which never carried coverage; a current record's coverage is always
+   * re-derived and compared before a boundary acts on it, so a tampered
+   * `coverage_json` cannot pass as the reviewed set.
+   */
+  coverage: ExecutionCoverageSet | null;
   /** The recorded activation record; `null` until the barrier committed (or aborted). */
   activation: Record<string, unknown> | null;
   retirement: Record<string, unknown> | null;
 };
+
+/**
+ * §4.1 one recorded coverage set: a minimal, closed shape check. The SET IS
+ * NEVER TRUSTED here — every boundary re-derives the coverage from the same
+ * discovered bytes and compares the two by canonical serialization, so a
+ * rewritten record refuses instead of authorizing anything.
+ */
+function readRecordedCoverage(text: unknown, what: string): ExecutionCoverageSet | null {
+  if (text === null || text === undefined) return null;
+  if (typeof text !== "string") throw conflict(`${what} is not a JSON string`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw conflict(`${what} is not valid JSON (${(error as Error).message}); the recorded coverage cannot be re-derived against it.`);
+  }
+  if (!isPlainObject(parsed)) throw conflict(`${what} is not a JSON object`);
+  if (
+    parsed.version !== 1 ||
+    typeof parsed.manifestId !== "string" ||
+    typeof parsed.manifestHash !== "string" ||
+    !Array.isArray(parsed.receipts) ||
+    typeof parsed.digest !== "string"
+  ) {
+    throw conflict(`${what} is not a version 1 coverage set; a recorded coverage document is closed and versioned.`);
+  }
+  return parsed as unknown as ExecutionCoverageSet;
+}
 
 function storedJsonOrNull(text: unknown, what: string): Record<string, unknown> | null {
   if (text === null || text === undefined) return null;
@@ -1556,7 +2857,7 @@ function storedJsonOrNull(text: unknown, what: string): Record<string, unknown> 
 function readMigrationRecord(db: StoreDb, manifestId: string): MigrationRecord | null {
   const row = db
     .prepare(
-      "select manifest_hash, phase, manifest_json, activation_receipt_json, retirement_json from execution_migrations " +
+      "select manifest_hash, phase, manifest_json, coverage_json, activation_receipt_json, retirement_json from execution_migrations " +
         "where manifest_id = ?",
     )
     .get(manifestId) as
@@ -1564,6 +2865,7 @@ function readMigrationRecord(db: StoreDb, manifestId: string): MigrationRecord |
         manifest_hash?: unknown;
         phase?: unknown;
         manifest_json?: unknown;
+        coverage_json?: unknown;
         activation_receipt_json?: unknown;
         retirement_json?: unknown;
       }
@@ -1583,17 +2885,36 @@ function readMigrationRecord(db: StoreDb, manifestId: string): MigrationRecord |
   } catch (error) {
     throw conflict(`execution_migrations(${manifestId}).manifest_json is not valid JSON (${(error as Error).message}).`);
   }
-  if (!isPlainObject(document) || document.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) {
-    throw conflict(`execution_migrations(${manifestId}).manifest_json is not a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} manifest.`);
+  if (
+    !isPlainObject(document) ||
+    (document.version !== EXECUTION_MIGRATION_MANIFEST_VERSION && document.version !== EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION)
+  ) {
+    throw conflict(
+      `execution_migrations(${manifestId}).manifest_json is not a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} (or historical ` +
+        `${EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION}) manifest.`,
+    );
   }
   return {
     manifestId,
     manifestHash: row.manifest_hash,
     phase,
-    manifest: document as unknown as ExecutionManifest,
+    manifest: document as unknown as ExecutionManifestDocument,
+    coverage: readRecordedCoverage(row.coverage_json, `execution_migrations(${manifestId}).coverage_json`),
     activation: storedJsonOrNull(row.activation_receipt_json, `execution_migrations(${manifestId}).activation_receipt_json`),
     retirement: storedJsonOrNull(row.retirement_json, `execution_migrations(${manifestId}).retirement_json`),
   };
+}
+
+/** §4.1 the version-2 document of one record. A v1 record is history: it is never mutated in place. */
+function requireCurrentManifest(record: MigrationRecord, verb: string): ExecutionManifest {
+  if (record.manifest.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) {
+    throw conflict(
+      `manifest ${record.manifestId} is recorded as a version ${record.manifest.version} document, which carries no surface discovery and ` +
+        `no coverage. ${verb} addresses a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} discovery only: abort that staging explicitly ` +
+        `and re-preview the workspace; nothing was changed.`,
+    );
+  }
+  return record.manifest;
 }
 
 /** The recorded manifest, checked against the pair the caller hands back and the control root it belongs to. */
@@ -1696,6 +3017,8 @@ type ExecutionActivationRecord = {
   storeRevision: number;
   attestationDigest: string;
   attestation: ActivationAttestation;
+  /** §4.1 the coverage digest the barrier recomputed and activated under. */
+  coverageDigest: string;
   /** The imported references this barrier revoked (they stay rows; they stop authorizing). */
   revokedSessions: DiscoveredOwner[];
   /** Imported held ownership that stays REPRESENTED and requires the named reconciliation. */
@@ -1729,18 +3052,6 @@ function reconciliationRequired(record: {
     `${named} and ${leases}. Before any consumer reads a migrated workflow, recover each workflow's coordinator with ` +
     `recoverExecutionCoordinator (naming the recorded prior holder and attesting it stopped), then rebind its plans with ` +
     `bindExecutionSession; a suspended execution or integration lease needs an explicit reconcile before reuse.`
-  );
-}
-
-/** §6/2b "Complete coverage rule": a 2a activation accepts a deferred surface only when it is proven ABSENT. */
-function assertNoDeferredSurfaces(manifest: ExecutionManifest): void {
-  const populated = manifest.deferred.filter((surface) => surface.disposition !== "absent" || surface.paths.length > 0);
-  if (populated.length === 0) return;
-  throw incomplete(
-    `${populated.length} deferred (2b) surface(s) are populated: ` +
-      `${populated.map((surface) => `${surface.surface} (${surface.paths.length} path(s))`).join(", ")}. A 2a activation ` +
-      `accepts a deferred surface only when the discovery proves it absent; there is no allow-incomplete flag, and this ` +
-      `workspace belongs on the staged route until 2b resolves those files. Nothing was activated.`,
   );
 }
 
@@ -1819,7 +3130,10 @@ function readStagedGraph(db: StoreDb): StagedGraph {
 
 /** §6 item 3: the staged graph must be exactly the reviewed import, or the barrier refuses to activate it. */
 function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: DiscoveredSources, epoch: number): void {
-  const expectedWorkflows = discovered.workflows.map((workflow) => workflow.workflowId);
+  // §2.2/§4.2 `execution_registry` holds the ACTIVE lifecycles only, so terminal
+  // (unregistered) history is compared against the workflow/plan rows it landed
+  // in and never against root membership it must not gain.
+  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered).map((workflow) => workflow.workflowId);
   if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
     throw conflict(
       `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +
@@ -1859,13 +3173,20 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
 }
 
 /** §6 item 3 the recorded activation of an already-active manifest: its receipt is the only answer. */
-function replayActivation(record: MigrationRecord, attestationDigest: string): ExecutionMigrationReceipt {
+function replayActivation(record: MigrationRecord, attestationDigest: string, coverageDigest: string): ExecutionMigrationReceipt {
   const recorded = record.activation?.attestationDigest;
   if (typeof recorded !== "string" || recorded !== attestationDigest) {
     throw conflict(
       `manifest ${record.manifestId} is already ACTIVE under a different attestation (recorded ` +
         `${typeof recorded === "string" ? recorded.slice(0, 12) : "\u2014 none"}), supplied ${attestationDigest.slice(0, 12)}); ` +
         `activation history is immutable, so reuse the recorded attestation. The live authority was not changed.`,
+    );
+  }
+  const recordedCoverage = record.activation?.coverageDigest;
+  if (recordedCoverage !== undefined && recordedCoverage !== coverageDigest) {
+    throw conflict(
+      `manifest ${record.manifestId} is already ACTIVE under coverage digest ${String(recordedCoverage)}, not the supplied ` +
+        `${coverageDigest}; activation history is immutable, so reuse the recorded coverage. The live authority was not changed.`,
     );
   }
   return { manifestId: record.manifestId, phase: "active", replayed: true };
@@ -1895,9 +3216,16 @@ function replayActivation(record: MigrationRecord, attestationDigest: string): E
 export async function activateExecutionMigration(
   input: ExecutionMigrationActivationInput,
 ): Promise<ExecutionMigrationReceipt> {
-  const { context, operator } = resolveMigrationInput(input, "activate");
+  const { context, operator, inventoryPath } = resolveMigrationInput(input, "activate");
   const manifestId = requireManifestRef(input.manifestId, "activate", "manifestId");
   const manifestHash = requireManifestRef(input.manifestHash, "activate", "manifestHash");
+  if (!isNonEmptyString(input.coverageDigest) || !/^[0-9a-f]{64}$/.test(input.coverageDigest)) {
+    throw conflict(
+      `activation requires coverageDigest: the canonical digest of the coverage set validated for this manifest. The barrier recomputes ` +
+        `that coverage from the named bytes and compares it, so an absent or unusable witness is refused rather than guessed. ` +
+        `Nothing was activated.`,
+    );
+  }
   if (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0) {
     throw conflict(
       `activation requires expectedEpoch: the positive store epoch the reviewed manifest was staged at. The barrier is a ` +
@@ -1921,15 +3249,16 @@ export async function activateExecutionMigration(
   // because discovery no longer recognises the workspace: after activation the
   // file route is fenced, and after retirement the root register is gone.
   const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "activation");
-  if (known.phase === "active") return replayActivation(known, attestationDigest);
+  if (known.phase === "active") return replayActivation(known, attestationDigest, input.coverageDigest);
   if (known.phase !== "staged") {
     throw conflict(
       `manifest ${manifestId} is recorded ${known.phase}; only a staged manifest activates. An aborted or retired manifest ` +
         `needs a re-preview under a fresh manifest, and nothing was activated.`,
     );
   }
+  requireCurrentManifest(known, "activation");
 
-  const prelock = discoverExecutionSources(context);
+  const prelock = discoverExecutionSources(context, { inventoryPath });
   const workflowLocks = [...prelock.workflows]
     .sort((a, b) => a.workflowId.localeCompare(b.workflowId))
     .map((workflow) => join(workflow.dir, WORKFLOW_SNAPSHOT_FILE));
@@ -1947,13 +3276,13 @@ export async function activateExecutionMigration(
               root,
               verb: "activation",
             });
-            if (record.phase === "active") return replayActivation(record, attestationDigest);
+            if (record.phase === "active") return replayActivation(record, attestationDigest, input.coverageDigest);
             if (record.phase !== "staged") {
               throw conflict(
                 `manifest ${manifestId} is recorded ${record.phase}; only a staged manifest activates, and nothing was activated.`,
               );
             }
-            const manifest = record.manifest;
+            const manifest = requireCurrentManifest(record, "activation");
             if (tx.execution.authorityState === "active") {
               throw conflict(
                 `the execution authority is already ACTIVE under manifest ${String(tx.execution.manifestId)}; an active ` +
@@ -1996,14 +3325,31 @@ export async function activateExecutionMigration(
                   `resolved with the legacy reconcile while JSON still owns execution (\u00a77); nothing was activated.`,
               );
             }
-            const discovered = discoverExecutionSources(context);
+            const discovered = discoverExecutionSources(context, { inventoryPath });
             assertReviewedManifestHolds({
               manifest,
               discovered,
               selfHeldLockDirs: new Set(prelock.workflows.map((workflow) => join(workflow.dir, LEGACY_WRITE_LOCK_DIR))),
               pendingCatalogOperations: pending,
             });
-            assertNoDeferredSurfaces(manifest);
+            // §4.1/§4.2 the coverage boundary replaces "populated means blocked":
+            // the barrier recomputes the whole coverage from the named bytes,
+            // closes it through C2's validator (which re-checks the host proof's
+            // stopped/reloaded attestation) and requires it to be BOTH the digest
+            // the operator approved and the set recorded at staging.
+            const barrierCoverage = coverageFromDiscovery({ discovered, manifest, manifestHash: record.manifestHash });
+            if (barrierCoverage.set.digest !== input.coverageDigest) {
+              throw conflict(
+                `activation supplies coverage digest ${input.coverageDigest}, but the coverage recomputed from this workspace is ` +
+                  `${barrierCoverage.set.digest}; the barrier activates exactly the reviewed coverage. Nothing was activated.`,
+              );
+            }
+            if (record.coverage === null || serializeExecutionValue(record.coverage) !== serializeExecutionValue(barrierCoverage.set)) {
+              throw conflict(
+                `the staged record of manifest ${manifestId} does not carry the coverage this workspace recomputes; the recorded receipts ` +
+                  `are not the reviewed ones. Nothing was activated.`,
+              );
+            }
             assertAttestationCoversOwners(discovered.owners, attestation);
             assertStagedGraphIsTheImport(readStagedGraph(tx.db), discovered, tx.epoch);
 
@@ -2052,6 +3398,7 @@ export async function activateExecutionMigration(
               storeRevision,
               attestationDigest,
               attestation,
+              coverageDigest: barrierCoverage.set.digest,
               revokedSessions: discovered.owners,
               suspendedLeases,
               suspendedIntegrationLeases,
@@ -2090,9 +3437,9 @@ export async function activateExecutionMigration(
 /** §6 item 4: where the manifest-addressed read-only history lives. */
 const ARCHIVED_EXECUTION_DIR = ["archived", "execution"] as const;
 
-/** §6 item 4: one core source file, with the durable per-item progress the resume reads. */
+/** §6 item 4: one retired source file, with the durable per-item progress the resume reads. */
 type RetirementItem = {
-  kind: "root" | "workflow";
+  kind: "root" | "workflow" | "session-envelope";
   path: string;
   relativePath: string;
   archivePath: string;
@@ -2152,31 +3499,62 @@ function harnessRelativePath(root: string, path: string, what: string): string {
   return segments.join("/");
 }
 
+/** One retirement item, with its manifest-addressed destination. */
+function retirementItemOf(kind: RetirementItem["kind"], path: string, sha256: string, root: string, archiveDir: string): RetirementItem {
+  const relativePath = harnessRelativePath(root, path, `the ${kind} source`);
+  return { kind, path, relativePath, archivePath: join(archiveDir, ...relativePath.split("/")), sha256, state: "pending" as const };
+}
+
 /**
- * §6 item 4 the retire set: EXACTLY the core sources the reviewed manifest
- * witnessed — the root register and the registered workflow snapshots. Session
- * envelopes, note/flow ledgers, launch journals and the host-owned execution
- * status file are deferred 2b surfaces and are never touched here.
+ * §6 item 4 the retire set: EXACTLY the sources the reviewed manifest addresses
+ * — the root register and the registered workflow snapshots, plus the session
+ * envelopes whose §4.1 row was validated `retire` (the historical bodies the
+ * import did not associate with any DB row). Note ledgers, launch journals,
+ * host-owned status files and the host-session evidence are retained 2b
+ * surfaces and are never touched here.
  */
-function retirementItems(manifest: ExecutionManifest, root: string, archiveDir: string): RetirementItem[] {
+function retirementItems(input: {
+  manifest: ExecutionManifestDocument;
+  coverage: ExecutionCoverageSet | null;
+  root: string;
+  archiveDir: string;
+}): RetirementItem[] {
+  const { manifest, coverage, root, archiveDir } = input;
   const core = manifest.sources.filter((witness) => witness.kind === "root" || witness.kind === "workflow");
   if (core.length === 0) {
     throw conflict(
-      `manifest ${manifest.id} records no core root/snapshot source, so there is nothing a 2a retirement could move; ` +
-        `nothing was retired.`,
+      `manifest ${manifest.id} records no core root/snapshot source, so there is nothing a retirement could move; nothing was retired.`,
     );
   }
-  return core.map((witness) => {
-    const relativePath = harnessRelativePath(root, witness.path, `the ${witness.kind} source`);
-    return {
-      kind: witness.kind === "root" ? ("root" as const) : ("workflow" as const),
-      path: witness.path,
-      relativePath,
-      archivePath: join(archiveDir, ...relativePath.split("/")),
-      sha256: witness.sha256,
-      state: "pending" as const,
-    };
-  });
+  const items = core.map((witness) =>
+    retirementItemOf(witness.kind === "root" ? "root" : "workflow", witness.path, witness.sha256, root, archiveDir),
+  );
+  if (manifest.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) return items;
+  if (coverage === null) {
+    throw conflict(
+      `manifest ${manifest.id} is a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} discovery recorded without its coverage; retirement refuses ` +
+        `to move sources it cannot tie to the reviewed coverage. Nothing was retired.`,
+    );
+  }
+  if (coverage.manifestId !== manifest.id) {
+    throw conflict(
+      `the recorded coverage belongs to manifest ${coverage.manifestId}, not ${manifest.id}; retirement addresses one reviewed discovery. ` +
+        `Nothing was retired.`,
+    );
+  }
+  for (const receipt of coverage.receipts) {
+    if (receipt.surface !== "workflow-session-envelopes" || receipt.disposition !== "retire") continue;
+    for (const witness of receipt.sources) {
+      if (witness.root !== "control") {
+        throw conflict(
+          `the retired session envelope ${witness.path} is configured under root ${witness.root}; the manifest-addressed archive lives ` +
+            `under the control root, so only control-rooted envelopes are retired. Nothing was retired.`,
+        );
+      }
+      items.push(retirementItemOf("session-envelope", join(manifest.roots.control, witness.path), witness.sha256, root, archiveDir));
+    }
+  }
+  return items;
 }
 
 function readRetirementLedger(path: string): ExecutionRetirementLedger | undefined {
@@ -2405,6 +3783,10 @@ async function assertRetirableAuthority(context: StoreContext, record: Migration
  * row of its own.
  */
 export async function retireExecutionSources(input: ExecutionMigrationRetireInput): Promise<ExecutionMigrationReceipt> {
+  // The shared request still names the reviewed inventory (one request, one
+  // discovery); retirement itself reads the coverage RECORDED with the manifest
+  // rather than re-discovering a workspace whose deferred files may legitimately
+  // have changed since activation.
   const { context } = resolveMigrationInput(input, "retire");
   const manifestId = requireManifestRef(input.manifestId, "retire", "manifestId");
   const manifestHash = requireManifestRef(input.manifestHash, "retire", "manifestHash");
@@ -2419,10 +3801,23 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
     );
   }
   await assertRetirableAuthority(context, known, "retirement");
+  // §4.1 the retirement boundary: the recorded coverage must be the set the
+  // barrier activated under, so a rewritten record is refused BEFORE a rename.
+  if (known.manifest.version === EXECUTION_MIGRATION_MANIFEST_VERSION) {
+    const activatedCoverage = known.activation?.coverageDigest;
+    if (known.coverage === null || typeof activatedCoverage !== "string" || activatedCoverage !== known.coverage.digest) {
+      throw conflict(
+        `manifest ${manifestId} is recorded active with a coverage digest this store cannot tie to its recorded coverage ` +
+          `(recorded ${known.coverage === null ? "\u2014 none" : known.coverage.digest}, activation ` +
+          `${typeof activatedCoverage === "string" ? activatedCoverage : "\u2014 none"}). Retirement moves exactly the reviewed ` +
+          `set; nothing was retired.`,
+      );
+    }
+  }
 
   const archiveDir = join(root, ...ARCHIVED_EXECUTION_DIR, manifestId);
   const ledgerPath = join(archiveDir, "retirement.json");
-  const expectedItems = retirementItems(known.manifest, root, archiveDir);
+  const expectedItems = retirementItems({ manifest: known.manifest, coverage: known.coverage, root, archiveDir });
   const lockPaths = [...expectedItems]
     .filter((item) => item.kind === "workflow")
     .map((item) => item.path)

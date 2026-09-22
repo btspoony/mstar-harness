@@ -933,23 +933,74 @@ export {
 export type {
   ExecutionDeferredSurface,
   ExecutionManifest,
+  ExecutionManifestDocument,
+  ExecutionManifestSurface,
   ExecutionMigrationAbortInput,
   ExecutionMigrationActivationInput,
   ExecutionMigrationApplyInput,
+  ExecutionMigrationCoverageInput,
+  ExecutionMigrationHostSession,
   ExecutionMigrationInput,
+  ExecutionMigrationInventory,
   ExecutionMigrationReceipt,
   ExecutionMigrationRetireInput,
+  ExecutionMigrationRoots,
   ExecutionSourceWitness,
+  HostDiscoveryProof,
 } from "./execution-migrate.js";
 export {
   abortExecutionMigration,
   activateExecutionMigration,
   applyExecutionMigration,
+  collectExecutionCoverage,
+  EXECUTION_MIGRATION_INVENTORY_VERSION,
+  EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION,
   EXECUTION_MIGRATION_MANIFEST_VERSION,
   executionManifestHash,
   previewExecutionMigration,
   retireExecutionSources,
 } from "./execution-migrate.js";
+// §4.1/§4.2 the pure coverage substrate (C2): the closed 18-surface inventory,
+// the canonical receipt/codec table, the producer entry point C3 builds its
+// receipts with and the one validator every boundary closes through. ADDITIVE
+// export — the engine package's exports map is the only reachable surface for
+// the migration transport (`collectExecutionCoverage`) and for consumers that
+// must recompute a receipt.
+export type {
+  ConsumerDiscoveryProof,
+  CoverageWitness,
+  ExecutionCoverageEvidence,
+  ExecutionCoverageManifest,
+  ExecutionCoverageReceipt,
+  ExecutionCoverageSet,
+  ExecutionSurface,
+} from "./execution-coverage.js";
+export {
+  EXECUTION_COVERAGE_SURFACES,
+  buildExecutionCoverageReceipt,
+  coverageWitnessKey,
+  executionCoverageDigest,
+  executionCoverageSurfaceScope,
+  validateExecutionCoverage,
+} from "./execution-coverage.js";
+// §5 F1 the retained workflow-notes ledger: the append-only accepted-record
+// writer plus its pure coverage normalizer. ADDITIVE export — the accepted
+// record shape, its receipt and the coverage facts are the whole published
+// surface, and the write path stays behind the engine's own authorization.
+export type {
+  WorkflowNote,
+  WorkflowNoteAcceptedRecord,
+  WorkflowNoteAppendReceipt,
+  WorkflowNoteHistoricalRecord,
+  WorkflowNotesCoverageFacts,
+} from "./execution-ledgers.js";
+export {
+  ExecutionLedgerError,
+  EXECUTION_LEDGER_ERROR_CODES,
+  appendWorkflowNote,
+  normalizeWorkflowNotesCoverage,
+  workflowNotesLedgerPath,
+} from "./execution-ledgers.js";
 // Execution recovery: the consistent whole-store backup, the explicit-loss
 // atomic restore and the diagnostic export (primary spec §8, R3 of the
 // migration protocol). `previewExecutionRestore` is the
