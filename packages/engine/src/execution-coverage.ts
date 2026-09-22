@@ -690,14 +690,39 @@ function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string;
   return { sha256, durable: kind.startsWith("workflow-") };
 }
 
+/**
+ * The workflow dir a canonical root-relative ledger companion belongs to, or
+ * `null` when the path is none of the released companions. The tail and the
+ * identity index sit directly in the workflow dir; a sealed history chunk sits
+ * in its `agent-flow-history/` subdirectory. Configured roots only prepend
+ * path segments, so the released level is recognized from the tail of the path.
+ */
+function agentFlowDirOf(path: string, name: string): string | null {
+  if (name === AGENT_FLOW_TAIL_FILE || name === AGENT_FLOW_INDEX_FILE) {
+    return path === name ? "" : path.slice(0, path.length - name.length - 1);
+  }
+  if (!/^chunk-\d{6}\.jsonl$/.test(name)) return null;
+  const segments = path.split("/");
+  return segments.length >= 3 && segments[segments.length - 2] === AGENT_FLOW_HISTORY_DIR ? segments.slice(0, -2).join("/") : null;
+}
+
 function agentFlowCodec(context: RowContext): unknown {
   let tail: Readonly<{ path: string; sha256: string; count: number; records: readonly unknown[] }> | null = null;
   let index: Readonly<{ path: string; sha256: string; count: number; entries: readonly unknown[] }> | null = null;
   const chunks: Array<Readonly<{ path: string; sha256: string; count: number; records: readonly unknown[] }>> = [];
 
+  const dirs = new Set<string>();
   for (const witness of context.sources) {
     const name = basenameOf(witness.path);
     const what = `${context.label} ledger file ${witness.path}`;
+    const dir = agentFlowDirOf(witness.path, name);
+    if (dir === null) {
+      refuse(
+        `${context.label} assigns ${witness.path}, which is not the released agent-flow tail, its accepted-identity index or a sealed history chunk; ` +
+          `an unknown companion of the ledger is never coverage.`,
+      );
+    }
+    dirs.add(dir);
     if (name === AGENT_FLOW_TAIL_FILE) {
       if (tail !== null) refuse(`${context.label} assigns two live tails (${tail.path}, ${witness.path}); one workflow dir owns one tail.`);
       const records = jsonlLines(context.bytesOf(witness), what).map((line, position) => agentFlowRecord(line, `${what} line ${position + 1}`));
@@ -735,14 +760,13 @@ function agentFlowCodec(context: RowContext): unknown {
       index = { path: witness.path, sha256: witness.sha256, count: entries.length, entries };
       continue;
     }
-    if (witness.path.startsWith(`${AGENT_FLOW_HISTORY_DIR}/`) && /^chunk-\d{6}\.jsonl$/.test(name)) {
-      const records = jsonlLines(context.bytesOf(witness), what).map((line, position) => agentFlowRecord(line, `${what} line ${position + 1}`));
-      chunks.push({ path: witness.path, sha256: witness.sha256, count: records.length, records });
-      continue;
-    }
+    const records = jsonlLines(context.bytesOf(witness), what).map((line, position) => agentFlowRecord(line, `${what} line ${position + 1}`));
+    chunks.push({ path: witness.path, sha256: witness.sha256, count: records.length, records });
+  }
+  if (dirs.size !== 1) {
     refuse(
-      `${context.label} assigns ${witness.path}, which is not the released agent-flow tail, its accepted-identity index or a sealed history chunk; ` +
-        `an unknown companion of the ledger is never coverage.`,
+      `${context.label}: the agent-flow tail, its accepted-identity index and its sealed history chunks live in ONE workflow dir, but the assignment ` +
+        `names ${[...dirs].sort(compareText).join(", ")}; companions of different workflow dirs are never one retained ledger.`,
     );
   }
 
