@@ -2580,6 +2580,154 @@ describe('agent-flow — index fail-closed boundaries (F2)', () => {
   })
 })
 
+describe('agent-flow — durability, legacy bound and archive boundaries (F2)', () => {
+  it('a LEGACY v1 bound without an incarnation does not skip rows: the walk restarts at the floor', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-legacy-bound-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // A pre-upgrade bound claims two rows were already consumed, but it carries
+    // no proven incarnation — it must not shorten the walk.
+    await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), JSON.stringify({ v: 1, cursors: { 'sess-legacy': 2 } }))
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-3' }) },
+    ], { id: 'sess-legacy', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+
+      const view = readAgentFlow(workflowDir)!
+      expect(view.events.map((e) => e.runId).sort()).toEqual(['run-1', 'run-2', 'run-3'])
+      // The bound was re-stamped with the verified incarnation, from the floor.
+      const entry = cursorEntry(workflowDir, 'sess-legacy')!
+      expect(entry.next).toBe(3)
+      expect(entry.stream).toMatch(STREAM_SHAPE)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a MALFORMED cursor entry refuses the record and leaves the sidecar bytes alone', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-cursor-entry-bad-')
+    try {
+      const damaged = JSON.stringify({ v: 2, cursors: { 'sess-a': { next: 0 } } })
+      await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), damaged)
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-a'),
+        event: { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' },
+      })).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')).toBe(damaged)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a live tool-call row is refused while the index is unreadable — no wfc1 exemption, no compaction', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-live-index-damaged-')
+    try {
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      const before = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')
+      expect(before.trim().split('\n')).toHaveLength(1)
+
+      // The authority becomes unreadable: the live write is refused and the
+      // ledger bytes stay exactly as they were.
+      await rm(join(workflowDir, AGENT_FLOW_INDEX_FILE), { force: true })
+      await mkdir(join(workflowDir, AGENT_FLOW_INDEX_FILE), { recursive: true })
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+
+      expect(readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')).toBe(before)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an UNREADABLE history chunk refuses the compaction instead of duplicating the batch', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-unreadable-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'q'.repeat(180)
+      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-arch-read', 'sess-arch-read', i, pad))
+      await writeFile(file, `${seeded.join('\n')}\n`)
+      await seedIdentityIndex(workflowDir, seeded)
+      // The active chunk slot exists but cannot be read as an archive.
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(join(dir, 'chunk-000001.jsonl'), { recursive: true })
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(false)
+
+      // The display tail was NOT compacted (the batch was never archived) and
+      // the new row's identity did not commit.
+      expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
+      expect(indexRows(workflowDir)).toHaveLength(AGENT_FLOW_MAX_EVENTS + 10)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a batch that ROLLS INTO A NEW CHUNK is archived exactly once — the sealed prefix is not duplicated', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-rollover-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'r'.repeat(180)
+      // A = the already-archived prefix (11 rows), X = the rows evicted with it
+      // (20 rows), then filler that keeps the display tail over the bound.
+      const archived = Array.from({ length: 11 }, (_, i) => sourcedLine(T0 + i, `run-a-${i}`, 'sess-arch', 'sess-arch', i, pad))
+      const evicted = Array.from({ length: 20 }, (_, i) => sourcedLine(T0 + 11 + i, `run-x-${i}`, 'sess-arch', 'sess-arch', 11 + i, pad))
+      const filler = Array.from({ length: 490 }, (_, i) => sourcedLine(T0 + 31 + i, `run-fill-${i}`, 'sess-fill', 'sess-fill', i, pad))
+      await writeFile(file, `${[...archived, ...evicted, ...filler].join('\n')}\n`)
+      await seedIdentityIndex(workflowDir, [...archived, ...evicted, ...filler])
+
+      // The active chunk already holds A at its tail and is over the seal gate,
+      // so this batch must roll into a NEW chunk.
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(dir, { recursive: true })
+      const oldChunk = `${Array.from({ length: 400 }, (_, i) => JSON.stringify({ pad: `${pad}${i}` })).join('\n')}\n${archived.join('\n')}\n`
+      await writeFile(join(dir, 'chunk-000001.jsonl'), oldChunk)
+      expect(statSync(join(dir, 'chunk-000001.jsonl')).size).toBeGreaterThan(AGENT_FLOW_SIZE_GATE_BYTES)
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-live'),
+        event: { v: 1, ts: T0 + 9000, kind: 'workflow-run', runId: 'run-live', name: 'audit' },
+      })).toBe(true)
+
+      const chunks = listAgentFlowHistoryChunks(workflowDir)
+      expect(chunks).toEqual(['chunk-000001.jsonl', 'chunk-000002.jsonl'])
+      const sealedChunk = readFileSync(join(dir, 'chunk-000001.jsonl'), 'utf8')
+      const newChunk = readFileSync(join(dir, 'chunk-000002.jsonl'), 'utf8')
+      // The seal gate closed the first chunk, so it is untouched…
+      expect(sealedChunk).toBe(oldChunk)
+      // …and the new chunk carries ONLY the not-yet-archived rows of the batch
+      // (the batch is the first 22 tail lines: the 11 archived rows plus the
+      // first 11 evicted ones).
+      expect(newChunk).toBe(`${evicted.slice(0, 11).join('\n')}\n`)
+      // Exactly one archived copy of every accepted occurrence.
+      expect(newChunk).not.toContain('run-a-0')
+      expect(sealedChunk.split('run-a-0').length - 1).toBe(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('workflow-ledger — verified native incarnation (F2 identity)', () => {
   it('a session whose header carries no creation stamp records nothing — no fabricated identity', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-no-incarnation-')

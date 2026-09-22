@@ -926,11 +926,13 @@ export function registerWorkflowLedger(
     }
     // The bound is usable only for the incarnation it was WRITTEN for: a
     // rebuilt log starts at its own floor instead of being skipped by a stale
-    // session bound. A legacy v1 entry (no recorded incarnation) is adopted
-    // once — its next durable write re-stamps the verified incarnation.
+    // session bound.
     const streamId = sessionStreamIdOf(session, sid)
     const entry = cursorRead.cursors.get(sid)
-    const verified = streamId !== undefined && entry !== undefined && (entry.stream === undefined || entry.stream === streamId) ? entry.next : 0
+    // A LEGACY v1 entry (no recorded incarnation) is not a verified checkpoint
+    // either: it is ignored and the durable identity index dedupes the re-walk,
+    // so a stale bound can never skip a rebuilt log's rows.
+    const verified = streamId !== undefined && entry !== undefined && entry.stream === streamId ? entry.next : 0
     return Math.max(bounded, verified > endSeq ? 0 : verified)
   }
 

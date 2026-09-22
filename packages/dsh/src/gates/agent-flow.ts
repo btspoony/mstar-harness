@@ -67,9 +67,13 @@
  * bytes and line-offset identity — they simply have no `eventId`.
  *
  * `recordWorkflowEvent` owns ONE critical section under the per-workflow lock
- * (the consumer no longer advances the cursor separately), moving three
- * durable stores in order: the accepted-identity INDEX (the dedup authority),
- * the bounded display tail, and the scan-bound CURSOR. A crash between the
+ * (the consumer no longer advances the cursor separately), committing three
+ * durable stores in this order, each one FSYNCED before the next: the ledger
+ * row (appended durably, and the compacted tail replaced through a fsynced temp
+ * + atomic rename + fsynced directory), then the accepted-identity INDEX entry
+ * (the dedup authority), then the scan-bound CURSOR (durable atomic replace).
+ * A durable failure at any step is an advisory refusal, never a silently
+ * downgraded success. A crash between the
  * append and the index entry is healed from the tail; a crash between the
  * index entry and the cursor costs a re-walk, never a duplicate. An event id
  * already present with DIFFERENT bytes (a reused stream/log identity) and a
@@ -190,9 +194,9 @@
  * `recordSubagentLink` / `readAgentFlow` + constants + types) are re-exported
  * verbatim by the entry.
  */
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -1081,17 +1085,25 @@ function parseWatermark(raw: string): Watermark {
   }
   const cursors: Watermark = new Map()
   for (const [sid, value] of Object.entries(entries)) {
-    if (sid === '') continue
+    // Every entry must be structurally valid: a malformed entry makes the whole
+    // present sidecar `unreadable` (the caller refuses and the bytes are left
+    // for diagnosis) instead of being silently dropped from a partial
+    // authority. JSON object semantics collapse duplicate keys before this
+    // point, so there is no conflicting-key case to detect here.
+    if (sid === '') throw new Error('empty cursor session id')
     if (typeof value === 'number') {
       // v1 legacy entry: the bound has NO recorded incarnation.
-      if (Number.isInteger(value) && value >= 1 && value < WORKFLOW_LEDGER_MAX_SEQ) cursors.set(sid, { next: value })
+      if (!Number.isInteger(value) || value < 1 || value >= WORKFLOW_LEDGER_MAX_SEQ) throw new Error('invalid v1 cursor bound')
+      cursors.set(sid, { next: value })
       continue
     }
     const entry = asRecord(value)
     const next = entry?.next
     const stream = entry?.stream
-    if (entry === undefined || typeof next !== 'number' || !Number.isInteger(next) || next < 1 || next >= WORKFLOW_LEDGER_MAX_SEQ) continue
-    if (stream !== undefined && (typeof stream !== 'string' || stream === '')) continue
+    if (entry === undefined || typeof next !== 'number' || !Number.isInteger(next) || next < 1 || next >= WORKFLOW_LEDGER_MAX_SEQ) {
+      throw new Error('invalid cursor entry')
+    }
+    if (stream !== undefined && (typeof stream !== 'string' || stream === '')) throw new Error('invalid cursor stream stamp')
     cursors.set(sid, stream === undefined ? { next } : { next, stream })
   }
   return cursors
@@ -1107,11 +1119,11 @@ function parseWatermark(raw: string): Watermark {
 function saveWatermark(workflowDir: string, cursors: Watermark): { kind: 'ok' } | { kind: 'failed'; reason: string } {
   try {
     const file = join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE)
-    const tmp = `${file}.tmp`
     const entries: Record<string, LedgerCursor> = {}
     for (const [sid, entry] of cursors) entries[sid] = entry
-    writeFileSync(tmp, JSON.stringify({ v: 2, cursors: entries }))
-    renameSync(tmp, file)
+    // Durable atomic replace: fsynced temp bytes, atomic rename, fsynced
+    // directory — `ok` is reported only after that whole boundary.
+    writeFileDurableSync(file, JSON.stringify({ v: 2, cursors: entries }))
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) }
   }
@@ -1197,7 +1209,10 @@ function advanceCursorLocked(
   // A stored bound for ANOTHER incarnation describes a log that no longer
   // exists at these positions — replace it. A matching bound, or an adopted
   // legacy entry with no recorded incarnation, advances monotonically.
-  const sameIncarnation = prior !== undefined && (prior.stream === undefined || prior.stream === streamId)
+  // Only a bound stamped for THIS incarnation may be advanced monotonically: an
+  // un-stamped legacy (v1) entry is not a verified checkpoint for this log, so
+  // it is replaced by the new position instead of dragging a stale value along.
+  const sameIncarnation = prior !== undefined && prior.stream === streamId
   const next = sameIncarnation && prior !== undefined ? Math.max(prior.next, nextSeq) : nextSeq
   cursors.set(sid, { next, stream: streamId })
   const saved = saveWatermark(workflowDir, cursors)
@@ -1496,6 +1511,61 @@ export function withWorkflowDirLock<T>(
 }
 
 /**
+ * Append bytes durably: one fd, one write, `fsync` before returning. Every
+ * accepted ledger row and every identity-index entry goes through here, so a
+ * caller can never report success for bytes that are still only in the page
+ * cache.
+ */
+function appendFileDurableSync(file: string, bytes: string): void {
+  const fd = openSync(file, 'a')
+  try {
+    writeSync(fd, bytes)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * Write one file durably: fsynced bytes in a temp sibling, atomic rename, then
+ * a fsynced parent directory so the rename itself survives a crash. Used for
+ * the compacted display tail and the cursor sidecar — the two atomic
+ * replacements whose durability the recovery order depends on.
+ */
+function writeFileDurableSync(file: string, content: string): void {
+  const tmp = `${file}.tmp`
+  const fd = openSync(tmp, 'w')
+  try {
+    writeSync(fd, content)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, file)
+  fsyncDirectory(dirname(file))
+}
+
+/**
+ * Fsync one directory (the rename/create durability boundary). A platform that
+ * refuses to open a directory for fsync degrades to a warn: the file bytes and
+ * the rename are still ordered, only the dir entry's durability is unproven.
+ */
+function fsyncDirectory(dir: string): void {
+  let fd: number
+  try {
+    fd = openSync(dir, 'r')
+  } catch (error) {
+    log('warn', `agent-flow directory fsync unavailable for ${dir} (${errorMessage(error)}) — the rename is ordered but its directory entry is not proven durable`)
+    return
+  }
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
  * Archive evicted display lines, byte-exact, and `fsync` them BEFORE the
  * caller rewrites the tail. History is written as SEALED chunks under
  * `<workflowDir>/agent-flow-history/` (`chunk-NNNNNN.jsonl`): evictions keep
@@ -1506,10 +1576,13 @@ export function withWorkflowDirLock<T>(
  *
  * CRASH IDEMPOTENCE: a process death after the chunk `fsync` but before the
  * tail rewrite leaves the batch in BOTH places. The retry therefore appends
- * only the part of the batch that is not already the chunk's tail (a byte
- * comparison at the line boundary): the same accepted occurrence is archived
- * exactly once, and legacy lines without an identity are handled by the same
- * byte rule.
+ * only the part of the batch that is not already the newest archived bytes (a
+ * byte comparison at the line boundary, computed against the chunk that holds
+ * them — including the chunk being sealed when the batch rolls into a new one):
+ * the same accepted occurrence is archived exactly once, and legacy lines
+ * without an identity are handled by the same byte rule. An unreadable chunk
+ * THROWS rather than reporting an empty archive, because an empty archive would
+ * erase that comparison and duplicate the batch.
  *
  * May throw (fs) — callers contain.
  */
@@ -1520,19 +1593,18 @@ function archiveHistoryLines(workflowDir: string, lines: readonly string[]): voi
   const activeName = sealed.length === 0 ? `chunk-${String(1).padStart(6, '0')}.jsonl` : sealed[sealed.length - 1]!
   let path = join(dir, activeName)
   let existing = readChunkLines(path)
-  // A retry may find part (or all) of this batch already archived — append
-  // only the remainder; never archive the same occurrence twice.
+  // A retry may find part (or all) of this batch already archived — append only
+  // the remainder; never archive the same occurrence twice. The overlap is
+  // computed against the chunk that holds the newest archived bytes, i.e.
+  // BEFORE any rollover moves the target.
   const overlap = archivedOverlap(existing, lines)
   if (overlap >= lines.length) return
-  if (overlap === 0) {
-    try {
-      if (statSync(path).size >= AGENT_FLOW_SIZE_GATE_BYTES) {
-        path = join(dir, `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`)
-        existing = []
-      }
-    } catch {
-      // brand-new chunk path — nothing to stat yet
-    }
+  const created = existing.length === 0
+  if (existing.length > 0 && statSync(path).size >= AGENT_FLOW_SIZE_GATE_BYTES) {
+    // ROLLOVER: the already-archived prefix of this batch lives in the chunk
+    // being sealed, so the overlap above is what keeps a crash retried across a
+    // rollover exact-once; the new chunk receives only the remainder.
+    path = join(dir, `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`)
   }
   const fd = openSync(path, 'a')
   try {
@@ -1543,16 +1615,25 @@ function archiveHistoryLines(workflowDir: string, lines: readonly string[]): voi
   } finally {
     closeSync(fd)
   }
+  // A newly created chunk needs its directory entry durable too.
+  if (created) fsyncDirectory(dir)
 }
 
-/** The lines of one history chunk (`[]` when it does not exist yet). */
+/**
+ * The lines of one history chunk — `[]` ONLY when the chunk does not exist
+ * yet. Any OTHER read failure throws: an unreadable archive must never be read
+ * as an empty one, because an empty one erases the already-archived prefix and
+ * duplicates it on the retry.
+ */
 function readChunkLines(path: string): string[] {
+  let raw: string
   try {
-    const raw = readFileSync(path, 'utf8')
-    return raw === '' ? [] : raw.replace(/\n$/, '').split('\n')
-  } catch {
-    return []
+    raw = readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
   }
+  return raw === '' ? [] : raw.replace(/\n$/, '').split('\n')
 }
 
 /**
@@ -1629,7 +1710,8 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
  */
 function appendLineLocked(workflowDir: string, line: string, index: IdentityIndex | undefined): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
-  appendFileSync(file, line)
+  // Durable row BEFORE the identity-index entry is committed (recovery order).
+  appendFileDurableSync(file, line)
   if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
   // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
   // newline produces one empty tail element that must not count as a line).
@@ -1646,9 +1728,7 @@ function appendLineLocked(workflowDir: string, line: string, index: IdentityInde
   if (archive.length === 0) return
   archiveHistoryLines(workflowDir, archive)
   const tail = [...retained, ...lines.slice(cut)]
-  const tmp = `${file}.tmp`
-  writeFileSync(tmp, `${tail.join('\n')}\n`)
-  renameSync(tmp, file)
+  writeFileDurableSync(file, `${tail.join('\n')}\n`)
 }
 
 /**
@@ -1672,7 +1752,15 @@ function appendEvent(workflowDir: string, event: AgentFlowEvent, identity?: Agen
   // Non-reentrant lock: the shared-lock append primitive.
   withWorkflowDirLock(workflowDir, () => {
     const read = loadIdentityIndex(workflowDir)
-    appendLineLocked(workflowDir, `${line}\n`, read.kind === 'unreadable' ? undefined : read.index)
+    if (read.kind === 'unreadable') {
+      // A damaged authority also breaks the COMPACTION contract (the display
+      // bound may only drop rows whose identity is durable), so the live row is
+      // refused instead of being appended with the index treated as absent.
+      // There is no `wfc1` exemption from this rule.
+      log('warn', `agent-flow live row refused — the accepted-identity index is unreadable (${read.reason}); the row is not appended and the display tail is not compacted`)
+      return
+    }
+    appendLineLocked(workflowDir, `${line}\n`, read.index)
   })
 }
 
