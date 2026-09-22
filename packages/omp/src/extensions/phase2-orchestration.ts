@@ -91,21 +91,28 @@
  *   host session identity; `session_shutdown` invalidates the callback
  *   generation so a late asynchronous sample can never emit into a dead one.
  *
- * ## Execution authority (source readiness, plan S3)
+ * ## Execution authority (2b: the observation runs on the DB binding)
  *
- * The observation's ownership pair is a coordinator ENVELOPE (a file session
- * credential) plus the workflow snapshot, so while the control harness's
- * execution authority is ACTIVE both are retired as an observation route
- * (primary spec §4.3) and every entry point refuses
- * `execution.consumer-not-ready` before opening either one: `bind` — whose route
- * is decided from the caller's own checkout, so the envelope is never opened on
- * the way to that refusal — the ownership probe behind
- * `checkpoint`/`reserve-launch`/`record-launch`, and the
- * advisory sampler that consumes it. Nothing is read out of the retired
- * documents, no binding is synthesized, and a store that exists and cannot be
- * read keeps its own refusal. Migrating this consumer onto the DB session
- * reference is deferred (2b) — the engine's route
- * (`resolveExecutionReadRoute`, plan S2) is the only probe used here.
+ * The engine's route (`resolveExecutionReadRoute`, plan S2) decides which
+ * authority answers, and the caller never selects one:
+ *
+ * - ACTIVE (`execution`): `bind` adopts this session's own DB coordinator
+ *   binding (`ExecutionBinding`) after resuming it against the current
+ *   store/epoch, and every later probe resumes that binding and reads the
+ *   workflow's DB authority. The coordinator envelope and the workflow snapshot
+ *   are retired here and are never opened — no fallback, and no synthesized
+ *   identity.
+ * - pre-activation (`files`): the file route still answers, so `bind` adopts the
+ *   workflow's OWN recorded coordinator envelope (resolved from the snapshot by
+ *   the host, never supplied by the call) and records a legacy binding. The §5
+ *   readiness check refuses that arm outright the moment the authority becomes
+ *   ACTIVE, and an active binding always supersedes a legacy record.
+ *
+ * A store that exists and cannot be read keeps its own refusal, and a harness
+ * with no store at all keeps the unchanged file route (§2.1: absence is not an
+ * authority verdict). `{operation:"export-history"}` is read-only evidence: one
+ * carrying session's own hidden history bound to one workflow, canonical bytes
+ * and digest returned to the caller, no file written and no authority granted.
  *
  * Not here, by contract: no process spawn, no screen parsing, no multiplexer
  * execution, no engine-row mutation, no lease release, no job-label plan
@@ -120,15 +127,28 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-
 import {
   WORKFLOW_TERMINAL_STATUSES,
   canonicalizeNearestExisting,
+  executionContextFor,
   probeCheckoutRoot,
+  readExecutionAuthority,
   readMainWorktree,
   readSessionEnvelope,
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
   resolveHarnessDir,
+  resumeExecutionSession,
   resolveWorkflowDir,
+  serializeExecutionValue,
 } from "@mstar-harness/engine";
-import type { CoordinationSession, PlanRow, WorkflowSnapshot } from "@mstar-harness/engine";
+import type {
+  CoordinationSession,
+  ExecutionBinding,
+  ExecutionIdentity,
+  ExecutionPlanView,
+  ExecutionRead,
+  ExecutionState,
+  PlanRow,
+  WorkflowSnapshot,
+} from "@mstar-harness/engine";
 import {
   decidePhase2Reminder,
   readPhase2Settings,
@@ -137,7 +157,14 @@ import {
   type Phase2Request,
   type ReminderState,
 } from "../phase2-orchestration";
-import { recordPlanLaunch, reservePlanLaunch, type PlanLaunchResult } from "../phase2-launches";
+import { recordPlanLaunch, reservePlanLaunch, type ExecutionLaunchAuthority, type PlanLaunchResult } from "../phase2-launches";
+import { executionBindingOf } from "../coordinator-identity";
+import {
+  buildExecutionHostInventory,
+  exportExecutionHostInventory,
+  inventoryDigest,
+  type ExecutionHostInventory,
+} from "../execution-host-inventory";
 import { PHASE2_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice } from "../notices";
 
 /** Ledger `customType` of this feature's decision records (the only writer). */
@@ -150,8 +177,12 @@ export { PHASE2_NOTICE_CUSTOM_TYPE };
 export const PHASE2_PHASE = "phase-2-execute";
 /** The single tool this extension registers (never an activation command). */
 const TOOL_NAME = "mstar_phase2";
-/** Record schema version; bumped only by a deliberate migration. */
+/** Record schema version of the decision records; bumped only by a deliberate migration. */
 const RECORD_VERSION = 1;
+/** Record schema version of the ACTIVE observation binding (the §3.1 `ExecutionBinding` generation). */
+const BIND_RECORD_VERSION = 2;
+/** The pre-activation binding generation, kept readable as legacy history. */
+const LEGACY_BIND_RECORD_VERSION = 1;
 /** Plugin-owned transport journal written by T2 (`phase2-launches.ts`). */
 const JOURNAL_FILE = "omp-launches.json";
 
@@ -166,13 +197,32 @@ const ADVISORY_TEXT = [
  * Durable records (session ledger only — never a second status register)
  * ------------------------------------------------------------------------- */
 
+/**
+ * The durable observation binding as this cutover writes it (§6): the session's
+ * own `ExecutionBinding`, adopted from the DB session authority. It carries the
+ * engine session reference and the canonical control root it was adopted from —
+ * never a session envelope path, and never a caller-supplied identity.
+ */
 export type Phase2BindingRecord = Readonly<{
+  version: 2;
+  kind: "bind";
+  workflowId: string;
+  hostSessionId: string;
+  executionBinding: ExecutionBinding;
+}>;
+
+/**
+ * The pre-activation bind record (prerequisite contract §3.2), kept readable as
+ * legacy history: it names a coordinator session ENVELOPE, which is exactly the
+ * retired transport. It is never written again, never upgraded into a DB
+ * binding, and never consulted while an active binding answers.
+ */
+export type Phase2LegacyBindingRecord = Readonly<{
   version: 1;
   kind: "bind";
   workflowId: string;
   hostSessionId: string;
   coordinatorSessionPath: string;
-  /** The engine `session_id` of that envelope at bind time — re-read and compared on every probe. */
   coordinatorSessionId: string;
   harnessRoot: string;
 }>;
@@ -205,11 +255,18 @@ export type Phase2TurnRecord = Readonly<{
   workflowId: string;
 }>;
 
-export type Phase2Record = Phase2BindingRecord | Phase2CheckpointRecord | Phase2ReminderRecord | Phase2TurnRecord;
+export type Phase2Record =
+  | Phase2BindingRecord
+  | Phase2LegacyBindingRecord
+  | Phase2CheckpointRecord
+  | Phase2ReminderRecord
+  | Phase2TurnRecord;
 
 export type Phase2SessionState = Readonly<{
-  /** The session's own identity pointer, or `null` when it never bound (or the binding is not a record for this session). */
+  /** The session's own ACTIVE binding, or `null` when it never adopted one. */
   binding: Phase2BindingRecord | null;
+  /** The pre-activation envelope binding of this session: history only, used only while no active binding exists. */
+  legacy: Phase2LegacyBindingRecord | null;
   reminder: ReminderState;
 }>;
 
@@ -231,29 +288,50 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
+/** The stable engine refusal code of a thrown error, or this adapter's own default. */
+function engineCodeOf(error: unknown, fallback: string): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.includes(".") ? code : fallback;
+}
+
+/** Structural guard for the §3.1 binding value a record persists. */
+function isExecutionBinding(value: unknown): value is ExecutionBinding {
+  if (!isPlainObject(value) || value.version !== 1 || !isNonEmptyString(value.harnessRoot)) return false;
+  const session = value.session;
+  if (!isPlainObject(session)) return false;
+  if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) return false;
+  if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
+  if (session.planId !== null && typeof session.planId !== "string") return false;
+  return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
+}
+
 /** Structural guard for a record read back from the ledger (`data` is `unknown`). */
 function isPhase2Record(value: unknown): value is Phase2Record {
   if (!isPlainObject(value)) return false;
-  if (value.version !== RECORD_VERSION) return false;
   if (!isNonEmptyString(value.hostSessionId) || !isNonEmptyString(value.workflowId)) return false;
   switch (value.kind) {
     case "bind":
+      // Two generations share the kind: the active binding this cutover writes,
+      // and the pre-activation envelope record kept readable as history.
+      if (value.version === BIND_RECORD_VERSION) return isExecutionBinding(value.executionBinding);
       return (
+        value.version === LEGACY_BIND_RECORD_VERSION &&
         isNonEmptyString(value.coordinatorSessionPath) &&
         isNonEmptyString(value.coordinatorSessionId) &&
         isNonEmptyString(value.harnessRoot)
       );
     case "checkpoint":
       return (
+        value.version === RECORD_VERSION &&
         CHECKPOINT_REASONS.includes(value.reason as CheckpointReason) &&
         (CHECKPOINT_DECISIONS as readonly unknown[]).includes(value.decision) &&
         typeof value.note === "string" &&
         (value.observationKey === null || isNonEmptyString(value.observationKey))
       );
     case "reminder":
-      return isNonEmptyString(value.observationKey);
+      return value.version === RECORD_VERSION && isNonEmptyString(value.observationKey);
     case "user-turn":
-      return true;
+      return value.version === RECORD_VERSION;
     default:
       return false;
   }
@@ -291,14 +369,20 @@ export function derivePhase2State(entries: readonly SessionEntry[], sessionId: s
     if (record.kind === "bind") bindingIndex = index;
   }
   if (bindingIndex === -1) {
-    return { binding: null, reminder: { acknowledgedKey: null, remindedKeys: [], blocked: false } };
+    return { binding: null, legacy: null, reminder: { acknowledgedKey: null, remindedKeys: [], blocked: false } };
   }
-  const binding = records[bindingIndex] as Phase2BindingRecord;
+  const newest = records[bindingIndex] as Phase2BindingRecord | Phase2LegacyBindingRecord;
+  // The newest bind record is the session's current binding, whichever
+  // generation wrote it: the active record is authoritative, and a legacy
+  // envelope record stays the pre-activation route only while no active one
+  // supersedes it.
+  const active = newest.version === BIND_RECORD_VERSION ? (newest as Phase2BindingRecord) : null;
+  const legacy = newest.version === LEGACY_BIND_RECORD_VERSION ? (newest as Phase2LegacyBindingRecord) : null;
   let acknowledgedKey: string | null = null;
   let blocked = false;
   const remindedKeys: string[] = [];
   for (const record of records.slice(bindingIndex + 1)) {
-    if (record.workflowId !== binding.workflowId) continue;
+    if (record.workflowId !== newest.workflowId) continue;
     if (record.kind === "checkpoint") {
       blocked = record.decision === "blocked";
       if (record.observationKey !== null) acknowledgedKey = record.observationKey;
@@ -308,7 +392,7 @@ export function derivePhase2State(entries: readonly SessionEntry[], sessionId: s
       remindedKeys.push(record.observationKey);
     }
   }
-  return { binding, reminder: { acknowledgedKey, remindedKeys, blocked } };
+  return { binding: active, legacy, reminder: { acknowledgedKey, remindedKeys, blocked } };
 }
 
 /* ------------------------------------------------------------------------- *
@@ -386,11 +470,26 @@ function journalFactsOf(workflowDir: string): string {
  * Engine probes (read-only; ownership and phase are re-read every time)
  * ------------------------------------------------------------------------- */
 
-/** The observed lifecycle a diagnostic may cite — only from a successfully read snapshot. */
+/** The observed lifecycle a diagnostic may cite — only from a successfully read authority. */
 type ObservedStatus = Readonly<{ workflowId: string; status: string }>;
 
+/**
+ * One successful ownership probe, in the one shape both authorities answer with:
+ * the lifecycle facts the observation projection admits, the workflow directory
+ * whose journal bytes the projection hashes, and the terminal/phase verdict the
+ * caller asked for.
+ */
 type WorkflowProbe =
-  | Readonly<{ ok: true; workflowDir: string; snapshot: WorkflowSnapshot }>
+  | Readonly<{
+      ok: true;
+      workflowId: string;
+      status: string;
+      phase: string | null;
+      workflowDir: string;
+      planFacts: readonly string[];
+      /** The active DB binding the probe resolved, when the ACTIVE authority answered (`null` on the file route). */
+      binding: ExecutionBinding | null;
+    }>
   | Readonly<{ ok: false; code: string; message: string; observed?: ObservedStatus }>;
 
 type SamplingResult = Readonly<{
@@ -405,24 +504,47 @@ type SamplingResult = Readonly<{
 }>;
 
 /** `null` when `snapshot.status` is terminal. */
-function workflowIsTerminal(snapshot: WorkflowSnapshot): boolean {
+function workflowIsTerminal(snapshot: { status: string }): boolean {
   return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status);
 }
 
+/** Per-plan stable facts from the DB view — the same terms, from the authoritative source. */
+function planFactsOfView(views: readonly ExecutionPlanView[]): readonly string[] {
+  const facts: string[] = [];
+  for (const view of views) {
+    const planId = isNonEmptyString(view.plan.id) ? view.plan.id : isNonEmptyString(view.plan.plan_id) ? view.plan.plan_id : "";
+    if (planId === "") continue;
+    const coordination = isPlainObject(view.coordination) ? view.coordination : null;
+    const prepared = isPlainObject(coordination?.prepared) ? coordination.prepared : null;
+    const handoff = isPlainObject(coordination?.handoff) ? coordination.handoff : null;
+    facts.push(
+      [
+        `plan:${planId}`,
+        isNonEmptyString(view.plan.status) ? view.plan.status : "",
+        coordination !== null && typeof coordination.revision === "number" ? String(coordination.revision) : "",
+        prepared !== null && isNonEmptyString(prepared.assignment_sha256) ? prepared.assignment_sha256 : "",
+        view.session === null ? "" : view.session.sessionId,
+        handoff !== null && isNonEmptyString(handoff.state) ? handoff.state : "",
+        view.executionLease === null || !isNonEmptyString(view.executionLease.holder) ? "" : view.executionLease.holder,
+      ].join(":"),
+    );
+  }
+  return facts;
+}
+
 /**
- * §5 the execution-authority readiness of one control harness, as a refusal
- * verdict for this extension's channels (or `null` when the file route still
- * answers).
+ * §5 the execution-authority readiness of one LEGACY file observation, as a
+ * refusal verdict (or `null` when the file route still answers).
  *
- * This observation reads the coordinator ENVELOPE (a file session credential)
- * and the workflow snapshot to derive ownership, so it is exactly the
- * credential-dependent consumer §5 keeps on the file route until its session
- * consumer is migrated: while the execution authority is ACTIVE both documents
- * are retired, and the honest answer is not-ready — never the retired bytes and
- * never a synthesized binding (`execution.consumer-not-ready`). A store that
- * EXISTS and cannot be read keeps its own refusal (the engine's code, passed
- * through unchanged), and a harness with no store at all keeps the unchanged
- * file route (§2.1: absence is not an authority verdict).
+ * The pre-activation arm reads the coordinator envelope (a file session
+ * credential) and the workflow snapshot, so while an execution authority is
+ * ACTIVE both documents are retired and the honest answer is not-ready — never
+ * the retired bytes and never a synthesized binding
+ * (`execution.consumer-not-ready`). A store that EXISTS and cannot be read keeps
+ * its own refusal (the engine's code, passed through unchanged), and a harness
+ * with no store at all keeps the unchanged file route (§2.1: absence is not an
+ * authority verdict). The ACTIVE arm never calls this: it resumes the adopted
+ * binding against the DB instead.
  */
 async function executionRefusal(
   harnessRoot: string,
@@ -446,19 +568,24 @@ async function executionRefusal(
     code: "execution.consumer-not-ready",
     message:
       `the execution authority of ${harnessRoot} is ACTIVE, so the coordinator envelope and the workflow snapshot are ` +
-      "retired as an observation route. Nothing was read: this observation needs the session/file binding the DB " +
-      "adapter deliberately does not carry, so it reports not-ready instead of reading the retired documents. Consume " +
-      "the execution DB state through the adapter instead; migrating this consumer's session binding is deferred (2b)",
+      "retired as an observation route. Nothing was read: a legacy envelope binding is history only, so re-bind this " +
+      "session through the ACTIVE route ({operation:\"bind\", workflowId}) and observe through the DB session binding",
   };
 }
 
 /**
- * Resolve the workflow directory under the binding's own control harness root
- * and read the named snapshot, then verify that this session is still exactly
- * the snapshot's bound coordinator and (when required) that the lifecycle is
- * running in `phase-2-execute`.
+ * The pre-activation arm of the ownership probe: this session's legacy envelope
+ * binding, re-verified against the envelope itself and against the workflow
+ * snapshot's own recorded coordinator. It is the unchanged file transport, and
+ * it is unreachable once an active binding answers — the caller only takes this
+ * arm for a legacy record, and the §5 readiness check refuses it the moment the
+ * execution authority becomes ACTIVE.
  */
-async function probeWorkflow(ctx: ExtensionContext, binding: Phase2BindingRecord, requirePhase2: boolean): Promise<WorkflowProbe> {
+async function probeLegacyWorkflow(
+  ctx: ExtensionContext,
+  binding: Phase2LegacyBindingRecord,
+  requirePhase2: boolean,
+): Promise<WorkflowProbe> {
   // §5 before the envelope is even opened: while the execution authority is
   // ACTIVE the envelope and the snapshot are retired as an observation route.
   const execution = await executionRefusal(binding.harnessRoot);
@@ -546,7 +673,107 @@ async function probeWorkflow(ctx: ExtensionContext, binding: Phase2BindingRecord
       observed: { workflowId: snapshot.id, status: snapshot.status },
     };
   }
-  return { ok: true, workflowDir, snapshot };
+  return {
+    ok: true,
+    workflowId: snapshot.id,
+    status: snapshot.status,
+    phase: snapshot.phase ?? null,
+    workflowDir,
+    planFacts: planFactsOf(snapshot),
+    binding: null,
+  };
+}
+
+/**
+ * The ACTIVE arm of the ownership probe: the session's own `ExecutionBinding` is
+ * resumed against the CURRENT store (a stale epoch, a foreign root or a revoked
+ * row refuses, and no envelope is consulted as a fallback), then the workflow's
+ * DB authority answers with the lifecycle, the plan views and the session that
+ * holds the coordinator seat. Ownership and phase are re-read on every probe.
+ */
+async function probeActiveWorkflow(
+  ctx: ExtensionContext,
+  binding: Phase2BindingRecord,
+  requirePhase2: boolean,
+): Promise<WorkflowProbe> {
+  const adopted = binding.executionBinding;
+  const identity: ExecutionIdentity = {
+    source: "host",
+    sessionId: adopted.session.sessionId,
+    workflowId: adopted.session.workflowId,
+    role: adopted.session.role,
+    planId: adopted.session.planId,
+  };
+  try {
+    await resumeExecutionSession(executionContextFor({ harnessDir: adopted.harnessRoot }, identity), adopted.session);
+  } catch (error) {
+    return {
+      ok: false,
+      code: engineCodeOf(error, "phase2.binding-stale"),
+      message: `the adopted execution binding of workflow ${binding.workflowId} no longer authorizes this session: ${String(error)}`,
+    };
+  }
+  let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
+  try {
+    read = await readExecutionAuthority({ harnessDir: adopted.harnessRoot }, { workflowId: binding.workflowId });
+  } catch (error) {
+    return {
+      ok: false,
+      code: engineCodeOf(error, "phase2.authority-unreadable"),
+      message: `the execution authority of ${adopted.harnessRoot} cannot serve workflow ${binding.workflowId}: ${String(error)}`,
+    };
+  }
+  const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
+  if (workflow === undefined) {
+    return {
+      ok: false,
+      code: "coordination.workflow-not-found",
+      message: `the execution authority read of workflow ${binding.workflowId} returned no active lifecycle`,
+    };
+  }
+  let workflowDir: string;
+  try {
+    workflowDir = join(resolveWorkflowDir(ctx.cwd, { harnessDir: adopted.harnessRoot }), binding.workflowId);
+  } catch (error) {
+    return {
+      ok: false,
+      code: "phase2.harness-unresolvable",
+      message: `the control harness root ${adopted.harnessRoot} does not resolve a workflow dir from ${ctx.cwd}: ${String(error)}`,
+    };
+  }
+  if (workflow.coordinator === null || workflow.coordinator.sessionId !== identity.sessionId) {
+    return {
+      ok: false,
+      code: "phase2.ownership-drift",
+      message: `workflow ${binding.workflowId} is bound to coordinator session ${workflow.coordinator?.sessionId ?? "(none)"}, not to this session ${identity.sessionId}`,
+      observed: { workflowId: binding.workflowId, status: workflow.state.status },
+    };
+  }
+  if (workflowIsTerminal(workflow.state)) {
+    return {
+      ok: false,
+      code: "phase2.workflow-terminal",
+      message: `workflow ${binding.workflowId} is ${workflow.state.status}`,
+      observed: { workflowId: binding.workflowId, status: workflow.state.status },
+    };
+  }
+  if (requirePhase2 && (workflow.state.status !== "running" || workflow.state.phase !== PHASE2_PHASE)) {
+    return {
+      ok: false,
+      code: "phase2.phase-inactive",
+      message: `workflow ${binding.workflowId} is ${workflow.state.status} at phase ${JSON.stringify(workflow.state.phase ?? null)}; the Phase-2 observation requires "${PHASE2_PHASE}"`,
+      observed: { workflowId: binding.workflowId, status: workflow.state.status },
+    };
+  }
+  return {
+    ok: true,
+    workflowId: binding.workflowId,
+    status: workflow.state.status,
+    phase: workflow.state.phase ?? null,
+    workflowDir,
+    planFacts: planFactsOfView(workflow.plans),
+    binding: adopted,
+  };
 }
 
 /* ------------------------------------------------------------------------- *
@@ -626,18 +853,53 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     }
   };
 
-  /** Codes that mean the binding is no longer current: the bound envelope is gone or replaced. */
-  const STALE_CODES = ["phase2.envelope-unreadable", "phase2.ownership-drift"];
+  /**
+   * Codes that mean the binding is no longer current for THIS session, so the
+   * local (process-scoped) marker and its "re-run bind" hint apply: the DB
+   * authority says the reference is stale, revoked or foreign
+   * (`store.stale-epoch`, `execution.session-unavailable`,
+   * `execution.scope-mismatch` — the active-route analogue of the retired
+   * envelope's gone/replaced cases), the adopted binding refused for a binding
+   * reason of this adapter's own, or a legacy envelope record is gone/replaced.
+   */
+  const STALE_CODES = [
+    "store.stale-epoch",
+    "execution.session-unavailable",
+    "execution.scope-mismatch",
+    "phase2.binding-stale",
+    "phase2.envelope-unreadable",
+    "phase2.ownership-drift",
+  ];
+
+  /** The identity terms of the session's current binding record, whichever generation wrote it. */
+  const bindingTermsOf = (state: Phase2SessionState): Readonly<{ workflowId: string; hostSessionId: string }> | null => {
+    const record = state.binding ?? state.legacy;
+    return record === null ? null : { workflowId: record.workflowId, hostSessionId: record.hostSessionId };
+  };
 
   /**
-   * The one ownership probe every tool and event uses: it re-reads the bound
-   * envelope and the named snapshot, and marks this instance's binding
-   * not-current when either half no longer matches. The mark is local and
-   * process-scoped (the durable binding record is never rewritten as if the
-   * child had handed off); a later `bind` with the current envelope clears it.
+   * The one ownership probe every tool and event uses. It picks the arm the
+   * session's own binding record declares — the ACTIVE DB binding, or the
+   * pre-activation envelope binding — and marks this instance's binding
+   * not-current when that authority no longer answers for this session. The mark
+   * is local and process-scoped (the durable binding record is never rewritten as
+   * if the child had handed off); a later `bind` clears it.
    */
-  const probeOwnership = async (ctx: ExtensionContext, binding: Phase2BindingRecord, requirePhase2: boolean): Promise<WorkflowProbe> => {
-    const probe = await probeWorkflow(ctx, binding, requirePhase2);
+  const probeOwnership = async (
+    ctx: ExtensionContext,
+    state: Phase2SessionState,
+    requirePhase2: boolean,
+  ): Promise<WorkflowProbe> => {
+    const probe =
+      state.binding !== null
+        ? await probeActiveWorkflow(ctx, state.binding, requirePhase2)
+        : state.legacy !== null
+          ? await probeLegacyWorkflow(ctx, state.legacy, requirePhase2)
+          : ({
+              ok: false,
+              code: "phase2.not-bound",
+              message: "this session holds no Phase-2 observation binding",
+            } as const);
     if (!probe.ok && STALE_CODES.includes(probe.code)) gate.stale = { code: probe.code, message: probe.message };
     return probe;
   };
@@ -646,7 +908,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
   const staleHint = (): string =>
     gate.stale === null
       ? ""
-      : " The local binding is marked not-current; re-run {operation:\"bind\"} with the current coordinator envelope before relying on this session.";
+      : " The local binding is marked not-current; re-run {operation:\"bind\", workflowId} in this session before relying on it.";
 
   /** Reset per-process observation state; called on load and on every session navigation. */
   const resetGate = (): void => {
@@ -666,7 +928,11 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
    * projection, and the engine facts the key is computed from. Every failure
    * yields `observation: null` — never a key derived from a partial read.
    */
-  const sample = async (ctx: ExtensionContext, binding: Phase2BindingRecord, probe: WorkflowProbe): Promise<SamplingResult> => {
+  const sample = async (
+    ctx: ExtensionContext,
+    terms: Readonly<{ workflowId: string; hostSessionId: string }>,
+    probe: WorkflowProbe,
+  ): Promise<SamplingResult> => {
     if (!probe.ok)
       return {
         ownedPhase2: false,
@@ -675,7 +941,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
         terminalIds: [],
       };
 
-    const observed: ObservedStatus = { workflowId: probe.snapshot.id, status: probe.snapshot.status };
+    const observed: ObservedStatus = { workflowId: probe.workflowId, status: probe.status };
     const snapshot = ctx.getAsyncJobSnapshot();
     if (snapshot === null) {
       return {
@@ -707,10 +973,10 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       ? `${journalFactsOf(probe.workflowDir)}:${settings.value.maxPlanInstances}`
       : "";
     const key = phase2ObservationKey({
-      workflowId: binding.workflowId,
-      hostSessionId: binding.hostSessionId,
+      workflowId: terms.workflowId,
+      hostSessionId: terms.hostSessionId,
       running,
-      planFacts: planFactsOf(probe.snapshot),
+      planFacts: probe.planFacts,
       launchFacts,
     });
     return {
@@ -734,10 +1000,11 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
    */
   const emitAdvisory = async (ctx: ExtensionContext): Promise<void> => {
     const state = derivePhase2State(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    if (state.binding === null) return;
+    const terms = bindingTermsOf(state);
+    if (terms === null) return;
     const generation = gate.generation;
-    const probed = await probeOwnership(ctx, state.binding, true);
-    const sampled = await sample(ctx, state.binding, probed);
+    const probed = await probeOwnership(ctx, state, true);
+    const sampled = await sample(ctx, terms, probed);
     if (generation !== gate.generation || gate.navigationPending) return;
     if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
 
@@ -762,8 +1029,8 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     const recorded = appendRecord({
       version: RECORD_VERSION,
       kind: "reminder",
-      hostSessionId: state.binding.hostSessionId,
-      workflowId: state.binding.workflowId,
+      hostSessionId: terms.hostSessionId,
+      workflowId: terms.workflowId,
       observationKey: observation.key,
     });
     if (!recorded) return;
@@ -779,7 +1046,195 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
 
   /* ---------------------------------------------------------- operations --- */
 
-  /** `bind` — record this session's observation identity for one explicit workflow. */
+  /** The engine's own coordinator-residency rule: main worktree, or the recorded integration worktree. */
+  const residencyRefusal = (ctx: ExtensionContext, integrationWorktreePath: string | undefined): ToolOutcome | null => {
+    const main = readMainWorktree(ctx.cwd);
+    const allowed: string[] = [];
+    if (main !== null) allowed.push(canonicalizeNearestExisting(main.root));
+    if (isNonEmptyString(integrationWorktreePath)) allowed.push(canonicalizeNearestExisting(integrationWorktreePath));
+    const checkout = probeCheckoutRoot(ctx.cwd);
+    const here = checkout === null ? null : canonicalizeNearestExisting(checkout);
+    if (here === null || !allowed.includes(here)) {
+      return refuse(
+        "phase2.scope-mismatch",
+        `a coordinator session binds from the main worktree or the recorded integration worktree; ${here ?? ctx.cwd} is neither (${allowed.join(", ") || "none resolvable"})`,
+      );
+    }
+    return null;
+  };
+
+  /** The ACTIVE bind: adopt this session's own DB coordinator binding for one workflow. */
+  const bindActive = async (
+    workflowId: string,
+    ctx: ExtensionContext,
+    hostSessionId: string,
+    harnessRoot: string,
+  ): Promise<ToolOutcome> => {
+    let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
+    try {
+      read = await readExecutionAuthority({ harnessDir: harnessRoot }, { workflowId });
+    } catch (error) {
+      return refuse(engineCodeOf(error, "phase2.authority-unreadable"), `the execution authority of ${harnessRoot} cannot serve workflow ${workflowId}: ${String(error)}`);
+    }
+    const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
+    if (workflow === undefined) {
+      return refuse("coordination.workflow-not-found", `the execution authority holds no active lifecycle ${workflowId}; nothing was bound.`);
+    }
+    const coordinator = workflow.coordinator;
+    if (coordinator === null || coordinator.sessionId !== hostSessionId) {
+      return refuse(
+        "phase2.coordinator-mismatch",
+        `workflow ${workflowId} is bound to coordinator session ${coordinator?.sessionId ?? "(none)"}, not to this host session ${hostSessionId}; nothing was bound.`,
+      );
+    }
+    const residency = residencyRefusal(ctx, workflow.state.integration_worktree_path);
+    if (residency !== null) return residency;
+    // The adopted reference is resumed against the current epoch/root before it
+    // is recorded: a stale, revoked or foreign row is never persisted as a
+    // binding (and no envelope stands in for it).
+    const identity: ExecutionIdentity = { source: "host", sessionId: hostSessionId, workflowId, role: "coordinator", planId: null };
+    try {
+      await resumeExecutionSession(executionContextFor({ harnessDir: harnessRoot }, identity), coordinator);
+    } catch (error) {
+      return refuse(engineCodeOf(error, "phase2.binding-stale"), `the DB coordinator binding of workflow ${workflowId} is not current: ${String(error)}`);
+    }
+    const executionBinding = executionBindingOf(harnessRoot, coordinator);
+    const existing = derivePhase2State(ctx.sessionManager.getEntries(), hostSessionId).binding;
+    if (existing !== null && existing.workflowId === workflowId && serializeExecutionValue(existing.executionBinding) === serializeExecutionValue(executionBinding)) {
+      gate.stale = null;
+      return outcome(true, false, `this session is already bound to ${workflowId}; the identity pointer is unchanged.`, {
+        code: "already-bound",
+        applied: false,
+        workflowId,
+        hostSessionId,
+        storeId: coordinator.storeId,
+        epoch: coordinator.epoch,
+      });
+    }
+    const record: Phase2BindingRecord = { version: BIND_RECORD_VERSION, kind: "bind", workflowId, hostSessionId, executionBinding };
+    if (!appendRecord(record)) {
+      return refuse("phase2.record-failed", "the observation identity could not be recorded in this session; nothing was bound.");
+    }
+    gate.reported.clear();
+    gate.stale = null;
+    return outcome(true, false, `bound the Phase-2 observation of workflow ${workflowId} to this session's execution authority (store epoch ${coordinator.epoch}).`, {
+      code: "bound",
+      applied: true,
+      workflowId,
+      hostSessionId,
+      storeId: coordinator.storeId,
+      epoch: coordinator.epoch,
+      phase: workflow.state.phase ?? null,
+    });
+  };
+
+  /**
+   * The PRE-ACTIVATION bind: the file route still answers, so the observation
+   * adopts the workflow's OWN recorded coordinator envelope — resolved from the
+   * workflow snapshot by the host, never supplied by the caller — and records a
+   * legacy binding. The moment the execution authority becomes ACTIVE this arm is
+   * refused by the route probe, and the ACTIVE arm supersedes it.
+   */
+  const bindLegacy = async (
+    workflowId: string,
+    ctx: ExtensionContext,
+    hostSessionId: string,
+    harnessRoot: string,
+  ): Promise<ToolOutcome> => {
+    let workflowDir: string;
+    try {
+      workflowDir = join(resolveWorkflowDir(ctx.cwd, { harnessDir: harnessRoot }), workflowId);
+    } catch (error) {
+      return refuse("phase2.harness-unresolvable", `the control harness root ${harnessRoot} does not resolve a workflow dir from ${ctx.cwd}: ${String(error)}`);
+    }
+    let snapshot: WorkflowSnapshot;
+    try {
+      snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+    } catch (error) {
+      return refuse("phase2.snapshot-unreadable", `cannot read the workflow snapshot for ${workflowId}: ${String(error)}`);
+    }
+    if (snapshot.id !== workflowId) {
+      return refuse("phase2.workflow-mismatch", `the snapshot at ${workflowDir} describes workflow ${snapshot.id}, not ${workflowId}`);
+    }
+    if (workflowIsTerminal(snapshot)) {
+      return refuse("phase2.workflow-terminal", `workflow ${snapshot.id} is ${snapshot.status}; nothing was bound.`);
+    }
+    const coordinator = snapshot.coordination?.coordinator;
+    if (coordinator === undefined) {
+      return refuse(
+        "phase2.coordinator-mismatch",
+        `workflow ${workflowId} records no coordinator binding; this session cannot observe a workflow that has no coordinator.`,
+      );
+    }
+    const residency = residencyRefusal(ctx, snapshot.integration_worktree_path);
+    if (residency !== null) return residency;
+
+    const sessionPath = canonicalizeNearestExisting(coordinator.session_file);
+    let envelope: CoordinationSession;
+    try {
+      envelope = readSessionEnvelope(sessionPath);
+    } catch (error) {
+      return refuse("phase2.envelope-unreadable", `the recorded coordinator envelope ${sessionPath} can no longer be read: ${String(error)}`);
+    }
+    if (envelope.role !== "coordinator") {
+      return refuse("phase2.plan-pm-session", `session ${envelope.session_id} is a ${envelope.role} session; a scoped-plan PM never binds the Phase-2 observation`);
+    }
+    if (envelope.workflow_id !== workflowId || envelope.session_id !== coordinator.session_id) {
+      return refuse(
+        "phase2.coordinator-mismatch",
+        `the envelope at ${sessionPath} is session ${envelope.session_id} of workflow ${envelope.workflow_id}, not the recorded coordinator ${coordinator.session_id} of ${workflowId}`,
+      );
+    }
+    const envelopeRoot = canonicalizeNearestExisting(envelope.harness_root);
+    const existing = derivePhase2State(ctx.sessionManager.getEntries(), hostSessionId).legacy;
+    if (
+      existing !== null &&
+      existing.workflowId === workflowId &&
+      existing.coordinatorSessionPath === sessionPath &&
+      existing.coordinatorSessionId === envelope.session_id &&
+      existing.harnessRoot === envelopeRoot
+    ) {
+      gate.stale = null;
+      return outcome(true, false, `this session is already bound to ${workflowId}; the identity pointer is unchanged.`, {
+        code: "already-bound",
+        applied: false,
+        workflowId,
+        hostSessionId,
+        coordinatorSessionId: envelope.session_id,
+      });
+    }
+    const record: Phase2LegacyBindingRecord = {
+      version: LEGACY_BIND_RECORD_VERSION,
+      kind: "bind",
+      workflowId,
+      hostSessionId,
+      coordinatorSessionPath: sessionPath,
+      coordinatorSessionId: envelope.session_id,
+      harnessRoot: envelopeRoot,
+    };
+    if (!appendRecord(record)) {
+      return refuse("phase2.record-failed", "the observation identity could not be recorded in this session; nothing was bound.");
+    }
+    gate.reported.clear();
+    gate.stale = null;
+    return outcome(true, false, `bound the Phase-2 observation of workflow ${workflowId} to the recorded coordinator session ${envelope.session_id} (pre-activation file route).`, {
+      code: "bound",
+      applied: true,
+      workflowId,
+      hostSessionId,
+      coordinatorSessionId: envelope.session_id,
+      harnessRoot: envelopeRoot,
+      phase: snapshot.phase ?? null,
+    });
+  };
+
+  /**
+   * `bind` — adopt this session's observation identity for one explicit workflow
+   * from whatever authority the addressed control root has: the DB session
+   * binding when the execution authority is ACTIVE, the recorded coordinator
+   * envelope on the pre-activation file route. The route is read from the root,
+   * never selected by the call, and the identity is always host-derived.
+   */
   const bind = async (params: Extract<Phase2Request, { operation: "bind" }>, ctx: ExtensionContext): Promise<ToolOutcome> => {
     const hostSessionId = ctx.sessionManager.getSessionId();
     if (hostSessionId === "") {
@@ -791,14 +1246,6 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
         "this session is a leaf/subagent (task) session, not the iteration coordinator; no observation identity was recorded.",
       );
     }
-
-    // §5 before ANY retired document is opened: the observation's ownership pair
-    // is a coordinator ENVELOPE (a file session credential) plus the workflow
-    // snapshot, and both are retired while the control harness's execution
-    // authority is ACTIVE. The route therefore answers first, from this
-    // checkout's own harness root — so a caller that is about to be refused
-    // never opens the envelope at all. A checkout that resolves no harness
-    // decides nothing here; the envelope's own root is probed unchanged below.
     let ownHarness: string | null = null;
     try {
       const resolved = resolveHarnessDir(ctx.cwd);
@@ -806,135 +1253,19 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     } catch {
       ownHarness = null;
     }
-    if (ownHarness !== null) {
-      const own = await executionRefusal(ownHarness);
-      if (own !== null) return refuse(own.code, own.message);
+    if (ownHarness === null) {
+      return refuse("phase2.harness-not-found", `no canonical control harness root is resolvable from ${ctx.cwd}; nothing was bound.`);
     }
-
-    const sessionPath = canonicalizeNearestExisting(params.coordinatorSessionPath);
-    let envelope: CoordinationSession;
+    let route: "execution" | "files";
     try {
-      envelope = readSessionEnvelope(sessionPath);
+      route = await resolveExecutionReadRoute({ harnessDir: ownHarness });
     } catch (error) {
-      return refuse("phase2.envelope-unreadable", `no readable coordination session envelope at ${sessionPath}: ${String(error)}`);
+      const code = engineCodeOf(error, "store.authority-unreadable");
+      return refuse(code, `the execution authority of ${ownHarness} could not be read (${code}): ${String(error)}`);
     }
-    if (envelope.role !== "coordinator") {
-      return refuse(
-        "phase2.plan-pm-session",
-        `session ${envelope.session_id} is a ${envelope.role} session; a scoped-plan PM never binds the Phase-2 observation`,
-      );
-    }
-    if (envelope.workflow_id !== params.workflowId) {
-      return refuse(
-        "phase2.workflow-mismatch",
-        `the session envelope binds workflow ${envelope.workflow_id}, not the named ${params.workflowId}`,
-      );
-    }
-    const harnessRoot = canonicalizeNearestExisting(envelope.harness_root);
-
-    // §5 before the snapshot is opened: while the execution authority of the
-    // envelope's control harness is ACTIVE, this observation's file binding
-    // (envelope + snapshot) is retired — the identity is a DB session there.
-    // The caller's own root was already probed above; this probe is the one the
-    // envelope's root keeps, so a caller that resolved no harness (or a
-    // different one) still cannot read a retired document.
-    const execution = await executionRefusal(harnessRoot);
-    if (execution !== null) return refuse(execution.code, execution.message);
-
-    let workflowDir: string;
-    try {
-      workflowDir = join(resolveWorkflowDir(ctx.cwd, { harnessDir: harnessRoot }), params.workflowId);
-    } catch (error) {
-      return refuse(
-        "phase2.harness-unresolvable",
-        `the envelope's control harness root ${harnessRoot} does not resolve a workflow dir from ${ctx.cwd}: ${String(error)}`,
-      );
-    }
-    let snapshot: WorkflowSnapshot;
-    try {
-      snapshot = readWorkflowSnapshot(workflowDir).snapshot;
-    } catch (error) {
-      return refuse("phase2.snapshot-unreadable", `cannot read the workflow snapshot for ${params.workflowId}: ${String(error)}`);
-    }
-    if (snapshot.id !== params.workflowId) {
-      return refuse(
-        "phase2.workflow-mismatch",
-        `the snapshot at ${workflowDir} describes workflow ${snapshot.id}, not ${params.workflowId}`,
-      );
-    }
-    if (workflowIsTerminal(snapshot)) {
-      return refuse("phase2.workflow-terminal", `workflow ${snapshot.id} is ${snapshot.status}; nothing was bound.`);
-    }
-    const coordinator = snapshot.coordination?.coordinator;
-    if (coordinator?.session_id !== envelope.session_id || coordinator.session_file !== sessionPath) {
-      return refuse(
-        "phase2.coordinator-mismatch",
-        `workflow ${snapshot.id} is bound to coordinator envelope ${coordinator?.session_file ?? "(none)"}, not to ${sessionPath}`,
-      );
-    }
-    // The engine's own coordinator-residency rule, read strictly: the caller's
-    // own checkout root must be the main worktree or the recorded integration
-    // worktree. (A bare path-prefix test would also accept a linked plan
-    // worktree that merely sits under the repository root, which is exactly the
-    // checkout an extra primary runs in.)
-    const main = readMainWorktree(ctx.cwd);
-    const allowed: string[] = [];
-    if (main !== null) allowed.push(canonicalizeNearestExisting(main.root));
-    if (isNonEmptyString(snapshot.integration_worktree_path)) {
-      allowed.push(canonicalizeNearestExisting(snapshot.integration_worktree_path));
-    }
-    const checkout = probeCheckoutRoot(ctx.cwd);
-    const here = checkout === null ? null : canonicalizeNearestExisting(checkout);
-    if (here === null || !allowed.includes(here)) {
-      return refuse(
-        "phase2.scope-mismatch",
-        `a coordinator session binds from the main worktree or the recorded integration worktree; ${here ?? ctx.cwd} is neither (${allowed.join(", ") || "none resolvable"})`,
-      );
-    }
-
-    const existing = derivePhase2State(ctx.sessionManager.getEntries(), hostSessionId).binding;
-    if (
-      existing !== null &&
-      existing.workflowId === params.workflowId &&
-      existing.coordinatorSessionPath === sessionPath &&
-      existing.coordinatorSessionId === envelope.session_id &&
-      existing.harnessRoot === harnessRoot
-    ) {
-      gate.stale = null;
-      return outcome(true, false, `this session is already bound to ${params.workflowId}; the identity pointer is unchanged.`, {
-        code: "already-bound",
-        applied: false,
-        workflowId: params.workflowId,
-        hostSessionId,
-        coordinatorSessionPath: sessionPath,
-        coordinatorSessionId: envelope.session_id,
-      });
-    }
-
-    const record: Phase2BindingRecord = {
-      version: RECORD_VERSION,
-      kind: "bind",
-      workflowId: params.workflowId,
-      hostSessionId,
-      coordinatorSessionPath: sessionPath,
-      coordinatorSessionId: envelope.session_id,
-      harnessRoot,
-    };
-    if (!appendRecord(record)) {
-      return refuse("phase2.record-failed", "the observation identity could not be recorded in this session; nothing was bound.");
-    }
-    gate.reported.clear();
-    gate.stale = null;
-    return outcome(true, false, `bound the Phase-2 observation to workflow ${params.workflowId}.`, {
-      code: "bound",
-      applied: true,
-      workflowId: params.workflowId,
-      hostSessionId,
-      coordinatorSessionPath: sessionPath,
-      coordinatorSessionId: envelope.session_id,
-      harnessRoot,
-      phase: snapshot.phase ?? null,
-    });
+    return route === "execution"
+      ? bindActive(params.workflowId, ctx, hostSessionId, ownHarness)
+      : bindLegacy(params.workflowId, ctx, hostSessionId, ownHarness);
   };
 
   /** `checkpoint` — acknowledge the scheduling spec against the sample taken now. */
@@ -943,14 +1274,15 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
   ): Promise<ToolOutcome> => {
     const state = derivePhase2State(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    if (state.binding === null) {
-      return refuse("phase2.not-bound", "this session holds no Phase-2 observation binding; call {operation:\"bind\"} first.");
+    const terms = bindingTermsOf(state);
+    if (terms === null) {
+      return refuse("phase2.not-bound", "this session holds no Phase-2 observation binding; call {operation:\"bind\", workflowId} first.");
     }
-    const probe = await probeOwnership(ctx, state.binding, true);
+    const probe = await probeOwnership(ctx, state, true);
     if (!probe.ok) {
       return refuse(probe.code, `${probe.message}. The checkpoint was not recorded.${staleHint()}`);
     }
-    const sampled = await sample(ctx, state.binding, probe);
+    const sampled = await sample(ctx, terms, probe);
     if (sampled.refusal !== null) diagnose(sampled.refusal.code, sampled.refusal.message, sampled.refusal.observed);
     const key = sampled.observation?.key ?? null;
     const blocked = params.decision === "blocked";
@@ -958,8 +1290,8 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       !appendRecord({
         version: RECORD_VERSION,
         kind: "checkpoint",
-        hostSessionId: state.binding.hostSessionId,
-        workflowId: state.binding.workflowId,
+        hostSessionId: terms.hostSessionId,
+        workflowId: terms.workflowId,
         reason: params.reason,
         decision: params.decision,
         note: params.note,
@@ -979,19 +1311,39 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     });
   };
 
-  /** `reserve-launch` / `record-launch` — the T2 journal, with authority from this session's binding. */
+  /** `reserve-launch` / `record-launch` — the T2 journal, with authority from this session's ACTIVE binding. */
   const launch = async (
     request: Extract<Phase2Request, { operation: "reserve-launch" } | { operation: "record-launch" }>,
     ctx: ExtensionContext,
   ): Promise<ToolOutcome> => {
     const state = derivePhase2State(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    if (state.binding === null) {
-      return refuse("phase2.not-bound", "this session holds no Phase-2 observation binding; call {operation:\"bind\"} first.");
+    const terms = bindingTermsOf(state);
+    if (terms === null) {
+      return refuse("phase2.not-bound", "this session holds no Phase-2 observation binding; call {operation:\"bind\", workflowId} first.");
     }
-    const probe = await probeOwnership(ctx, state.binding, true);
+    if (state.binding === null) {
+      // The launch journal is adopted under the ACTIVE authority (§6): a legacy
+      // envelope binding never carries launch authority, and the file route is
+      // migration history for this surface.
+      return refuse(
+        "phase2.binding-legacy",
+        `this session's observation binding for ${terms.workflowId} is the pre-activation envelope record; the launch journal requires the ACTIVE execution authority. Re-bind through {operation:"bind", workflowId} once the execution authority is active.`,
+      );
+    }
+    const probe = await probeOwnership(ctx, state, true);
     if (!probe.ok) return refuse(probe.code, `${probe.message}. No launch bookkeeping was written.${staleHint()}`);
 
-    const authority = { coordinatorSessionPath: state.binding.coordinatorSessionPath, cwd: ctx.cwd };
+    const authority: ExecutionLaunchAuthority = {
+      cwd: ctx.cwd,
+      identity: {
+        source: "host",
+        sessionId: state.binding.hostSessionId,
+        workflowId: state.binding.workflowId,
+        role: "coordinator",
+        planId: null,
+      },
+      binding: state.binding.executionBinding,
+    };
     let result: PlanLaunchResult;
     try {
       result =
@@ -1024,13 +1376,59 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     });
   };
 
+  /**
+   * `export-history` — the §4.2 read-only bounded evidence operation (H2's
+   * producer amendment). It exports THIS carrying session's own hidden history as
+   * one canonical document bound to one workflow, plus the exact H1 export
+   * digest. It binds nothing, stops nothing, adopts nothing, spawns nothing,
+   * writes no file and requires no operator attestation: the coordinator saves
+   * the returned bytes through the existing file-write channel at the explicit
+   * evidence path it chooses, and C3 aggregates one document per named native
+   * session. A carrying leaf may export its own readable history — this grants no
+   * coordinator authority — and a session whose own ledger cannot be read refuses
+   * instead of fabricating a wider scan.
+   */
+  const exportHistory = async (
+    params: Extract<Phase2Request, { operation: "export-history" }>,
+    ctx: ExtensionContext,
+  ): Promise<ToolOutcome> => {
+    const hostSessionId = ctx.sessionManager.getSessionId();
+    if (hostSessionId === "") {
+      return refuse("phase2.task-session", "the host session has no native id, so no inventory can be attributed to it; nothing was exported.");
+    }
+    let entries: readonly SessionEntry[];
+    try {
+      entries = ctx.sessionManager.getEntries();
+    } catch (error) {
+      return refuse(
+        "phase2.ledger-unreadable",
+        `this session's own ledger cannot be read (${String(error)}), so no inventory was exported; a full scan is never fabricated`,
+      );
+    }
+    let inventory: ExecutionHostInventory;
+    try {
+      inventory = buildExecutionHostInventory({ workflowId: params.workflowId, hostSessionId, entries });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      return refuse(typeof code === "string" ? code : "inventory.failed", error instanceof Error ? error.message : String(error));
+    }
+    return outcome(true, false, exportExecutionHostInventory(inventory), {
+      code: "exported",
+      workflowId: inventory.workflowId,
+      hostSessionId: inventory.hostSessionId,
+      exportSha256: inventory.export.sha256,
+      evidenceSha256: inventoryDigest(inventory),
+      records: inventory.export.document.records.length,
+      diagnostics: inventory.export.document.diagnostics.length,
+    });
+  };
+
   /* ---------------------------------------------------------------- tool --- */
 
   const skillRef = z.object({ name: z.string(), source: z.string() }).strict();
   const capabilityRef = z.object({ executable: z.string(), version: z.string(), target: z.string() }).strict();
-  const bindRequest = z
-    .object({ operation: z.literal("bind"), workflowId: z.string(), coordinatorSessionPath: z.string() })
-    .strict();
+  const bindRequest = z.object({ operation: z.literal("bind"), workflowId: z.string() }).strict();
+  const exportHistoryRequest = z.object({ operation: z.literal("export-history"), workflowId: z.string() }).strict();
   const checkpointRequest = z
     .object({
       operation: z.literal("checkpoint"),
@@ -1071,17 +1469,19 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     name: TOOL_NAME,
     label: "Phase-2 orchestration",
     description:
-      'Morning Star Phase-2 host observation. `{operation:"bind"}` records this coordinator session\'s identity pointer for one explicitly named workflow (authority is derived from the session envelope and the named snapshot, never from the call). `{operation:"checkpoint"}` acknowledges a run of the shared rescheduling checkpoint against the sample taken at that moment and can assert a block. `{operation:"reserve-launch"}` and `{operation:"record-launch"}` admit and record one extra plan-primary launch intent in the plugin\'s local transport journal; the optional Herdr/tmux skill performs every CLI call. Not a user activation command: nothing is spawned, merged, leased or written to engine state.',
-    parameters: z.union([bindRequest, checkpointRequest, reserveRequest, recordRequest]),
+      'Morning Star Phase-2 host observation. `{operation:"bind"}` adopts this session\'s identity pointer for one explicitly named workflow from whatever authority the control root has (the active DB session binding, or the recorded coordinator envelope pre-activation) \u2014 never from the call. `{operation:"checkpoint"}` acknowledges a run of the shared rescheduling checkpoint against the sample taken at that moment and can assert a block. `{operation:"reserve-launch"}` and `{operation:"record-launch"}` admit and record one extra plan-primary launch intent in the plugin\'s local transport journal under the ACTIVE execution authority; the optional Herdr/tmux skill performs every CLI call. `{operation:"export-history"}` returns THIS session\'s bounded hidden-history evidence bytes for one workflow (no file is written and no authority is granted). Not a user activation command: nothing is spawned, merged, leased or written to engine state.',
+    parameters: z.union([bindRequest, exportHistoryRequest, checkpointRequest, reserveRequest, recordRequest]),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
         const request = params as unknown as Phase2Request;
         const result =
           request.operation === "bind"
             ? await bind(request, ctx)
-            : request.operation === "checkpoint"
-              ? await checkpoint(request, ctx)
-              : await launch(request, ctx);
+            : request.operation === "export-history"
+              ? await exportHistory(request, ctx)
+              : request.operation === "checkpoint"
+                ? await checkpoint(request, ctx)
+                : await launch(request, ctx);
         return {
           content: [{ type: "text", text: result.text }],
           details: { mstarPhase2: result.details, ok: result.ok },
@@ -1106,14 +1506,15 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     if (!explicit) return;
     gate.userTurn = true;
     const state = derivePhase2State(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    if (state.binding === null || !state.reminder.blocked) return;
+    const terms = bindingTermsOf(state);
+    if (terms === null || !state.reminder.blocked) return;
     // A recorded block is cleared by a real user turn — durably, so a reload
     // cannot resurrect a blocker the user already overrode.
     appendRecord({
       version: RECORD_VERSION,
       kind: "user-turn",
-      hostSessionId: state.binding.hostSessionId,
-      workflowId: state.binding.workflowId,
+      hostSessionId: terms.hostSessionId,
+      workflowId: terms.workflowId,
     });
   });
 
