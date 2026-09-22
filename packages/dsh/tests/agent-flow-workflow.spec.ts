@@ -2540,7 +2540,7 @@ describe('agent-flow — record identity + bounded history (F2)', () => {
       // to this event. The complete row is therefore appended once (refusing
       // every unattributable fragment would stall the ledger on unrelated
       // damage), and the fragment is preserved byte-for-byte for diagnosis.
-      const cut = '{"v":1,"ts":1700000000000,"kind":"workflow-run","runId":"run-1","name":"audit","eventId":"wfe1:workflow-run:sess-a:sess-a:0'
+      const cut = '{"v":1,"ts":1700000000000,"kind":"workflow-run","runId":"run-1","name":"audit","eventId":"wfe1:workflow-run:sess-a:se'
       await writeFile(file, cut)
       expect(recordWorkflowEvent({
         harnessDir,
@@ -3337,6 +3337,10 @@ describe('workflow-ledger — explicit awaited target (F2 resolver route)', () =
     let call = 0
     const targetA = workflowDir
     const targetB = join(harnessDir, 'workflows', 'wf-flipped')
+    // The flipped target exists as a real workflow dir; the window (not a
+    // missing directory) is what must refuse the first attempt.
+    await mkdir(targetB, { recursive: true })
+    await writeFile(join(targetB, 'snapshot.json'), v2Snapshot('wf-flipped'))
     try {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, async (sessionId) => {
         call += 1

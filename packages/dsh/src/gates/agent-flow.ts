@@ -1984,6 +1984,34 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
 }
 
 /**
+ * Terminate a torn tail before appending: a previous writer can die mid-line
+ * and leave a final fragment WITHOUT a newline. The fragment's own bytes are
+ * never modified — exactly one newline is added, so it becomes its own damaged
+ * line (which every reader already skips) instead of swallowing the next
+ * accepted record.
+ * @returns the file's size AFTER the repair (0 when the ledger does not exist).
+ */
+function terminateTornTailLocked(file: string): number {
+  let size: number
+  try {
+    size = statSync(file).size
+  } catch {
+    return 0
+  }
+  if (size === 0) return 0
+  const fd = openSync(file, 'r')
+  try {
+    const last = Buffer.allocUnsafe(1)
+    readSync(fd, last, 0, 1, size - 1)
+    if (last.toString('utf8') === '\n') return size
+  } finally {
+    closeSync(fd)
+  }
+  appendFileDurableSync(file, '\n')
+  return size + 1
+}
+
+/**
  * Append one ALREADY-SERIALIZED line to `<workflowDir>/agent-flow.jsonl` and
  * keep the DISPLAY file bounded — the caller holds the per-workflow lock.
  * The common path stays append-ONLY: the file is `stat`-gated, and only a
@@ -2000,9 +2028,14 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
  */
 function appendLineLocked(workflowDir: string, line: string, index: IdentityIndex | undefined): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
+  // A torn final fragment has no line terminator; appending onto it would
+  // concatenate this record into the damaged line and make an ACCEPTED row
+  // unreadable. Terminate it first (its own bytes stay untouched — one newline
+  // only, so it becomes its own already-skipped damaged line).
+  const sizeBefore = terminateTornTailLocked(file)
   // Durable row BEFORE the identity-index entry is committed (recovery order).
   appendFileDurableSync(file, line)
-  if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
+  if (sizeBefore + Buffer.byteLength(line) <= AGENT_FLOW_SIZE_GATE_BYTES) return
   // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
   // newline produces one empty tail element that must not count as a line).
   const content = readFileSync(file, 'utf8')
