@@ -2747,8 +2747,11 @@ describe("mstar plan \u2014 execution transport", () => {
       fixture.root,
     );
     expect(noIdentity.exitCode).toBe(2);
+    // `--json` usage failures of this family are the A2 object on STDOUT (the
+    // existing convention: "a commander-level usage failure still carries the
+    // A2 failure object under --json"), never a stderr line.
     expect(jsonOf(noIdentity).code).toBe("usage");
-    expect(noIdentity.stderr).toContain("MSTAR_EXECUTION_IDENTITY");
+    expect(String(jsonOf(noIdentity).message)).toContain("MSTAR_EXECUTION_IDENTITY");
 
     expect(snapshotBytes(fixture)).toBe(before);
   });

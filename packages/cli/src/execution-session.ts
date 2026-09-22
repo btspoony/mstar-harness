@@ -348,6 +348,15 @@ function childSignalOf(child: { signal?: NodeJS.Signals | null; signalCode?: Nod
 }
 
 /**
+ * The exit code a child finished with, reading both runtime spellings:
+ * `node:child_process` under Node returns `status`, Bun's own result carries
+ * `exitCode`. A normal child exit is only propagated when BOTH are read.
+ */
+function childExitOf(child: { status?: number | null; exitCode?: number | null }): number | null {
+  return child.exitCode ?? child.status ?? null;
+}
+
+/**
  * Run argv with inherited stdio and propagate the child's own outcome: its exit
  * code, or the signal it was killed by (re-raised so scripts and CI observe the
  * same termination). Nothing about the identity is printed.
@@ -365,7 +374,7 @@ function launchUnderIdentity(argv: readonly string[], identity: ExecutionIdentit
     process.kill(process.pid, signal);
     return;
   }
-  process.exitCode = child.exitCode ?? 0;
+  process.exitCode = childExitOf(child) ?? 0;
 }
 
 /**

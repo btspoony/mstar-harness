@@ -122,7 +122,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   store.close();
   await initializeExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
-  writeText(planMarkdown, `# ${PLAN_ID}\n`);
+  writeText(planMarkdown, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
   return { root, harnessDir, context, planMarkdown };
 }
 
@@ -272,6 +272,18 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(policy.exitCode).toBe(0);
     expect((await storedHeader(fixture)).execution_policy).toEqual({ plan_parallelism: "sdd" });
 
+    // Delivery evidence is recorded stage by stage on the RUNNING lifecycle,
+    // before the status move below (the close consultation reads it later).
+    const deliveryPath = join(fixture.root, "delivery.json");
+    writeJson(deliveryPath, { compound: { outcome: "created" } });
+    const delivery = runCli(
+      workflowVerbArgs("evidence", fixture, bound, await workflowTokenOf(fixture), "delivery-1", ["--file", deliveryPath]),
+      fixture,
+      identity,
+    );
+    expect(delivery.exitCode).toBe(0);
+    expect((await storedHeader(fixture)).delivery).toMatchObject({ compound: { outcome: "created" } });
+
     const pausedToken = await workflowTokenOf(fixture);
     const paused = runCli(
       workflowVerbArgs("lifecycle", fixture, bound, pausedToken, "lifecycle-1", [
@@ -299,16 +311,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(replayed.exitCode).toBe(0);
     expect(jsonOf(replayed).replayed).toBe(true);
-
-    const deliveryPath = join(fixture.root, "delivery.json");
-    writeJson(deliveryPath, { compound: { outcome: "created" } });
-    const delivery = runCli(
-      workflowVerbArgs("evidence", fixture, bound, await workflowTokenOf(fixture), "delivery-1", ["--file", deliveryPath]),
-      fixture,
-      identity,
-    );
-    expect(delivery.exitCode).toBe(0);
-    expect((await storedHeader(fixture)).delivery).toMatchObject({ compound: { outcome: "created" } });
   });
 
   test("the terminal lifecycle is atomic and the retired file close has no active route", async () => {

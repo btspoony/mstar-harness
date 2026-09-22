@@ -302,10 +302,11 @@ export function workflowStatusOf(receipt: ExecutionReceipt<ExecutionState>, work
 type LifecycleOperation = Extract<WorkflowExecutionOperation, { kind: "lifecycle" }>;
 type ExecutionPolicyOperation = Extract<WorkflowExecutionOperation, { kind: "execution-policy" }>;
 
-/** The verb, blurb and operation mapping of the active workflow grammar. */
+/** The verb, its own flags, and the operation each `workflow` verb carries. */
 function workflowTransitions(): ReadonlyArray<{
   verb: string;
   description: string;
+  options: ReadonlyArray<readonly [string, string]>;
   operation: (options: CliOptions) => WorkflowExecutionOperation;
 }> {
   return [
@@ -314,6 +315,10 @@ function workflowTransitions(): ReadonlyArray<{
       description:
         "Request the next lifecycle phase: the named phase is evaluated against the lifecycle's own registered compass and " +
         "its committed rows by the existing phase gate, so a phase the gate does not produce refuses",
+      options: [
+        ["--phase <phase>", "The phase this call requests (the gate decides whether it is the produced transition)"],
+        ["--compass <path>", "Absolute path of the lifecycle's registered compass (the gate's input)"],
+      ],
       operation: (options) => {
         const phase = optionalFlag(options, "phase");
         const compassPath = optionalFlag(options, "compass");
@@ -333,6 +338,10 @@ function workflowTransitions(): ReadonlyArray<{
       description:
         "Move the lifecycle status: the terminal rules (every owned row Done, the delivery-evidence consultation for a " +
         "completed close, no lease on a terminal lifecycle) run unchanged behind this verb",
+      options: [
+        ["--status <status>", "The lifecycle status to move to (running | paused | completed | failed | stopped)"],
+        ["--reason <text>", "The reason recorded with this transition"],
+      ],
       operation: (options) => {
         const status = optionalFlag(options, "status");
         const reason = optionalFlag(options, "reason");
@@ -348,6 +357,7 @@ function workflowTransitions(): ReadonlyArray<{
     {
       verb: "execution-policy",
       description: "Record the lifecycle's execution policy (the same policy shape the snapshot validator owns)",
+      options: [["--file <path>", "Absolute path of the execution-policy JSON payload"]],
       operation: (options) => {
         const policy = requireJsonFile(options.file, "--file", "workflow execution-policy", "policy-json-path");
         // The engine's `assertWorkflowOperationShape` owns the policy shape.
@@ -359,6 +369,7 @@ function workflowTransitions(): ReadonlyArray<{
       description:
         "Record the reviewed integration checkout: the existing worktree/branch validators require an existing checkout of " +
         "this repository, distinct from the main/control checkout, on the registered integration branch",
+      options: [["--path <path>", "Absolute path of the reviewed integration checkout"]],
       operation: (options) => {
         const integrationPath = optionalFlag(options, "path");
         if (integrationPath === undefined || !isAbsolute(integrationPath)) {
@@ -389,8 +400,8 @@ export function registerExecutionWorkflowCommands(target: Command): void {
       "take --session-ref/--expect/--operation under an independently acquired identity.",
   );
 
-  for (const { verb, description, operation } of workflowTransitions()) {
-    group
+  for (const { verb, description, options: verbOptions, operation } of workflowTransitions()) {
+    const command = group
       .command(verb)
       .description(`${description} (active DB route; coordinator identity)`)
       .option("--workflow <id>", "Workflow id")
@@ -398,7 +409,11 @@ export function registerExecutionWorkflowCommands(target: Command): void {
       .option("--expect <token>", "The workflow's full execution token from the current read (the CAS)")
       .option("--operation <id>", "Caller-supplied id of this one operation (the replay key)")
       .option("--harness <path>", "Absolute control-harness override (default: resolved root)")
-      .option("--json", "Machine-readable JSON on stdout")
+      .option("--json", "Machine-readable JSON on stdout");
+    // Each verb declares ITS OWN flags: a flag another member owns is an
+    // unknown option (usage, exit 2), never silently ignored input.
+    for (const [flag, blurb] of verbOptions) command.option(flag, blurb);
+    command
       .exitOverride()
       .action(async (options: CliOptions) => {
         const json = options.json === true;

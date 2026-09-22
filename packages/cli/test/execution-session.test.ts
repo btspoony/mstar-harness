@@ -97,7 +97,7 @@ function assignmentText(input: { harnessDir: string; planMarkdown: string; workt
     `**SDD dir**: ${input.sddDir}`,
     "**Execute as**: project-manager",
     "**Execution scope**: plan",
-    "**Delegation**: forbidden",
+    "**Delegation**: allowed (plan-local subagents only)",
     "**Prepare gate**: go",
     "**QA gate**: mandatory",
     "**Findings cleanup**: allow-residual",
@@ -182,7 +182,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# ${PLAN_ID}\n`);
+  writeText(planMarkdown, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
   mkdirSync(worktreePath, { recursive: true });
   const assignmentPath = join(sddDir, "assignment.md");
@@ -305,6 +305,56 @@ function attestationFor(priorSessionId: string): Record<string, unknown> {
   };
 }
 
+/**
+ * The full active plan chain of one fixture: register, bind the coordinator,
+ * prepare the row through the DB route (no session file) and bind the plan-pm
+ * that claims the prepared row's execution lease.
+ */
+async function preparePlanSeat(
+  fixture: Fixture,
+  planPmId = PLAN_PM_ID,
+): Promise<{ coordinator: ExecutionSessionRef; coordinatorWire: string; planPmWire: string; planPmRef: ExecutionSessionRef }> {
+  const identity = coordinatorIdentity();
+  const initial = await readExecutionAuthority(fixture.context);
+  registerThroughAuthority(fixture, identity, initial.token);
+
+  // The tokens the active writes consume come from a read of THIS store.
+  const beforeBind = await tokensOf(fixture);
+  const coordinator = activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+
+  const prepared = runCli(
+    [
+      "plan",
+      "prepare",
+      "--session-ref",
+      coordinator.wire,
+      "--plan",
+      PLAN_ID,
+      "--assignment",
+      fixture.assignmentPath,
+      "--expect",
+      beforeBind.plan,
+      "--operation",
+      "prepare-1",
+      "--harness",
+      fixture.harnessDir,
+      "--json",
+    ],
+    fixture,
+    identity,
+  );
+  expect(prepared.exitCode).toBe(0);
+  expect(jsonOf(prepared).route).toBe("execution");
+
+  // The plan-pm seat claims the prepared row with its own acquired identity.
+  const afterPrepare = await tokensOf(fixture);
+  const planPm = activeBind(fixture, planPmIdentity(planPmId), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
+  expect(planPm.ref.role).toBe("plan-pm");
+  expect(planPm.ref.planId).toBe(PLAN_ID);
+  expect(planPm.ref.sessionId).toBe(planPmId);
+  return { coordinator: coordinator.ref, coordinatorWire: coordinator.wire, planPmWire: planPm.wire, planPmRef: planPm.ref };
+}
+
 describe("mstar session run \u2014 documented invocation", () => {
   test("launches argv under one minted local identity and propagates its exit code", async () => {
     const fixture = await activeFixture("mstar-session-run");
@@ -375,49 +425,12 @@ describe("mstar session run \u2014 documented invocation", () => {
 
   test("binds, resumes and mutates in a temporary DB, and a retry replays the same receipt", async () => {
     const fixture = await activeFixture("mstar-session-chain");
-    const identity = coordinatorIdentity();
-    const initial = await readExecutionAuthority(fixture.context);
-    registerThroughAuthority(fixture, identity, initial.token);
-
-    // The tokens the active writes consume come from a read of THIS store.
-    const beforeBind = await tokensOf(fixture);
-    const coordinator = activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
-
-    // The coordinator prepares the row through the DB route (no session file).
-    const prepared = runCli(
-      [
-        "plan",
-        "prepare",
-        "--session-ref",
-        coordinator.wire,
-        "--plan",
-        PLAN_ID,
-        "--assignment",
-        fixture.assignmentPath,
-        "--expect",
-        beforeBind.plan,
-        "--operation",
-        "prepare-1",
-        "--harness",
-        fixture.harnessDir,
-        "--json",
-      ],
-      fixture,
-      identity,
-    );
-    expect(prepared.exitCode).toBe(0);
-    expect(jsonOf(prepared).route).toBe("execution");
-
-    // The plan-pm seat claims the prepared row with its own acquired identity.
-    const afterPrepare = await tokensOf(fixture);
-    const planPm = activeBind(fixture, planPmIdentity(), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
-    expect(planPm.ref.role).toBe("plan-pm");
-    expect(planPm.ref.planId).toBe(PLAN_ID);
-    expect(planPm.ref.sessionId).toBe(PLAN_PM_ID);
+    const { planPmWire, planPmRef } = await preparePlanSeat(fixture);
+    expect(planPmRef.sessionId).toBe(PLAN_PM_ID);
 
     // The session-authorized view of that binding, and the documented resume.
     const view = runCli(
-      ["plan", "show", "--session-ref", planPm.wire, "--plan", PLAN_ID, "--harness", fixture.harnessDir, "--json"],
+      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir, "--json"],
       fixture,
       planPmIdentity(),
     );
@@ -426,7 +439,7 @@ describe("mstar session run \u2014 documented invocation", () => {
     expect(jsonOf(view).route).toBe("execution");
 
     const resumed = runCli(
-      ["plan", "bind", "--execution", "--resume-ref", planPm.wire, "--json"],
+      ["plan", "bind", "--execution", "--resume-ref", planPmWire, "--json"],
       fixture,
       planPmIdentity(),
     );
@@ -445,7 +458,7 @@ describe("mstar session run \u2014 documented invocation", () => {
       "plan",
       "progress",
       "--session-ref",
-      planPm.wire,
+      planPmWire,
       "--file",
       progressPath,
       "--expect",
@@ -507,8 +520,25 @@ describe("mstar plan \u2014 identity channel", () => {
       MSTAR_EXECUTION_IDENTITY: "{not json",
     });
     expect(malformed.exitCode).toBe(2);
-    expect(malformed.stderr).toContain("MSTAR_EXECUTION_IDENTITY");
-    expect(malformed.stdout).not.toContain(WIRE_PREFIX);
+    // Under `--json` this family reports the usage failure as the A2 object on
+    // STDOUT (the repo-wide convention: `plan-coordination.test.ts` "a
+    // commander-level usage failure still carries the A2 failure object under
+    // --json"), and the message names the channel without echoing its value.
+    const failure = jsonOf(malformed);
+    expect(failure.code).toBe("usage");
+    expect(String(failure.message)).toContain("MSTAR_EXECUTION_IDENTITY");
+    expect(malformed.stdout).not.toContain("{not json");
+    expect(malformed.stderr).toBe("");
+
+    // Human mode keeps the same diagnostic on stderr.
+    const humanArgs = bindArgs.filter((arg) => arg !== "--json");
+    const humanMalformed = spawnCli(humanArgs, fixture, {
+      ...cliEnv(fixture, identity),
+      MSTAR_EXECUTION_IDENTITY: "{not json",
+    });
+    expect(humanMalformed.exitCode).toBe(2);
+    expect(humanMalformed.stderr).toContain("MSTAR_EXECUTION_IDENTITY");
+    expect(humanMalformed.stdout).toBe("");
 
     // Nothing was bound by either refusal: the authority holds no coordinator.
     const workflow = await workflowStateOf(fixture);
@@ -583,31 +613,26 @@ describe("mstar plan \u2014 transport disjointness", () => {
 
   test("a copied reference under another acquired identity cannot write", async () => {
     const fixture = await activeFixture("mstar-session-copied");
-    const identity = coordinatorIdentity();
-    const initial = await readExecutionAuthority(fixture.context);
-    registerThroughAuthority(fixture, identity, initial.token);
-    const tokens = await tokensOf(fixture);
-    const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
-
+    const { planPmWire, planPmRef } = await preparePlanSeat(fixture);
     const progressPath = join(fixture.root, "progress.json");
     writeJson(progressPath, { status: "InReview", summary: "copied", evidence_paths: [fixture.evidencePath] });
-    const afterBind = await tokensOf(fixture);
+    const before = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+    const beforeToken = before.token;
 
     // The same wire under a DIFFERENT independently acquired identity is not
-    // that session: the engine compares the caller inside its own transaction.
-    const foreign: ExecutionIdentity = { ...coordinatorIdentity(), sessionId: SUCCESSOR_ID };
+    // that session: the engine compares the caller inside its own transaction,
+    // so the copy cannot write even though its reference is a real one.
+    const otherPlanPm = planPmIdentity("planpm-exec-session-other");
     const copied = runCli(
       [
         "plan",
         "progress",
         "--session-ref",
-        coordinator.wire,
-        "--plan",
-        PLAN_ID,
+        planPmWire,
         "--file",
         progressPath,
         "--expect",
-        afterBind.plan,
+        beforeToken,
         "--operation",
         "progress-copied",
         "--harness",
@@ -615,20 +640,25 @@ describe("mstar plan \u2014 transport disjointness", () => {
         "--json",
       ],
       fixture,
-      foreign,
+      otherPlanPm,
     );
     expect(copied.exitCode).toBe(1);
     expect(String(jsonOf(copied).code)).toMatch(/^(coordination|execution)\./);
 
-    // A reference the store does not hold is refused too.
-    const staleWire = encodeExecutionSessionRef({ ...coordinator.ref, sessionId: SUCCESSOR_ID });
+    // A reference the store does not hold is refused too (`--plan` is not
+    // needed: a plan-pm reference carries its own plan).
+    const staleWire = encodeExecutionSessionRef({ ...planPmRef, sessionId: "planpm-exec-session-unheld" });
     const stale = runCli(
-      ["plan", "show", "--session-ref", staleWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir, "--json"],
+      ["plan", "show", "--session-ref", staleWire, "--harness", fixture.harnessDir, "--json"],
       fixture,
-      foreign,
+      planPmIdentity("planpm-exec-session-unheld"),
     );
     expect(stale.exitCode).toBe(1);
     expect(String(jsonOf(stale).code)).toMatch(/^(coordination|execution)\./);
+
+    // Neither refusal wrote: the row still carries the token this call read.
+    const after = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+    expect(after.token).toBe(beforeToken);
   });
 });
 
