@@ -85,12 +85,21 @@ import {
   serializeExecutionValue,
 } from "@mstar-harness/engine";
 
+// `packages/cli/test` -> `packages/cli` -> `packages` -> the repository root.
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(TEST_DIR, "..", "..");
-const CLI_ENTRY = join(REPO, "packages", "cli", "dist", "mstar-harness.js");
+const CLI_ROOT = resolve(TEST_DIR, "..");
+const REPO = resolve(CLI_ROOT, "..", "..");
+const CLI_ENTRY = join(CLI_ROOT, "dist", "mstar-harness.js");
 const HOOK_ENTRY = join(REPO, "hooks", "mstar-write-gate.mjs");
 const MANIFEST_PATH = join(REPO, "hooks", "execution-consumer.json");
 const MANIFEST_BASENAME = "execution-consumer.json";
+
+// The resolution above is load-bearing for EVERY manifest/artifact path in this
+// file: a wrong level would silently point outside the checkout. Fail loudly on
+// the repository's own landmarks rather than on a downstream missing file.
+assert.ok(existsSync(join(REPO, "package.json")), `repository root did not resolve: ${REPO}`);
+assert.ok(existsSync(join(CLI_ROOT, "package.json")), `CLI package root did not resolve: ${CLI_ROOT}`);
+assert.ok(existsSync(MANIFEST_PATH), `generated manifest not found at ${MANIFEST_PATH}`);
 
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
