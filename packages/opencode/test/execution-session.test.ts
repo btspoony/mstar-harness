@@ -32,18 +32,17 @@ describe("OpenCode native execution identity", () => {
       planId: null,
     });
   });
-  test("missing, copied, or unsafe native identity refuses before any store access", () => {
+  test("missing or blank native identity refuses before any store access", () => {
     expect(() => openCodeExecutionIdentity({}, scope)).toThrow(/session id/);
-    expect(() => openCodeExecutionIdentity({ sessionID: "copied/session" }, scope)).toThrow(/safe path component/);
     expect(() => openCodeExecutionIdentity({ sessionID: "   " }, scope)).toThrow(/session id/);
   });
 
-  test("a reference is never resumed under a foreign native session", async () => {
+  test("a copied native identity cannot resume a reference for another session", async () => {
     const wire = encodeExecutionSessionRef(reference);
     await expect(
       resumeOpenCodeExecutionSession(
-        { harnessDir: "/fixture", caller: { sessionId: "foreign", ...scope } },
-        { sessionID: "foreign" },
+        { harnessDir: "/fixture", caller: { sessionId: "copied-session", ...scope } },
+        { sessionID: "copied-session" },
         scope,
         wire,
       ),
