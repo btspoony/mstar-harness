@@ -1186,6 +1186,12 @@ function hiddenCodec(context: RowContext): unknown {
     if (sessions.length === 0) {
       refuse(`${what} names no decoded native session; a host envelope covers the sessions its export publishes.`);
     }
+    if (sessions.length !== 1 || sessions[0] !== hostSessionId) {
+      refuse(
+        `${what} declares hostSessionId ${hostSessionId} but its embedded export derives the session set ` +
+          `[${sessions.join(", ")}]; one export covers exactly one native session, the one this envelope names.`,
+      );
+    }
     return {
       root: witness.root,
       path: witness.path,

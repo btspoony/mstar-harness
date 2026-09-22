@@ -1082,11 +1082,48 @@ describe("execution-coverage", () => {
     });
     refuseLeavingState(invalidAttestation);
 
-    // An absent row may not carry a populated proof.
+    // The embedded export may only publish the session its envelope names.
+    const foreignExport = materialize(buildRows());
+    const foreignDocs = hostDocs(WORKFLOW_B);
+    const foreignEntry = JSON.parse(foreignDocs.envelope.text) as { export: { document: unknown } };
+    const smuggled = doc(
+      "host",
+      `host-sessions/${WORKFLOW_A}.json`,
+      canonical({
+        ...(JSON.parse(foreignDocs.envelope.text) as Record<string, unknown>),
+        workflowId: WORKFLOW_A,
+        hostSessionId: SESSION_A,
+        export: {
+          sha256: sha(canonical({ ...(foreignEntry.export.document as Record<string, unknown>) }).slice(0, -1)),
+          document: foreignEntry.export.document,
+        },
+      }),
+    );
+    replaceRowDocuments(foreignExport, "omp-hidden-entries", WORKFLOW_A, [smuggled]);
+    refuseLeavingState(foreignExport);
+
+    // An absent row rebuilt from its own bytes may not carry a populated proof.
     const absentWithProof = materialize(buildRows());
+    const absentIndex = rowIndex(absentWithProof, "omp-hidden-entries", WORKFLOW_A);
+    const source = absentWithProof.coverage.receipts[absentIndex];
+    setReceipt(
+      absentWithProof,
+      absentIndex,
+      buildExecutionCoverageReceipt(
+        {
+          surface: "omp-hidden-entries",
+          workflowId: WORKFLOW_A,
+          disposition: "absent",
+          manifestId: source.manifestId,
+          manifestHash: source.manifestHash,
+          storeId: source.storeId,
+          epoch: source.epoch,
+        },
+        absentWithProof.evidence,
+      ),
+    );
     assign(absentWithProof, "omp-hidden-entries", WORKFLOW_A, []);
-    patchReceipt(absentWithProof, "omp-hidden-entries", WORKFLOW_A, (receipt) => ({ ...receipt, disposition: "absent", sources: [], evidence: [] }));
-    refuseLeavingState(absentWithProof);
+    refusalOf(() => validate(absentWithProof));
   });
 
   test("execution-coverage-assignment-binds-sources-to-a-row", () => {
