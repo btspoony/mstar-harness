@@ -1244,26 +1244,53 @@ export function agentFlowLedgerCacheDirCounts(): { cursors: number; index: numbe
 }
 
 /**
- * Whether the retained HISTORY (`agent-flow-history/chunk-*.jsonl`) already
- * holds at least one IDENTIFIED accepted row — a row whose stable record id
- * only the identity index can dedupe once it has left the live tail. Read in
- * chunk order and stop at the first identified line; an unreadable chunk makes
- * the question undecidable, which is treated as "identified" (refuse) rather
- * than risking a re-append of archived accepted rows. Legacy lines (no
- * `eventId`) are deliberately NOT counted — they were never indexed, their
- * bytes are untouched, and only the bounded tail can match them.
+ * Whether the retained HISTORY (`agent-flow-history/chunk-*.jsonl`) holds a row
+ * whose identity the index is REQUIRED to carry — a durable workflow event
+ * (`wfe1:…`) that has already left the live tail. Read in chunk order and stop
+ * at the first such line.
+ *
+ * Only index-scoped identities count: live tool-call rows carry a `wfc1:…` id
+ * that is deliberately NOT indexed, so a history of only those rows does not
+ * require an index and must not be mistaken for a lost one. Legacy lines (no
+ * `eventId` at all) are likewise not counted — they were never indexed and
+ * their bytes stay untouched.
+ *
+ * Damage fails CLOSED: an unreadable history directory, an unreadable chunk or
+ * an unparseable line inside a chunk is treated as identified history, never as
+ * "no history" (a lost authority must not slide through as a first run). A
+ * missing history directory is the normal never-compacted state and returns
+ * `false`.
  */
 function historyHoldsIdentifiedRows(workflowDir: string): boolean {
-  for (const name of listAgentFlowHistoryChunks(workflowDir)) {
+  const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+  let names: string[]
+  try {
+    names = readdirSync(dir).filter((name) => name.startsWith('chunk-') && name.endsWith('.jsonl')).sort()
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err?.code === 'ENOENT') return false
+    log('warn', `agent-flow history directory is unreadable (${errorMessage(error)}) — treating the retained history as identified`)
+    return true
+  }
+  for (const name of names) {
     let content: string
     try {
-      content = readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, name), 'utf8')
+      content = readFileSync(join(dir, name), 'utf8')
     } catch (error) {
       log('warn', `agent-flow history chunk ${name} is unreadable (${errorMessage(error)}) — treating the retained history as identified`)
       return true
     }
     for (const line of content.split('\n')) {
-      if (line !== '' && eventIdOfLine(line) !== undefined) return true
+      if (line === '') continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        log('warn', `agent-flow history chunk ${name} carries an unparseable line — treating the retained history as identified`)
+        return true
+      }
+      const eventId = asRecord(parsed)?.eventId
+      if (typeof eventId === 'string' && eventId.startsWith(`${WORKFLOW_EVENT_ID_PREFIX}:`)) return true
     }
   }
   return false

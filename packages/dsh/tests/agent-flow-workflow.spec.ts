@@ -2516,6 +2516,52 @@ describe('agent-flow — index fail-closed boundaries (F2)', () => {
     }
   })
 
+  it('a missing index over a history of only LIVE call rows is a legitimate first run — wfc1 ids are not indexed', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-live-')
+    try {
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(dir, { recursive: true })
+      // A live tool-call row carries a `wfc1:` id but is NOT index-scoped.
+      await writeFile(join(dir, 'chunk-000001.jsonl'), `${dispatchLine(1_700_000_000_000, { eventId: 'wfc1:sess-1:c-1:dispatch' })}\n`)
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a DAMAGED history line with a missing index refuses the record — damage never reads as "no history"', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-damaged-')
+    try {
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(dir, { recursive: true })
+      // A torn chunk line: neither a legacy row nor a readable identity.
+      await writeFile(join(dir, 'chunk-000001.jsonl'), '{"v":1,"ts":1700000000000,"kind":"workflow-run"\n')
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an UNREADABLE history chunk with a missing index refuses the record — an unreadable authority is not "no history"', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-chunk-unreadable-')
+    try {
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(join(dir, 'chunk-000001.jsonl'), { recursive: true })
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('a missing index over LEGACY-only history is a legitimate first run: the row records once', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-legacy-')
     try {
