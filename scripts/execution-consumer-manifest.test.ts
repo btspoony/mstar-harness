@@ -39,6 +39,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import {
   CONSUMER_MANIFEST_PROTOCOL,
+  type ConsumerManifestRefusalCode,
   ExecutionConsumerManifestError,
   type ExecutionConsumerManifest,
   collectExecutionConsumerManifest,
@@ -254,7 +255,7 @@ function asManifest(manifest: MutableManifest | Record<string, unknown>): Execut
   return manifest as unknown as ExecutionConsumerManifest;
 }
 
-function expectRefusal(run: () => void, code: string): void {
+function expectRefusal(run: () => void, code: ConsumerManifestRefusalCode): void {
   let caught: unknown;
   try {
     run();
