@@ -1381,8 +1381,24 @@ function toInReview(fixture: Fixture, planSession: string, summary: string): voi
   }
 }
 
+/**
+ * The handoff input the shared submitter actually reads: the fixture root, the
+ * pinned review range and the three evidence reports. Deliberately not the
+ * integration fixture — a standalone attempt (development or report-only) has
+ * no integration path to offer, and naming one at a standalone call site would
+ * have to be invented.
+ */
+interface HandoffFixture {
+  root: string;
+  baseSha: string;
+  sourceSha: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
 /** Submit the pinned handoff and return the engine's own handoff id. */
-function submitHandoff(fixture: IntegrationFixture, planSession: string): string {
+function submitHandoff(fixture: HandoffFixture, planSession: string): string {
   const payload = join(fixture.root, "handoff.json");
   writeJson(payload, {
     // Spec §D: the plan session supplies revisions and evidence paths only —
@@ -1852,7 +1868,7 @@ function makeStandaloneRepairFixture(withPr = false): StandaloneRepairFixture {
   const planSession = bindPlan(fixture, PLAN_ID);
   toInReview(fixture, planSession, "standalone ready");
   const handoffId = submitHandoff(
-    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
     planSession,
   );
   const accepted = transition(fixture, "accept", coordinator, handoffId);
@@ -1925,7 +1941,7 @@ function makeStandaloneCompletionFixture(): StandaloneCompletionFixture {
   const planSession = bindPlan(fixture, PLAN_ID);
   toInReview(fixture, planSession, "standalone ready for completion");
   const handoffId = submitHandoff(
-    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
     planSession,
   );
   const accepted = transition(fixture, "accept", coordinator, handoffId);
@@ -2086,7 +2102,7 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   const planSession = bindPlan(fixture, PLAN_ID);
   toInReview(fixture, planSession, "report-only ready for completion");
   const handoffId = submitHandoff(
-    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
     planSession,
   );
   const accepted = transition(fixture, "accept", coordinator, handoffId);

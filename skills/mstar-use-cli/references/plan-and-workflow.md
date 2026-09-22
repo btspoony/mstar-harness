@@ -123,7 +123,8 @@ mstar plan integration-accept --session <coordinator-session.json> --plan plan-a
 # then complete; an absent or nonmatching policy refuses the completion
 mstar workflow evidence --workflow wf-demo --file completion.json --session <coordinator-session.json>
 
-# every route ends here; a standalone workflow reaches this line straight from accept
+# every route ends here: a standalone development workflow reaches this line
+# straight from accept, the report-only route after recording its fulfilment above
 mstar plan complete --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
 ```
 

@@ -85,7 +85,7 @@ The report-only route replaces the PR/merge stages with the recorded policy and 
 ## 5. Failure and abandonment
 
 - Failure and abandonment close through explicit `failed`/`stopped` statuses with a recorded reason. They are never rewritten as successfully completed.
-- **Current exposure.** The DB lifecycle already carries a terminal branch for `failed`/`stopped`, but the supported **installed JSON/CLI writer** for those statuses is not yet available — recording one from a live workflow has no lawful verb today. This contract neither claims that writer nor implements a general cancellation path: until a supported verb exists, a workflow that must become terminal without a successful completion evidence record is a named blocker for its owner, reported as such rather than closed as `completed` or edited by hand.
+- **Current exposure.** The DB lifecycle already carries the terminal `failed`/`stopped` branch (the active form `mstar workflow lifecycle --status failed|stopped --reason`, under `--session-ref`/`--expect`/`--operation`), and this contract does **not** reimplement it. What stays deferred is the **installed JSON/CLI `failed`/`stopped` exposure** — no expanded exposure and no cancellation subsystem is claimed or added here. A workflow that must become terminal on that deferred path is a named blocker for its owner: reported as such, rather than closed as `completed` or edited by hand.
 - `closeWorkflow` preserves an existing valid terminal snapshot unchanged, including `failed`/`stopped` — idempotence this contract keeps.
 - Close never releases leases. Another owner's lease is not released to force closure; strict terminal validation refuses leases without deleting them.
 - Scoped and plan-scoped sessions cannot mutate lifecycle anchors or close sibling workflows (foundational distinctions, third meaning).
@@ -141,5 +141,5 @@ The direction and reason columns record the reasoning behind each answer; the an
 >
 > **What stays untouched.** `development` keeps its Git proofs (dirty-checkout and moved-ref refusals, the pinned source/target anchors, the PR identity and verified-merge evidence) and the iteration route keeps its merge proof and both leases. A report-only completion releases only the row's own execution lease, leaves the workflow `running`, and still requires the terminal close to write `completed` and unregister the root entry; recovery replays an already-completed row read-only, rewriting no bytes and no timestamp.
 >
-> **Deferral (unchanged).** No terminal writer for `failed`/`stopped` is added, and none is claimed: §5's current exposure stands, and this amendment closes no live workflow — it defines only how the declared kind reaches a lawful `Done` and `completed`.
+> **Deferral (unchanged).** No **JSON/CLI** terminal writer for `failed`/`stopped` is added, and none is claimed; the DB lifecycle's existing terminal branch is not reimplemented here either. §5's current exposure stands, and this amendment closes no live workflow — it defines only how the declared kind reaches a lawful `Done` and `completed`.
 
