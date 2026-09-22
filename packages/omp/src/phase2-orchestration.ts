@@ -146,7 +146,8 @@ export type CheckpointReason =
   | "capacity-changed";
 
 export type Phase2Request =
-  | { operation: "bind"; workflowId: string; coordinatorSessionPath: string }
+  | { operation: "bind"; workflowId: string }
+  | { operation: "export-history"; workflowId: string }
   | {
     operation: "checkpoint";
     reason: CheckpointReason;
