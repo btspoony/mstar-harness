@@ -2353,6 +2353,49 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     await expect(read(planPm, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
   });
 
+  test("reads the committed authority after a clean close folded the journal into the store file", async () => {
+    // R6's mechanism, made deterministic. This runtime completes a closed
+    // connection's SQLite cleanup — checkpoint every committed frame into the
+    // database file, then remove the now-empty `-wal`/`-shm` pair — when the
+    // closed handle is collected rather than when `close()` returns, so the
+    // shape a store is left in is decided by the garbage collector. On Bun
+    // 1.4.0 a read landing after that cleanup refused `store.corrupt: unable to
+    // open database file`: SQLite reads a WAL database THROUGH its journal, and
+    // a read-only connection can never create the `-wal` it needs. The forced
+    // collection makes the cleanup happen HERE instead of at an arbitrary point
+    // in this file; the authority it folds in must still be served.
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-quiesced-wal", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-quiesced-coordinator"),
+    );
+    const accepted = executionFootprint(context);
+
+    Bun.gc(true);
+    // The precondition this case is about: SQLite's own quiesced shape — every
+    // committed frame in the database file, both sidecars gone — is really on
+    // disk. If a runtime stops leaving it, this fails here rather than passing
+    // the reads below for the wrong reason.
+    expect(existsSync(`${storePath(context)}-wal`)).toBe(false);
+    expect(existsSync(`${storePath(context)}-shm`)).toBe(false);
+
+    // That folded-in state is the whole committed authority, and both reads
+    // serve it: the root graph, and the plan read of the reported case.
+    const root = await readExecutionState(context);
+    expect(root.data.workflows.map((entry) => entry.state.id)).toEqual(["wf-1"]);
+    expect(root.data.workflows[0]?.coordinator).toEqual(coordinatorRef.data);
+    const plan = await readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1");
+    expect(plan.token).toBe(planTokens["p-1"]);
+    expect(plan.data.plan).toMatchObject({ id: "p-1", status: "Todo" });
+    // Repeating the read is not a one-shot: the recorded failure kept refusing.
+    expect((await readExecutionState(context)).token).toBe(root.token);
+    // Read-only: the authority those reads served is the accepted one, unmoved.
+    expect(executionFootprint(context)).toEqual(accepted);
+  });
+
   test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {
     const shared = "host-shared";
     const fixture = await createdWorkflow("session-read-precedence", shared);

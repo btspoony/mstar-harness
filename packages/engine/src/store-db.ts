@@ -16,7 +16,7 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
@@ -277,6 +277,62 @@ async function connect(dbPath: string, mode: "read" | "write"): Promise<StoreDb>
   return openConnection(dbPath, mode, DatabaseSync);
 }
 
+/** SQLite's own file header is 100 bytes; offsets 18/19 carry the file format's
+ * write/read version, `2` for WAL. */
+const DATABASE_HEADER_BYTES = 100;
+const WAL_FILE_FORMAT_VERSION = 2;
+
+/**
+ * Put back the `-wal` file a read-only connection needs when SQLite's own clean
+ * close has folded the journal into the database file and removed it.
+ *
+ * SQLite reads a WAL database THROUGH its journal: a read-only connection
+ * creates the `-shm` index itself but can never create the `-wal`, so the
+ * quiesced shape — every committed frame in the database file, header still
+ * recording WAL, no sidecars — refuses the open with SQLITE_CANTOPEN, which
+ * surfaces here as `store.corrupt` "unable to open database file". Node's
+ * `node:sqlite` creates that empty journal inside its open; Bun 1.4.0 refuses
+ * instead, and the shape is not rare: this runtime completes a closed handle's
+ * cleanup — checkpoint, then remove the empty sidecars — when the handle is
+ * collected, so a read after any writer close can meet it. That is the recorded
+ * store-open flake in `execution-store.test.ts`, and the same shape a store
+ * copied without its sidecars has.
+ *
+ * The database file IS the whole committed state in that shape — a journal is
+ * only absent because SQLite's own clean close removed it, or the store file was
+ * copied without it — so the empty journal the read needs is created here: never
+ * a fabricated frame, and never over an existing file (`wx`), so a writer that
+ * created its journal first is left exactly as it is. Every other shape — a
+ * rollback-journal store, a store that already has its journal, a file too short
+ * or unreadable to be a store — is left untouched and keeps its own refusal.
+ */
+function ensureJournalForRead(dbPath: string): void {
+  if (existsSync(`${dbPath}-wal`)) return;
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      if (readSync(source, header, 0, header.length, 0) < header.length) return;
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    // Not a readable store file: the open below reports its own failure, exactly
+    // as it did before this shape check existed.
+    return;
+  }
+  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION) return;
+  let journal: number;
+  try {
+    journal = openSync(`${dbPath}-wal`, "wx");
+  } catch {
+    // `EEXIST` — a writer created the journal first; nothing to add. Any other
+    // failure leaves the store to the open below, which reports it.
+    return;
+  }
+  closeSync(journal);
+}
+
 /**
  * The one connection body (pragma order, verification, busy mapping) shared by
  * the async opener and the synchronous route probe. `DatabaseSync` is handed in
@@ -291,6 +347,10 @@ function openConnection(
   // writers without a second argument, readers with the read-only option.
   let db: StoreDb;
   try {
+    // A read-only connection can never create the `-wal` a quiesced WAL store
+    // needs, so the empty journal is put back before the open (see the helper);
+    // a writer creates its own as part of applying `journal_mode=wal`.
+    if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
     refuseOpenFailure(error, dbPath);
@@ -1278,9 +1338,12 @@ export type StoreHandle = {
 };
 
 /**
- * Open an existing store for reading or writing. Creates nothing: a missing
+ * Open an existing store for reading or writing. Creates no store: a missing
  * database is a `store.not-initialized` refusal. Readers open with the
- * read-only option plus `query_only=ON`. The schema and store identity are
+ * read-only option plus `query_only=ON`; a WAL store whose journal SQLite's own
+ * clean close removed gets that empty `-wal` back beside it before the open
+ * (`ensureJournalForRead`), because a read-only connection cannot create the
+ * journal it needs to read a WAL database. The schema and store identity are
  * verified on every request; drift/newer/corrupt refuses before mutation.
  */
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
