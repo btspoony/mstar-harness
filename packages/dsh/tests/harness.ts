@@ -363,8 +363,10 @@ export class FakeAgentRegistry extends Service {
  * pushes an envelope into the session's `log` and emits it on the
  * `session/event` firehose (the real store's append+emit contract). The
  * sessions are STRUCTURAL FAKES (plain objects): the consumer reads only
- * `header.id` / `header.cwd` / `header.delegationDepth` / `seq` /
- * `eventAt(seq)` structurally, and `@deepseek-ai/dsh-session` cannot
+ * `header.id` / `header.cwd` / `header.delegationDepth` / `header.createdAt`
+ * (the required `SessionHeader` creation stamp that carries the native log
+ * incarnation) / `seq` / `eventAt(seq)` structurally, and
+ * `@deepseek-ai/dsh-session` cannot
  * construct under Bun/JSC. Mounted as the `@deepseek-ai/dsh-session-fake`
  * module row (`bootApp({ sessionsService: 'fake' })`) so the plugin's REAL
  * `registerWorkflowLedger` wiring registers against it — the gate → session

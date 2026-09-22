@@ -16,7 +16,8 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
@@ -277,6 +278,126 @@ async function connect(dbPath: string, mode: "read" | "write"): Promise<StoreDb>
   return openConnection(dbPath, mode, DatabaseSync);
 }
 
+/** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
+ * offsets 18/19 the file format's write/read version (`2` for WAL). */
+const DATABASE_HEADER_BYTES = 100;
+const SQLITE_FORMAT_MAGIC = "SQLite format 3\u0000";
+const WAL_FILE_FORMAT_VERSION = 2;
+
+/**
+ * The store's final path must be a genuinely missing file or a regular file —
+ * decided WITHOUT following a link (`lstat`). Only a missing path (ENOENT) is
+ * "no store"; every path that EXISTS but is not a regular file — a symlink,
+ * dangling or not, a directory, a device — and every path that cannot even be
+ * examined is an existing-but-unreadable store and refuses `store.corrupt`
+ * here. That is what keeps a link — whose target may sit outside the resolved
+ * control root — from being answered as an absent store and reopening the
+ * retired file route, and it runs before any existence check, header probe or
+ * driver open.
+ */
+function assertAbsentOrRegularStoreFile(dbPath: string): void {
+  let stats: Stats | undefined;
+  let examineError: unknown;
+  try {
+    stats = lstatSync(dbPath);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return;
+    examineError = error;
+  }
+  if (stats?.isFile()) return;
+  const observed =
+    stats === undefined
+      ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})`
+      : stats.isSymbolicLink()
+        ? "it is a symbolic link"
+        : "it is not a regular file";
+  throw new StoreError(
+    "store.corrupt",
+    `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and ` +
+      `written only at its own canonical path inside the resolved control root; nothing was read or written.`,
+  );
+}
+
+/**
+ * Is this complete SQLite file header the one shape a read-only connection
+ * cannot open on its own: a WAL-format database with no journal beside it?
+ * Decided from the file's own bytes, non-mutating, without a format
+ * interpreter — the magic string, a legal page size, both WAL version bytes, the
+ * three payload fractions and the schema/text-encoding values SQLite itself
+ * writes, plus the page-aligned size every SQLite database file has. Bytes that
+ * merely happen to carry `2` in both version positions are not a database and
+ * get no journal. Whether the file is actually a store (its schema, migration
+ * checksums and identity) stays the caller's content check: this predicate only
+ * settles what the header says.
+ */
+function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
+  if (bytes < DATABASE_HEADER_BYTES) return false;
+  if (header.toString("latin1", 0, 16) !== SQLITE_FORMAT_MAGIC) return false;
+  const pageSize = header.readUInt16BE(16);
+  const legalPageSize = pageSize === 1 ? 65536 : pageSize;
+  if (legalPageSize < 512 || legalPageSize > 65536 || (legalPageSize & (legalPageSize - 1)) !== 0) return false;
+  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION) return false;
+  if (header[21] !== 64 || header[22] !== 32 || header[23] !== 32) return false;
+  // 0 is the legal "no schema recorded yet" value for both fields.
+  if (header.readUInt32BE(44) > 4) return false;
+  if (header.readUInt32BE(56) > 3) return false;
+  return bytes % legalPageSize === 0;
+}
+
+/**
+ * Put back the `-wal` file a read-only connection needs when SQLite's own clean
+ * close has folded the journal into the database file and removed it.
+ *
+ * SQLite reads a WAL database THROUGH its journal: a read-only connection
+ * creates the `-shm` index itself but can never create the `-wal`, so the
+ * quiesced shape — every committed frame in the database file, header still
+ * recording WAL, no sidecars — refuses the open with SQLITE_CANTOPEN, which
+ * surfaces here as `store.corrupt` "unable to open database file". Node's
+ * `node:sqlite` creates that empty journal inside its open; Bun 1.4.0 refuses
+ * instead, and the shape is not rare: this runtime completes a closed handle's
+ * cleanup — checkpoint, then remove the empty sidecars — when the handle is
+ * collected, so a read after any writer close can meet it. The same shape is
+ * what a store file copied without its sidecars has.
+ *
+ * The database file IS the whole committed state in that shape — a journal is
+ * only absent because SQLite's own clean close removed it, or the store file was
+ * copied without it — so the empty journal the read needs is created here: never
+ * a fabricated frame, and never over an existing file (`wx`), so a writer that
+ * created its journal first is left exactly as it is. Every other shape — a
+ * rollback-journal store, a store that already has its journal, bytes that are
+ * not a database, an unreadable file — is left untouched and keeps its own
+ * refusal, so a refused store never gains a sidecar.
+ */
+function ensureJournalForRead(dbPath: string): void {
+  if (existsSync(`${dbPath}-wal`)) return;
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  let bytes: number;
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      bytes = fstatSync(source).size;
+      if (readSync(source, header, 0, header.length, 0) < header.length) return;
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    // Not a readable store file: the open below reports its own failure, exactly
+    // as it did before this shape check existed.
+    return;
+  }
+  if (!isWalFormatDatabase(header, bytes)) return;
+  let journal: number;
+  try {
+    journal = openSync(`${dbPath}-wal`, "wx");
+  } catch {
+    // `EEXIST` — a writer created the journal first; nothing to add. Any other
+    // failure leaves the store to the open below, which reports it.
+    return;
+  }
+  closeSync(journal);
+}
+
 /**
  * The one connection body (pragma order, verification, busy mapping) shared by
  * the async opener and the synchronous route probe. `DatabaseSync` is handed in
@@ -291,6 +412,12 @@ function openConnection(
   // writers without a second argument, readers with the read-only option.
   let db: StoreDb;
   try {
+    // The final path must be a regular file inside the control root: neither
+    // intent follows a symlink out of it. A read-only connection can also never
+    // create the `-wal` a quiesced WAL store needs, so that empty journal is put
+    // back before the read open (see the helpers).
+    assertAbsentOrRegularStoreFile(dbPath);
+    if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
     refuseOpenFailure(error, dbPath);
@@ -773,6 +900,11 @@ create table execution_migrations(
 );
 `;
 
+/** Next append-only execution schema change: coverage is optional during staging. */
+export const MIGRATION_5_SQL = `
+alter table execution_migrations add column coverage_json text;
+`;
+
 export type Migration = { version: number; name: string; sql: string };
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
@@ -781,6 +913,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
+  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
 ];
 
 /** Execution tables created by migration 4 — the executable form of §2.2. */
@@ -1156,8 +1289,11 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * the SAME `node:sqlite` driver read-only through the synchronous loader.
  *
  * The existence check below is the discrimination the guards act on, taken
- * BEFORE anything else in this function: only a path with no store file can
- * answer `state: null` without having read a store. A store file that EXISTS
+ * BEFORE anything else in this function, and it runs on the final path WITHOUT
+ * following a link: only a path with no store file can answer `state: null`
+ * without having read a store, so a dangling symlink or other non-regular final
+ * path refuses `store.corrupt` first and can never reopen the retired file
+ * route. A store file that EXISTS
  * and fails to open (SQLITE_CANTOPEN / an I/O error) or that another writer
  * holds past the bounded wait answers `unreadable` — never "no authority", so
  * neither guard can fall back to the retired file route for a store that is
@@ -1173,6 +1309,10 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  */
 function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe {
   const dbPath = storeDbPath(context);
+  // The same no-link discrimination the open makes: a dangling symlink or other
+  // non-regular final path is an existing store that cannot be read, never "no
+  // store", so the retired file route cannot answer for it.
+  assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     dropProbeConnection();
     return { kind: "state", dbPath, state: null };
@@ -1266,6 +1406,44 @@ export function assertExecutionFileReadAllowed(context: StoreContext): void {
       `retired root/snapshot JSON as authority. Nothing was read: consume the execution DB adapter instead.`,
   );
 }
+/**
+ * Execute a synchronous read-only callback against the current execution
+ * authority. This is the guard used immediately before file-native commits:
+ * it reuses the probe's inode-stable read connection and never opens a second
+ * asynchronous driver path.
+ */
+export function withExecutionReadGuard<T>(
+  context: StoreContext,
+  body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
+): T {
+  const probe = probeExecutionAuthority(context);
+  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
+  if (probe.state !== "active") {
+    throw new StoreError(
+      "execution.consumer-not-ready",
+      "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
+    );
+  }
+  const db = probeConnectionFor(probe.dbPath);
+  if (db === null) {
+    throw new StoreError("store.not-initialized", "The execution store disappeared before the read-only assertion.");
+  }
+  const store = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get() as
+    | { store_id?: unknown; authority_epoch?: unknown }
+    | undefined;
+  const execution = db.prepare("select authority_state from execution_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (
+    store === undefined ||
+    typeof store.store_id !== "string" ||
+    typeof store.authority_epoch !== "number" ||
+    execution?.authority_state !== "active"
+  ) {
+    throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
+  }
+  return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
+}
 
 export type StoreHandle = {
   db: StoreDb;
@@ -1278,14 +1456,27 @@ export type StoreHandle = {
 };
 
 /**
- * Open an existing store for reading or writing. Creates nothing: a missing
- * database is a `store.not-initialized` refusal. Readers open with the
- * read-only option plus `query_only=ON`. The schema and store identity are
+ * Open an existing store for reading or writing. Creates no store: a missing
+ * database is a `store.not-initialized` refusal — and "missing" is decided on
+ * the final path without following a link, so a dangling symlink or any other
+ * non-regular file is an existing-but-unreadable store and refuses
+ * `store.corrupt` instead, never answering as an absent store. The final path
+ * must also be a regular file at the store's own canonical path — a link target
+ * outside the resolved control root is never followed. Readers open with the
+ * read-only option plus `query_only=ON`; a WAL store whose journal SQLite's own
+ * clean close removed gets that empty `-wal` back beside it before the open
+ * (`ensureJournalForRead`), because a read-only connection cannot create the
+ * journal it needs to read a WAL database. The schema and store identity are
  * verified on every request; drift/newer/corrupt refuses before mutation.
  */
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
+  // The existence discrimination runs on the final path WITHOUT following a
+  // link: a dangling symlink or any other non-regular file is an existing store
+  // that cannot be read — `store.corrupt`, never "no store" — so neither this
+  // open nor the retired file route can answer from a link target.
+  assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",

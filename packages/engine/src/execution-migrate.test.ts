@@ -54,7 +54,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,12 +64,15 @@ import {
   abortExecutionMigration,
   activateExecutionMigration,
   applyExecutionMigration,
+  collectExecutionCoverage,
   executionManifestHash,
   previewExecutionMigration,
   retireExecutionSources,
   type ExecutionManifest,
+  type ExecutionManifestDocument,
 } from "./execution-migrate.js";
-import { readExecutionState } from "./execution-store.js";
+import { type ExecutionCoverageSet } from "./execution-coverage.js";
+import { readExecutionState, serializeExecutionValue } from "./execution-store.js";
 import { captureIssue } from "./issue.js";
 import {
   assertBackupDescribesStore,
@@ -105,7 +108,13 @@ afterAll(() => {
 // Fixture: a real legacy execution workspace
 // ---------------------------------------------------------------------------
 
-type Fixture = { root: string; harness: string; context: StoreContext };
+type Fixture = {
+  root: string;
+  harness: string;
+  context: StoreContext;
+  /** §4.2 the explicit inventory path every migration verb names. */
+  inventoryPath: string;
+};
 
 type LegacyWorkspace = Fixture & {
   workflowId: string;
@@ -126,7 +135,26 @@ function workspace(name: string): Fixture {
   execFileSync("git", ["init", "-q"], { cwd: root });
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
-  return { root, harness, context: { harnessDir: harness } };
+  const fixture: Fixture = { root, harness, context: { harnessDir: harness }, inventoryPath: join(harness, INV, "inventory.json") };
+  writeInventory(fixture);
+  return fixture;
+}
+
+const INV = "execution-inventory";
+
+/** §4.2 the explicit inventory of one fixture: the configured roots and the evidence inputs. */
+function writeInventory(fixture: Fixture, extra: Record<string, unknown> = {}): void {
+  writeJson(fixture.inventoryPath, {
+    version: 2,
+    roots: { sdd: join(fixture.harness, INV, "sdd"), host: join(fixture.harness, INV, "host"), package: join(fixture.harness, INV, "package") },
+    hostSessions: [],
+    sddEvidence: [],
+    consumers: [],
+    injectors: [],
+    injectorInventory: null,
+    backup: null,
+    ...extra,
+  });
 }
 
 function writeText(path: string, text: string): void {
@@ -435,7 +463,17 @@ async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; m
 }
 
 function migrationInput(fixture: Fixture, operationId: string) {
-  return { context: fixture.context, operationId, operator: "ops-engineer" };
+  return { context: fixture.context, operationId, operator: "ops-engineer", inventoryPath: fixture.inventoryPath };
+}
+
+/** §4.1/§4.2 the coverage of one reviewed manifest, recomputed by the real collector. */
+async function coverageOf(fixture: Fixture, manifest: ExecutionManifest): Promise<ExecutionCoverageSet> {
+  return collectExecutionCoverage({ ...migrationInput(fixture, "op-coverage"), manifest });
+}
+
+/** §4.2 the coverage digest of one reviewed manifest. */
+async function coverageDigestOf(fixture: Fixture, manifest: ExecutionManifest): Promise<string> {
+  return (await coverageOf(fixture, manifest)).digest;
 }
 
 /** A verified recovery point of the current store state. */
@@ -449,7 +487,7 @@ async function stageReviewed(fixture: Fixture, suffix: string): Promise<Executio
   const backup = await recoveryPoint(fixture);
   const manifest = await previewExecutionMigration(migrationInput(fixture, `op-preview-${suffix}`));
   await applyExecutionMigration({
-    ...migrationInput(fixture, `op-apply-${suffix}`),
+    ...migrationInput(fixture, `op-apply-${suffix}`), coverage: await coverageOf(fixture, manifest),
     manifest,
     manifestHash: executionManifestHash(manifest),
     backup,
@@ -578,13 +616,14 @@ function migrationAttestation(stoppedSessions: ActivationAttestation["stoppedSes
   };
 }
 
-function activationInput(fixture: Fixture, manifest: ExecutionManifest, suffix: string, attestation = migrationAttestation()) {
+async function activationInput(fixture: Fixture, manifest: ExecutionManifest, suffix: string, attestation = migrationAttestation()) {
   return {
     ...migrationInput(fixture, `op-activate-${suffix}`),
     manifestId: manifest.id,
     manifestHash: executionManifestHash(manifest),
     expectedEpoch: manifest.epoch,
     attestation,
+    coverageDigest: await coverageDigestOf(fixture, manifest),
   };
 }
 
@@ -605,7 +644,7 @@ async function stageCore(fixture: Fixture, suffix: string): Promise<ExecutionMan
   const backup = await recoveryPoint(fixture);
   const manifest = await previewExecutionMigration(migrationInput(fixture, `op-${suffix}-preview`));
   await applyExecutionMigration({
-    ...migrationInput(fixture, `op-${suffix}-apply`),
+    ...migrationInput(fixture, `op-${suffix}-apply`), coverage: await coverageOf(fixture, manifest),
     manifest,
     manifestHash: executionManifestHash(manifest),
     backup,
@@ -675,7 +714,7 @@ describe("execution-preview", () => {
 
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-preview-1"));
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
     expect(manifest.id.startsWith("exec-")).toBe(true);
     expect(manifest.root).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.storeId).toBe((footprint.storeMeta as { store_id: string }).store_id);
@@ -689,6 +728,9 @@ describe("execution-preview", () => {
       "session-envelope",
       "session-envelope",
       "session-envelope",
+      // §4.2 the explicit inventory is itself a witnessed input: the discovery it
+      // drives is bound to those exact bytes.
+      "inventory",
     ]);
     expect(manifest.sources.map((witness) => witness.path)).toEqual([
       canonicalPath(fixture.statusPath),
@@ -696,6 +738,7 @@ describe("execution-preview", () => {
       canonicalPath(fixture.coordinatorEnvelope),
       canonicalPath(fixture.planEnvelopes[PLAN_A]),
       canonicalPath(fixture.planEnvelopes[PLAN_B]),
+      canonicalPath(fixture.inventoryPath),
     ]);
     // The 2b deferred register is inventoried surface by surface; this fixture
     // occupies none of them.
@@ -751,7 +794,7 @@ describe("execution-preview", () => {
   test("execution-preview-refuses-a-missing-referenced-envelope", async () => {
     const fixture = await legacyWorkspace("preview-missing-envelope");
     rmSync(fixture.planEnvelopes[PLAN_A]);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-missing")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-missing")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("does not exist");
   });
@@ -759,7 +802,7 @@ describe("execution-preview", () => {
   test("execution-preview-refuses-an-envelope-identity-mismatch", async () => {
     const fixture = await legacyWorkspace("preview-envelope-identity");
     writeJson(fixture.planEnvelopes[PLAN_A], envelopeOf("plan-pm", "host-someone-else", fixture.workflowId, fixture.harness, PLAN_A));
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-identity")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-identity")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain(PLAN_A_SESSION);
   });
@@ -770,7 +813,7 @@ describe("execution-preview", () => {
     writeFileSync(outside, readFileSync(fixture.planEnvelopes[PLAN_B]));
     rmSync(fixture.planEnvelopes[PLAN_B]);
     symlinkSync(outside, fixture.planEnvelopes[PLAN_B]);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-symlink")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-symlink")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("symlink");
   });
@@ -787,7 +830,7 @@ describe("execution-preview", () => {
       relation_hash: "3".repeat(64),
     };
     writeJson(fixture.snapshotPath, snapshot);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-foreign-pin")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-foreign-pin")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("pins catalog store");
   });
@@ -829,7 +872,7 @@ describe("execution-preview", () => {
       "0".repeat(64),
       JSON.stringify(pin),
     );
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-binding")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-binding")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("neither side wins silently");
   });
@@ -854,7 +897,7 @@ describe("execution-preview", () => {
     };
     writeJson(fixture.snapshotPath, snapshot);
     const footprint = storeFootprint(fixture.dbPath);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-pin-row")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-pin-row")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("the pin and its row disagree");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
@@ -911,7 +954,7 @@ describe("execution-preview", () => {
     const backup = await recoveryPoint(fixture);
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-bound-unpinned-preview"));
     const receipt = await applyExecutionMigration({
-      ...migrationInput(fixture, "op-bound-unpinned-apply"),
+      ...migrationInput(fixture, "op-bound-unpinned-apply"), coverage: await coverageOf(fixture, manifest),
       manifest,
       manifestHash: executionManifestHash(manifest),
       backup,
@@ -936,7 +979,7 @@ describe("execution-preview", () => {
   test("execution-preview-refuses-an-unclassified-workflow-entry", async () => {
     const fixture = await legacyWorkspace("preview-unclassified");
     writeText(join(fixture.workflowDir, "stray-artifact.txt"), "not a source this inventory classifies");
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-unclassified")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unclassified")));
     expect(refusal.code).toBe("execution.coverage-incomplete");
     expect(refusal.message).toContain("stray-artifact.txt");
   });
@@ -950,7 +993,7 @@ describe("execution-preview", () => {
     };
     snapshot.plans[1]!.coordination.audit = [{ at: TS, actor: "someone" }];
     writeJson(fixture.snapshotPath, snapshot);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("unexpected key(s): audit");
   });
@@ -965,7 +1008,7 @@ describe("execution-preview", () => {
       TS,
       TS,
     );
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-pending")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-pending")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("op-pending");
   });
@@ -998,7 +1041,7 @@ describe("execution-preview", () => {
   test("execution-preview-refuses-an-active-execution-authority", async () => {
     const fixture = await legacyWorkspace("preview-active-authority");
     rawRun(fixture.dbPath, "update execution_meta set authority_state = 'active' where id = 1");
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-active")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-active")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("ACTIVE");
   });
@@ -1027,7 +1070,7 @@ describe("execution-stage", () => {
     const epoch = manifest.epoch;
 
     const receipt = await applyExecutionMigration({
-      ...migrationInput(fixture, "op-stage-apply"),
+      ...migrationInput(fixture, "op-stage-apply"), coverage: await coverageOf(fixture, manifest),
       manifest,
       manifestHash,
       backup,
@@ -1217,10 +1260,10 @@ describe("execution-stage", () => {
     const backup = await recoveryPoint(fixture);
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-replay-preview"));
     const manifestHash = executionManifestHash(manifest);
-    const first = await applyExecutionMigration({ ...migrationInput(fixture, "op-replay-apply"), manifest, manifestHash, backup });
+    const first = await applyExecutionMigration({ ...migrationInput(fixture, "op-replay-apply"), coverage: await coverageOf(fixture, manifest), manifest, manifestHash, backup });
     const footprint = storeFootprint(fixture.dbPath);
 
-    const second = await applyExecutionMigration({ ...migrationInput(fixture, "op-replay-apply-again"), manifest, manifestHash, backup });
+    const second = await applyExecutionMigration({ ...migrationInput(fixture, "op-replay-apply-again"), coverage: await coverageOf(fixture, manifest), manifest, manifestHash, backup });
     expect(first.replayed).toBe(false);
     expect(second).toEqual({ manifestId: manifest.id, phase: "staged", replayed: true });
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
@@ -1235,9 +1278,9 @@ describe("execution-stage", () => {
     snapshot.updated_at = "2026-09-05";
     writeJson(fixture.snapshotPath, snapshot);
 
-    const refusal = await refusalOf(() =>
+    const refusal = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(fixture, "op-drift-apply"),
+        ...migrationInput(fixture, "op-drift-apply"), coverage: await coverageOf(fixture, manifest),
         manifest,
         manifestHash: executionManifestHash(manifest),
         backup,
@@ -1253,8 +1296,8 @@ describe("execution-stage", () => {
     const backup = await recoveryPoint(fixture);
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-pair-preview"));
     const footprint = storeFootprint(fixture.dbPath);
-    const refusal = await refusalOf(() =>
-      applyExecutionMigration({ ...migrationInput(fixture, "op-pair-apply"), manifest, manifestHash: "0".repeat(64), backup }),
+    const refusal = await refusalOf(async () =>
+      applyExecutionMigration({ ...migrationInput(fixture, "op-pair-apply"), coverage: await coverageOf(fixture, manifest), manifest, manifestHash: "0".repeat(64), backup }),
     );
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("does not hash to the reviewed value");
@@ -1275,9 +1318,9 @@ describe("execution-stage", () => {
       schemaVersion: manifest.schemaVersion,
       catalogRevision: manifest.catalogRevision,
     };
-    const stale = await refusalOf(() =>
+    const stale = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(fixture, "op-unverified-apply"),
+        ...migrationInput(fixture, "op-unverified-apply"), coverage: await coverageOf(fixture, manifest),
         manifest,
         manifestHash: executionManifestHash(manifest),
         backup,
@@ -1303,9 +1346,9 @@ describe("execution-stage", () => {
     const footprint = storeFootprint(fixture.dbPath);
 
     await expect(
-      withEnv({ MSTAR_STORE_FAIL_EXECUTION_IMPORT_AFTER: "1" }, () =>
+      withEnv({ MSTAR_STORE_FAIL_EXECUTION_IMPORT_AFTER: "1" }, async () =>
         applyExecutionMigration({
-          ...migrationInput(fixture, "op-rollback-apply"),
+          ...migrationInput(fixture, "op-rollback-apply"), coverage: await coverageOf(fixture, manifest),
           manifest,
           manifestHash: executionManifestHash(manifest),
           backup,
@@ -1323,16 +1366,16 @@ describe("execution-stage", () => {
     const backup = await recoveryPoint(fixture);
     const first = await previewExecutionMigration(migrationInput(fixture, "op-second-preview-1"));
     await applyExecutionMigration({
-      ...migrationInput(fixture, "op-second-apply-1"),
+      ...migrationInput(fixture, "op-second-apply-1"), coverage: await coverageOf(fixture, first),
       manifest: first,
       manifestHash: executionManifestHash(first),
       backup,
     });
     const second = await previewExecutionMigration(migrationInput(fixture, "op-second-preview-2"));
     const other: ExecutionManifest = { ...second, id: `${second.id}-other` };
-    const refusal = await refusalOf(() =>
+    const refusal = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(fixture, "op-second-apply-2"),
+        ...migrationInput(fixture, "op-second-apply-2"), coverage: await coverageOf(fixture, other),
         manifest: other,
         manifestHash: executionManifestHash(other),
         backup,
@@ -1351,9 +1394,9 @@ describe("execution-stage", () => {
     const rootLock = join(fixture.harness, ".status-write.lockdir");
     const workflowLock = join(fixture.workflowDir, ".status-write.lockdir");
     const apply = () =>
-      withEnv({ MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS: "120" }, () =>
+      withEnv({ MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS: "120" }, async () =>
         applyExecutionMigration({
-          ...migrationInput(fixture, "op-locks-apply"),
+          ...migrationInput(fixture, "op-locks-apply"), coverage: await coverageOf(fixture, manifest),
           manifest,
           manifestHash: executionManifestHash(manifest),
           backup,
@@ -1419,9 +1462,9 @@ describe("execution-stage", () => {
     rootDoc.workflows[0]!.dir = join("..", "outside-harness");
     writeJson(fixture.statusPath, rootDoc);
 
-    const refusal = await refusalOf(() =>
+    const refusal = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(fixture, "op-escape-apply"),
+        ...migrationInput(fixture, "op-escape-apply"), coverage: await coverageOf(fixture, manifest),
         manifest,
         manifestHash: executionManifestHash(manifest),
         backup,
@@ -1433,26 +1476,37 @@ describe("execution-stage", () => {
   });
 
   test("execution-stage-stages-with-a-populated-deferred-surface", async () => {
-    // A workflow dir carrying a real deferred ledger still stages: the surface
-    // is reported blocked in the manifest for the 2b (and R2) barrier to read —
-    // staging never claims activation readiness.
+    // §4.1 a populated surface is no longer "blocked by definition": the
+    // manifest inventories it, the collector RECOMPUTES its receipt from the
+    // retained bytes and staging persists that validated set. Staging still
+    // claims nothing about activation readiness.
     const fixture = await legacyWorkspace("stage-deferred-surface");
     const ledger = join(fixture.workflowDir, "agent-flow.jsonl");
-    writeText(ledger, '{"v":1,"ts":1,"kind":"dispatch"}');
+    const line = '{"v":1,"ts":1,"kind":"dispatch","role":"plan-pm","verdict":"ok","hard":false}';
+    writeText(ledger, line);
     const backup = await recoveryPoint(fixture);
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-deferred-preview"));
     expect(manifest.deferred.find((surface) => surface.surface === "workflow-agent-flow-ledger")).toMatchObject({
       disposition: "blocked",
       paths: [canonicalPath(ledger)],
     });
+    const coverage = await coverageOf(fixture, manifest);
+    const row = manifest.surfaces.find((surface) => surface.surface === "workflow-agent-flow-ledger");
+    expect(row?.sources.map((witness) => witness.path)).toContain(`workflows/${PRIMARY}/agent-flow.jsonl`);
+    const ledgerReceipt = coverage.receipts.find((receipt) => receipt.surface === "workflow-agent-flow-ledger");
+    expect(ledgerReceipt).toMatchObject({ disposition: "retain", protocol: "agent-flow-v2", workflowId: PRIMARY });
     const receipt = await applyExecutionMigration({
-      ...migrationInput(fixture, "op-deferred-apply"),
+      ...migrationInput(fixture, "op-deferred-apply"), coverage,
       manifest,
       manifestHash: executionManifestHash(manifest),
       backup,
     });
     expect(receipt.phase).toBe("staged");
-    expect(readFileSync(ledger, "utf8")).toBe('{"v":1,"ts":1,"kind":"dispatch"}\n');
+    expect(readFileSync(ledger, "utf8")).toBe(`${line}\n`);
+    // The validated set is what the staged record carries.
+    expect(
+      rawGet<{ coverage_json: string }>(fixture.dbPath, "select coverage_json from execution_migrations")!.coverage_json,
+    ).toContain(coverage.digest);
   });
 
   test("execution-stage-refuses-a-handoff-without-its-plan-session", async () => {
@@ -1469,7 +1523,7 @@ describe("execution-stage", () => {
     writeJson(fixture.snapshotPath, snapshot);
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-handoff-preview")));
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-handoff-preview")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("handoff requires a bound plan session");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
@@ -1493,9 +1547,9 @@ describe("execution-stage", () => {
       const backup = await recoveryPoint(fixture);
       const manifest = await previewExecutionMigration(migrationInput(fixture, `op-merge-${label}-preview`));
       const footprint = storeFootprint(fixture.dbPath);
-      const refusal = await refusalOf(() =>
+      const refusal = await refusalOf(async () =>
         applyExecutionMigration({
-          ...migrationInput(fixture, `op-merge-${label}-apply`),
+          ...migrationInput(fixture, `op-merge-${label}-apply`), coverage: await coverageOf(fixture, manifest),
           manifest,
           manifestHash: executionManifestHash(manifest),
           backup,
@@ -1558,9 +1612,9 @@ describe("execution-stage", () => {
       ),
     };
 
-    const refusal = await refusalOf(() =>
+    const refusal = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(fixture, "op-coverage-apply"),
+        ...migrationInput(fixture, "op-coverage-apply"), coverage: await coverageOf(fixture, edited),
         manifest: edited,
         manifestHash: executionManifestHash(edited),
         backup,
@@ -1577,9 +1631,9 @@ describe("execution-stage", () => {
     const secondFootprint = storeFootprint(second.dbPath);
     const claimed: ExecutionManifest = { ...secondManifest, pendingCatalogOperations: ["op-ghost"] };
 
-    const secondRefusal = await refusalOf(() =>
+    const secondRefusal = await refusalOf(async () =>
       applyExecutionMigration({
-        ...migrationInput(second, "op-pending-claim-apply"),
+        ...migrationInput(second, "op-pending-claim-apply"), coverage: await coverageOf(second, claimed),
         manifest: claimed,
         manifestHash: executionManifestHash(claimed),
         backup: secondBackup,
@@ -1606,7 +1660,7 @@ describe("execution-stage", () => {
     };
 
     for (const suffix of ["", "-wal", "-shm"]) {
-      const refusal = await refusalOf(() =>
+      const refusal = await refusalOf(async () =>
         assertBackupDescribesStore(fixture.context, { ...backup, backupPath: `${fixture.dbPath}${suffix}` }, reviewed),
       );
       expect(refusal.code, suffix).toBe("store.activation-stale");
@@ -1668,7 +1722,15 @@ describe("execution-stage", () => {
     const deferredWitnesses = forward.witnesses.filter((entry) => entry.startsWith("deferred "));
     expect(deferredWitnesses.length).toBeGreaterThan(0);
     expect(deferredWitnesses).toEqual([...deferredWitnesses].sort());
-    expect(deferredWitnesses.join("\n")).toContain("sessions/plan-pm-legacy-a.json");
+    // §4.1 an UNREFERENCED envelope is a source of the workflow's session
+    // surface, enumerated in canonical order — it is never an unclassified
+    // stranger, and the same content in any creation order reads back identically.
+    const unreferenced = forward.witnesses
+      .filter((entry) => entry.startsWith("session-envelope "))
+      .map((entry) => entry.slice("session-envelope ".length))
+      .filter((path) => path.includes("plan-pm-legacy"));
+    expect(unreferenced.length).toBe(2);
+    expect(unreferenced).toEqual([...unreferenced].sort());
   });
 
   test("execution-stage-writes-rows-the-db-reader-accepts", async () => {
@@ -1722,7 +1784,7 @@ describe("execution-activation", () => {
     const prepared = authorityOf(fixture.dbPath);
     expect(prepared.authority_epoch).toBe(manifest.epoch);
 
-    const receipt = await activateExecutionMigration(activationInput(fixture, manifest, "core"));
+    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "core"));
     expect(receipt).toEqual({ manifestId: manifest.id, phase: "active", replayed: false });
 
     // ── the cutover: authority active, ONE epoch advance, ONE root revision
@@ -1762,17 +1824,33 @@ describe("execution-activation", () => {
     expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from catalog_entities")!.n).toBe(1);
   });
 
-  test("execution-activation-refuses-any-deferred-surface", async () => {
-    // §2.3/2b: a real envelope-bearing workspace stays staged. There is no
-    // allow-incomplete flag, and the refusal names the exact surface.
+  test("execution-activation-refuses-a-coverage-digest-this-workspace-does-not-recompute", async () => {
+    // §4.1 the barrier recomputes every receipt from the named bytes: a digest
+    // the workspace does not recompute — forged, drifted or taken from another
+    // discovery — refuses with zero authority switch. There is no
+    // allow-incomplete flag and no operator acknowledgement that substitutes for
+    // bytes.
     const fixture = await legacyWorkspace("activate-deferred");
     const manifest = await stageCore(fixture, "deferred");
     const footprint = storeFootprint(fixture.dbPath);
+    // A populated surface is VALIDATED coverage, not a block: the reviewed set
+    // carries the envelope surface this fixture really holds.
+    const coverage = await coverageOf(fixture, manifest);
+    expect(coverage.receipts.find((receipt) => receipt.surface === "workflow-session-envelopes")).toMatchObject({
+      disposition: "migrate",
+      protocol: "session-v1",
+      workflowId: PRIMARY,
+    });
+    expect(coverage.receipts.length).toBe(manifest.surfaces.length);
 
-    const refusal = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "deferred")));
-    expect(refusal.code).toBe("execution.coverage-incomplete");
-    expect(refusal.message).toContain("workflow-session-envelopes");
-    expect(refusal.message).toContain("no allow-incomplete flag");
+    const refusal = await refusalOf(async () =>
+      activateExecutionMigration({
+        ...(await activationInput(fixture, manifest, "deferred")),
+        coverageDigest: "0".repeat(64),
+      }),
+    );
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("coverage recomputed from this workspace");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
     expect(authorityOf(fixture.dbPath).authority_epoch).toBe(manifest.epoch);
     expect(migrationPhaseOf(fixture.dbPath)).toBe("staged");
@@ -1790,7 +1868,7 @@ describe("execution-activation", () => {
     snapshot.updated_at = "2026-09-05";
     writeJson(fixture.snapshotPaths[0]!, snapshot);
 
-    const refusal = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "drift")));
+    const refusal = await refusalOf(async () => activateExecutionMigration(await activationInput(fixture, manifest, "drift")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("no longer holds the reviewed bytes");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
@@ -1803,9 +1881,9 @@ describe("execution-activation", () => {
     const footprint = storeFootprint(fixture.dbPath);
 
     // An unknown stopped owner is a claim the frozen inventory does not contain.
-    const ghost = await refusalOf(() =>
+    const ghost = await refusalOf(async () =>
       activateExecutionMigration(
-        activationInput(fixture, manifest, "ghost", migrationAttestation([{ sessionId: "sess-ghost", host: "omp", state: "stopped" }])),
+        await activationInput(fixture, manifest, "ghost", migrationAttestation([{ sessionId: "sess-ghost", host: "omp", state: "stopped" }])),
       ),
     );
     expect(ghost.code).toBe("execution.coverage-incomplete");
@@ -1817,8 +1895,8 @@ describe("execution-activation", () => {
       ...consumer,
       disposition: consumer.current ? ("excluded:no-store-access" as const) : ("excluded:superseded-binary" as const),
     }));
-    const noneAdopted = await refusalOf(() =>
-      activateExecutionMigration(activationInput(fixture, manifest, "excluded", excluded)),
+    const noneAdopted = await refusalOf(async () =>
+      activateExecutionMigration(await activationInput(fixture, manifest, "excluded", excluded)),
     );
     expect(noneAdopted.code).toBe("execution.coverage-incomplete");
     expect(noneAdopted.message).toContain("none adopted this build");
@@ -1826,24 +1904,18 @@ describe("execution-activation", () => {
     // The operator who reviewed the manifest attests the barrier.
     const otherOperator = migrationAttestation();
     otherOperator.operator = { actor: "someone-else", authorizationRef: "D29" };
-    const wrongOperator = await refusalOf(() =>
-      activateExecutionMigration(activationInput(fixture, manifest, "operator", otherOperator)),
+    const wrongOperator = await refusalOf(async () =>
+      activateExecutionMigration(await activationInput(fixture, manifest, "operator", otherOperator)),
     );
     expect(wrongOperator.code).toBe("store.attestation-invalid");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
 
-  test("execution-activation-cannot-reach-the-known-owner-gate-from-a-2a-fixture", async () => {
-    // The missing-known-owner refusal is UNREACHABLE by construction, so this
-    // case pins the construction instead of a state no 2a fixture can reach:
-    // an owner the barrier would have to revoke IS an envelope inside the
-    // workflow's own sessions/ dir (readSessionSource), the same discovery pass
-    // records every entry of that dir as the populated `workflow-session-envelopes`
-    // surface, and the deferred-coverage gate runs BEFORE the owner gate. So the
-    // attestation shape that would trip the missing-owner arm — one naming no
-    // owner at all — is refused for the deferred surface, with the frozen owner
-    // inventory provably non-empty. The reachable owner-gate predicate is the
-    // unknown-session one, covered above.
+  test("execution-activation-reaches-the-owner-gate-behind-validated-coverage", async () => {
+    // With §4.1 coverage the barrier no longer stops at a populated surface, so
+    // the frozen-owner gate is REACHABLE: an attestation that names no owner is
+    // refused for the owners the import would revoke, with the owner inventory
+    // provably non-empty.
     const fixture = await legacyWorkspace("activate-owner-closure");
     const manifest = await stageCore(fixture, "owner-closure");
     const footprint = storeFootprint(fixture.dbPath);
@@ -1851,16 +1923,13 @@ describe("execution-activation", () => {
     // The frozen manifest does carry owner-bearing sources: every referenced
     // envelope is a witness, so this fixture's owner set is not empty…
     expect(manifest.sources.filter((witness) => witness.kind === "session-envelope").length).toBeGreaterThan(0);
-    // …and the very same pass records that surface as populated, which is what
-    // makes the owner gate unreachable from here.
+    // …and the very same pass records that surface as populated coverage.
     expect(manifest.deferred.find((surface) => surface.surface === "workflow-session-envelopes")?.paths.length).toBeGreaterThan(0);
 
-    const omission = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "owner-closure")));
+    const omission = await refusalOf(async () => activateExecutionMigration(await activationInput(fixture, manifest, "owner-closure")));
     expect(omission.code).toBe("execution.coverage-incomplete");
-    expect(omission.message).toContain("workflow-session-envelopes");
-    expect(omission.message).toContain("no allow-incomplete flag");
-    // The owner-coverage refusal did NOT fire: the deferred barrier answered first.
-    expect(omission.message).not.toContain("does not name");
+    expect(omission.message).toContain("does not name");
+    expect(omission.message).toContain("stopped/reloaded");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
     expect(migrationPhaseOf(fixture.dbPath)).toBe("staged");
     expect(authorityOf(fixture.dbPath).authority_epoch).toBe(manifest.epoch);
@@ -1872,8 +1941,8 @@ describe("execution-activation", () => {
     const staged = storeFootprint(fixture.dbPath);
     const epoch = authorityOf(fixture.dbPath).authority_epoch;
 
-    const crash = withEnv({ MSTAR_STORE_FAIL_EXECUTION_ACTIVATION: "before-commit" }, () =>
-      activateExecutionMigration(activationInput(fixture, manifest, "crash")),
+    const crash = withEnv({ MSTAR_STORE_FAIL_EXECUTION_ACTIVATION: "before-commit" }, async () =>
+      activateExecutionMigration(await activationInput(fixture, manifest, "crash")),
     );
     await expect(crash).rejects.toThrow(/induced execution-migration failure/);
     // Exactly the staged authority: no partial activation, no epoch move, no
@@ -1886,7 +1955,7 @@ describe("execution-activation", () => {
     expect(() => assertExecutionFileWriteAllowed(fixture.context)).not.toThrow();
 
     // The retry resolves the same unknown-commit question once, and once only.
-    const receipt = await activateExecutionMigration(activationInput(fixture, manifest, "after-crash"));
+    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "after-crash"));
     expect(receipt).toEqual({ manifestId: manifest.id, phase: "active", replayed: false });
     expect(authorityOf(fixture.dbPath).authority_epoch).toBe(epoch + 1);
   });
@@ -1894,17 +1963,17 @@ describe("execution-activation", () => {
   test("execution-activation-replays-and-never-double-bumps-the-epoch", async () => {
     const fixture = await coreWorkspace("activate-replay");
     const manifest = await stageCore(fixture, "replay");
-    await activateExecutionMigration(activationInput(fixture, manifest, "first"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "first"));
     const activated = storeFootprint(fixture.dbPath);
 
-    const replay = await activateExecutionMigration(activationInput(fixture, manifest, "second"));
+    const replay = await activateExecutionMigration(await activationInput(fixture, manifest, "second"));
     expect(replay).toEqual({ manifestId: manifest.id, phase: "active", replayed: true });
     expect(storeFootprint(fixture.dbPath)).toEqual(activated);
 
     // A different attestation cannot re-activate an immutable history.
     const other = migrationAttestation();
     other.attestedAt = "2026-09-21T01:00:00.000Z";
-    const refusal = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "other", other)));
+    const refusal = await refusalOf(async () => activateExecutionMigration(await activationInput(fixture, manifest, "other", other)));
     expect(refusal.message).toContain("different attestation");
     expect(storeFootprint(fixture.dbPath)).toEqual(activated);
 
@@ -1924,7 +1993,7 @@ describe("execution-activation", () => {
     rawRun(fixture.dbPath, "update execution_inputs set input_hash = ? where workflow_id = ?", "f".repeat(64), CORE_A);
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() => activateExecutionMigration(activationInput(fixture, manifest, "tampered")));
+    const refusal = await refusalOf(async () => activateExecutionMigration(await activationInput(fixture, manifest, "tampered")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("sealed inputs are not the reviewed import");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
@@ -1936,13 +2005,14 @@ describe("execution-activation", () => {
     const manifest = await stageCore(fixture, "stale");
     const staged = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() =>
+    const refusal = await refusalOf(async () =>
       activateExecutionMigration({
         ...migrationInput(fixture, "op-activate-stale"),
         manifestId: manifest.id,
         manifestHash: executionManifestHash(manifest),
         expectedEpoch: manifest.epoch + 1,
         attestation: migrationAttestation(),
+        coverageDigest: await coverageDigestOf(fixture, manifest),
       }),
     );
     expect(refusal.code).toBe("execution.migration-conflict");
@@ -1959,7 +2029,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-moves-exactly-the-core-sources", async () => {
     const fixture = await coreWorkspace("retire-core", { workflows: 2 });
     const manifest = await stageCore(fixture, "retire");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire"));
 
     // Deferred 2b files that appear AFTER activation: retirement must move the
     // core sources and leave every one of them exactly where it is.
@@ -2014,12 +2084,12 @@ describe("execution-retirement", () => {
   test("execution-retirement-refuses-a-source-written-since-the-receipt", async () => {
     const fixture = await coreWorkspace("retire-drift");
     const manifest = await stageCore(fixture, "retire-drift");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-drift"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-drift"));
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
     snapshot.updated_at = "2026-09-09";
     writeJson(fixture.snapshotPaths[0]!, snapshot);
 
-    const refusal = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "drift")));
+    const refusal = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "drift")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("no longer holds the reviewed bytes");
     // The pre-pass verifies every source BEFORE the first rename, so a changed
@@ -2033,7 +2103,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-resumes-from-the-destination-hash", async () => {
     const fixture = await coreWorkspace("retire-resume", { workflows: 1 });
     const manifest = await stageCore(fixture, "retire-resume");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-resume"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-resume"));
     const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
     const archivedRoot = join(archiveDir, "status.json");
 
@@ -2066,7 +2136,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-refuses-a-ledger-that-redirects-an-archive-destination", async () => {
     const fixture = await coreWorkspace("retire-ledger-redirect");
     const manifest = await stageCore(fixture, "retire-ledger-redirect");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-ledger-redirect"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-ledger-redirect"));
     const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
     const ledgerPath = join(archiveDir, "retirement.json");
 
@@ -2126,7 +2196,7 @@ describe("execution-retirement", () => {
     ];
     for (const [index, destination] of destinations.entries()) {
       writeJson(ledgerPath, ledgerWith({ archivePath: destination }));
-      const refusal = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, `redirect-${index}`)));
+      const refusal = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, `redirect-${index}`)));
       expect(refusal.code).toBe("execution.migration-conflict");
       expect(refusal.message).toContain("archive destination");
       // Nothing moved: the redirected destination was never created, the
@@ -2142,7 +2212,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-refuses-a-ledger-that-rewrites-an-addressed-field", async () => {
     const fixture = await coreWorkspace("retire-ledger-fields");
     const manifest = await stageCore(fixture, "retire-ledger-fields");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-ledger-fields"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-ledger-fields"));
     const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
     const ledgerPath = join(archiveDir, "retirement.json");
 
@@ -2195,7 +2265,7 @@ describe("execution-retirement", () => {
     ];
     for (const [index, variant] of variants.entries()) {
       writeJson(ledgerPath, ledgerWith(variant.tamper));
-      const refusal = await refusalOf(() =>
+      const refusal = await refusalOf(async () =>
         retireExecutionSources(retirementInput(fixture, manifest, `fields-${index}`)),
       );
       expect(refusal.code).toBe("execution.migration-conflict");
@@ -2210,7 +2280,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-refuses-a-symlinked-archive-destination-before-any-rename", async () => {
     const fixture = await coreWorkspace("retire-archive-symlink");
     const manifest = await stageCore(fixture, "retire-archive-symlink");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-archive-symlink"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-archive-symlink"));
     const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
     const escaped = join(fixture.root, "escaped-archive");
     mkdirSync(escaped, { recursive: true });
@@ -2219,7 +2289,7 @@ describe("execution-retirement", () => {
     // A destination directory that is a LINK out of the archive: the canonical
     // destination of the snapshot is then outside the manifest-addressed history.
     symlinkSync(escaped, join(archiveDir, "workflows"));
-    const outward = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "symlink-out")));
+    const outward = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "symlink-out")));
     expect(outward.code).toBe("execution.migration-conflict");
     expect(outward.message).toContain("outside the manifest-addressed archive");
 
@@ -2230,7 +2300,7 @@ describe("execution-retirement", () => {
     rmSync(join(archiveDir, "workflows"));
     mkdirSync(join(archiveDir, "elsewhere"), { recursive: true });
     symlinkSync(join(archiveDir, "elsewhere"), join(archiveDir, "workflows"));
-    const inward = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "symlink-in")));
+    const inward = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "symlink-in")));
     expect(inward.code).toBe("execution.migration-conflict");
     expect(inward.message).toContain("is a symlink");
 
@@ -2247,7 +2317,7 @@ describe("execution-retirement", () => {
   test("execution-retirement-records-the-receipt-only-after-every-item-moved", async () => {
     const fixture = await coreWorkspace("retire-receipt");
     const manifest = await stageCore(fixture, "retire-receipt");
-    await activateExecutionMigration(activationInput(fixture, manifest, "retire-receipt"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "retire-receipt"));
     const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
 
     const crash = withEnv({ MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "before-receipt" }, () =>
@@ -2273,7 +2343,7 @@ describe("execution-retirement", () => {
     const manifest = await stageCore(fixture, "retire-unactivated");
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() => retireExecutionSources(retirementInput(fixture, manifest, "early")));
+    const refusal = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "early")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("retired only behind an ACTIVE receipt");
     expect(existsSync(fixture.statusPath)).toBe(true);
@@ -2349,10 +2419,10 @@ describe("execution-abort", () => {
   test("execution-abort-refuses-an-active-manifest-and-preserves-authority", async () => {
     const fixture = await coreWorkspace("abort-active");
     const manifest = await stageCore(fixture, "abort-active");
-    await activateExecutionMigration(activationInput(fixture, manifest, "abort-active"));
+    await activateExecutionMigration(await activationInput(fixture, manifest, "abort-active"));
     const activated = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() => abortExecutionMigration(abortInput(fixture, manifest, "active")));
+    const refusal = await refusalOf(async () => abortExecutionMigration(abortInput(fixture, manifest, "active")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("is recorded active");
     expect(storeFootprint(fixture.dbPath)).toEqual(activated);
@@ -2361,7 +2431,7 @@ describe("execution-abort", () => {
 
     // A retired manifest cannot abort either: retirement is forward-only.
     await retireExecutionSources(retirementInput(fixture, manifest, "after-abort-attempt"));
-    const retired = await refusalOf(() => abortExecutionMigration(abortInput(fixture, manifest, "retired")));
+    const retired = await refusalOf(async () => abortExecutionMigration(abortInput(fixture, manifest, "retired")));
     expect(retired.message).toContain("is recorded retired");
   });
 
@@ -2388,12 +2458,12 @@ describe("execution-abort", () => {
     const backup = await recoveryPoint(fixture);
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-restage-preview"));
     const manifestHash = executionManifestHash(manifest);
-    await applyExecutionMigration({ ...migrationInput(fixture, "op-restage-apply"), manifest, manifestHash, backup });
+    await applyExecutionMigration({ ...migrationInput(fixture, "op-restage-apply"), coverage: await coverageOf(fixture, manifest), manifest, manifestHash, backup });
     await abortExecutionMigration(abortInput(fixture, manifest, "restage"));
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(() =>
-      applyExecutionMigration({ ...migrationInput(fixture, "op-restage-again"), manifest, manifestHash, backup }),
+    const refusal = await refusalOf(async () =>
+      applyExecutionMigration({ ...migrationInput(fixture, "op-restage-again"), coverage: await coverageOf(fixture, manifest), manifest, manifestHash, backup }),
     );
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("is recorded aborted");
@@ -2405,7 +2475,7 @@ describe("execution-abort", () => {
     const firstBackup = await recoveryPoint(fixture);
     const first = await previewExecutionMigration(migrationInput(fixture, "op-repreview-first"));
     await applyExecutionMigration({
-      ...migrationInput(fixture, "op-repreview-apply"),
+      ...migrationInput(fixture, "op-repreview-apply"), coverage: await coverageOf(fixture, first),
       manifest: first,
       manifestHash: executionManifestHash(first),
       backup: firstBackup,
@@ -2422,7 +2492,7 @@ describe("execution-abort", () => {
     expect(second.id).not.toBe(first.id);
     const secondBackup = await recoveryPoint(fixture);
     const staged = await applyExecutionMigration({
-      ...migrationInput(fixture, "op-repreview-second-apply"),
+      ...migrationInput(fixture, "op-repreview-second-apply"), coverage: await coverageOf(fixture, second),
       manifest: second,
       manifestHash: executionManifestHash(second),
       backup: secondBackup,
@@ -2443,5 +2513,688 @@ describe("execution-abort", () => {
           .state_json,
       ) as { updated_at: string }).updated_at,
     ).toBe("2026-09-07");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2b — the populated version-2 manifest, validated coverage, session
+// retirement and the real-producer bytes (§4.1/§4.2/§5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical bytes `exportExecutionHostInventory` produced on the Hosts
+ * track (`packages/omp/src/execution-host-inventory.ts`, `buildExecutionHostInventory`
+ * + `exportExecutionHostInventory`): one `mstar:model-handoff` entry of ONE
+ * native session, bound to ONE workflow, in the released envelope shape. The
+ * bytes below are the producer's own output, captured verbatim; the digest is
+ * what the producer itself reports for them, so the interop regression can
+ * prove that C2's closed comparison accepts producer bytes UNCHANGED.
+ */
+const PRODUCER_WORKFLOW = "20260921-producer-workflow";
+const PRODUCER_SESSION = "native-session-c3-producer";
+const PRODUCER_ENVELOPE =
+  '{"export":{"document":{"diagnostics":[],"document":"execution-host-history","records":[{"entryId":"entry-handoff-1","index":0,"payload":{"action":"arm","baselineModelChangeId":null,"binding":{"sessionId":"native-session-c3-producer","workflowId":"20260921-producer-workflow"},"observedModel":null,"operationId":"op-1","reason":null,"state":"pending","version":1},"payloadHash":"4076bdd1fa1fe6ac20157efb3022e724c323b6a454aa09c936c9e33a4999aaa7","sessionId":"native-session-c3-producer","type":"mstar:model-handoff","view":{"cancelled":false,"checkpointId":null,"declaredAction":"arm","declaredKind":null,"declaredState":"pending","dedupKey":"op-1","generation":1,"operationId":"op-1","provenance":[],"workflowId":"20260921-producer-workflow"}}],"version":1},"sha256":"5a96c5bc766f91c5d44cfff7ef34a12c1a8ab2083137535f15031f08bbfa0ab7"},"host":"omp","hostSessionId":"native-session-c3-producer","protocol":"host-hidden-inventory-v1","version":1,"workflowId":"20260921-producer-workflow"}\n';
+const PRODUCER_ENVELOPE_SHA = "0643293fa09da5be7e89728b3595e41e3d29d0c2647ac9c570ba1cbde49c80c8";
+
+const TERMINAL_WORKFLOW = "20260921-terminal-history";
+const TERMINAL_PLAN = `${TERMINAL_WORKFLOW}-plan`;
+const TERMINAL_SESSION = "host-terminal-0001";
+/** P4's immutable recovery audit: provenance the import must never drop. */
+const RECOVERY_RECORD = {
+  operation_id: "op-recover-1",
+  request_hash: "c".repeat(64),
+  workflow_id: PRODUCER_WORKFLOW,
+  prior_session_id: "host-prior-0001",
+  session_id: COORDINATOR_SESSION,
+  authorization_ref: "D29 Prepare recovery",
+  reason: "prior coordinator stopped",
+  stopped_session_ids: ["host-prior-0001"],
+  snapshot_version_before: `sha256:${"d".repeat(64)}`,
+  compass_version: `sha256:${"e".repeat(64)}`,
+  recovered_at: "2026-09-04T00:00:00.000Z",
+};
+
+type PopulatedWorkspace = Fixture & {
+  workflowId: string;
+  workflowDir: string;
+  snapshotPath: string;
+  statusPath: string;
+  envelopePath: string;
+  terminalDir: string;
+  terminalSnapshotPath: string;
+  terminalEnvelopePath: string;
+  hostEnvelopePath: string;
+  coverageAttestationPath: string;
+  sddPath: string;
+  dbPath: string;
+  protectedPaths: string[];
+};
+
+/**
+ * §4.2 the fully populated workspace: one registered running workflow (a bound
+ * coordinator envelope, the four retained ledgers, the operator's SDD evidence,
+ * the host-session export produced by the real producer and P4's recovery
+ * audit) plus one TERMINAL workflow dir the root register no longer lists (an
+ * unreferenced envelope, so its session surface is `retire`).
+ */
+async function populatedWorkspace(name: string): Promise<PopulatedWorkspace> {
+  const fixture = workspace(name);
+  const handle = await initializeStore(fixture.context);
+  handle.close();
+
+  const workflowId = PRODUCER_WORKFLOW;
+  const workflowDir = join(fixture.harness, "workflows", workflowId);
+  const envelopePath = join(workflowDir, "sessions", `coordinator-${COORDINATOR_SESSION}.json`);
+  const statusPath = join(fixture.harness, "status.json");
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const terminalDir = join(fixture.harness, "workflows", TERMINAL_WORKFLOW);
+  const terminalSnapshotPath = join(terminalDir, WORKFLOW_SNAPSHOT_FILE);
+  const terminalEnvelopePath = join(terminalDir, "sessions", `coordinator-${TERMINAL_SESSION}.json`);
+
+  writeJson(snapshotPath, {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: "2026-09-01",
+    updated_at: "2026-09-02",
+    delivery_kind: "development",
+    project: "_default",
+    branch: { source: `feature/${workflowId}`, target: "main" },
+    coordination: {
+      coordinator: { session_id: COORDINATOR_SESSION, session_file: envelopePath, bound_at: TS },
+      identity_recoveries: [RECOVERY_RECORD],
+    },
+    plans: [{ id: PLAN_A, title: "Populated plan", file: "plans/plan-a.md", status: "InReview", metadata: {} }],
+  });
+  writeJson(terminalSnapshotPath, {
+    schema_version: 1,
+    id: TERMINAL_WORKFLOW,
+    type: "plan",
+    status: "completed",
+    started_at: "2026-08-01",
+    ended_at: "2026-08-20",
+    updated_at: "2026-08-20",
+    delivery_kind: "development",
+    project: "_default",
+    branch: { source: `feature/${TERMINAL_WORKFLOW}`, target: "main" },
+    plans: [{ id: TERMINAL_PLAN, title: "Terminal plan", file: "plans/terminal.md", status: "Done", metadata: {} }],
+  });
+  writeJson(statusPath, {
+    version: 2,
+    updated_at: ROOT_UPDATED_AT,
+    workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-01", dir: join("workflows", workflowId) }],
+  });
+  writeJson(envelopePath, envelopeOf("coordinator", COORDINATOR_SESSION, workflowId, fixture.harness));
+  // The terminal dir's envelope is referenced by NO binding: it is historical
+  // evidence the session surface owns, and its row is therefore `retire`.
+  writeJson(terminalEnvelopePath, envelopeOf("coordinator", TERMINAL_SESSION, TERMINAL_WORKFLOW, fixture.harness));
+
+  // The four retained workflow ledgers, in their released formats.
+  writeText(
+    join(workflowDir, "notes.jsonl"),
+    [
+      JSON.stringify({ kind: "note", ts: "2026-09-01T00:00:00.000Z", text: "legacy note body" }),
+      JSON.stringify({ version: 1, id: "note-1", workflowId, sessionId: COORDINATOR_SESSION, kind: "note", ts: "2026-09-01T00:00:01.000Z", text: "recorded" }),
+    ].join("\n"),
+  );
+  writeText(join(workflowDir, "agent-flow.jsonl"), JSON.stringify({ v: 1, ts: 1, kind: "dispatch", role: "plan-pm", verdict: "ok", hard: false }));
+  writeText(join(workflowDir, "workflow-ledger-cursors.json"), serializeExecutionValue({ v: 2, cursors: { [COORDINATOR_SESSION]: { next: 2 } } }));
+  writeJson(join(workflowDir, "omp-launches.json"), {
+    version: 1,
+    workflow_id: workflowId,
+    coordinator: { session_id: COORDINATOR_SESSION, session_file: envelopePath },
+    intents: [],
+  });
+
+  // The explicit evidence roots: SDD bodies, the host export, the injector
+  // deployment, the recovery point and the operator's coverage attestation.
+  const evidenceDir = join(fixture.harness, INV);
+  const hostEnvelopePath = join(evidenceDir, "host", "host-sessions", "producer.json");
+  const coverageAttestationPath = join(evidenceDir, "host", "attestation.json");
+  const sddPath = join(evidenceDir, "sdd", workflowId, "task-1-report.md");
+  const injectorPath = join(evidenceDir, "package", "injectors", "fs-store.js");
+  const injectorInventoryPath = join(evidenceDir, "package", "coverage", "injector-inventory.json");
+  const backupImagePath = join(evidenceDir, "package", "backups", "store.db");
+  const backupInventoryPath = join(evidenceDir, "package", "coverage", "recovery-inventory.json");
+
+  mkdirSync(dirname(hostEnvelopePath), { recursive: true });
+  writeFileSync(hostEnvelopePath, PRODUCER_ENVELOPE);
+  writeJson(coverageAttestationPath, {
+    ...migrationAttestation([{ sessionId: PRODUCER_SESSION, host: "omp", state: "stopped" }]),
+  });
+  writeText(sddPath, "# populated workflow report");
+  writeText(injectorPath, "export const store = {};");
+  writeText(injectorInventoryPath, serializeExecutionValue({
+    version: 1,
+    protocol: "injector-inventory-v1",
+    injectors: [{ module: { root: "package", path: "injectors/fs-store.js", sha256: sha256OfBytes(readFileSync(injectorPath)) }, capability: "body-only" }],
+  }));
+  writeText(backupImagePath, "sqlite-consistent-backup");
+  writeText(backupInventoryPath, serializeExecutionValue({
+    version: 1,
+    document: "recovery-inventory",
+    backup: { path: "backups/store.db", sha256: sha256OfBytes(readFileSync(backupImagePath)) },
+    schemaVersion: 4,
+    integrity: "verified",
+    coverageDigest: "7".repeat(64),
+    recoveryGeneration: 2,
+  }));
+
+  // §4.2 the explicit inventory: every root and every evidence pointer.
+  writeInventory(fixture, {
+    hostSessions: [
+      { workflowId, host: "omp", sessionId: PRODUCER_SESSION, envelope: hostEnvelopePath, attestation: coverageAttestationPath },
+    ],
+    sddEvidence: [{ workflowId, path: sddPath }],
+    injectors: [injectorPath],
+    injectorInventory: injectorInventoryPath,
+    backup: { image: backupImagePath, inventory: backupInventoryPath },
+  });
+
+  return {
+    ...fixture,
+    workflowId,
+    workflowDir,
+    snapshotPath,
+    statusPath,
+    envelopePath,
+    terminalDir,
+    terminalSnapshotPath,
+    terminalEnvelopePath,
+    hostEnvelopePath,
+    coverageAttestationPath,
+    sddPath,
+    dbPath: storeDbPath(fixture.context),
+    protectedPaths: [statusPath, snapshotPath, envelopePath, terminalSnapshotPath, terminalEnvelopePath, hostEnvelopePath],
+  };
+}
+
+describe("Phase 2b - populated manifest, validated coverage and session retirement", () => {
+  test("Phase 2b a fully populated workspace stages, activates and retires under validated coverage", async () => {
+    const fixture = await populatedWorkspace("c3-populated");
+    await captureIssue(fixture.context, issueInput("Phase 2b issue"), { operationId: "op-c3-issue", actor: "project-manager" });
+    const issueFootprint = rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from issues");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-c3-preview"));
+
+    // ── the version-2 manifest covers DISCOVERY: roots, rows, proofs
+    expect(manifest.version).toBe(2);
+    expect(manifest.roots.control).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
+    expect(manifest.surfaces.length).toBeGreaterThan(0);
+    expect(manifest.surfaces.find((row) => row.surface === "artifact-store-injectors")?.consumerProof).toBeUndefined();
+    const hiddenRow = manifest.surfaces.find((row) => row.surface === "omp-hidden-entries" && row.workflowId === fixture.workflowId)!;
+    expect(hiddenRow.sources.map((witness) => witness.path)).toEqual(["host-sessions/producer.json"]);
+    expect(hiddenRow.hostProof).toMatchObject({ sessions: [{ host: "omp", sessionId: PRODUCER_SESSION }] });
+    expect(hiddenRow.sources[0]!.sha256).toBe(PRODUCER_ENVELOPE_SHA);
+
+    const coverage = await coverageOf(fixture, manifest);
+    expect(coverage.manifestId).toBe(manifest.id);
+    expect(coverage.receipts.length).toBe(manifest.surfaces.length);
+    // Every receipt's source set IS its manifest row's assigned set.
+    for (const receipt of coverage.receipts) {
+      const row = manifest.surfaces.find((candidate) => candidate.surface === receipt.surface && candidate.workflowId === receipt.workflowId)!;
+      expect(receipt.sources).toEqual(row.sources);
+    }
+    expect(coverage.receipts.find((receipt) => receipt.surface === "workflow-notes-ledger")!.disposition).toBe("retain");
+    expect(coverage.receipts.find((receipt) => receipt.surface === "omp-hidden-entries")!).toMatchObject({
+      disposition: "retain",
+      protocol: "omp-hidden-v1",
+      workflowId: PRODUCER_WORKFLOW,
+    });
+    const terminalEnvelopeReceipt = coverage.receipts.find(
+      (receipt) => receipt.surface === "workflow-session-envelopes" && receipt.workflowId === TERMINAL_WORKFLOW,
+    )!;
+    expect(terminalEnvelopeReceipt.disposition).toBe("retire");
+
+    const staged = await applyExecutionMigration({
+      ...migrationInput(fixture, "op-c3-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      backup,
+      coverage,
+    });
+    expect(staged.phase).toBe("staged");
+    // Terminal history is imported WITHOUT root registry membership.
+    expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from execution_registry")!.n).toBe(1);
+    expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from execution_workflows")!.n).toBe(2);
+
+    const receipt = await activateExecutionMigration({
+      ...(await activationInput(fixture, manifest, "c3", migrationAttestation([{ sessionId: COORDINATOR_SESSION, host: "omp", state: "stopped" }]))),
+    });
+    expect(receipt).toEqual({ manifestId: manifest.id, phase: "active", replayed: false });
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("active");
+
+    // P4's recovery audit survives as PROVENANCE and the coordinator seat is
+    // not revived: the read view serves the audit and no active coordinator.
+    const state = await readExecutionState(fixture.context);
+    const imported = state.data.workflows.find((workflow) => workflow.state.id === fixture.workflowId)!;
+    expect(imported.coordinator).toBeNull();
+    // P4's audit is carried in the imported workflow STATE, byte-for-byte.
+    const storedHeader = JSON.parse(
+      rawGet<{ state_json: string }>(
+        fixture.dbPath,
+        `select state_json from execution_workflows where workflow_id = '${PRODUCER_WORKFLOW}'`,
+      )!.state_json,
+    ) as Record<string, unknown>;
+    expect(storedHeader.identity_recoveries).toEqual([RECOVERY_RECORD]);
+    expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from issues")).toEqual(issueFootprint);
+
+    // ── §3.3 retirement: core sources PLUS the retire-disposition envelope row
+    const retired = await retireExecutionSources(retirementInput(fixture, manifest, "c3"));
+    expect(retired).toEqual({ manifestId: manifest.id, phase: "retired", replayed: false });
+    const archiveDir = join(fixture.harness, "archived", "execution", manifest.id);
+    expect(existsSync(join(archiveDir, "status.json"))).toBe(true);
+    expect(existsSync(join(archiveDir, "workflows", fixture.workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    expect(existsSync(join(archiveDir, "workflows", TERMINAL_WORKFLOW, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    // The unreferenced terminal envelope was archived; the REFERENCED one stays.
+    expect(existsSync(join(archiveDir, "workflows", TERMINAL_WORKFLOW, "sessions", `coordinator-${TERMINAL_SESSION}.json`))).toBe(true);
+    expect(existsSync(fixture.terminalEnvelopePath)).toBe(false);
+    expect(existsSync(fixture.envelopePath)).toBe(true);
+    // Nothing else moved: the retained ledgers, the host export and the SDD
+    // evidence are byte-identical.
+    expect(readFileSync(join(fixture.workflowDir, "agent-flow.jsonl"), "utf8")).toContain('"kind":"dispatch"');
+    expect(readFileSync(fixture.hostEnvelopePath, "utf8")).toBe(PRODUCER_ENVELOPE);
+    expect(readFileSync(fixture.sddPath, "utf8")).toContain("populated workflow report");
+  });
+
+  test("Phase 2b closes the host-inventory row against the real producer bytes", async () => {
+    // The `omp-hidden-entries` row is built from bytes the real H2 producer
+    // (`packages/omp/src/execution-host-inventory.ts`) emits, and the closed
+    // substrate decodes those bytes UNCHANGED: `export.sha256` covers the
+    // canonical serialization of the embedded document with the exporter's
+    // framing LF excluded (contract section 4.2, one rule), while the envelope's
+    // own digest covers the bytes as delivered.
+    const fixture = await populatedWorkspace("c3-host-interop");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-host-preview"));
+    const row = manifest.surfaces.find((candidate) => candidate.surface === "omp-hidden-entries")!;
+    expect(row.sources.map((witness) => witness.path)).toEqual(["host-sessions/producer.json"]);
+    expect(row.hostProof).toMatchObject({ sessions: [{ host: "omp", sessionId: PRODUCER_SESSION }] });
+    expect(row.hostProof!.sessions[0]!.source.sha256).toBe(PRODUCER_ENVELOPE_SHA);
+    expect(row.hostProof!.attestation.sha256).toBe(sha256OfBytes(readFileSync(fixture.coverageAttestationPath)));
+
+    // The producer's own bytes, recomputed here: the envelope file digest covers
+    // the delivered bytes; the embedded digest covers the export without the
+    // framing LF that the canonical serializer appends.
+    expect(sha256OfBytes(readFileSync(fixture.hostEnvelopePath))).toBe(PRODUCER_ENVELOPE_SHA);
+    const envelope = JSON.parse(PRODUCER_ENVELOPE) as { export: { sha256: string; document: unknown } };
+    const exported = serializeExecutionValue(envelope.export.document);
+    expect(envelope.export.sha256).toBe(sha256OfBytes(Buffer.from(exported.slice(0, -1), "utf8")));
+    expect(envelope.export.sha256).not.toBe(sha256OfBytes(Buffer.from(exported, "utf8")));
+
+    // ...and the row closes through the closed substrate.
+    const coverage = await coverageOf(fixture, manifest);
+    const receipt = coverage.receipts.find((candidate) => candidate.surface === "omp-hidden-entries")!;
+    expect(receipt).toMatchObject({ disposition: "retain", protocol: "omp-hidden-v1", workflowId: PRODUCER_WORKFLOW });
+    expect(receipt.sources).toEqual([{ root: "host", path: "host-sessions/producer.json", sha256: PRODUCER_ENVELOPE_SHA }]);
+    expect(receipt.evidence).toEqual([
+      { root: "host", path: "attestation.json", sha256: sha256OfBytes(readFileSync(fixture.coverageAttestationPath)) },
+    ]);
+
+    // ONE byte of the producer's payload and the closed comparison refuses: the
+    // embedded export digest is recomputed from the bytes, never carried on
+    // trust.
+    writeFileSync(fixture.hostEnvelopePath, PRODUCER_ENVELOPE.replace('"action":"arm"', '"action":"arm!"'));
+    const mutated = await previewExecutionMigration(migrationInput(fixture, "op-host-mutated-preview"));
+    const refusal = await refusalOf(async () => coverageOf(fixture, mutated));
+    expect(refusal.code).toBe("execution.coverage-incomplete");
+    expect(refusal.message).toContain("export.sha256");
+  });
+
+  test("Phase 2b refuses a present agent-flow compaction journal before any receipt", async () => {
+    const fixture = await populatedWorkspace("c3-compaction");
+    writeJson(join(fixture.workflowDir, "agent-flow-compaction.json"), {
+      version: 1,
+      tailBefore: { bytes: 1, sha256: "1".repeat(64) },
+      tailAfter: { bytes: 1, sha256: "2".repeat(64) },
+      archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: 1, sha256: "3".repeat(64) },
+      lines: 1,
+    });
+    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-compaction-preview")));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("agent-flow-compaction.json");
+    expect(refusal.message).toContain("UNFINISHED compaction transaction");
+    // Nothing was staged and no receipt was built.
+    expect(rawGet<{ phase: string }>(fixture.dbPath, "select phase from execution_migrations order by rowid desc limit 1")).toBeUndefined();
+  });
+
+  test("Phase 2b refuses a forged coverage set and a drifted receipt with zero authority switch", async () => {
+    const fixture = await populatedWorkspace("c3-refusals");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-refusals-preview"));
+    const coverage = await coverageOf(fixture, manifest);
+    const staged = storeFootprint(fixture.dbPath);
+
+    // A forged receipt (one flipped resultHash) is not the recomputed set.
+    const forged: ExecutionCoverageSet = {
+      ...coverage,
+      receipts: coverage.receipts.map((receipt, index) =>
+        index === 0 ? { ...receipt, resultHash: "0".repeat(64) } : receipt,
+      ),
+    };
+    const forgedRefusal = await refusalOf(async () =>
+      applyExecutionMigration({
+        ...migrationInput(fixture, "op-refusals-forged"),
+        manifest,
+        manifestHash: executionManifestHash(manifest),
+        backup,
+        coverage: forged,
+      }),
+    );
+    expect(forgedRefusal.code).toBe("execution.migration-conflict");
+    expect(storeFootprint(fixture.dbPath)).toEqual(staged);
+
+    // A receipt drifted since review (a source byte changed) refuses too.
+    writeText(join(fixture.workflowDir, "notes.jsonl"), '{"kind":"note","ts":"2026-09-09T00:00:00.000Z","text":"rewritten after review"}');
+    const drifted = await refusalOf(async () =>
+      applyExecutionMigration({
+        ...migrationInput(fixture, "op-refusals-drifted"),
+        manifest,
+        manifestHash: executionManifestHash(manifest),
+        backup,
+        coverage,
+      }),
+    );
+    expect(drifted.code).toBe("execution.migration-conflict");
+    expect(storeFootprint(fixture.dbPath)).toEqual(staged);
+    // The EXECUTION authority never left `legacy`: a refused staging attempt
+    // writes nothing at all.
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("legacy");
+  });
+
+  test("Phase 2b replay preserves issue/catalog state and the archive identity", async () => {
+    const fixture = await populatedWorkspace("c3-replay");
+    await captureIssue(fixture.context, issueInput("Replay issue"), { operationId: "op-c3-replay-issue", actor: "project-manager" });
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-c3-replay-preview"));
+    const coverage = await coverageOf(fixture, manifest);
+    const applyInput = {
+      ...migrationInput(fixture, "op-c3-replay-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      backup,
+      coverage,
+    };
+    await applyExecutionMigration(applyInput);
+    const footprint = storeFootprint(fixture.dbPath);
+    const replay = await applyExecutionMigration({ ...applyInput, operationId: "op-c3-replay-apply-again" });
+    expect(replay).toEqual({ manifestId: manifest.id, phase: "staged", replayed: true });
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
+    expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from issues")!.n).toBe(1);
+
+    await activateExecutionMigration({
+      ...(await activationInput(fixture, manifest, "c3-replay", migrationAttestation([{ sessionId: COORDINATOR_SESSION, host: "omp", state: "stopped" }]))),
+    });
+    const activated = storeFootprint(fixture.dbPath);
+    const activationReplay = await activateExecutionMigration({
+      ...(await activationInput(fixture, manifest, "c3-replay-again", migrationAttestation([{ sessionId: COORDINATOR_SESSION, host: "omp", state: "stopped" }]))),
+    });
+    expect(activationReplay).toEqual({ manifestId: manifest.id, phase: "active", replayed: true });
+    expect(storeFootprint(fixture.dbPath)).toEqual(activated);
+
+    await retireExecutionSources(retirementInput(fixture, manifest, "c3-replay"));
+    const retiredArchive = treeInventory(join(fixture.harness, "archived", "execution", manifest.id));
+    const retirementReplay = await retireExecutionSources(retirementInput(fixture, manifest, "c3-replay-again"));
+    expect(retirementReplay).toEqual({ manifestId: manifest.id, phase: "retired", replayed: true });
+    expect(treeInventory(join(fixture.harness, "archived", "execution", manifest.id))).toEqual(retiredArchive);
+  });
+
+  test("Phase 2b refuses a version-1 staged manifest and requires an explicit abort", async () => {
+    const fixture = await populatedWorkspace("c3-v1-manifest");
+    const legacyManifest: ExecutionManifestDocument = {
+      version: 1,
+      id: "exec-legacy-v1",
+      storeId: "store",
+      epoch: 1,
+      schemaVersion: 4,
+      root: fixture.harness,
+      sources: [],
+      coreHash: "0".repeat(64),
+      deferred: [],
+      catalogRevision: 0,
+      pendingCatalogOperations: [],
+    };
+    const now = "2026-09-21T00:00:00.000Z";
+    rawRun(
+      fixture.dbPath,
+      "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, coverage_json, activation_receipt_json, retirement_json, created_at, updated_at) values (?, ?, 'staged', ?, null, null, null, ?, ?)",
+      legacyManifest.id,
+      executionManifestHash(legacyManifest),
+      JSON.stringify(legacyManifest),
+      now,
+      now,
+    );
+    rawRun(fixture.dbPath, "update execution_meta set authority_state = 'staged', manifest_id = ? where id = 1", legacyManifest.id);
+
+    const activateRefusal = await refusalOf(async () =>
+      activateExecutionMigration({
+        ...migrationInput(fixture, "op-c3-v1-activate"),
+        manifestId: legacyManifest.id,
+        manifestHash: executionManifestHash(legacyManifest),
+        expectedEpoch: 1,
+        attestation: migrationAttestation(),
+        coverageDigest: "1".repeat(64),
+      }),
+    );
+    expect(activateRefusal.code).toBe("execution.migration-conflict");
+    expect(activateRefusal.message).toContain("version 1");
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("staged");
+
+    const abort = await abortExecutionMigration({
+      ...migrationInput(fixture, "op-c3-v1-abort"),
+      manifestId: legacyManifest.id,
+      manifestHash: executionManifestHash(legacyManifest),
+      reason: "v1 staging superseded by the version-2 discovery",
+    });
+    expect(abort).toEqual({ manifestId: legacyManifest.id, phase: "aborted", replayed: false });
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("aborted");
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("legacy");
+  });
+
+  /**
+   * A minimal reference implementation of R1's canonical closure, transcribed
+   * from `scripts/execution-consumer-manifest.ts` (`treeEntries`,
+   * `digestEntries`, `hashCopiedTree`) so C3's derivation can be compared with
+   * R1's own rule without importing a repo script into the engine package.
+   */
+  function referenceTreeEntries(rootPath: string, exclude: readonly string[] = []): Array<{ path: string; kind: "file" | "symlink"; sha256: string; linkTarget: string | null }> {
+    // R1 canonicalizes every root before walking it, so a link target is
+    // recorded relative to the CANONICAL tree root.
+    const rootAbs = realpathSync(rootPath);
+    const entries: Array<{ path: string; kind: "file" | "symlink"; sha256: string; linkTarget: string | null }> = [];
+    const walk = (dirAbs: string, relDir: string): void => {
+      for (const dirent of readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+        if (exclude.includes(dirent.name)) continue;
+        const abs = join(dirAbs, dirent.name);
+        const rel = relDir === "" ? dirent.name : `${relDir}/${dirent.name}`;
+        if (dirent.isDirectory()) {
+          walk(abs, rel);
+          continue;
+        }
+        if (dirent.isSymbolicLink()) {
+          const resolved = realpathSync(abs);
+          entries.push({
+            path: rel,
+            kind: "symlink",
+            sha256: sha256OfBytes(readFileSync(resolved)),
+            linkTarget: relative(rootAbs, resolved).split("\\").join("/"),
+          });
+          continue;
+        }
+        entries.push({ path: rel, kind: "file", sha256: sha256OfBytes(readFileSync(abs)), linkTarget: null });
+      }
+    };
+    walk(rootAbs, "");
+    entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return entries;
+  }
+
+  /** R1's digest: sha256 over the compact JSON of the sorted entry closure. */
+  function referenceTreeDigest(entries: readonly unknown[]): string {
+    return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  }
+
+  type ConsumerFixture = Fixture & { manifestPath: string; sourceRoot: string; generatedRoot: string; linkPath: string };
+
+  /** §4.2 a fixture consumer package whose declaration is written in the shape the reviewed substrate decodes. */
+  async function consumerWorkspace(name: string): Promise<ConsumerFixture> {
+    const fixture = workspace(name);
+    // The migration route opens the store AND reads the v2 root register, so the
+    // fixture carries both: a store and one registered workflow dir.
+    const handle = await initializeStore(fixture.context);
+    handle.close();
+    const workflowId = "20260921-consumer-fixture";
+    const workflowDir = join(fixture.harness, "workflows", workflowId);
+    writeJson(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), {
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-01",
+      updated_at: "2026-09-02",
+      delivery_kind: "development",
+      project: "_default",
+      branch: { source: `feature/${workflowId}`, target: "main" },
+      plans: [{ id: `${workflowId}-plan`, title: "Consumer fixture plan", file: "plans/consumer.md", status: "Todo", metadata: {} }],
+    });
+    writeJson(join(fixture.harness, "status.json"), {
+      version: 2,
+      updated_at: ROOT_UPDATED_AT,
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-01", dir: join("workflows", workflowId) }],
+    });
+    const packageRoot = join(fixture.root, "packages", "cli");
+    const sourceRoot = join(packageRoot, "src");
+    const generatedRoot = join(packageRoot, "dist");
+    writeText(join(sourceRoot, "nested", "util.ts"), "export const util = 1;");
+    writeText(join(sourceRoot, "index.ts"), "export const index = util;");
+    const linkPath = join(sourceRoot, "alias.ts");
+    symlinkSync(join(sourceRoot, "nested", "util.ts"), linkPath);
+    writeText(join(packageRoot, "package.json"), '{"name":"@mstar-harness/cli"}');
+    writeText(join(generatedRoot, "mstar-harness.js"), "// built entry");
+    // R1's own non-build allowlist: the producer's manifest basename is skipped
+    // inside a GENERATED tree even though it sits there on disk.
+    writeText(join(generatedRoot, "execution-consumer.json"), "{}");
+    writeText(join(fixture.root, "skills", "mstar-harness-core", "SKILL.md"), "# copied skill\n");
+    writeText(join(packageRoot, "harness-skills", "mstar-harness-core", "SKILL.md"), "# copied skill\n");
+    writeText(join(fixture.root, "agents", "dev.md"), "# merged agent\n");
+    writeText(join(packageRoot, "harness-agents", "dev.md"), "# merged agent\n");
+    writeText(join(packageRoot, "harness-agents", "host-only.md"), "# host overlay\n");
+
+    const sourceEntries = referenceTreeEntries(sourceRoot);
+    const generatedEntries = referenceTreeEntries(generatedRoot, ["execution-consumer.json"]);
+    const copyEntries = referenceTreeEntries(join(fixture.root, "skills"));
+    const mergeEntries = referenceTreeEntries(join(fixture.root, "agents"));
+    // The producer's OWN handoff form and location
+    // (`packages/<consumer>/execution-consumer/<consumer>.json`, canonical §3.1,
+    // outside every declared tree), so the migration chain takes its evidence
+    // straight from producer bytes and never from an operator projection.
+    const manifestPath = join(packageRoot, "execution-consumer", "cli.json");
+    writeText(
+      manifestPath,
+      serializeExecutionValue({
+        version: 1,
+        protocol: "consumer-v1",
+        repoRoot: ".",
+        consumers: [
+          {
+            id: "cli",
+            packageRoot: "packages/cli",
+            capability: "writer",
+            capabilityNote: null,
+            entrypoint: "packages/cli/dist/mstar-harness.js",
+            runtime: { target: "node", floor: ">=24.18.0", declaration: "package-engines" },
+            sources: {
+              trees: [{ root: "packages/cli/src", files: sourceEntries.length, sha256: referenceTreeDigest(sourceEntries) }],
+              files: [{ path: "packages/cli/package.json", sha256: sha256OfBytes(readFileSync(join(packageRoot, "package.json"))) }],
+            },
+            generated: {
+              trees: [{ root: "packages/cli/dist", files: generatedEntries.length, sha256: referenceTreeDigest(generatedEntries) }],
+              files: [{ path: "packages/cli/dist/mstar-harness.js", sha256: sha256OfBytes(readFileSync(join(generatedRoot, "mstar-harness.js"))) }],
+            },
+            copiedInstructions: [
+              { sourceRoot: "skills", targetRoot: "packages/cli/harness-skills", mode: "copy", files: copyEntries.length, sha256: referenceTreeDigest(copyEntries) },
+              { sourceRoot: "agents", targetRoot: "packages/cli/harness-agents", mode: "merge", files: mergeEntries.length, sha256: referenceTreeDigest(mergeEntries) },
+            ],
+          },
+        ],
+      }),
+    );
+    // R1 records repo-relative paths, so the configured package root IS this
+    // fixture's checkout root.
+    writeInventory(fixture, {
+      roots: { sdd: join(fixture.harness, INV, "sdd"), host: join(fixture.harness, INV, "host"), package: fixture.root },
+      consumers: [{ surface: "cli-writer", path: manifestPath, consumerId: "cli" }],
+    });
+    return { ...fixture, manifestPath, sourceRoot, generatedRoot, linkPath };
+  }
+
+  test("Phase 2b closes the consumer surface against R1's own tree/copy rule", async () => {
+    const fixture = await consumerWorkspace("c3-consumer-interop");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-consumer-preview"));
+    const row = manifest.surfaces.find((candidate) => candidate.surface === "cli-writer")!;
+    const coverage = await coverageOf(fixture, manifest);
+    const receipt = coverage.receipts.find((candidate) => candidate.surface === "cli-writer")!;
+    expect(receipt).toMatchObject({ disposition: "retain", protocol: "consumer-v1", workflowId: null });
+
+    // Every proof fact is R1's own rule, recomputed from the real bytes.
+    const sourceEntries = referenceTreeEntries(fixture.sourceRoot);
+    const generatedEntries = referenceTreeEntries(fixture.generatedRoot, ["execution-consumer.json"]);
+    const proof = row.consumerProof!;
+    const sourceTree = proof.trees.find((tree) => tree.kind === "source")!;
+    const generatedTree = proof.trees.find((tree) => tree.kind === "generated")!;
+    expect(sourceTree).toMatchObject({ path: "packages/cli/src", files: sourceEntries.length, sha256: referenceTreeDigest(sourceEntries) });
+    expect(generatedTree).toMatchObject({ path: "packages/cli/dist", files: generatedEntries.length, sha256: referenceTreeDigest(generatedEntries) });
+    // R1 records a symlink by its tree-relative target and the resolved bytes.
+    const linkEntry = sourceEntries.find((entry) => entry.kind === "symlink")!;
+    expect(linkEntry).toMatchObject({ path: "alias.ts", linkTarget: "nested/util.ts" });
+    expect(row.sources.find((witness) => witness.path === "packages/cli/src/alias.ts")?.sha256).toBe(linkEntry.sha256);
+    // Copies: the source-side closure is the digest, a merge keeps host-only extras out of the pair.
+    const copyProof = proof.copies.find((copy) => copy.mode === "copy")!;
+    expect(copyProof).toMatchObject({ sourceRoot: "skills", targetRoot: "packages/cli/harness-skills", files: 1, sha256: referenceTreeDigest(referenceTreeEntries(join(fixture.root, "skills"))) });
+    expect(copyProof.sourceWitnesses.map((witness) => witness.path)).toEqual(["skills/mstar-harness-core/SKILL.md"]);
+    const mergeProof = proof.copies.find((copy) => copy.mode === "merge")!;
+    expect(mergeProof.targetWitnesses.map((witness) => witness.path)).toEqual(["packages/cli/harness-agents/dev.md"]);
+    expect(row.sources.some((witness) => witness.path.includes("host-only.md"))).toBe(false);
+    // The row's evidence document IS the producer-side artifact at its own path.
+    expect(row.evidence).toEqual([
+      { root: "package", path: "packages/cli/execution-consumer/cli.json", sha256: sha256OfBytes(readFileSync(fixture.manifestPath)) },
+    ]);
+
+    // ONE changed source byte and the declared closure no longer holds: the
+    // frozen manifest no longer describes the discovered world (a conflict, the
+    // same verdict `apply` gives for source drift).
+    writeText(join(fixture.sourceRoot, "index.ts"), "export const index = 2;");
+    const drift = await refusalOf(async () => coverageOf(fixture, manifest));
+    expect(drift.code).toBe("execution.migration-conflict");
+    expect(drift.message).toContain("surface discovery no longer holds the reviewed bytes");
+
+    // Re-discovering the drifted tree still refuses: the proof is recomputed
+    // from the real bytes and the DECLARED digest is now stale.
+    const rediscoved = await previewExecutionMigration(migrationInput(fixture, "op-consumer-drift-preview"));
+    const declared = await refusalOf(async () => coverageOf(fixture, rediscoved));
+    expect(declared.code).toBe("execution.coverage-incomplete");
+    expect(declared.message).toContain("discovery proof disagrees with the declared source tree");
+  });
+
+  test("Phase 2b names the producer-encoding conflict instead of reformatting the artifact", async () => {
+    // The repository producer serializes its manifest with two-space
+    // indentation and writes ONE aggregate document for all consumers, while the
+    // reviewed consumer substrate decodes canonical §3.1 bytes with exactly one
+    // consumer entry. C3 refuses and NAMES the cross-package conflict; it never
+    // reformats, reduces or rewrites the producer artifact to fit the decoder.
+    const fixture = await consumerWorkspace("c3-consumer-encoding");
+    const document = JSON.parse(readFileSync(fixture.manifestPath, "utf8")) as Record<string, unknown>;
+
+    writeFileSync(fixture.manifestPath, `${JSON.stringify(document, null, 2)}\n`);
+    const pretty = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-consumer-pretty")));
+    expect(pretty.code).toBe("execution.migration-conflict");
+    expect(pretty.message).toContain("cross-package encoding conflict");
+    expect(pretty.message).toContain("canonical");
+
+    const aggregate = { ...document, consumers: [...(document.consumers as unknown[]), { ...(document.consumers as Array<Record<string, unknown>>)[0], id: "engine" }] };
+    writeFileSync(fixture.manifestPath, serializeExecutionValue(aggregate));
+    const many = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-consumer-aggregate")));
+    expect(many.code).toBe("execution.migration-conflict");
+    expect(many.message).toContain("carries 2 consumer entries");
   });
 });
