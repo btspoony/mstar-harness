@@ -27,7 +27,8 @@
  *   authority rows that point predates as the loss (an `execution` domain
  *   difference at minimum, under the canonical digest), and restore replaces
  *   the store only under the EXACT approved loss digest; the diagnostic export
- *   carries session rows without identities.
+ *   reports the key names it dropped and carries no concrete session identity
+ *   (session rows without one, no envelope path, the recovery successor absent).
  * - `route`: the execution verbs live under `store execution`, while
  *   `store activate` remains the issue/catalog barrier.
  */
@@ -592,13 +593,23 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // The artifact describes the authority it was asked for…
     expect(canonical.execution?.authorityState).toBe("active");
     expect(canonical.workflows?.map((workflow) => workflow.workflowId)).toEqual([WORKFLOW_ID]);
-    // …while the session identities are dropped and the dropped key names report it.
-    expect(Array.isArray(canonical.redactedKeys)).toBe(true);
-    expect(canonical.redactedKeys as string[]).toContain("session_id");
-    expect(canonical.redactedKeys as string[]).toContain("holder_session_id");
-    // The recovery successor exists only as a session row, and the export carries
-    // session ROWS without identities — never this id.
-    expect(canonicalJson.includes(SUCCESSOR_SESSION)).toBe(false);
+    // The artifact reports the key names it dropped, and they are the imported
+    // lease's holder identity fields. No traversed document carries a
+    // `session_id` key at all: the import moves every session binding into the
+    // `execution_sessions` row (the workflow header drops `coordination`, the
+    // plan state and coordination block drop `session`) and the export projects
+    // those session rows without an identity column.
+    const redactedKeys = canonical.redactedKeys as string[];
+    for (const key of ["holder", "holder_session_id", "holder_role"]) {
+      expect(redactedKeys).toContain(key);
+    }
+    // The observable fact rather than the key names: the serialized artifact
+    // carries no concrete session identity — neither the imported ones nor the
+    // recovery successor, which exists only as a session row and in the recovery
+    // operation receipt, neither of which the export projects.
+    for (const sessionId of [COORDINATOR_SESSION, PLAN_SESSION, SUCCESSOR_SESSION]) {
+      expect(canonicalJson.includes(sessionId)).toBe(false);
+    }
 
     // ── §6 item 4: retirement moves exactly the reviewed core sources
     const retireArgs = [
