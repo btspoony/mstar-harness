@@ -68,7 +68,6 @@ interface Fixture {
   context: StoreContext;
   dbPath: string;
   inventoryPath: string;
-  workflowDir: string;
   statusPath: string;
   snapshotPath: string;
   coordinatorEnvelope: string;
@@ -256,7 +255,6 @@ async function legacyFixture(label: string): Promise<Fixture> {
     context,
     dbPath: join(harnessDir, "store.db"),
     inventoryPath,
-    workflowDir,
     statusPath,
     snapshotPath,
     coordinatorEnvelope,
@@ -312,7 +310,7 @@ function previewAndCover(fixture: Fixture, label: string): ReviewedArtifacts {
     "--harness",
     fixture.harnessDir,
     "--json",
-  ]);
+  ], fixture);
   const summary = dataOf(preview);
   expectSuccess(preview, "preview");
   expect(summary.version).toBe(2);
@@ -377,7 +375,7 @@ function activateFamily(fixture: Fixture, reviewed: ReviewedArtifacts, attestati
 /** A verified recovery point taken through the existing store verb, as an operator takes one. */
 function takeRecoveryPoint(fixture: Fixture, label: string): { imagePath: string; receiptPath: string } {
   const imagePath = join(fixture.harnessDir, "archived", "backups", `${label}-point.db`);
-  const backup = runCli(["store", "backup", "--out", imagePath, "--harness", fixture.harnessDir, "--json"]);
+  const backup = runCli(["store", "backup", "--out", imagePath, "--harness", fixture.harnessDir, "--json"], fixture);
   const data = dataOf(backup);
   expect(backup.exitCode).toBe(0);
   expect(data.backupPath).toBe(imagePath);
@@ -470,7 +468,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
       "--harness",
       fixture.harnessDir,
       "--json",
-    ]);
+    ], fixture);
     const replaySummary = dataOf(replay);
     expectSuccess(replay, "preview");
     expect(replaySummary.manifestId).toBe(reviewed.manifestId);
@@ -488,7 +486,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // ── §6 item 2: apply stages behind a verified recovery point, and replays
     const point = takeRecoveryPoint(fixture, "operator");
     const applyArgs = applyFamily(fixture, reviewed, point.receiptPath, "operator-apply");
-    const applied = runCli(applyArgs);
+    const applied = runCli(applyArgs, fixture);
     const staged = dataOf(applied);
     expectSuccess(applied, "apply");
     expect(staged.phase).toBe("staged");
@@ -499,7 +497,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const catalogAfterApply = issueCatalogAuthorityOf(fixture);
     expect(catalogAfterApply.authority_state).toBe("active");
 
-    const replayedApply = runCli(applyArgs);
+    const replayedApply = runCli(applyArgs, fixture);
     expect(replayedApply.exitCode).toBe(0);
     expect(jsonOf(replayedApply).operation).toBe("apply");
     expect(dataOf(replayedApply).replayed).toBe(true);
@@ -509,7 +507,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const attestationPath = join(fixture.root, "operator-attestation.json");
     writeJson(attestationPath, stopAttestation([COORDINATOR_SESSION, PLAN_SESSION]));
     const activateArgs = activateFamily(fixture, reviewed, attestationPath, "operator-activate");
-    const activated = runCli(activateArgs);
+    const activated = runCli(activateArgs, fixture);
     const activation = dataOf(activated);
     expectSuccess(activated, "activate");
     expect(activation.phase).toBe("active");
@@ -520,7 +518,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // The execution barrier is not the issue/catalog one: that authority is untouched.
     expect(issueCatalogAuthorityOf(fixture)).toEqual(catalogAfterApply);
 
-    const replayedActivate = runCli(activateArgs);
+    const replayedActivate = runCli(activateArgs, fixture);
     expect(replayedActivate.exitCode).toBe(0);
     expect(dataOf(replayedActivate).replayed).toBe(true);
     expect(executionAuthorityOf(fixture)).toEqual(executionAfterActivation);
@@ -575,7 +573,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
 
     // ── §8: the diagnostic export describes the authority without identities
     const exportPath = join(fixture.root, "operator-export.json");
-    const exported = runCli(["store", "execution", "export", "--out", exportPath, "--harness", fixture.harnessDir, "--json"]);
+    const exported = runCli(["store", "execution", "export", "--out", exportPath, "--harness", fixture.harnessDir, "--json"], fixture);
     const exportData = dataOf(exported);
     expectSuccess(exported, "export");
     expect(exportData.format).toBe("execution-diagnostic-v1");
@@ -615,7 +613,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
       fixture.harnessDir,
       "--json",
     ];
-    const retired = runCli(retireArgs);
+    const retired = runCli(retireArgs, fixture);
     expectSuccess(retired, "retire");
     expect(dataOf(retired).phase).toBe("retired");
     const archiveDir = join(fixture.harnessDir, "archived", "execution", reviewed.manifestId);
@@ -627,7 +625,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     expect(existsSync(fixture.planEnvelope)).toBe(true);
     expect(existsSync(fixture.statusPath)).toBe(false);
 
-    const replayedRetire = runCli(retireArgs);
+    const replayedRetire = runCli(retireArgs, fixture);
     expect(replayedRetire.exitCode).toBe(0);
     expect(dataOf(replayedRetire).phase).toBe("retired");
     expect(dataOf(replayedRetire).replayed).toBe(true);
@@ -640,7 +638,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const protectedPaths = [fixture.statusPath, fixture.snapshotPath, fixture.coordinatorEnvelope, fixture.planEnvelope];
     const protectedBefore = protectedPaths.map((path) => readFileSync(path).toString("base64"));
 
-    const applied = runCli(applyFamily(fixture, reviewed, point.receiptPath, "abort-apply"));
+    const applied = runCli(applyFamily(fixture, reviewed, point.receiptPath, "abort-apply"), fixture);
     expectSuccess(applied, "apply");
     expect(executionAuthorityOf(fixture).authority_state).toBe("staged");
 
@@ -660,7 +658,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
       fixture.harnessDir,
       "--json",
     ];
-    const aborted = runCli(abortArgs);
+    const aborted = runCli(abortArgs, fixture);
     expectSuccess(aborted, "abort");
     expect(dataOf(aborted).phase).toBe("aborted");
     expect(dataOf(aborted).replayed).toBe(false);
@@ -672,7 +670,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     expect(protectedPaths.map((path) => readFileSync(path).toString("base64"))).toEqual(protectedBefore);
 
     // An aborted manifest is never re-staged: the replay reports the recorded abort.
-    const replayedAbort = runCli(abortArgs);
+    const replayedAbort = runCli(abortArgs, fixture);
     expect(replayedAbort.exitCode).toBe(0);
     expect(dataOf(replayedAbort).phase).toBe("aborted");
     expect(dataOf(replayedAbort).replayed).toBe(true);
@@ -687,21 +685,21 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const applyArgs = applyFamily(fixture, reviewed, point.receiptPath, "refusal-apply");
 
     // Missing --coverage: usage, and nothing staged.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--coverage")), "apply", "--coverage");
+    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--coverage"), fixture), "apply", "--coverage");
     // Missing --inventory: the manifest records an explicit scope, so the
     // boundary's own discovery would not be the reviewed one.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--inventory")), "apply", "--inventory");
+    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--inventory"), fixture), "apply", "--inventory");
     // A coverage set of ANOTHER manifest is never applied under this one.
     const foreignCoverage = join(fixture.root, "refusal-foreign-coverage.json");
     const coverageDocument = JSON.parse(readFileSync(reviewed.coveragePath, "utf8")) as Record<string, unknown>;
     writeJson(foreignCoverage, { ...coverageDocument, manifestId: "00000000-0000-4000-8000-000000000000" });
     const foreignArgs = applyArgs.map((arg) => (arg === reviewed.coveragePath ? foreignCoverage : arg));
-    expectUsageRefusal(runCli(foreignArgs), "apply", "coverage");
+    expectUsageRefusal(runCli(foreignArgs, fixture), "apply", "coverage");
     // A missing recovery point: the reviewed manifest alone never authorizes a write.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--backup")), "apply", "--backup");
+    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--backup"), fixture), "apply", "--backup");
     // Missing --attestation at the barrier.
     expectUsageRefusal(
-      runCli(withoutFlag(activateFamily(fixture, reviewed, attestationPath, "refusal-activate"), "--attestation")),
+      runCli(withoutFlag(activateFamily(fixture, reviewed, attestationPath, "refusal-activate"), "--attestation"), fixture),
       "activate",
       "--attestation",
     );
@@ -720,7 +718,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
         "--harness",
         fixture.harnessDir,
         "--json",
-      ]),
+      ], fixture),
       "abort",
       "--reason",
     );
@@ -741,7 +739,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
         "--harness",
         fixture.harnessDir,
         "--json",
-      ]),
+      ], fixture),
       "restore",
       "--accept-loss-digest",
     );
@@ -760,11 +758,11 @@ describe("mstar store execution \u2014 the operator family over populated input"
         "--harness",
         fixture.harnessDir,
         "--json",
-      ]),
+      ], fixture),
       "preview",
       "--coverage-out",
     );
-    expectUsageRefusal(runCli(["store", "execution", "export", "--not-a-flag", "--harness", fixture.harnessDir, "--json"]), "export", "--not-a-flag");
+    expectUsageRefusal(runCli(["store", "execution", "export", "--not-a-flag", "--harness", fixture.harnessDir, "--json"], fixture), "export", "--not-a-flag");
 
     // Every refusal above wrote nothing: no manifest was recorded and the
     // execution authority never left legacy.
@@ -804,7 +802,7 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     // The recovery point predates the staging, so the staging's own committed
     // operation is exactly the loss the restore would cause.
     const point = takeRecoveryPoint(fixture, "restore");
-    const applied = runCli(applyFamily(fixture, reviewed, point.receiptPath, "restore-apply"));
+    const applied = runCli(applyFamily(fixture, reviewed, point.receiptPath, "restore-apply"), fixture);
     expectSuccess(applied, "apply");
     expect(dataOf(applied).phase).toBe("staged");
 
@@ -820,7 +818,7 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
       "--harness",
       fixture.harnessDir,
       "--json",
-    ]);
+    ], fixture);
     const previewData = dataOf(preview);
     expectSuccess(preview, "restore-preview");
     expect(previewData.lostOperationIds as string[]).toContain("restore-apply");
@@ -849,7 +847,7 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     // A digest that is not this inventory's loss is refused, and the live store
     // keeps the staged authority it had.
     const authorityBefore = executionAuthorityOf(fixture);
-    const refused = runCli(restoreArgs("0".repeat(64)));
+    const refused = runCli(restoreArgs("0".repeat(64)), fixture);
     expect(refused.exitCode).toBe(1);
     expect(jsonOf(refused).ok).toBe(false);
     expect(jsonOf(refused).route).toBe("execution");
@@ -858,7 +856,7 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     expect(executionAuthorityOf(fixture)).toEqual(authorityBefore);
 
     // The exact approved loss is accepted and the store is replaced.
-    const restored = runCli(restoreArgs(lossDigest));
+    const restored = runCli(restoreArgs(lossDigest), fixture);
     const restoreData = dataOf(restored);
     expectSuccess(restored, "restore");
     expect(Number(restoreData.epoch)).toBeGreaterThan(0);
@@ -866,7 +864,7 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
 
     // The replaced store is readable through the diagnostic export, and it is
     // the recovery point's own execution state (legacy), not the staged one.
-    const exported = runCli(["store", "execution", "export", "--harness", fixture.harnessDir, "--json"]);
+    const exported = runCli(["store", "execution", "export", "--harness", fixture.harnessDir, "--json"], fixture);
     const exportData = dataOf(exported);
     expectSuccess(exported, "export");
     const canonical = JSON.parse(String(exportData.canonicalJson)) as {
