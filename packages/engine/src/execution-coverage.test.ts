@@ -137,8 +137,28 @@ function notesDoc(wf: string): Doc {
 function agentFlowDocs(wf: string): Doc[] {
   const sessionId = `sess-${wf}`;
   const stream = wf === WORKFLOW_A ? STREAM_A : STREAM_B;
-  const tailLine = JSON.stringify({ v: 1, ts: 1, kind: "workflow-run", runId: `run-${wf}`, name: `run of ${wf}` });
-  const chunkLine = JSON.stringify({ v: 1, ts: 2, kind: "workflow-agent", runId: `run-${wf}`, seq: 1, label: "member", childId: `child-${wf}` });
+  // The released durable row: the event kind plus the source tuple whose
+  // recomputation the ledger's identity is (F2 `workflowEventId`).
+  const tailLine = JSON.stringify({
+    v: 1,
+    ts: 1,
+    kind: "workflow-run",
+    runId: `run-${wf}`,
+    name: `run of ${wf}`,
+    eventId: `wfe1:workflow-run:${sessionId}:${stream}:1`,
+    source: { sessionId, streamId: stream, seq: 1 },
+  });
+  const chunkLine = JSON.stringify({
+    v: 1,
+    ts: 2,
+    kind: "workflow-agent",
+    runId: `run-${wf}`,
+    seq: 1,
+    label: "member",
+    childId: `child-${wf}`,
+    eventId: `wfe1:workflow-agent:${sessionId}:${stream}:2`,
+    source: { sessionId, streamId: stream, seq: 2 },
+  });
   return [
     doc("control", `workflows/${wf}/agent-flow.jsonl`, `${tailLine}\n`),
     doc(
@@ -633,12 +653,38 @@ describe("execution-coverage", () => {
     replaceRowDocuments(missingRow, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, index]);
     refuseLeavingState(missingRow);
 
-    // The recorded digest no longer describes the retained line.
+    // The recorded digest no longer describes the row that owns that id.
     const forgedDigest = materialize(buildRows());
     const entries = index.text.trim().split("\n").map((line) => JSON.parse(line) as { id: string; d: string });
     entries[1] = { ...entries[1], d: fakeHex(3).slice(0, 32) };
     replaceRowDocuments(forgedDigest, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, doc("control", index.path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`), chunk]);
     refuseLeavingState(forgedDigest);
+
+    // The id no longer matches the bytes of the row it names (a mis-bound entry).
+    const misBound = materialize(buildRows());
+    const swapped = [
+      { ...entries[0], d: entries[1].d },
+      { ...entries[1], d: entries[0].d },
+    ];
+    replaceRowDocuments(misBound, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, doc("control", index.path, `${swapped.map((entry) => JSON.stringify(entry)).join("\n")}\n`), chunk]);
+    refuseLeavingState(misBound);
+
+    // The durable source tuple changed while the carried id stayed put.
+    const tupleDrift = materialize(buildRows());
+    const drifted = JSON.parse(tail.text.trim()) as Record<string, unknown>;
+    const driftedSource = drifted.source as Record<string, unknown>;
+    replaceRowDocuments(tupleDrift, "workflow-agent-flow-ledger", WORKFLOW_A, [
+      doc("control", tail.path, `${JSON.stringify({ ...drifted, source: { ...driftedSource, seq: 3 } })}\n`),
+      index,
+      chunk,
+    ]);
+    refuseLeavingState(tupleDrift);
+
+    // Companions of two workflow dirs are not one retained ledger.
+    const foreignDir = materialize(buildRows());
+    const foreignDocs = agentFlowDocs(WORKFLOW_B);
+    replaceRowDocuments(foreignDir, "workflow-agent-flow-ledger", WORKFLOW_A, [tail, foreignDocs[1], chunk]);
+    refuseLeavingState(foreignDir);
   });
 
   test("execution-coverage-consumer-manifest-is-r1s", () => {

@@ -664,47 +664,63 @@ function notesCodec(context: RowContext): unknown {
 }
 
 /** One agent-flow ledger line validated against the released record union. */
-function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string; durable: boolean }> {
+function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string; durable: boolean; eventId: string | null }> {
   const { record, sha256 } = jsonlRecord(line, what);
   if (record.v !== 1) refuse(`${what}.v must be 1; the ledger is versioned, never guessed.`);
   if (typeof record.ts !== "number" || !Number.isFinite(record.ts)) refuse(`${what}.ts must be a finite number.`);
   const kind = expectEnum(record.kind, AGENT_FLOW_KINDS, `${what}.kind`);
   if (kind === "dispatch") {
-    expectKeys(record, ["v", "ts", "kind", "role", "verdict", "hard"], ["agent", "planId", "taskId", "taskCategory"], what);
+    expectKeys(record, ["v", "ts", "kind", "role", "verdict", "hard"], ["agent", "planId", "taskId", "taskCategory", "eventId"], what);
     expectText(record.role, `${what}.role`);
     expectEnum(record.verdict, DISPATCH_VERDICTS, `${what}.verdict`);
     if (typeof record.hard !== "boolean") refuse(`${what}.hard must be a boolean.`);
   } else if (kind === "settle") {
-    expectKeys(record, ["v", "ts", "kind", "outcome"], ["agent", "durationMs", "role", "planId", "taskId", "childId", "taskRef"], what);
+    expectKeys(record, ["v", "ts", "kind", "outcome"], ["agent", "durationMs", "role", "planId", "taskId", "childId", "taskRef", "eventId"], what);
     expectEnum(record.outcome, SETTLE_OUTCOMES, `${what}.outcome`);
     if (record.durationMs !== undefined) expectInteger(record.durationMs, `${what}.durationMs`, 0);
   } else if (kind === "subagent-link") {
-    expectKeys(record, ["v", "ts", "kind", "childId", "label", "role"], ["agent", "planId", "taskId", "taskRef"], what);
+    expectKeys(record, ["v", "ts", "kind", "childId", "label", "role"], ["agent", "planId", "taskId", "taskRef", "eventId"], what);
     expectString(record.childId, `${what}.childId`);
     expectText(record.label, `${what}.label`);
     expectText(record.role, `${what}.role`);
   } else if (kind === "workflow-verdict") {
-    expectKeys(record, ["v", "ts", "kind", "tool", "mode", "verdict"], ["agent", "workflow", "objective", "code"], what);
+    expectKeys(record, ["v", "ts", "kind", "tool", "mode", "verdict"], ["agent", "workflow", "objective", "code", "eventId"], what);
     expectEnum(record.tool, WORKFLOW_TOOLS, `${what}.tool`);
     expectEnum(record.mode, WORKFLOW_GATE_MODES, `${what}.mode`);
     expectEnum(record.verdict, WORKFLOW_VERDICTS, `${what}.verdict`);
   } else if (kind === "workflow-run") {
-    expectKeys(record, ["v", "ts", "kind", "runId", "name"], ["agent"], what);
+    expectKeys(record, ["v", "ts", "kind", "runId", "name", "eventId", "source"], ["agent"], what);
     expectString(record.runId, `${what}.runId`);
     expectString(record.name, `${what}.name`);
   } else if (kind === "workflow-agent") {
-    expectKeys(record, ["v", "ts", "kind", "runId", "seq", "label", "childId"], ["phase"], what);
+    expectKeys(record, ["v", "ts", "kind", "runId", "seq", "label", "childId", "eventId", "source"], ["phase"], what);
     expectString(record.runId, `${what}.runId`);
     expectInteger(record.seq, `${what}.seq`, 1);
     expectString(record.label, `${what}.label`);
     expectString(record.childId, `${what}.childId`);
   } else {
-    expectKeys(record, ["v", "ts", "kind", "runId", "stopReason"], [], what);
+    expectKeys(record, ["v", "ts", "kind", "runId", "stopReason", "eventId", "source"], [], what);
     expectString(record.runId, `${what}.runId`);
     expectEnum(record.stopReason, WORKFLOW_STOP_REASONS, `${what}.stopReason`);
   }
   if (record.agent !== undefined && record.agent !== "") expectString(record.agent, `${what}.agent`);
-  return { sha256, durable: kind.startsWith("workflow-") };
+  const durable = kind.startsWith("workflow-");
+  if (!durable) {
+    // A live tool-call row carries no durable source tuple, and a legacy row
+    // carries no identity at all: both stay accepted as they were written.
+    return { sha256, durable: false, eventId: record.eventId === undefined ? null : expectString(record.eventId, `${what}.eventId`) };
+  }
+  const source = expectObject(record.source, `${what}.source`);
+  expectExactKeys(source, ["sessionId", "streamId", "seq"], `${what}.source`);
+  const sessionId = expectString(source.sessionId, `${what}.source.sessionId`);
+  const streamId = expectString(source.streamId, `${what}.source.streamId`);
+  const seq = expectInteger(source.seq, `${what}.source.seq`, 0);
+  const eventId = expectString(record.eventId, `${what}.eventId`);
+  const recomputed = `${WORKFLOW_EVENT_ID_PREFIX}${kind}:${sessionId}:${streamId}:${seq}`;
+  if (eventId !== recomputed) {
+    refuse(`${what}.eventId ${eventId} is not the identity its own source tuple derives (${recomputed}); a durable row's id is recomputed, never carried on trust.`);
+  }
+  return { sha256, durable: true, eventId };
 }
 
 /**
@@ -793,8 +809,11 @@ function agentFlowCodec(context: RowContext): unknown {
   const durableRows = [
     ...(tail === null ? [] : tail.records),
     ...chunks.flatMap((chunk) => chunk.records),
-  ].filter((record) => (record as { durable: boolean }).durable) as ReadonlyArray<{ sha256: string }>;
-  const indexedDigests = index === null ? [] : [...new Set((index.entries as ReadonlyArray<{ id: string; d: string }>).map((entry) => entry.d))];
+  ].filter((record) => (record as { durable: boolean }).durable) as ReadonlyArray<{ sha256: string; eventId: string | null }>;
+  const indexed = new Map<string, string>();
+  for (const entry of (index?.entries ?? []) as ReadonlyArray<{ id: string; d: string }>) {
+    if (!indexed.has(entry.id)) indexed.set(entry.id, entry.d);
+  }
   if (index === null && durableRows.length > 0) {
     refuse(
       `${context.label} retains ${durableRows.length} durable ledger row(s) but assigns no ${AGENT_FLOW_INDEX_FILE}; a missing identity index is ` +
@@ -802,22 +821,29 @@ function agentFlowCodec(context: RowContext): unknown {
     );
   }
   if (index !== null) {
-    for (const digit of indexedDigests) {
-      if (!durableRows.some((record) => record.sha256.startsWith(digit))) {
+    for (const [id, digest] of indexed) {
+      const row = durableRows.find((record) => record.eventId === id);
+      if (row === undefined) {
         refuse(
-          `${context.label}: identity index digest ${digit} names no retained durable row in the assigned tail or history chunks; an index entry whose ` +
-            `row is missing means the retained set is incomplete.`,
+          `${context.label}: identity index entry ${id} names no retained durable row in the assigned tail or history chunks; an index entry whose row ` +
+            `is missing means the retained set is incomplete.`,
+        );
+      }
+      if (row.sha256.slice(0, 32) !== digest) {
+        refuse(
+          `${context.label}: identity index entry ${id} records digest ${digest}, but the retained row that owns that id hashes to ${row.sha256.slice(0, 32)}; ` +
+            `an index entry is bound to the bytes of its own row.`,
         );
       }
     }
     for (const chunk of chunks) {
       for (const record of chunk.records) {
         if (!(record as { durable: boolean }).durable) continue;
-        const digest = (record as { sha256: string }).sha256;
-        if (!indexedDigests.some((digit) => digest.startsWith(digit))) {
+        const id = (record as { eventId: string | null }).eventId as string;
+        if (!indexed.has(id)) {
           refuse(
-            `${context.label}: an archived durable row of ${chunk.path} has no identity-index entry; an unindexed row that left the live dedup window ` +
-              `is not complete coverage.`,
+            `${context.label}: the archived durable row ${id} of ${chunk.path} has no identity-index entry; an unindexed row that left the live dedup ` +
+              `window is not complete coverage.`,
           );
         }
       }
