@@ -83,6 +83,7 @@ import type { Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { withWorkflowDirLock } from './gates/agent-flow.ts'
 
+import type { ExecutionBinding } from '@mstar-harness/engine'
 /** Envelope schema version carried by the snapshot file (`sv`). */
 export const ENGINE_STATUS_SNAPSHOT_VERSION = 1
 /** Per-entry record version carried by every stored entry (`rv`). */
@@ -182,6 +183,7 @@ export interface EngineStatusSnapshotWriteInput {
   readonly maxBytes?: number
 }
 
+
 /**
  * One session's durable workflow-selection CONTROL record (D4): the active
  * workflow this session picked plus the durable no-backfill floor. It lives in
@@ -193,6 +195,7 @@ export interface WorkflowSessionBinding {
   readonly cwd: string
   /** The session's chosen ACTIVE workflow id; absent = no explicit pick yet. */
   readonly selectedWorkflowId?: string
+  readonly executionBinding?: ExecutionBinding | null
   /**
    * Durable exclusion floor: ledger rows at or below this sequence were
    * intentionally skipped while the session was unbound and must never be
@@ -201,11 +204,7 @@ export interface WorkflowSessionBinding {
   readonly excludedBeforeSeq: number
 }
 
-/**
- * Binding read outcome: the stored record (or its absence as `ok` WITHOUT a
- * `binding`), or why attribution is unavailable — absent and corrupt are
- * distinct answers, never a silent empty record.
- */
+/** One binding read outcome. */
 export type WorkflowSessionBindingRead =
   | { readonly kind: 'ok'; readonly binding?: WorkflowSessionBinding }
   | { readonly kind: 'unavailable'; readonly reason: string }
@@ -214,6 +213,8 @@ export type WorkflowSessionBindingRead =
 export interface WorkflowSessionBindingUpdate {
   /** The chosen active workflow id; omitted preserves the stored preference. */
   readonly selectedWorkflowId?: string
+  /** Adopt or clear the current execution authority witness. */
+  readonly executionBinding?: ExecutionBinding | null
   /** The exclusion floor to merge (by max) into the stored record. */
   readonly excludedBeforeSeq: number
   /** Global byte ceiling override (test seam; production uses the constant). */
@@ -259,6 +260,21 @@ function asEntry(value: unknown): EngineStatusSnapshotEntry | undefined {
   return { rv: value.rv as number, cwd, at, turn: value.turn, payload: value.payload }
 }
 
+/** Interpret one durable execution-authority witness. */
+function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined {
+  if (value === null || value === undefined) return value === null ? null : undefined
+  if (!isPlainObject(value) || value.version !== 1) return undefined
+  if (typeof value.harnessRoot !== 'string' || value.harnessRoot === '' || !isPlainObject(value.session)) return undefined
+  const session = value.session as Record<string, unknown>
+  if (typeof session.storeId !== 'string' || session.storeId === '' ||
+    typeof session.workflowId !== 'string' || session.workflowId === '' ||
+    typeof session.sessionId !== 'string' || session.sessionId === '' ||
+    (session.role !== 'coordinator' && session.role !== 'plan-pm') ||
+    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0 ||
+    (session.role === 'coordinator' ? session.planId !== null : typeof session.planId !== 'string' || session.planId === '')) return undefined
+  return value as ExecutionBinding
+}
+
 /** Interpret one unknown value as a stored binding record, or undefined. */
 function asBinding(value: unknown): WorkflowSessionBinding | undefined {
   if (!isPlainObject(value)) return undefined
@@ -266,14 +282,15 @@ function asBinding(value: unknown): WorkflowSessionBinding | undefined {
   if (cwd === undefined) return undefined
   const seq = value.excludedBeforeSeq
   if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return undefined
-  // An absent preference is fine (no pick yet); a present-but-unusable one
-  // ('' or a non-string) is a record shape this build refuses.
   const selectedRaw = value.selectedWorkflowId
   const selected = nonEmptyString(selectedRaw)
   if (selectedRaw !== undefined && selected === undefined) return undefined
+  const executionBinding = asExecutionBinding(value.executionBinding)
+  if (executionBinding === undefined && value.executionBinding !== undefined) return undefined
   return {
     cwd,
     ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+    ...(value.executionBinding === undefined ? {} : { executionBinding }),
     excludedBeforeSeq: seq,
   }
 }
@@ -805,9 +822,18 @@ export function updateWorkflowSessionBinding(
         return { kind: 'degraded' as const, reason: 'cwd-mismatch' }
       }
       const selected = update.selectedWorkflowId ?? existing?.selectedWorkflowId
+      const executionBinding = update.executionBinding === undefined
+        ? existing?.executionBinding ?? null
+        : update.executionBinding
+      if (executionBinding !== null && asExecutionBinding(executionBinding) === undefined) {
+        return { kind: 'degraded' as const, reason: 'invalid-execution-binding' }
+      }
       doc.bindings[sessionId] = {
         cwd,
         ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+        ...(update.executionBinding !== undefined || existing?.executionBinding !== undefined
+          ? { executionBinding }
+          : {}),
         // The floor only advances: an older observation never walks the
         // exclusion window back over rows already excluded.
         excludedBeforeSeq: Math.max(existing?.excludedBeforeSeq ?? 0, update.excludedBeforeSeq),
