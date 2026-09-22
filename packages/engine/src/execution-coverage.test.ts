@@ -96,6 +96,8 @@ type Row = {
   evidence?: Doc;
   patch?: (receipt: Record<string, unknown>) => Record<string, unknown>;
   manifestWorkflowId?: string | null;
+  /** C3's trusted consumer discovery proof — an independent fixture input. */
+  consumerProof?: Record<string, unknown>;
 };
 
 /* ------------------------------------------------------------------ fixtures */
@@ -256,11 +258,24 @@ function consumerRow(surface: ExecutionSurface, consumer: string, capability: st
   const sourcePath = `${packageRoot}/src/index.ts`;
   const configPath = `${packageRoot}/package.json`;
   const generatedPath = `${packageRoot}/dist/index.js`;
+  const sourceFile = doc("package", sourcePath, "export const index = {};");
+  const configFile = doc("package", configPath, "{}");
+  const generatedFile = doc("package", generatedPath, "// built");
+  const copyFile = doc("package", `${packageRoot}/harness-skills/SKILL.md`, "# copied skill\n");
+  // C3's proof is a separate input: it is derived from the real bytes/kinds and
+  // is never read out of the declaration below.
+  const proof = {
+    trees: [{ consumerId: consumer, kind: "source", root: "package", path: `${packageRoot}/src`, files: 1, sha256: fakeHex(31), witnesses: [witnessOf(sourceFile)] }],
+    copies: copies
+      ? [{ consumerId: consumer, root: "package", sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 1, sha256: fakeHex(32), witnesses: [witnessOf(copyFile)] }]
+      : [],
+  };
   return {
     surface,
     workflowId: null,
     disposition: "retain",
-    docs: [doc("package", sourcePath, "export const index = {};"), doc("package", configPath, "{}"), doc("package", generatedPath, "// built")],
+    docs: copies ? [sourceFile, configFile, generatedFile, copyFile] : [sourceFile, configFile, generatedFile],
+    consumerProof: proof,
     evidence: doc(
       "package",
       `coverage/${surface}.execution-consumer.json`,
@@ -279,7 +294,7 @@ function consumerRow(surface: ExecutionSurface, consumer: string, capability: st
             sources: { trees: [{ root: `${packageRoot}/src`, files: 1, sha256: fakeHex(31) }], files: [{ path: configPath, sha256: sha("{}") }] },
             generated: { trees: [], files: [{ path: generatedPath, sha256: sha("// built") }] },
             copiedInstructions: copies
-              ? [{ sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 3, sha256: fakeHex(32) }]
+              ? [{ sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 1, sha256: fakeHex(32) }]
               : [],
           },
         ],
@@ -419,7 +434,12 @@ function materialize(rows: Row[], options: { digest?: string; coverageManifestHa
       evidence,
     );
     receipts.push((row.patch ? row.patch(receipt as unknown as Record<string, unknown>) : receipt) as unknown as ExecutionCoverageReceipt);
-    surfaces.push({ surface: row.surface, workflowId: row.manifestWorkflowId !== undefined ? row.manifestWorkflowId : row.workflowId, sources });
+    surfaces.push({
+      surface: row.surface,
+      workflowId: row.manifestWorkflowId !== undefined ? row.manifestWorkflowId : row.workflowId,
+      sources,
+      ...(row.consumerProof === undefined ? {} : { consumerProof: row.consumerProof }),
+    });
     for (const witness of [...sources, ...evidenceWitnesses]) pinned.set(coverageWitnessKey(witness.root, witness.path), witness);
   }
   const inventory = doc("host", "inventory.json", legacy({ version: 1, sessions: [SESSION_A, SESSION_B] }));
@@ -549,6 +569,27 @@ function putManifest(fixture: Fixture, surface: ExecutionSurface, manifest: Reco
   const witness = overrideDoc(fixture.evidence, doc(entry.root, entry.path, canonical(manifest)));
   setReceipt(fixture, index, { ...fixture.coverage.receipts[index], evidence: [witness] });
   repin(fixture, [witness]);
+}
+
+function proofOf(fixture: Fixture, surface: ExecutionSurface): Record<string, unknown> {
+  const row = fixture.manifest.surfaces.find((candidate) => candidate.surface === surface && candidate.workflowId === null);
+  if (row?.consumerProof === undefined) throw new Error(`fixture bug: no consumer proof for ${surface}`);
+  return row.consumerProof as unknown as Record<string, unknown>;
+}
+
+type ManifestRow = ExecutionCoverageManifest["surfaces"][number];
+
+function setProof(fixture: Fixture, surface: ExecutionSurface, proof: Record<string, unknown> | undefined): void {
+  fixture.manifest = {
+    ...fixture.manifest,
+    surfaces: fixture.manifest.surfaces.map((row) =>
+      matches(row, surface, null)
+        ? proof === undefined
+          ? { surface: row.surface, workflowId: row.workflowId, sources: row.sources }
+          : { ...row, consumerProof: proof as unknown as ManifestRow["consumerProof"] }
+        : row,
+    ),
+  };
 }
 
 function validate(fixture: Fixture): void {
@@ -744,6 +785,58 @@ describe("execution-coverage", () => {
     const zcodeEntries = zcode.manifest.consumers as Array<Record<string, unknown>>;
     putManifest(missingEntrypoint, "zcode-hook", { ...zcode.manifest, consumers: [{ ...zcodeEntries[0], generated: { trees: [], files: [] } }] }, zcode.entry);
     refuseLeavingState(missingEntrypoint);
+
+    // A populated consumer row without C3's proof is never self-certified.
+    const noProof = materialize(buildRows());
+    setProof(noProof, "cli-writer", undefined);
+    refuseLeavingState(noProof);
+
+    // The declaration was tampered with AND its receipt rebuilt from those bytes,
+    // so only the unchanged C3 proof can refuse it.
+    const tampered = materialize(buildRows());
+    const tamperEntry = consumerManifestOf(tampered, "cli-writer");
+    const tamperConsumers = tamperEntry.manifest.consumers as Array<Record<string, unknown>>;
+    const tamperSources = tamperConsumers[0].sources as { trees: Array<Record<string, unknown>>; files: unknown[] };
+    putManifest(
+      tampered,
+      "cli-writer",
+      { ...tamperEntry.manifest, consumers: [{ ...tamperConsumers[0], sources: { ...tamperSources, trees: [{ ...tamperSources.trees[0], sha256: fakeHex(99) }] } }] },
+      tamperEntry.entry,
+    );
+    rebuildRow(tampered, "cli-writer", null);
+    refuseLeavingState(tampered);
+
+    // source and generated kinds are never interchangeable.
+    const swappedKind = materialize(buildRows());
+    const kindProof = proofOf(swappedKind, "cli-writer");
+    setProof(swappedKind, "cli-writer", { ...kindProof, trees: [{ ...(kindProof.trees as Array<Record<string, unknown>>)[0], kind: "generated" }] });
+    refuseLeavingState(swappedKind);
+
+    // A proof tree the declaration does not describe.
+    const extraTree = materialize(buildRows());
+    const extraProof = proofOf(extraTree, "cli-writer");
+    setProof(extraTree, "cli-writer", {
+      ...extraProof,
+      trees: [...(extraProof.trees as unknown[]), { consumerId: "cli", kind: "generated", root: "package", path: "packages/cli/dist", files: 1, sha256: fakeHex(77), witnesses: [] }],
+    });
+    refuseLeavingState(extraTree);
+
+    // A proof entry for another consumer id.
+    const foreignId = materialize(buildRows());
+    const foreignProof = proofOf(foreignId, "cli-writer");
+    setProof(foreignId, "cli-writer", { ...foreignProof, trees: [{ ...(foreignProof.trees as Array<Record<string, unknown>>)[0], consumerId: "omp" }] });
+    refuseLeavingState(foreignId);
+
+    // An assigned file under a declared tree root that neither the declaration
+    // nor the proof lists: a prefix never excuses an unlisted file.
+    const unlisted = materialize(buildRows());
+    replaceRowDocuments(unlisted, "cli-writer", null, [
+      doc("package", "packages/cli/src/index.ts", "export const index = {};"),
+      doc("package", "packages/cli/src/extra.ts", "export const extra = {};"),
+      doc("package", "packages/cli/package.json", "{}"),
+      doc("package", "packages/cli/dist/index.js", "// built"),
+    ]);
+    refuseLeavingState(unlisted);
   });
 
   test("execution-coverage-injector-inventory-is-exact", () => {

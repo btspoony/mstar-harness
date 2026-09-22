@@ -128,12 +128,49 @@ export type ExecutionCoverageManifest = Readonly<{
     surface: ExecutionSurface;
     workflowId: string | null;
     sources: readonly CoverageWitness[];
+    /**
+     * C3's own discovery proof for a consumer surface (§4.1): derived from real
+     * bytes/kinds/link targets by the R1 verification implementation before the
+     * full manifest is hashed. C2 never derives it, never copies it out of a
+     * consumer declaration and only compares the declaration with it.
+     */
+    consumerProof?: ConsumerDiscoveryProof;
   }>[];
   sources: readonly CoverageWitness[];
 }>;
 
 /** Evidence bytes keyed by `${root}:${path}` — the only proof a validator accepts. */
 export type ExecutionCoverageEvidence = ReadonlyMap<string, Uint8Array>;
+
+/**
+ * C3's trusted consumer discovery (§4.1): independently derived `source` and
+ * `generated` trees plus the copied-instruction parity facts, each carrying the
+ * exact file-witness closure its bytes prove. Only the manifest row may hold it.
+ */
+export type ConsumerDiscoveryProof = Readonly<{
+  trees: readonly Readonly<{
+    consumerId: string;
+    kind: "source" | "generated";
+    root: CoverageWitness["root"];
+    path: string;
+    files: number;
+    sha256: string;
+    witnesses: readonly CoverageWitness[];
+  }>[];
+  copies: readonly Readonly<{
+    consumerId: string;
+    root: CoverageWitness["root"];
+    sourceRoot: string;
+    targetRoot: string;
+    mode: "copy" | "merge";
+    files: number;
+    sha256: string;
+    witnesses: readonly CoverageWitness[];
+  }>[];
+}>;
+
+type ConsumerTreeProof = ConsumerDiscoveryProof["trees"][number];
+type ConsumerCopyProof = ConsumerDiscoveryProof["copies"][number];
 
 type Disposition = ExecutionCoverageReceipt["disposition"];
 type Protocol = ExecutionCoverageReceipt["protocol"];
@@ -1269,17 +1306,6 @@ function consumerCodec(context: RowContext): unknown {
     refuse(`${context.label} records entrypoint ${manifest.entrypoint}, which appears in no source or generated file entry; the entry artifact must be inventoried.`);
   }
   claimFile(entrypoint.path, entrypoint.sha256, `${context.label} manifest entrypoint`);
-  const uncovered = context.sources.filter((witness) => {
-    if (claimed.has(coverageWitnessKey(witness.root, witness.path))) return false;
-    const roots = [...manifest.sources.trees, ...manifest.generated.trees].map((tree) => tree.root);
-    return !roots.some((root) => root === "." || witness.path.startsWith(`${root}/`));
-  });
-  if (uncovered.length > 0) {
-    refuse(
-      `${context.label} assigns source witness(es) ${uncovered.map((witness) => witness.path).join(", ")} that the consumer manifest describes in no ` +
-        `file entry and no declared closure tree; the assignment and the manifest must describe the same bytes.`,
-    );
-  }
   return { sources: sourceRefs(context), format: "consumer-v1", manifest };
 }
 
@@ -1610,15 +1636,60 @@ export function executionCoverageDigest(receipts: readonly ExecutionCoverageRece
 
 const MANIFEST_KEYS = ["manifestId", "manifestHash", "storeId", "epoch", "surfaces", "sources"] as const;
 
-type ManifestSurface = Readonly<{ surface: ExecutionSurface; workflowId: string | null; sources: readonly CoverageWitness[] }>;
+type ManifestSurface = Readonly<{
+  surface: ExecutionSurface;
+  workflowId: string | null;
+  sources: readonly CoverageWitness[];
+  consumerProof?: ConsumerDiscoveryProof;
+}>;
+
+function expectConsumerProof(value: unknown, what: string): ConsumerDiscoveryProof {
+  const record = expectObject(value, what);
+  expectExactKeys(record, ["trees", "copies"], what);
+  const trees = expectArray(record.trees, `${what}.trees`).map((entry, index) => {
+    const where = `${what}.trees[${index}]`;
+    const tree = expectObject(entry, where);
+    expectExactKeys(tree, ["consumerId", "kind", "root", "path", "files", "sha256", "witnesses"], where);
+    return {
+      consumerId: expectString(tree.consumerId, `${where}.consumerId`),
+      kind: expectEnum(tree.kind, ["source", "generated"] as const, `${where}.kind`),
+      root: expectEnum(tree.root, COVERAGE_ROOTS, `${where}.root`),
+      path: expectWitnessPath(tree.path, `${where}.path`),
+      files: expectInteger(tree.files, `${where}.files`, 0),
+      sha256: expectHex64(tree.sha256, `${where}.sha256`),
+      witnesses: expectWitnessList(tree.witnesses, `${where}.witnesses`),
+    };
+  });
+  const copies = expectArray(record.copies, `${what}.copies`).map((entry, index) => {
+    const where = `${what}.copies[${index}]`;
+    const copy = expectObject(entry, where);
+    expectExactKeys(copy, ["consumerId", "root", "sourceRoot", "targetRoot", "mode", "files", "sha256", "witnesses"], where);
+    return {
+      consumerId: expectString(copy.consumerId, `${where}.consumerId`),
+      root: expectEnum(copy.root, COVERAGE_ROOTS, `${where}.root`),
+      sourceRoot: expectWitnessPath(copy.sourceRoot, `${where}.sourceRoot`),
+      targetRoot: expectWitnessPath(copy.targetRoot, `${where}.targetRoot`),
+      mode: expectEnum(copy.mode, COPY_MODES, `${where}.mode`),
+      files: expectInteger(copy.files, `${where}.files`, 0),
+      sha256: expectHex64(copy.sha256, `${where}.sha256`),
+      witnesses: expectWitnessList(copy.witnesses, `${where}.witnesses`),
+    };
+  });
+  return { trees, copies };
+}
 
 function expectManifestSurface(value: unknown, what: string): ManifestSurface {
   const record = expectObject(value, what);
-  expectExactKeys(record, ["surface", "workflowId", "sources"], what);
+  expectKeys(record, ["surface", "workflowId", "sources"], ["consumerProof"], what);
   const surface = expectSurface(record.surface, `${what}.surface`);
   const workflowId = expectNullableString(record.workflowId, `${what}.workflowId`);
   expectScope(surface, workflowId, what);
-  return { surface, workflowId, sources: expectWitnessList(record.sources, `${what}.sources`) };
+  const sources = expectWitnessList(record.sources, `${what}.sources`);
+  if (record.consumerProof === undefined) return { surface, workflowId, sources };
+  if (SURFACE_CONSUMERS[surface] === undefined) {
+    refuse(`${what} carries a consumer discovery proof for ${surface}, which is not a consumer surface; a non-consumer row never gains this field.`);
+  }
+  return { surface, workflowId, sources, consumerProof: expectConsumerProof(record.consumerProof, `${what}.consumerProof`) };
 }
 
 /**
@@ -1799,6 +1870,15 @@ export function validateExecutionCoverage(
           `result is recomputed from the named bytes, never asserted by the receipt.`,
       );
     }
+    if (SURFACE_CONSUMERS[receipt.surface] === undefined) {
+      if (assigned.consumerProof !== undefined) {
+        refuse(`${label} carries a consumer discovery proof on a non-consumer row; only a consumer surface gains this field.`);
+      }
+    } else if (receipt.disposition !== "absent") {
+      validateConsumerProof(receipt, recomputed.facts, assigned.consumerProof, label);
+    } else if (assigned.consumerProof !== undefined) {
+      refuse(`${label} is absent yet its manifest row carries a consumer discovery proof; an absent row has nothing to prove.`);
+    }
     factsBySurface.set(key, recomputed.facts);
   }
 
@@ -1811,6 +1891,114 @@ export function validateExecutionCoverage(
     refuse(
       `the core-execution facts name the workflows ${core.workflows.join(", ") || "(none)"}, but the manifest inventories ${discovered.join(", ") || "(none)"}; ` +
         `a workflow discovered by the core authority is never omitted from the workflow-scoped inventory.`,
+    );
+  }
+}
+
+/**
+ * Compare a consumer declaration with C3's trusted discovery proof (§4.1): exact
+ * set equality per kind (source and generated are never interchangeable),
+ * consumer-id binding, the separate copied-instruction facts, and a closure over
+ * the row's assigned bytes in which every proof witness is one of them and every
+ * assigned byte is described by the declaration or the proof. No path prefix
+ * excuses an unlisted file, and nothing here is derived from the declaration.
+ */
+function validateConsumerProof(
+  receipt: ExecutionCoverageReceipt,
+  facts: unknown,
+  proof: ConsumerDiscoveryProof | undefined,
+  label: string,
+): void {
+  const declared = (facts as { manifest?: ConsumerEntry } | undefined)?.manifest;
+  if (declared === undefined) refuse(`${label}'s decoded consumer declaration is unavailable for proof comparison.`);
+  if (proof === undefined) {
+    refuse(`${label} is populated but its manifest row carries no consumer discovery proof; a consumer receipt is never self-certified by its own declaration.`);
+  }
+  for (const tree of proof.trees) {
+    if (tree.consumerId !== declared.id) refuse(`${label}: the discovery proof describes consumer ${tree.consumerId}; this row covers ${declared.id}.`);
+  }
+  for (const copy of proof.copies) {
+    if (copy.consumerId !== declared.id) refuse(`${label}: the discovery proof describes consumer ${copy.consumerId}; this row covers ${declared.id}.`);
+  }
+
+  const proofTrees = new Map<string, ConsumerTreeProof>();
+  for (const tree of proof.trees) {
+    const key = `${tree.kind}|${tree.path}`;
+    if (proofTrees.has(key)) refuse(`${label}: the discovery proof lists the ${tree.kind} tree ${tree.path} twice; a duplicated proof is not discovery.`);
+    proofTrees.set(key, tree);
+  }
+  const declaredTrees: Array<{ kind: "source" | "generated"; root: string; files: number; sha256: string }> = [
+    ...declared.sources.trees.map((tree) => ({ kind: "source" as const, ...tree })),
+    ...declared.generated.trees.map((tree) => ({ kind: "generated" as const, ...tree })),
+  ];
+  for (const tree of declaredTrees) {
+    const found = proofTrees.get(`${tree.kind}|${tree.root}`);
+    if (found === undefined) {
+      refuse(`${label}: the discovery proof has no ${tree.kind} tree for ${tree.root}; a declared closure the proof does not know is not corroborated.`);
+    }
+    if (found.files !== tree.files || found.sha256 !== tree.sha256) {
+      refuse(
+        `${label}: the discovery proof disagrees with the declared ${tree.kind} tree ${tree.root} (proof ${found.files} file(s)/${found.sha256}, declaration ` +
+          `${tree.files}/${tree.sha256}).`,
+      );
+    }
+    proofTrees.delete(`${tree.kind}|${tree.root}`);
+  }
+  if (proofTrees.size > 0) {
+    refuse(`${label}: the discovery proof carries ${[...proofTrees.keys()].join(", ")}, which the consumer declaration does not describe; the sets are compared exactly.`);
+  }
+
+  const proofCopies = new Map<string, ConsumerCopyProof>();
+  for (const copy of proof.copies) {
+    const key = `${copy.sourceRoot}|${copy.targetRoot}`;
+    if (proofCopies.has(key)) refuse(`${label}: the discovery proof lists the copy ${key} twice; a duplicated proof is not discovery.`);
+    proofCopies.set(key, copy);
+  }
+  if (declared.copiedInstructions.length !== proofCopies.size) {
+    refuse(
+      `${label}: the consumer declaration carries ${declared.copiedInstructions.length} copied-instruction tree(s) while the discovery proof carries ` +
+        `${proofCopies.size}; copies are compared exactly, separately from source/generated trees.`,
+    );
+  }
+  for (const copy of declared.copiedInstructions) {
+    const found = proofCopies.get(`${copy.sourceRoot}|${copy.targetRoot}`);
+    if (found === undefined) {
+      refuse(`${label}: the discovery proof has no copy ${copy.sourceRoot} -> ${copy.targetRoot} for the declared copied-instruction tree.`);
+    }
+    if (found.mode !== copy.mode || found.files !== copy.files || found.sha256 !== copy.sha256) {
+      refuse(
+        `${label}: the discovery proof disagrees with the declared copy ${copy.sourceRoot} -> ${copy.targetRoot} (proof ${found.mode}/${found.files}/` +
+          `${found.sha256}, declaration ${copy.mode}/${copy.files}/${copy.sha256}).`,
+      );
+    }
+  }
+
+  const assigned = new Map<string, string>();
+  for (const witness of receipt.sources) assigned.set(coverageWitnessKey(witness.root, witness.path), witness.sha256);
+  const claimed = new Set<string>();
+  const claim = (witness: CoverageWitness, what: string): void => {
+    const key = coverageWitnessKey(witness.root, witness.path);
+    const assignedSha = assigned.get(key);
+    if (assignedSha === undefined) refuse(`${what} (${key}) is not an assigned source witness of this row; the proof never names a file the row does not hold.`);
+    if (assignedSha !== witness.sha256) refuse(`${what} (${key}) does not hash to the assigned bytes.`);
+    claimed.add(key);
+  };
+  for (const file of [...declared.sources.files, ...declared.generated.files]) {
+    const match = receipt.sources.find((witness) => witness.path === file.path && witness.sha256 === file.sha256);
+    if (match === undefined) refuse(`${label}: the declared file ${file.path} is not an assigned source witness with that digest.`);
+    claimed.add(coverageWitnessKey(match.root, match.path));
+  }
+  for (const tree of proof.trees) {
+    for (const witness of tree.witnesses) claim(witness, `${label}: a witness of the ${tree.kind} tree ${tree.path}`);
+  }
+  for (const copy of proof.copies) {
+    for (const witness of copy.witnesses) claim(witness, `${label}: a witness of the copy ${copy.sourceRoot} -> ${copy.targetRoot}`);
+  }
+  const unclaimed = [...assigned.keys()].filter((key) => !claimed.has(key));
+  if (unclaimed.length > 0) {
+    refuse(
+      `${label} assigns source witness(es) ${unclaimed.join(", ")} that neither the consumer declaration nor the discovery proof describes; the assigned ` +
+        `set and the proved closure are the same bytes`,
     );
   }
 }
