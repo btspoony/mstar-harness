@@ -859,7 +859,7 @@ describe("phase2 launch admission journal", () => {
     // A recovered intent whose recorded checkout is NOT the one that handed off:
     // the durable handoff belongs to another launch/attempt, so it must not
     // discharge this record even though the prepared pin and plan match.
-    expect(preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
+    expect(await preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
     const foreign = { ...a, id: "phase2-launch:plan-a:0", state: "reserved", worktreePath: fixture.worktrees["plan-b"]! };
     appendJournalIntents(fixture, [foreign]);
 
