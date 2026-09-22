@@ -334,11 +334,14 @@ const CLI_CONSULT_TIMEOUT_MS = 15_000;
 export type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "authority-read" | "register-read" };
 
 /**
- * The real CLI invocation for one bound association. Preference order:
- * the session-authorized read (revalidates the caller) when this plugin holds
- * the session reference; otherwise `plan show --workflow/--plan` (authority and
- * row read, caller currency NOT verified); otherwise `status validate` with no
- * flags, whose argument-less form reads the ACTIVE register.
+ * The real CLI invocation for one bound association. Preference order: the
+ * session-authorized read (revalidates the caller) when this plugin holds the
+ * session reference — `plan show --session-ref` for a plan-pm scope and the
+ * read-only resume (`plan bind --execution --resume-ref`) for a coordinator
+ * scope, which carries no plan for the show form to address; otherwise
+ * `plan show --workflow/--plan` (authority and row read, caller currency NOT
+ * verified); otherwise `status validate` with no flags, whose argument-less
+ * form reads the ACTIVE register.
  */
 export function openCodeConsultPlan(
   association: OpenCodeAssociation & { kind: "bound" },
@@ -349,6 +352,15 @@ export function openCodeConsultPlan(
   if (sessionRef !== null && identity.role === "plan-pm") {
     return {
       argv: ["plan", "show", "--session-ref", sessionRef, "--plan", String(identity.planId), "--json", ...harnessFlags],
+      proof: "session-authorized",
+    };
+  }
+  if (sessionRef !== null) {
+    // A coordinator reference: the only session-authorized READ that scope has
+    // is the read-only resume, which revalidates caller, root, store, epoch and
+    // the live row. It takes no other flag, so the root comes from the cwd.
+    return {
+      argv: ["plan", "bind", "--execution", "--resume-ref", sessionRef, "--json"],
       proof: "session-authorized",
     };
   }

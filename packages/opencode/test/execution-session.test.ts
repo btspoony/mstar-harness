@@ -221,6 +221,55 @@ async function seedBoundPlanSession(
   return { wire: encodeExecutionSessionRef(bound.data), planId: planScope.planId, workflowId: planScope.workflowId };
 }
 
+/**
+ * A REAL ACTIVE execution authority whose COORDINATOR is bound to the native
+ * session id, plus that binding's canonical wire — the state the coordinator's
+ * session-authorized read (the read-only resume) needs to succeed.
+ */
+async function seedBoundCoordinatorSession(
+  harness: string,
+  nativeSessionId: string,
+): Promise<{ wire: string; workflowId: string }> {
+  const handle = await initializeStore({ harnessDir: harness });
+  handle.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  const nativeCaller: ExecutionCaller = {
+    sessionId: nativeSessionId,
+    role: "coordinator",
+    workflowId: planScope.workflowId,
+    planId: null,
+  };
+  const context: ExecutionContext = { harnessDir: harness, caller: nativeCaller };
+  await createExecutionWorkflow(context, {
+    entry: { id: planScope.workflowId, type: "plan", started_at: TS, dir: `workflows/${planScope.workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: planScope.workflowId,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      plans: [],
+      delivery_kind: "development",
+      branch: { source: `feature/${planScope.workflowId}`, target: "main" },
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${planScope.workflowId}`,
+  });
+  const workflow = (await readExecutionAuthority(context)).data.workflows.find(
+    (entry) => entry.state.id === planScope.workflowId,
+  );
+  if (workflow === undefined) throw new Error("fixture: the workflow is not registered");
+  const bound = await bindExecutionSession(context, {
+    workflowId: planScope.workflowId,
+    planId: null,
+    role: "coordinator",
+    expected: workflow.workflowToken,
+    operationId: "bind-native-coordinator",
+  });
+  return { wire: encodeExecutionSessionRef(bound.data), workflowId: planScope.workflowId };
+}
+
 /** One prepared Assignment document (the same header set the sibling suites seal). */
 function writeAssignmentDocument(harness: string, planId: string, workflowId: string): string {
   const planPath = join(harness, "plans", `${planId}.md`);
@@ -354,6 +403,30 @@ describe("OpenCode native association (decision-only)", () => {
     expect(openCodeConsultPlan(withRef, "/root")).toEqual({
       argv: ["plan", "show", "--session-ref", wire, "--plan", planScope.planId, "--json", "--harness", "/root"],
       proof: "session-authorized",
+    });
+  });
+
+  test("a coordinator holding its own reference takes the session-authorized resume read", () => {
+    const wire = encodeExecutionSessionRef(reference);
+    observeOpenCodeSessionRefs(reference.sessionId, `mstar plan bind --execution --resume-ref ${wire}`);
+
+    const association = openCodeAssociation({ sessionID: reference.sessionId }, ambientEnv(nativeIdentity));
+    expect(association.kind).toBe("bound");
+    if (association.kind !== "bound") throw new Error("unreachable");
+    expect(association.sessionRef).toBe(wire);
+    // The coordinator resume read takes no other flag: the root is the cwd.
+    expect(openCodeConsultPlan(association, "/root")).toEqual({
+      argv: ["plan", "bind", "--execution", "--resume-ref", wire, "--json"],
+      proof: "session-authorized",
+    });
+    // …and with no reference the coordinator keeps the weakest, honestly
+    // labelled form rather than a currency claim it cannot make.
+    forgetOpenCodeSessionRef(reference.sessionId);
+    const withoutRef = openCodeAssociation({ sessionID: reference.sessionId }, ambientEnv(nativeIdentity));
+    if (withoutRef.kind !== "bound") throw new Error("unreachable");
+    expect(openCodeConsultPlan(withoutRef, "/root")).toEqual({
+      argv: ["status", "validate"],
+      proof: "register-read",
     });
   });
 
@@ -496,6 +569,53 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
       });
       if (bound.kind !== "bound") throw new Error("fixture: the association must be bound");
       const direct = runOpenCodeExecutionCli(openCodeConsultPlan(bound, harness).argv, bound.identity, {
+        command: makeCliLauncher(project),
+        cwd: project,
+      });
+      expect(direct.status).toBe(0);
+      expect(direct.envelope?.route).toBe("execution");
+      expect(direct.envelope?.ok).toBe(true);
+    } finally {
+      delete process.env[EXECUTION_IDENTITY_ENV];
+    }
+  });
+
+  test("a coordinator reference makes the gated write session-authorized through the read-only resume", async () => {
+    const { project, harness, statusPath } = makeHarnessProject();
+    rmSync(statusPath, { force: true });
+    const seeded = await seedBoundCoordinatorSession(harness, reference.sessionId);
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] }, null, 2));
+    process.env[OPENCODE_EXECUTION_CLI_ENV] = makeCliLauncher(project);
+    process.env[EXECUTION_IDENTITY_ENV] = serializeExecutionValue(nativeIdentity);
+
+    try {
+      const hooks = await MorningStarHarnessPlugin();
+      const lines = await withCapturedLogs(async () => {
+        await hooks["tool.execute.before"]!({ tool: "bash", sessionID: reference.sessionId, callID: "c1" }, {
+          args: { command: `mstar plan bind --execution --resume-ref ${seeded.wire} --json` },
+        });
+        await hooks["tool.execute.before"]!({ tool: "write", sessionID: reference.sessionId, callID: "c2" }, {
+          args: {
+            filePath: statusPath,
+            content: JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] }),
+          },
+        });
+      });
+
+      const consultation = lines.find((line) => line.includes("plan bind")) ?? "";
+      expect(consultation).toContain("--resume-ref");
+      expect(consultation).toContain("session-authorized read");
+      expect(consultation).not.toContain("refused or failed");
+      expect(consultation).toContain(" ok — ");
+
+      const bound = openCodeAssociation(
+        { sessionID: reference.sessionId },
+        { [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(nativeIdentity) },
+      );
+      if (bound.kind !== "bound") throw new Error("fixture: the association must be bound");
+      const plan = openCodeConsultPlan(bound, harness);
+      expect(plan.argv).toEqual(["plan", "bind", "--execution", "--resume-ref", seeded.wire, "--json"]);
+      const direct = runOpenCodeExecutionCli(plan.argv, bound.identity, {
         command: makeCliLauncher(project),
         cwd: project,
       });
