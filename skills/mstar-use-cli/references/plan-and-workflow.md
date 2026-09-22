@@ -65,12 +65,13 @@ All plan and workflow refusals are mutation-free: the authoritative bytes are un
 
 ## Completion sequence
 
-The plan session hands off; the coordinator drives the rest. The engine selects **one of two routes** from the workflow's own type and delivery kind — never inferred from anchors that happen to be absent.
+The plan session hands off; the coordinator drives the rest. The engine selects **one of three routes** from the workflow's own type and delivery kind — never inferred from anchors that happen to be absent.
 
 | Route | When | After `accept` | What `complete` does |
 |---|---|---|---|
 | **Iteration** | `type: iteration`, or any non-standalone workflow | `integration-start` → the operator's pinned `git merge --no-ff` in the recorded integration checkout → `integration-accept` → `complete` | Done, the handoff completed, and **both** leases released — the row's execution lease and the workflow's integration-merge lease |
 | **Standalone development** | `type: plan` with `delivery_kind: development` owning exactly one row | `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until its delivery evidence and the close |
+| **Standalone report-only** | `type: plan` with `delivery_kind: verification/report-only` owning exactly one row | record the fulfilment of the registered completion policy, then `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until the close |
 
 Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (ownership transfer, not integration acceptance). Each command needs a token read from the immediately preceding state, and Git is the operator's action, never a side effect of a verb.
 
@@ -81,8 +82,9 @@ Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (
 | integration-start | coordinator | the integration attempt and its pinned base, before any Git runs | **iteration route only**; reads the clean recorded integration checkout and refuses a foreign merge lease — the attempt is pinned *before* Git so a crash mid-merge stays reconcilable |
 | merge | operator | the merge itself | **iteration route only**; an explicit pinned merge in the recorded integration worktree |
 | integration-accept | coordinator | verified evidence of the pinned Git result | **iteration route only**; never runs a merge and never completes the row |
-| complete | coordinator | Done, atomically | the last step of **either** route: it releases only the row's execution lease on the standalone route, and both leases on the iteration route |
-| return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the iteration attempt without a second merge — on the standalone route it only replays an already-completed row |
+| completion evidence | coordinator | the fulfilment of the registered `completion_policy` (policy + evidence) | **report-only route only**, and it comes *before* Done: the completion step refuses an absent, empty or nonmatching fulfilment, so the row cannot be marked Done on a policy nothing fulfilled |
+| complete | coordinator | Done, atomically | the last step of **every** route: it releases only the row's execution lease on both standalone routes, and both leases on the iteration route |
+| return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the iteration attempt without a second merge — on either standalone route it only replays an already-completed row |
 | repair-delivery-source | coordinator | a corrected `branch.source` only | **not a normal step**: a pre-fix-snapshot exception for a registered source that wrongly equals the target, derived from the sealed accepted handoff, never replayable |
 
 A retried start never moves the recorded base; that is what makes the pinned attempt, not the retry, the unit of recovery.
@@ -117,7 +119,11 @@ mstar plan integration-start --session <coordinator-session.json> --plan plan-a 
 git merge --no-ff --no-edit <source-sha>
 mstar plan integration-accept --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
 
-# both routes end here; a standalone development plan reaches this line straight from accept
+# report-only route only: record the fulfilment of the registered completion policy,
+# then complete; an absent or nonmatching policy refuses the completion
+mstar workflow evidence --workflow wf-demo --file completion.json --session <coordinator-session.json>
+
+# every route ends here; a standalone workflow reaches this line straight from accept
 mstar plan complete --session <coordinator-session.json> --plan plan-a --handoff <live-handoff-id> --expect <revision> --json
 ```
 
@@ -173,6 +179,7 @@ mstar workflow recover-coordinator --prior-session <recorded-coordinator-session
 
 - Registration is create-only: it writes the workflow snapshot and the root register entry under one lock, recording the owned plan row, the project, the declared delivery kind and the branch anchors. The delivery kind is **declared, never inferred**, and each kind requires its own evidence declaration at registration. Re-running after a crash between the two writes recovers: existing snapshot bytes are kept and only the root entry is written.
 - Delivery evidence is recorded stage by stage: a payload is merged into the snapshot's delivery block under the snapshot lock. The PR identity is recorded once and pinned to the registered branch anchors; a conflicting anchor is refused rather than overwritten. Declaring the kind of an older kind-less snapshot is a one-time act and refuses a terminal snapshot.
+- **Completion ordering per kind.** The declared kind decides which stage order applies, and the recording seam is the same one: a `development` workflow records the compound disposition, the PR identity and the verified-merge record **after** every row is `Done` (the tail runs post-Done); a `verification/report-only` workflow records the fulfilment of its registered `completion_policy` — `{completion: {policy, evidence}}`, the policy naming the registered one — **before** the row is `Done`, because the completion step and the close both consult it. An absent, empty or nonmatching fulfilment refuses the completion with no write, and no merge, integration branch or integration checkout is ever synthesized for this kind.
 - Both verbs are authorized like the close: a coordinated workflow's document is written only for its own bound coordinator envelope; otherwise the call refuses without changing bytes.
 - A registered `branch.source` cannot be amended by ordinary evidence: the evidence verb merges only the delivery block, and the one-time kind declaration refuses a value that conflicts with an already-registered anchor. The single exception is the legacy repair verb, which replaces **only** `branch.source` on a pre-fix snapshot whose registered source wrongly equals its target, derived from the sealed accepted handoff — it records no Done, no delivery success and no remote merge, and it is not a general anchor editor.
 - The close consults this evidence *before* writing the terminal state, so a gate and the close can never disagree. Close order, refusal conditions and the root unregister: `references/status-and-registers.md`.

@@ -19,7 +19,7 @@ Four facts that are not interchangeable: plan-row `Done`, workflow `completed`, 
 Every workflow declares its delivery kind at registration, as part of the registration evidence (§4a). Declared kinds:
 
 - **`development`** — the full lifecycle of §3 applies: PR submission, merge-ready milestone, verified merge, and evidence-backed terminal close. The PR obligation is the declared delivery path, not an optional extra.
-- **`verification/report-only`** — an explicit alternative completion policy is recorded at registration and names what evidence completes the workflow (for example the acceptance artifacts or report location). Terminal close still runs through the same evidence-backed close ordering (§4g); only the PR/merge stages are replaced by the recorded policy.
+- **`verification/report-only`** — an explicit alternative completion policy is recorded at registration and names what evidence completes the workflow (for example the acceptance artifacts or report location). Terminal close still runs through the same evidence-backed close ordering (§4g); only the PR/merge stages are replaced by the recorded policy. Its row completes from an **accepted handoff plus a recorded fulfilment of that policy** — the fulfilment is recorded before the row is marked `Done`, no merge or integration evidence is invented, and the close consults the same fulfilment it did not verify itself (§3 route application).
 
 Binding rules:
 
@@ -56,6 +56,16 @@ register → recall → prepare/lock → execute + review/acceptance → compoun
 
 **Iteration application.** An iteration uses the same outer lifecycle around its multiple plan rows, adding only iteration-specific scope planning, dependency scheduling, integration and package/compass projections. Child plan handoffs do not trigger per-child delivery PRs or premature parent closure; only the iteration workflow itself walks submit PR → verify merge → terminal close.
 
+**Route application.** The engine selects the row's completion route from the workflow's own `type` and declared delivery kind — never from anchors that happen to be absent — and there are three:
+
+| Route | Selected when | After `accept` | What completion owns |
+|---|---|---|---|
+| iteration | `type: iteration`, or any non-standalone workflow | pinned `integration-start` → the operator's explicit merge in the recorded integration checkout → `integration-accept` | row `Done`, the completed handoff with its integration record, and **both** leases released |
+| standalone development | `type: plan`, `delivery_kind: development`, exactly one row | `complete` straight from the accepted handoff | row `Done` and the completed handoff with no integration record; only the row's execution lease is released and the workflow stays `running` until its delivery tail and the close |
+| standalone report-only | `type: plan`, `delivery_kind: verification/report-only`, exactly one row | the fulfilment of the registered completion policy is recorded, then `complete` straight from the accepted handoff | row `Done` and the completed handoff with no integration record; only the row's execution lease is released and the workflow stays `running` until the close |
+
+The report-only route replaces the PR/merge stages with the recorded policy and **nothing else**: the accepted handoff, the review/QA/findings gates, the pinned evidence digests, the byte-level handoff pin and the delivery-evidence consultation are the same ones the other two routes use. Development Git proofs and the iteration merge proof are untouched by it, and the route never synthesizes a merge, an integration branch or an integration checkout for a workflow that authored none. Recording a fulfilment that does not name the registered `completion_policy` refuses the completion and the close exactly as an absent one does.
+
 ## 4. Evidence contracts
 
 **(a) Registration is an authorized domain operation.** It writes the create-only snapshot and the root entry under one lock. The primitive reference is the audit-promotion sequence `packages/engine/src/audit.ts:1250-1324`: plan-row/snapshot construction, entry validation, then the atomic root-lock section — create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, with rollback that removes only the exact snapshot version that call created. The generic producer (seam S1) reuses these primitives; it does not invent a second registration mechanism.
@@ -75,6 +85,7 @@ register → recall → prepare/lock → execute + review/acceptance → compoun
 ## 5. Failure and abandonment
 
 - Failure and abandonment close through explicit `failed`/`stopped` statuses with a recorded reason. They are never rewritten as successfully completed.
+- **Current exposure.** The DB lifecycle already carries a terminal branch for `failed`/`stopped`, but the supported **installed JSON/CLI writer** for those statuses is not yet available — recording one from a live workflow has no lawful verb today. This contract neither claims that writer nor implements a general cancellation path: until a supported verb exists, a workflow that must become terminal without a successful completion evidence record is a named blocker for its owner, reported as such rather than closed as `completed` or edited by hand.
 - `closeWorkflow` preserves an existing valid terminal snapshot unchanged, including `failed`/`stopped` — idempotence this contract keeps.
 - Close never releases leases. Another owner's lease is not released to force closure; strict terminal validation refuses leases without deleting them.
 - Scoped and plan-scoped sessions cannot mutate lifecycle anchors or close sibling workflows (foundational distinctions, third meaning).
@@ -119,4 +130,16 @@ The direction and reason columns record the reasoning behind each answer; the an
 > Legacy source correction is a distinct coordinator-owned domain operation for a running, single-row standalone development workflow whose registered source erroneously equals its target. It derives the replacement source only from that row's already-accepted, evidence-pinned handoff and verifies the source Git ref/commit. Under the existing snapshot lock and expected row revision it may replace only `branch.source`, advance that row's coordination revision and update snapshot `updated_at`. All PR/merge evidence, statuses, leases, timestamps other than `updated_at`, target and handoff pins remain unchanged. It cannot record Done, delivery success or remote merge. Missing proof, foreign authority, terminal state, a nonmatching legacy shape, or a repeat after correction refuses without writes. Future registrations must name the true delivery source; this is not their normal lifecycle step.
 >
 > This extends §4a (registration is an authorized domain operation) with a bounded repair for pre-existing snapshots only, and leaves §5 (failure and abandonment) and the Binding negatives above untouched.
+
+> Amendment 2026-09-22: **standalone report-only completion.**
+>
+> §1 already declared the kind; this amendment records the route that completes it, applied identically on the file (JSON) lifecycle and the execution-authority (DB) lifecycle, and states what it leaves alone.
+>
+> **Route.** For a single-row `type: plan` workflow whose registered `delivery_kind` is `verification/report-only`, the row completes from an **accepted handoff** once the registered `completion_policy` has a recorded fulfilment (`delivery.completion` naming that same policy and its evidence). The fulfilment is recorded through the authorized delivery-evidence seam **before** the row is marked `Done`; `complete` re-consults it at its own locked mutation boundary, and the terminal close consults the same consultation (§4g) before writing `completed`. Recording a mismatch, an emptiness or a missing member refuses both steps and writes nothing.
+>
+> **What it does not do.** No merge, no integration attempt, no integration branch, no integration checkout and no synthesised source Git proof: `integration-start`, `integration-accept` and a Git-derived completion proof remain unavailable to this kind, and the route refuses integration contamination rather than tolerating it. It does not relax the accepted-handoff requirement, the review/QA/findings gates, the pinned evidence digests, the byte-level handoff pin, the coordinator-writer authority or the completion-policy identity check — a report-only completion is judged by the same guards as the other routes, minus the delivery stages the kind does not have.
+>
+> **What stays untouched.** `development` keeps its Git proofs (dirty-checkout and moved-ref refusals, the pinned source/target anchors, the PR identity and verified-merge evidence) and the iteration route keeps its merge proof and both leases. A report-only completion releases only the row's own execution lease, leaves the workflow `running`, and still requires the terminal close to write `completed` and unregister the root entry; recovery replays an already-completed row read-only, rewriting no bytes and no timestamp.
+>
+> **Deferral (unchanged).** No terminal writer for `failed`/`stopped` is added, and none is claimed: §5's current exposure stands, and this amendment closes no live workflow — it defines only how the declared kind reaches a lawful `Done` and `completed`.
 
