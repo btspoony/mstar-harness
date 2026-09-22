@@ -2680,26 +2680,32 @@ describe("mstar plan \u2014 execution transport", () => {
     const fixture = makeFixture();
     const before = snapshotBytes(fixture);
 
-    const mixed = runCli(
-      [
-        "plan",
-        "progress",
-        "--session",
-        join(fixture.harness, "sessions", "plan-a.json"),
-        "--session-ref",
-        activeRefWire(),
-        "--expect",
-        "exec-v1:plan:store:1:key:1",
-        "--operation",
-        "progress-mixed",
-        "--file",
-        join(fixture.root, "progress.json"),
-      ],
-      fixture.root,
-    );
+    const mixedArgs = [
+      "plan",
+      "progress",
+      "--session",
+      join(fixture.harness, "sessions", "plan-a.json"),
+      "--session-ref",
+      activeRefWire(),
+      "--expect",
+      "exec-v1:plan:store:1:key:1",
+      "--operation",
+      "progress-mixed",
+      "--file",
+      join(fixture.root, "progress.json"),
+    ];
+    const mixed = runCli(mixedArgs, fixture.root);
     expect(mixed.exitCode).toBe(2);
-    expect(jsonOf(mixed).code).toBe("usage");
     expect(mixed.stderr).toContain("disjoint transports");
+
+    // Under `--json` the SAME refusal is the A2 usage object on stdout — the
+    // one output path this family already uses for every usage failure
+    // ("a commander-level usage failure still carries the A2 failure object
+    // under --json", above in this file).
+    const mixedJson = runCli([...mixedArgs, "--json"], fixture.root);
+    expect(mixedJson.exitCode).toBe(2);
+    expect(jsonOf(mixedJson).code).toBe("usage");
+    expect(String(jsonOf(mixedJson).message)).toContain("disjoint transports");
 
     const stated = runCli(
       ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--session-id", "some-session"],

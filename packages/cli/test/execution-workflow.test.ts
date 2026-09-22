@@ -262,7 +262,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
 
     const policyPath = join(fixture.root, "policy.json");
-    writeJson(policyPath, { plan_parallelism: "sdd" });
+    // `plan_parallelism` is a CLOSED two-value set in the engine
+    // (`serial | parallel`), so the fixture sends the accepted spelling.
+    writeJson(policyPath, { plan_parallelism: "parallel" });
     const policyToken = await workflowTokenOf(fixture);
     const policy = runCli(
       workflowVerbArgs("execution-policy", fixture, bound, policyToken, "policy-1", ["--file", policyPath]),
@@ -270,7 +272,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(policy.exitCode).toBe(0);
-    expect((await storedHeader(fixture)).execution_policy).toEqual({ plan_parallelism: "sdd" });
+    expect((await storedHeader(fixture)).execution_policy).toEqual({ plan_parallelism: "parallel" });
 
     // Delivery evidence is recorded stage by stage on the RUNNING lifecycle,
     // before the status move below (the close consultation reads it later).
@@ -367,13 +369,24 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(stopped.exitCode).toBe(0);
-    const terminal = await storedHeader(fixture);
-    expect(terminal.status).toBe("stopped");
-    expect(typeof terminal.ended_at).toBe("string");
+    // The committed state of the transition is the receipt's OWN graph: a
+    // terminal close leaves the lifecycle out of the ACTIVE register, so the
+    // workflow-id read afterwards is exactly the authority's
+    // `coordination.workflow-not-found` — the fixture never re-reads it by id
+    // (and nothing here relaxes the "never fall back to the newest entry" rule).
+    const committed = dataOf(stopped) as unknown as ExecutionState;
+    const closed = committed.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+    expect(closed?.state.status).toBe("stopped");
+    expect(typeof closed?.state.ended_at).toBe("string");
 
-    // A terminal lifecycle is never reopened by this route.
+    const register = await readExecutionAuthority(fixture.context);
+    if (!("workflows" in register.data)) throw new Error("the register read did not return the whole state");
+    expect(register.data.workflows.some((entry) => entry.state.id === WORKFLOW_ID)).toBe(false);
+
+    // A closed lifecycle is never reopened: the authority holds no active
+    // lifecycle for it, so any further transition is its own refusal.
     const reopened = runCli(
-      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "stop-2", [
+      workflowVerbArgs("lifecycle", fixture, bound, jsonOf(stopped).token as string, "stop-2", [
         "--status",
         "running",
         "--reason",
@@ -383,6 +396,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(reopened.exitCode).toBe(1);
+    expect(String(jsonOf(reopened).code)).toMatch(/^(coordination|execution)\./);
   });
 
   test("an iteration registration records its reviewed integration checkout, and the phase gate reads its own compass", async () => {
@@ -514,7 +528,10 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(String(jsonOf(wrongScope).code)).toMatch(/^coordination\./);
     expect((await storedHeader(fixture)).status).toBe("paused");
 
-    // A malformed invocation never reaches the store.
+    // The grammar verbs are ACTIVE-ONLY: `--session` is not one of their flags,
+    // so a mixed invocation is commander's own usage refusal (exit 2) — the
+    // explicit "disjoint transports" diagnostic belongs to the verbs that own
+    // BOTH transports (asserted right below on `workflow evidence`).
     const mixed = runCli(
       [
         "workflow",
@@ -538,7 +555,36 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(mixed.exitCode).toBe(2);
-    expect(mixed.stderr).toContain("disjoint transports");
+    expect(mixed.stderr).toContain("--session");
+
+    // `workflow evidence` does own both transports, so its mix is refused with
+    // the explicit diagnostic before any IO.
+    const deliveryPath = join(fixture.root, "delivery-mixed.json");
+    writeJson(deliveryPath, { compound: { outcome: "created" } });
+    const evidenceMix = runCli(
+      [
+        "workflow",
+        "evidence",
+        "--workflow",
+        WORKFLOW_ID,
+        "--session",
+        join(fixture.harnessDir, "session.json"),
+        "--session-ref",
+        encodeExecutionSessionRef(bound),
+        "--expect",
+        await workflowTokenOf(fixture),
+        "--operation",
+        "evidence-mixed",
+        "--file",
+        deliveryPath,
+        "--harness",
+        fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(evidenceMix.exitCode).toBe(2);
+    expect(evidenceMix.stderr).toContain("disjoint transports");
 
     // The one-time delivery-kind rewrite has no active operation.
     const declare = runCli(
