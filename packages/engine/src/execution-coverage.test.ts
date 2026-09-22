@@ -1118,6 +1118,8 @@ describe("execution-coverage", () => {
           manifestHash: source.manifestHash,
           storeId: source.storeId,
           epoch: source.epoch,
+          // An absent row names no witness, exactly as the other absent fixtures do.
+          sources: [],
         },
         absentWithProof.evidence,
       ),
