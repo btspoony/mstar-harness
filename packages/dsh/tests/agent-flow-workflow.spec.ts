@@ -38,7 +38,7 @@ import {
   WORKFLOW_LEDGER_TRUNCATION_MARKER,
   WORKFLOW_LEDGER_WATERMARK_FILE,
 } from '../src/gates/agent-flow.ts'
-import type { AgentFlowEventSource, AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
+import type { AgentFlowEventSource } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import {
   awaitWorkflowLedgerIdle,
@@ -1520,13 +1520,13 @@ describe('workflow-ledger consumer — cold scan over session event snapshots ()
       // file carries both (the lock + fresh read made the read-modify-write
       // atomic across processes), each stamped with the incarnation that
       // process derived for its own session log.
-      const a = cursorEntry(workflowDir, 'proc-a')!
-      const b = cursorEntry(workflowDir, 'proc-b')!
-      expect(a.next).toBe(5)
-      expect(b.next).toBe(5)
-      expect(a.stream).toMatch(STREAM_SHAPE)
-      expect(b.stream).toMatch(STREAM_SHAPE)
-      expect(a.stream).not.toBe(b.stream)
+      const entryA = cursorEntry(workflowDir, 'proc-a')!
+      const entryB = cursorEntry(workflowDir, 'proc-b')!
+      expect(entryA.next).toBe(5)
+      expect(entryB.next).toBe(5)
+      expect(entryA.stream).toMatch(STREAM_SHAPE)
+      expect(entryB.stream).toMatch(STREAM_SHAPE)
+      expect(entryA.stream).not.toBe(entryB.stream)
       // The ledger holds all 10 rows (5 per process) — nothing lost.
       const flow = readAgentFlow(workflowDir)!
       expect(flow.events).toHaveLength(10)
@@ -2666,11 +2666,11 @@ describe('workflow-ledger — explicit awaited target (F2 resolver route)', () =
       await idle()
 
       // Each row advanced only its OWN session's bound.
-      const a = cursorEntry(workflowDir, 'sess-a')!
-      const b = cursorEntry(workflowDir, 'sess-b')!
-      expect(a.next).toBe(1)
-      expect(b.next).toBe(1)
-      expect(a.stream).not.toBe(b.stream)
+      const entryA = cursorEntry(workflowDir, 'sess-a')!
+      const entryB = cursorEntry(workflowDir, 'sess-b')!
+      expect(entryA.next).toBe(1)
+      expect(entryB.next).toBe(1)
+      expect(entryA.stream).not.toBe(entryB.stream)
       expect(readAgentFlow(workflowDir)!.events.map((e) => e.runId).sort()).toEqual(['run-a', 'run-b'])
     } finally {
       await ctx.fiber.dispose().catch(() => {})
