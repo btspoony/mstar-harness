@@ -407,8 +407,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
 
     // A terminal `stopped` transition carries no Done requirement, so it closes
     // the lifecycle in ONE transaction.
+    const beforeStopToken = await workflowTokenOf(fixture);
     const stopped = runCli(
-      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "stop-1", [
+      workflowVerbArgs("lifecycle", fixture, bound, beforeStopToken, "stop-1", [
         "--status",
         "stopped",
         "--reason",
@@ -418,15 +419,16 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(stopped.exitCode).toBe(0);
-    // The committed state of the transition is the receipt's OWN graph: a
-    // terminal close leaves the lifecycle out of the ACTIVE register, so the
-    // workflow-id read afterwards is exactly the authority's
-    // `coordination.workflow-not-found` — the fixture never re-reads it by id
-    // (and nothing here relaxes the "never fall back to the newest entry" rule).
+    expect(jsonOf(stopped).operation_id).toBe("stop-1");
+    expect(jsonOf(stopped).replayed).toBe(false);
+    // The accepted transaction advanced the store: its root token moved.
+    expect(jsonOf(stopped).token).not.toBe(beforeStopToken);
+    // The committed graph this transition returned no longer holds the
+    // lifecycle: a terminal close drops the registry membership in the SAME
+    // transaction, and the active adapter keeps no terminal lifecycle — which is
+    // exactly why the workflow-id read afterwards must answer not-found.
     const committed = dataOf(stopped) as unknown as ExecutionState;
-    const closed = committed.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
-    expect(closed?.state.status).toBe("stopped");
-    expect(typeof closed?.state.ended_at).toBe("string");
+    expect(committed.workflows.some((entry) => entry.state.id === WORKFLOW_ID)).toBe(false);
 
     const register = await readExecutionAuthority(fixture.context);
     if (!("workflows" in register.data)) throw new Error("the register read did not return the whole state");
