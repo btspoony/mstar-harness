@@ -21,6 +21,9 @@ import { mkdir, mkdtemp, rm, symlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  adoptExecutionBinding,
+  clearExecutionBinding,
+  resolveExecutionLedgerTarget,
   resolveActiveWorkflow,
   resolveReadWorkflow,
   _terminalStatusCacheHas,
@@ -713,4 +716,35 @@ it('automatically selects canonical integration cwd and refuses conflicting topo
       else expect(selected).toMatchObject({ kind: 'active', workflowId: 'wf-a' })
     }
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('requires canonical native adoption for active writers and permits legacy only after clear', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-ledger-target-'))
+  const harnessDir = join(root, '.mstar')
+  const cwd = root
+  await mkdir(cwd, { recursive: true })
+  try {
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+    })
+    const binding = {
+      version: 1 as const,
+      harnessRoot: harnessDir,
+      session: { storeId: 'store-a', epoch: 3, workflowId: 'wf-a', role: 'coordinator' as const, sessionId: 'session-a', planId: null },
+    }
+    expect(adoptExecutionBinding(harnessDir, 'session-a', cwd, { ...binding, harnessRoot: join(root, 'foreign') })).toBe(false)
+    expect(adoptExecutionBinding(harnessDir, 'session-a', cwd, binding)).toBe(true)
+    // The DB is absent, so a canonical execution witness cannot silently
+    // become a legacy writer or an idle/no-work answer.
+    await expect(resolveExecutionLedgerTarget('session-a', cwd)).resolves.toBeNull()
+    expect(clearExecutionBinding(harnessDir, 'session-a', cwd)).toBe(true)
+    await expect(resolveExecutionLedgerTarget('session-a', cwd)).resolves.toMatchObject({
+      workflowId: 'wf-a',
+      source: 'legacy',
+      epoch: null,
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
