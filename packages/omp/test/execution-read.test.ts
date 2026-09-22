@@ -55,6 +55,7 @@ import {
   createExecutionWorkflow,
   initializeExecutionAuthority,
   initializeStore,
+  readExecutionAuthority,
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
@@ -212,7 +213,7 @@ async function seedActiveAuthority(fixture: Fixture): Promise<ExecutionSessionRe
     harnessDir: fixture.harness,
     caller: { sessionId: SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
   };
-  const created = await createExecutionWorkflow(context, {
+  await createExecutionWorkflow(context, {
     entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
     snapshot: {
       schema_version: 1,
@@ -226,14 +227,17 @@ async function seedActiveAuthority(fixture: Fixture): Promise<ExecutionSessionRe
       delivery_kind: "development",
       branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
     } as never,
+    // Creation is a ROOT-scoped CAS: its receipt token is a root token, so the
+    // workflow-scoped bind reads the WORKFLOW token from the authority instead.
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
+  const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
     planId: null,
     role: "coordinator",
-    expected: created.token,
+    expected: workflowToken,
     operationId: `bind-${SESSION_ID}`,
   });
   return bound.data;

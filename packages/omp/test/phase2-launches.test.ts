@@ -281,14 +281,17 @@ async function seedActiveAuthority(fixture: Fixture): Promise<void> {
       integration_worktree_path: fixture.integrationPath,
       plans: PLAN_IDS.map((planId) => ({ id: planId, title: `Plan ${planId}`, file: `plans/${planId}.md`, status: "Todo" })),
     } as never,
+    // Creation is a ROOT-scoped CAS: the receipt's own token is a root token and
+    // must never be handed to a workflow-scoped verb.
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
+  expect(created.data.workflows[0]?.state.id).toBe(WORKFLOW_ID);
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
     planId: null,
     role: "coordinator",
-    expected: created.token,
+    expected: await workflowTokenOf(fixture),
     operationId: `bind-${COORDINATOR_SESSION_ID}`,
   });
   fixture.coordinator = bound.data;
@@ -317,6 +320,17 @@ async function bindFixture(options: FixtureOptions = {}): Promise<Fixture> {
 /** The plan's own CAS token, read fresh from the authority at call time. */
 async function planTokenOf(fixture: Fixture, planId: PlanId): Promise<ExecutionToken> {
   const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId });
+  return read.token;
+}
+
+/**
+ * The workflow's own CAS token. A `{workflowId}` read returns the WORKFLOW token,
+ * while `createExecutionWorkflow`'s receipt carries the ROOT token its creation
+ * CAS used — the two are not interchangeable, and a workflow-scoped verb refuses
+ * a root token (`execution.token-kind`) instead of coercing it.
+ */
+async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
   return read.token;
 }
 

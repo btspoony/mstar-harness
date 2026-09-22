@@ -736,7 +736,6 @@ export async function showCoordinatorRecovery(
         coordinatorSessionId: coordinator === null ? null : coordinator.sessionId,
         coordinatorStoreId: coordinator === null ? null : coordinator.storeId,
         coordinatorEpoch: coordinator === null ? null : coordinator.epoch,
-        expected: workflow.workflowToken,
       },
     };
   }
