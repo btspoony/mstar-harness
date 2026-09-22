@@ -27,7 +27,6 @@
  */
 import { isAbsolute } from "node:path";
 import { Command } from "commander";
-import pc from "picocolors";
 import {
   SddScriptError,
   WORKFLOW_LIFECYCLE_STATUSES,

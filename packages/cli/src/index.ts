@@ -162,6 +162,7 @@ import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {
   assertLegacyExecutionFormAvailable,
+  failExecutionVerb,
   printExecutionSuccess,
   registerSessionCommands,
   requireExecutionIdentity,
@@ -170,7 +171,6 @@ import {
   activeWorkflowContext,
   activeWorkflowScope,
   closeActiveWorkflow,
-  failExecutionVerb,
   readActiveWorkflowFlags,
   readActiveRegistrationFlags,
   recordActiveDelivery,
