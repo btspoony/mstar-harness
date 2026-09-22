@@ -173,7 +173,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  readlinkSync,
+  realpathSync,
   renameSync,
   writeFileSync,
   type Dirent,
@@ -326,7 +326,7 @@ export type ExecutionMigrationInventory = Readonly<{
   roots: Readonly<{ sdd: string; host: string; package: string }>;
   hostSessions: readonly ExecutionMigrationHostSession[];
   sddEvidence: readonly Readonly<{ workflowId: string; path: string }>[];
-  consumers: readonly Readonly<{ surface: ExecutionSurface; path: string }>[];
+  consumers: readonly Readonly<{ surface: ExecutionSurface; path: string; consumerId: string }>[];
   injectors: readonly string[];
   injectorInventory: string | null;
   backup: Readonly<{ image: string; inventory: string }> | null;
@@ -673,8 +673,6 @@ type DiscoveredSources = {
   surfaces: ExecutionManifestSurface[];
   /** Every pinned witness key (`${root}:${path}`) → the file its bytes were read from. */
   witnessPaths: ReadonlyMap<string, string>;
-  /** Link entries whose witness bytes are the link target, not a file's contents. */
-  linkBytes: ReadonlyMap<string, Uint8Array>;
   /**
    * §4.2 discovery evidence that proves an ABSENT row (an explicitly empty
    * deployment inventory) and is therefore pinned without being assigned to any
@@ -727,8 +725,6 @@ type DiscoveryLedger = {
   witnesses: ExecutionSourceWitness[];
   /** (`${root}:${path}`) → the file the witness bytes were read from. */
   witnessPaths: Map<string, string>;
-  /** (`${root}:${path}`) → link-target bytes, for a witness that names a link entry. */
-  linkBytes: Map<string, Uint8Array>;
 };
 
 /** One discovered file, recorded once per witness key. */
@@ -884,11 +880,18 @@ function readInventoryFile(path: string): { inventory: ExecutionMigrationInvento
   });
   const consumers = asArray(document.consumers, "consumers").map((entry, index) => {
     const label = `consumers[${index}]`;
-    const record = exact(entry, label, ["surface", "path"]);
+    const record = exact(entry, label, ["surface", "path", "consumerId"]);
     if (typeof record.surface !== "string" || !(EXECUTION_COVERAGE_SURFACES as readonly string[]).includes(record.surface)) {
       throw conflict(`${what}.${label}.surface must be one of the 18 closed execution surfaces; an unknown surface is not coverage.`);
     }
-    return { surface: record.surface as ExecutionSurface, path: requireAbsolute(record.path, `${label}.path`) };
+    if (!isNonEmptyString(record.consumerId)) {
+      throw conflict(`${what}.${label}.consumerId must name the consumer the evidence document declares; the selection is explicit, never guessed from a document set.`);
+    }
+    return {
+      surface: record.surface as ExecutionSurface,
+      path: requireAbsolute(record.path, `${label}.path`),
+      consumerId: record.consumerId,
+    };
   });
   const injectors = asArray(document.injectors, "injectors").map((entry, index) => requireAbsolute(entry, `injectors[${index}]`));
   let injectorInventory: string | null = null;
@@ -1209,11 +1212,24 @@ type ConsumerDeclaration = Readonly<{
   copies: readonly Readonly<{ sourceRoot: string; targetRoot: string; mode: "copy" | "merge" }>[];
 }>;
 
-function readConsumerDeclaration(path: string, what: string): ConsumerDeclaration {
+/** §4.2 R1's non-build allowlist: the producer's own manifest basename. */
+const CONSUMER_MANIFEST_BASENAME = "execution-consumer.json";
+
+/**
+ * Read one explicit consumer declaration. The row's evidence document is decoded
+ * by C2 with the closed producer rules — canonical §3.1 bytes and exactly ONE
+ * consumer entry per evidence document — so C3 refuses any document C2 could not
+ * decode and names the reason precisely instead of reformatting or reducing the
+ * artifact. The consumer id is explicit inventory input, never guessed from the
+ * document set.
+ */
+function readConsumerDeclaration(input: { path: string; consumerId: string; what: string }): ConsumerDeclaration {
+  const { path, consumerId, what } = input;
   const bytes = readSourceBytes(path, what, `${what} is missing`);
+  const text = bytes.toString("utf8");
   let document: unknown;
   try {
-    document = JSON.parse(bytes.toString("utf8"));
+    document = JSON.parse(text);
   } catch (error) {
     throw conflict(`${what} is not valid JSON (${(error as Error).message}).`);
   }
@@ -1221,12 +1237,29 @@ function readConsumerDeclaration(path: string, what: string): ConsumerDeclaratio
   if (document.version !== 1 || document.protocol !== "consumer-v1") {
     throw conflict(`${what} is not a version 1 consumer-v1 manifest; the consumer surfaces decode no other producer manifest.`);
   }
-  const consumers = document.consumers;
-  if (!Array.isArray(consumers) || consumers.length !== 1) {
-    throw conflict(`${what} must carry exactly one consumer entry; the R1 producer writes one manifest per consumer.`);
+  if (!Array.isArray(document.consumers)) throw conflict(`${what}.consumers must be an array.`);
+  if (document.consumers.length !== 1) {
+    throw conflict(
+      `${what} carries ${document.consumers.length} consumer entries while the coverage row decodes exactly ONE. This is a cross-package encoding conflict ` +
+        `between the aggregate repository producer artifact and the reviewed per-consumer substrate: C3 reports it and stages nothing — it never selects, ` +
+        `reduces, reformats or rewrites a producer artifact to fit the decoder.`,
+    );
   }
-  const entry = consumers[0];
+  const entry = document.consumers[0];
   if (!isPlainObject(entry) || !isNonEmptyString(entry.id)) throw conflict(`${what}.consumers[0] must name its consumer id.`);
+  if (entry.id !== consumerId) {
+    throw conflict(
+      `${what} declares consumer ${JSON.stringify(entry.id)}, not the ${JSON.stringify(consumerId)} this surface names; a declaration is never reused for ` +
+        `another consumer. Nothing was staged.`,
+    );
+  }
+  if (serializeExecutionValue(document) !== text) {
+    throw conflict(
+      `${what} is not canonical §3.1 JSON with one terminal LF, so the reviewed consumer substrate cannot decode it (the repository producer serializes with ` +
+        `two-space indentation). This is a cross-package encoding conflict reported to the producers, never resolved by rewriting the artifact here; ` +
+        `nothing was staged.`,
+    );
+  }
   const readSet = (value: unknown, label: string): { trees: string[]; files: Array<{ path: string; sha256: string }> } => {
     if (!isPlainObject(value)) throw conflict(`${what}.${label} must be an object.`);
     if (!Array.isArray(value.trees)) throw conflict(`${what}.${label}.trees must be an array.`);
@@ -1258,75 +1291,96 @@ function readConsumerDeclaration(path: string, what: string): ConsumerDeclaratio
   return { id: entry.id, sourceTrees: sources.trees, generatedTrees: generated.trees, declaredFiles: [...sources.files, ...generated.files], copies };
 }
 
-/** One real tree closure: every entry under `treeRoot`, with a link witness naming the link's target. */
-function walkTreeEntries(input: {
+/** One tree entry in R1's canonical closure (`scripts/execution-consumer-manifest.ts`). */
+type ConsumerTreeEntry = Readonly<{ path: string; kind: "file" | "symlink"; sha256: string; linkTarget: string | null }>;
+
+/**
+ * Walk one declared tree into R1's canonical entry closure: entries are sorted
+ * by tree-relative path, a symlink is recorded by the canonical path it resolves
+ * to **relative to its own tree** plus the RESOLVED bytes, a link that escapes
+ * its tree refuses, and the producer's own manifest basename is skipped where
+ * R1's generated-tree specs skip it (its non-build allowlist). Every file is
+ * also recorded as a coverage witness, so the row's assigned bytes are exactly
+ * the bytes this closure was computed from.
+ */
+function consumerTreeEntries(input: {
   ledger: DiscoveryLedger;
   rootName: CoverageWitness["root"];
   rootDir: string;
   treeRoot: string;
+  excludeManifest: boolean;
   what: string;
-}): Map<string, CoverageWitness> {
-  const { ledger, rootName, rootDir, treeRoot, what } = input;
-  const absoluteRoot = join(rootDir, treeRoot);
+}): ConsumerTreeEntry[] {
+  const { ledger, rootName, rootDir, treeRoot, excludeManifest, what } = input;
+  const treeAbs = join(rootDir, treeRoot);
   let info: Stats;
   try {
-    info = lstatSync(absoluteRoot);
+    info = lstatSync(treeAbs);
   } catch {
     throw conflict(`${what} tree ${treeRoot} is missing under its configured root ${rootDir}.`);
   }
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw conflict(`${what} tree ${treeRoot} is not a real directory under its configured root ${rootDir}.`);
   }
-  const entries = new Map<string, CoverageWitness>();
-  const walk = (dir: string, prefix: string): void => {
-    for (const entry of directoryEntries(dir, `${what} tree ${treeRoot}`)) {
-      const path = join(dir, entry.name);
-      const suffix = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+  const entries: ConsumerTreeEntry[] = [];
+  const walk = (dirAbs: string, relDir: string): void => {
+    for (const entry of directoryEntries(dirAbs, `${what} tree ${treeRoot}`)) {
+      if (excludeManifest && entry.name === CONSUMER_MANIFEST_BASENAME) continue;
+      const abs = join(dirAbs, entry.name);
+      const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
       if (entry.isDirectory()) {
-        walk(path, suffix);
+        walk(abs, rel);
         continue;
       }
-      const relativePath = `${treeRoot}/${suffix}`;
+      const witnessPath = `${treeRoot}/${rel}`;
       if (entry.isSymbolicLink()) {
-        // A link is an ENTRY of the tree, and its fact is the target it records:
-        // the witness names the exact link target, never a resolved file.
-        const bytes = Buffer.from(readlinkSync(path), "utf8");
-        const witness = { root: rootName, path: relativePath, sha256: sha256Of(bytes) } as CoverageWitness;
-        const key = coverageWitnessKey(witness.root, witness.path);
-        ledger.witnessPaths.set(key, path);
-        ledger.linkBytes.set(key, bytes);
-        entries.set(suffix, witness);
+        let resolved: string;
+        try {
+          resolved = realpathSync(abs);
+        } catch {
+          throw conflict(`${what} tree ${treeRoot} carries the dangling link ${rel}; a tree is never recorded with an unresolvable link.`);
+        }
+        if (!isPathWithin(treeAbs, resolved) || resolved === treeAbs) {
+          throw conflict(
+            `${what} tree ${treeRoot} carries the link ${rel}, which resolves outside its own tree; such a tree is not portable and is never coverage.`,
+          );
+        }
+        const bytes = readSourceBytes(resolved, `${what} link ${rel}`, `${what} link ${rel} resolves to a missing file`);
+        const key = coverageWitnessKey(rootName, witnessPath);
+        const sha256 = sha256Of(bytes);
+        if (!ledger.witnessPaths.has(key)) {
+          ledger.witnessPaths.set(key, resolved);
+          ledger.witnesses.push({ path: resolved, sha256, kind: "deferred" });
+        }
+        entries.push({ path: rel, kind: "symlink", sha256, linkTarget: relative(treeAbs, resolved).split(/[\\/]+/).join("/") });
         continue;
       }
       if (!entry.isFile()) {
-        throw conflict(`${what} tree ${treeRoot} carries ${entry.name}, which is neither a regular file, a directory nor a link; an unclassifiable entry is never coverage.`);
+        throw conflict(`${what} tree ${treeRoot} carries ${rel}, which is neither a regular file, a directory nor a link; an unclassifiable entry is never coverage.`);
       }
-      const witness = recordWitness(ledger, rootName, rootDir, path, "deferred");
-      if (witness.path !== relativePath) {
-        throw conflict(`${what} tree ${treeRoot} entry ${path} does not have the canonical root-relative path ${relativePath}.`);
+      const witness = recordWitness(ledger, rootName, rootDir, abs, "deferred");
+      if (witness.path !== witnessPath) {
+        throw conflict(`${what} tree ${treeRoot} entry ${abs} does not have the canonical root-relative path ${witnessPath}.`);
       }
-      entries.set(suffix, witness);
+      entries.push({ path: rel, kind: "file", sha256: witness.sha256, linkTarget: null });
     }
   };
-  walk(absoluteRoot, "");
+  walk(treeAbs, "");
+  entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return entries;
 }
 
-/** The C3 tree digest: sha256 over the canonical, suffix-sorted entry closure. */
-function treeDigestOf(entries: ReadonlyMap<string, CoverageWitness>): string {
-  const list = [...entries.entries()]
-    .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
-    .map(([suffix, witness]) => ({ path: suffix, sha256: witness.sha256 }));
-  return digestOf(list);
+/** R1's tree digest: sha256 over the compact JSON of the sorted entry closure. */
+function consumerTreeDigestOf(entries: readonly ConsumerTreeEntry[]): string {
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
 /**
- * §4.1 C3's consumer discovery proof, derived from REAL bytes: the declared
- * tree roots are walked, every entry is hashed as read (a link hashes its
- * target), and the declared copy pairs are proven — exact equality for `copy`,
- * source-subset equality for `merge`. The declaration supplies the roots and the
- * declared file list; it never supplies the proof, and a declared file whose
- * real bytes disagree with its digest refuses here.
+ * §4.1 C3's consumer discovery proof, derived from REAL bytes with R1's own
+ * rules (tree entry closure, tree digest, copy parity and the source-side copy
+ * digest). The declaration supplies the roots and the declared file list; it
+ * never supplies the proof, and a declared digest whose real bytes disagree
+ * refuses here.
  */
 function consumerDiscoveryProof(input: {
   ledger: DiscoveryLedger;
@@ -1336,56 +1390,102 @@ function consumerDiscoveryProof(input: {
 }): { proof: ConsumerDiscoveryProof; sources: CoverageWitness[] } {
   const { ledger, packageRoot, declaration, what } = input;
   const sources = new Map<string, CoverageWitness>();
-  const trees: ConsumerDiscoveryProof["trees"] = [];
-  const addTree = (treeRoot: string, kind: "source" | "generated"): void => {
-    const entries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot, what: `${what} ${kind}` });
-    for (const witness of entries.values()) sources.set(coverageWitnessKey(witness.root, witness.path), witness);
-    trees.push({
-      consumerId: declaration.id,
-      kind,
-      root: "package",
-      path: treeRoot,
-      files: entries.size,
-      sha256: treeDigestOf(entries),
-      witnesses: [...entries.values()].sort(compareWitnesses),
+  const collect = (entries: readonly ConsumerTreeEntry[], treeRoot: string): CoverageWitness[] =>
+    entries.map((entry) => {
+      const key = coverageWitnessKey("package", `${treeRoot}/${entry.path}`);
+      const path = ledger.witnessPaths.get(key);
+      if (path === undefined) throw conflict(`${what} tree ${treeRoot} entry ${entry.path} was never recorded as a witness; nothing was staged.`);
+      const witness: CoverageWitness = { root: "package", path: `${treeRoot}/${entry.path}`, sha256: entry.sha256 };
+      sources.set(key, witness);
+      return witness;
     });
+
+  const trees: ConsumerDiscoveryProof["trees"] = [];
+  const addTrees = (treeRoots: readonly string[], kind: "source" | "generated"): void => {
+    for (const treeRoot of treeRoots) {
+      const entries = consumerTreeEntries({
+        ledger,
+        rootName: "package",
+        rootDir: packageRoot,
+        treeRoot,
+        excludeManifest: kind === "generated",
+        what: `${what} ${kind}`,
+      });
+      trees.push({
+        consumerId: declaration.id,
+        kind,
+        root: "package",
+        path: treeRoot,
+        files: entries.length,
+        sha256: consumerTreeDigestOf(entries),
+        witnesses: collect(entries, treeRoot),
+      });
+    }
   };
-  for (const treeRoot of declaration.sourceTrees) addTree(treeRoot, "source");
-  for (const treeRoot of declaration.generatedTrees) addTree(treeRoot, "generated");
+  addTrees(declaration.sourceTrees, "source");
+  addTrees(declaration.generatedTrees, "generated");
 
   const copies: ConsumerDiscoveryProof["copies"] = [];
   for (const copy of declaration.copies) {
-    const sourceEntries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot: copy.sourceRoot, what: `${what} copy source` });
-    const targetEntries = walkTreeEntries({ ledger, rootName: "package", rootDir: packageRoot, treeRoot: copy.targetRoot, what: `${what} copy target` });
-    for (const witness of [...sourceEntries.values(), ...targetEntries.values()]) {
-      sources.set(coverageWitnessKey(witness.root, witness.path), witness);
-    }
-    for (const [suffix, source] of sourceEntries) {
-      const target = targetEntries.get(suffix);
-      if (target === undefined) {
-        throw conflict(`${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} has no target entry for ${suffix}; a copy is never partial.`);
+    const sourceEntries = consumerTreeEntries({
+      ledger,
+      rootName: "package",
+      rootDir: packageRoot,
+      treeRoot: copy.sourceRoot,
+      excludeManifest: false,
+      what: `${what} copy source`,
+    });
+    const targetEntries = consumerTreeEntries({
+      ledger,
+      rootName: "package",
+      rootDir: packageRoot,
+      treeRoot: copy.targetRoot,
+      excludeManifest: false,
+      what: `${what} copy target`,
+    });
+    const sourceDigest = consumerTreeDigestOf(sourceEntries);
+    if (copy.mode === "copy") {
+      if (consumerTreeDigestOf(targetEntries) !== sourceDigest) {
+        throw conflict(
+          `${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} does not match its source tree (mode copy); a copied instruction tree is never stale.`,
+        );
       }
-      if (target.sha256 !== source.sha256) {
-        throw conflict(`${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} carries different bytes for ${suffix} on each side.`);
+    } else {
+      // Overlay merge: the target is a superset, so every source entry must be
+      // present with identical bytes and link target; host-only extras stay
+      // outside this pair (C2 covers them through the generated-tree closure).
+      const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry] as const));
+      for (const entry of sourceEntries) {
+        const copied = targetByPath.get(entry.path);
+        if (
+          copied === undefined ||
+          copied.kind !== entry.kind ||
+          copied.sha256 !== entry.sha256 ||
+          copied.linkTarget !== entry.linkTarget
+        ) {
+          throw conflict(`${what} merged instruction ${copy.targetRoot}/${entry.path} does not match its source ${copy.sourceRoot}/${entry.path}.`);
+        }
       }
     }
-    if (copy.mode === "copy" && targetEntries.size !== sourceEntries.size) {
-      throw conflict(
-        `${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} declares mode copy but the target carries ` +
-          `${targetEntries.size} entry(ies) against ${sourceEntries.size} source entry(ies); a copy target holds exactly the source set.`,
-      );
-    }
-    const ordered = [...sourceEntries.entries()].sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0));
+    const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry] as const));
+    const orderedSource = [...sourceEntries].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    const sourceWitnesses = collect(orderedSource, copy.sourceRoot);
+    const targetWitnesses = orderedSource.map((entry) => {
+      const key = coverageWitnessKey("package", `${copy.targetRoot}/${entry.path}`);
+      const witness: CoverageWitness = { root: "package", path: `${copy.targetRoot}/${entry.path}`, sha256: (targetByPath.get(entry.path) as ConsumerTreeEntry).sha256 };
+      sources.set(key, witness);
+      return witness;
+    });
     copies.push({
       consumerId: declaration.id,
       root: "package",
       sourceRoot: copy.sourceRoot,
       targetRoot: copy.targetRoot,
       mode: copy.mode,
-      files: sourceEntries.size,
-      sha256: digestOf(ordered.map(([suffix, witness]) => ({ path: suffix, sha256: witness.sha256 }))),
-      sourceWitnesses: ordered.map((entry) => entry[1]),
-      targetWitnesses: ordered.map(([suffix]) => targetEntries.get(suffix) as CoverageWitness),
+      files: sourceEntries.length,
+      sha256: sourceDigest,
+      sourceWitnesses,
+      targetWitnesses,
     });
   }
 
@@ -1393,12 +1493,12 @@ function consumerDiscoveryProof(input: {
     const witness = coverageWitnessOf("package", packageRoot, join(packageRoot, file.path), `${what} declared file`);
     if (witness.sha256 !== file.sha256) {
       throw conflict(
-        `${what} declares file ${file.path} with sha256 ${file.sha256}, but the bytes under the configured package root hash to ` +
-          `${witness.sha256}; a declared closure is verified against the bytes it names, never trusted.`,
+        `${what} declares file ${file.path} with sha256 ${file.sha256}, but the bytes under the configured package root hash to ${witness.sha256}; ` +
+          `a declared closure is verified against the bytes it names, never trusted.`,
       );
     }
-    sources.set(coverageWitnessKey(witness.root, witness.path), witness);
     const key = coverageWitnessKey(witness.root, witness.path);
+    sources.set(key, witness);
     if (!ledger.witnessPaths.has(key)) {
       ledger.witnessPaths.set(key, join(packageRoot, file.path));
       ledger.witnesses.push({ path: join(packageRoot, file.path), sha256: witness.sha256, kind: "deferred" });
@@ -1578,7 +1678,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     );
   }
 
-  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map(), linkBytes: new Map() };
+  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map() };
   const deferred: ExecutionDeferredSurface[] = [];
   const workflows: DiscoveredWorkflow[] = [];
   const owners: DiscoveredOwner[] = [];
@@ -1730,7 +1830,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     }
     const what = `the ${declaration.surface} consumer manifest`;
     const evidence = witnessForPath(ledger, roots, declaration.path, what, "evidence");
-    const parsed = readConsumerDeclaration(declaration.path, what);
+    const parsed = readConsumerDeclaration({ path: declaration.path, consumerId: declaration.consumerId, what });
     const { proof, sources } = consumerDiscoveryProof({ ledger, packageRoot: roots.package, declaration: parsed, what });
     consumerRows.set(declaration.surface, { sources, proof, evidence });
   }
@@ -1876,7 +1976,6 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     surfaces,
     pinnedExtras,
     witnessPaths: ledger.witnessPaths,
-    linkBytes: ledger.linkBytes,
   };
 }
 
@@ -1932,14 +2031,6 @@ function coverageEvidenceOf(discovered: DiscoveredSources, witnesses: readonly C
   const evidence = new Map<string, Uint8Array>();
   for (const witness of witnesses) {
     const key = coverageWitnessKey(witness.root, witness.path);
-    const link = discovered.linkBytes.get(key);
-    if (link !== undefined) {
-      if (sha256Of(Buffer.from(link)) !== witness.sha256) {
-        throw conflict(`the link witness ${key} changed since discovery; nothing was staged.`);
-      }
-      evidence.set(key, link);
-      continue;
-    }
     const path = discovered.witnessPaths.get(key);
     if (path === undefined) {
       throw conflict(`the witness ${key} has no discovered file; coverage is recomputed from named bytes, never from a path alone.`);

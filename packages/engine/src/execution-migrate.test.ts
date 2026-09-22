@@ -54,7 +54,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -2966,5 +2966,176 @@ describe("Phase 2b — populated manifest, validated coverage and session retire
     expect(abort).toEqual({ manifestId: legacyManifest.id, phase: "aborted", replayed: false });
     expect(migrationPhaseOf(fixture.dbPath)).toBe("aborted");
     expect(executionMetaOf(fixture.dbPath).authority_state).toBe("legacy");
+  });
+
+  /**
+   * A minimal reference implementation of R1's canonical closure, transcribed
+   * from `scripts/execution-consumer-manifest.ts` (`treeEntries`,
+   * `digestEntries`, `hashCopiedTree`) so C3's derivation can be compared with
+   * R1's own rule without importing a repo script into the engine package.
+   */
+  function referenceTreeEntries(rootAbs: string, exclude: readonly string[] = []): Array<{ path: string; kind: "file" | "symlink"; sha256: string; linkTarget: string | null }> {
+    const entries: Array<{ path: string; kind: "file" | "symlink"; sha256: string; linkTarget: string | null }> = [];
+    const walk = (dirAbs: string, relDir: string): void => {
+      for (const dirent of readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+        if (exclude.includes(dirent.name)) continue;
+        const abs = join(dirAbs, dirent.name);
+        const rel = relDir === "" ? dirent.name : `${relDir}/${dirent.name}`;
+        if (dirent.isDirectory()) {
+          walk(abs, rel);
+          continue;
+        }
+        if (dirent.isSymbolicLink()) {
+          const resolved = realpathSync(abs);
+          entries.push({
+            path: rel,
+            kind: "symlink",
+            sha256: sha256OfBytes(readFileSync(resolved)),
+            linkTarget: relative(rootAbs, resolved).split("\\").join("/"),
+          });
+          continue;
+        }
+        entries.push({ path: rel, kind: "file", sha256: sha256OfBytes(readFileSync(abs)), linkTarget: null });
+      }
+    };
+    walk(rootAbs, "");
+    entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return entries;
+  }
+
+  /** R1's digest: sha256 over the compact JSON of the sorted entry closure. */
+  function referenceTreeDigest(entries: readonly unknown[]): string {
+    return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  }
+
+  type ConsumerFixture = Fixture & { manifestPath: string; sourceRoot: string; generatedRoot: string; linkPath: string };
+
+  /** §4.2 a fixture consumer package whose declaration is written in the shape the reviewed substrate decodes. */
+  function consumerWorkspace(name: string): ConsumerFixture {
+    const fixture = workspace(name);
+    const packageRoot = join(fixture.root, "packages", "cli");
+    const sourceRoot = join(packageRoot, "src");
+    const generatedRoot = join(packageRoot, "dist");
+    writeText(join(sourceRoot, "nested", "util.ts"), "export const util = 1;");
+    writeText(join(sourceRoot, "index.ts"), "export const index = util;");
+    const linkPath = join(sourceRoot, "alias.ts");
+    symlinkSync(join(sourceRoot, "nested", "util.ts"), linkPath);
+    writeText(join(packageRoot, "package.json"), '{"name":"@mstar-harness/cli"}');
+    writeText(join(generatedRoot, "mstar-harness.js"), "// built entry");
+    // R1's own non-build allowlist: the producer's manifest basename is skipped
+    // inside a GENERATED tree even though it sits there on disk.
+    writeText(join(generatedRoot, "execution-consumer.json"), "{}");
+    writeText(join(fixture.root, "skills", "mstar-harness-core", "SKILL.md"), "# copied skill\n");
+    writeText(join(packageRoot, "harness-skills", "mstar-harness-core", "SKILL.md"), "# copied skill\n");
+    writeText(join(fixture.root, "agents", "dev.md"), "# merged agent\n");
+    writeText(join(packageRoot, "harness-agents", "dev.md"), "# merged agent\n");
+    writeText(join(packageRoot, "harness-agents", "host-only.md"), "# host overlay\n");
+
+    const sourceEntries = referenceTreeEntries(sourceRoot);
+    const generatedEntries = referenceTreeEntries(generatedRoot, ["execution-consumer.json"]);
+    const copyEntries = referenceTreeEntries(join(fixture.root, "skills"));
+    const mergeEntries = referenceTreeEntries(join(fixture.root, "agents"));
+    const manifestPath = join(packageRoot, "coverage", "cli.execution-consumer.json");
+    writeText(
+      manifestPath,
+      serializeExecutionValue({
+        version: 1,
+        protocol: "consumer-v1",
+        repoRoot: ".",
+        consumers: [
+          {
+            id: "cli",
+            packageRoot: "packages/cli",
+            capability: "writer",
+            capabilityNote: null,
+            entrypoint: "packages/cli/dist/mstar-harness.js",
+            runtime: { target: "node", floor: ">=24.18.0", declaration: "package-engines" },
+            sources: {
+              trees: [{ root: "packages/cli/src", files: sourceEntries.length, sha256: referenceTreeDigest(sourceEntries) }],
+              files: [{ path: "packages/cli/package.json", sha256: sha256OfBytes(readFileSync(join(packageRoot, "package.json"))) }],
+            },
+            generated: {
+              trees: [{ root: "packages/cli/dist", files: generatedEntries.length, sha256: referenceTreeDigest(generatedEntries) }],
+              files: [{ path: "packages/cli/dist/mstar-harness.js", sha256: sha256OfBytes(readFileSync(join(generatedRoot, "mstar-harness.js"))) }],
+            },
+            copiedInstructions: [
+              { sourceRoot: "skills", targetRoot: "packages/cli/harness-skills", mode: "copy", files: copyEntries.length, sha256: referenceTreeDigest(copyEntries) },
+              { sourceRoot: "agents", targetRoot: "packages/cli/harness-agents", mode: "merge", files: mergeEntries.length, sha256: referenceTreeDigest(mergeEntries) },
+            ],
+          },
+        ],
+      }),
+    );
+    // R1 records repo-relative paths, so the configured package root IS this
+    // fixture's checkout root.
+    writeInventory(fixture, {
+      roots: { sdd: join(fixture.harness, INV, "sdd"), host: join(fixture.harness, INV, "host"), package: fixture.root },
+      consumers: [{ surface: "cli-writer", path: manifestPath, consumerId: "cli" }],
+    });
+    return { ...fixture, manifestPath, sourceRoot, generatedRoot, linkPath };
+  }
+
+  test("Phase 2b closes the consumer surface against R1's own tree/copy rule", async () => {
+    const fixture = consumerWorkspace("c3-consumer-interop");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-consumer-preview"));
+    const row = manifest.surfaces.find((candidate) => candidate.surface === "cli-writer")!;
+    const coverage = await coverageOf(fixture, manifest);
+    const receipt = coverage.receipts.find((candidate) => candidate.surface === "cli-writer")!;
+    expect(receipt).toMatchObject({ disposition: "retain", protocol: "consumer-v1", workflowId: null });
+
+    // Every proof fact is R1's own rule, recomputed from the real bytes.
+    const sourceEntries = referenceTreeEntries(fixture.sourceRoot);
+    const generatedEntries = referenceTreeEntries(fixture.generatedRoot, ["execution-consumer.json"]);
+    const proof = row.consumerProof!;
+    const sourceTree = proof.trees.find((tree) => tree.kind === "source")!;
+    const generatedTree = proof.trees.find((tree) => tree.kind === "generated")!;
+    expect(sourceTree).toMatchObject({ path: "packages/cli/src", files: sourceEntries.length, sha256: referenceTreeDigest(sourceEntries) });
+    expect(generatedTree).toMatchObject({ path: "packages/cli/dist", files: generatedEntries.length, sha256: referenceTreeDigest(generatedEntries) });
+    // R1 records a symlink by its tree-relative target and the resolved bytes.
+    const linkEntry = sourceEntries.find((entry) => entry.kind === "symlink")!;
+    expect(linkEntry).toMatchObject({ path: "alias.ts", linkTarget: "nested/util.ts" });
+    expect(row.sources.find((witness) => witness.path === "packages/cli/src/alias.ts")?.sha256).toBe(linkEntry.sha256);
+    // Copies: the source-side closure is the digest, a merge keeps host-only extras out of the pair.
+    const copyProof = proof.copies.find((copy) => copy.mode === "copy")!;
+    expect(copyProof).toMatchObject({ sourceRoot: "skills", targetRoot: "packages/cli/harness-skills", files: 1, sha256: referenceTreeDigest(referenceTreeEntries(join(fixture.root, "skills"))) });
+    expect(copyProof.sourceWitnesses.map((witness) => witness.path)).toEqual(["skills/mstar-harness-core/SKILL.md"]);
+    const mergeProof = proof.copies.find((copy) => copy.mode === "merge")!;
+    expect(mergeProof.targetWitnesses.map((witness) => witness.path)).toEqual(["packages/cli/harness-agents/dev.md"]);
+    expect(row.sources.some((witness) => witness.path.includes("host-only.md"))).toBe(false);
+
+    // ONE changed source byte and the declared closure no longer holds.
+    writeText(join(fixture.sourceRoot, "index.ts"), "export const index = 2;");
+    const drift = await refusalOf(async () => coverageOf(fixture, manifest));
+    expect(drift.code).toBe("execution.coverage-incomplete");
+    expect(drift.message).toContain("surface discovery no longer holds the reviewed bytes");
+
+    // Re-discovering the drifted tree still refuses: the proof is recomputed
+    // from the real bytes and the DECLARED digest is now stale.
+    const rediscoved = await previewExecutionMigration(migrationInput(fixture, "op-consumer-drift-preview"));
+    const declared = await refusalOf(async () => coverageOf(fixture, rediscoved));
+    expect(declared.code).toBe("execution.coverage-incomplete");
+    expect(declared.message).toContain("discovery proof disagrees with the declared source tree");
+  });
+
+  test("Phase 2b names the producer-encoding conflict instead of reformatting the artifact", async () => {
+    // The repository producer serializes its manifest with two-space
+    // indentation and writes ONE aggregate document for all consumers, while the
+    // reviewed consumer substrate decodes canonical §3.1 bytes with exactly one
+    // consumer entry. C3 refuses and NAMES the cross-package conflict; it never
+    // reformats, reduces or rewrites the producer artifact to fit the decoder.
+    const fixture = consumerWorkspace("c3-consumer-encoding");
+    const document = JSON.parse(readFileSync(fixture.manifestPath, "utf8")) as Record<string, unknown>;
+
+    writeFileSync(fixture.manifestPath, `${JSON.stringify(document, null, 2)}\n`);
+    const pretty = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-consumer-pretty")));
+    expect(pretty.code).toBe("execution.migration-conflict");
+    expect(pretty.message).toContain("cross-package encoding conflict");
+    expect(pretty.message).toContain("canonical");
+
+    const aggregate = { ...document, consumers: [...(document.consumers as unknown[]), { ...(document.consumers as Array<Record<string, unknown>>)[0], id: "engine" }] };
+    writeFileSync(fixture.manifestPath, serializeExecutionValue(aggregate));
+    const many = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-consumer-aggregate")));
+    expect(many.code).toBe("execution.migration-conflict");
+    expect(many.message).toContain("carries 2 consumer entries");
   });
 });
