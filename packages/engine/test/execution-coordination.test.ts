@@ -2589,21 +2589,22 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
   }, 30000);
 
   /**
-   * §7/R10 one deterministic drift inside the preflight→commit window: the
-   * sealed Git proof is re-read immediately before the commit, so the drift must
-   * leave the plan exactly where the acceptance left it — still InReview, no
-   * `Done`, no completion receipt, the handoff still accepted and the execution
-   * lease still held.
+   * §7/R10 one refused completion: either a deterministic drift inside the
+   * preflight→commit window (the sealed Git proof is re-read immediately before
+   * the commit) or a topology the capture refuses before the transaction. Both
+   * must leave the plan exactly where the acceptance left it — still InReview,
+   * no `Done`, no completion receipt, the handoff still accepted and the
+   * execution lease still held.
    */
   async function expectCompletionRaceRefused(
     standalone: LifecycleFixture,
     label: string,
     handoffId: string,
-    drift: () => void,
+    drift?: () => void,
   ): Promise<void> {
     const before = planStateFootprint(standalone.context, OWN_PLAN);
     const footprint = planFootprint(standalone.context, OWN_PLAN);
-    setCompleteWitnessGapForTest(drift);
+    if (drift !== undefined) setCompleteWitnessGapForTest(drift);
     try {
       const raced = await refusalOf(() =>
         planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, `complete-race-${label}`, {
@@ -2665,6 +2666,44 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     await expectCompletionRaceRefused(standalone, "drift-objects", handoffId, () => {
       runGit(["repack", "-ad"], standalone.featurePath);
     });
+  }, 30000);
+
+  test("complete refuses a file created inside a pre-existing empty directory, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-empty-dir", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-empty-dir");
+    // An empty directory is invisible to `git status`, so it is a legal clean
+    // state and no tracked path leads to it; the proof still has to notice a
+    // path appearing inside it, exactly as the clean policy does.
+    mkdirSync(join(standalone.featurePath, "empty-dir"), { recursive: true });
+    await expectCompletionRaceRefused(standalone, "drift-empty-dir", handoffId, () => {
+      writeFileSync(join(standalone.featurePath, "empty-dir", "child.txt"), "appeared after the proof\n");
+    });
+  }, 30000);
+
+  test("complete refuses an untracked name whose kind changes at the same path, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-kind", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-kind");
+    const slot = join(standalone.featurePath, "slot");
+    mkdirSync(slot, { recursive: true });
+    // The parent entry name stays `slot`: only its KIND moves from directory to
+    // file, so a name-only inventory would not notice this dirty worktree.
+    await expectCompletionRaceRefused(standalone, "drift-kind", handoffId, () => {
+      rmSync(slot, { recursive: true });
+      writeFileSync(slot, "now a file at the same name\n");
+    });
+  }, 30000);
+
+  test("complete refuses a non-regular alternate object store, with no DB mutation", async () => {
+    const standalone = await lifecycleFixture("complete-drift-alternates", "development");
+    const handoffId = await acceptedAttempt(standalone, "drift-alternates");
+    // §7 an alternate topology this proof cannot enumerate is refused at
+    // capture rather than witnessed as an unreadable entry.
+    const objects = execFileSync("git", ["-C", standalone.featurePath, "rev-parse", "--git-path", "objects"], {
+      encoding: "utf8",
+    }).trim();
+    rmSync(join(objects, "info", "alternates"), { force: true });
+    mkdirSync(join(objects, "info", "alternates"), { recursive: true });
+    await expectCompletionRaceRefused(standalone, "drift-alternates", handoffId);
   }, 30000);
 });
 
