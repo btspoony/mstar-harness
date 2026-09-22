@@ -165,7 +165,14 @@ export type ConsumerDiscoveryProof = Readonly<{
     mode: "copy" | "merge";
     files: number;
     sha256: string;
-    witnesses: readonly CoverageWitness[];
+    /** The source-tree entries of the copy, by their configured-root-relative entry paths. */
+    sourceWitnesses: readonly CoverageWitness[];
+    /**
+     * The target entries corresponding to `sourceWitnesses`, one per source
+     * suffix. A `merge` target's extra entries belong to an independent
+     * generated-tree proof, never to this array.
+     */
+    targetWitnesses: readonly CoverageWitness[];
   }>[];
 }>;
 
@@ -1663,7 +1670,7 @@ function expectConsumerProof(value: unknown, what: string): ConsumerDiscoveryPro
   const copies = expectArray(record.copies, `${what}.copies`).map((entry, index) => {
     const where = `${what}.copies[${index}]`;
     const copy = expectObject(entry, where);
-    expectExactKeys(copy, ["consumerId", "root", "sourceRoot", "targetRoot", "mode", "files", "sha256", "witnesses"], where);
+    expectExactKeys(copy, ["consumerId", "root", "sourceRoot", "targetRoot", "mode", "files", "sha256", "sourceWitnesses", "targetWitnesses"], where);
     return {
       consumerId: expectString(copy.consumerId, `${where}.consumerId`),
       root: expectEnum(copy.root, COVERAGE_ROOTS, `${where}.root`),
@@ -1672,7 +1679,8 @@ function expectConsumerProof(value: unknown, what: string): ConsumerDiscoveryPro
       mode: expectEnum(copy.mode, COPY_MODES, `${where}.mode`),
       files: expectInteger(copy.files, `${where}.files`, 0),
       sha256: expectHex64(copy.sha256, `${where}.sha256`),
-      witnesses: expectWitnessList(copy.witnesses, `${where}.witnesses`),
+      sourceWitnesses: expectWitnessList(copy.sourceWitnesses, `${where}.sourceWitnesses`),
+      targetWitnesses: expectWitnessList(copy.targetWitnesses, `${where}.targetWitnesses`),
     };
   });
   return { trees, copies };
@@ -1921,10 +1929,26 @@ function validateConsumerProof(
     if (copy.consumerId !== declared.id) refuse(`${label}: the discovery proof describes consumer ${copy.consumerId}; this row covers ${declared.id}.`);
   }
 
+  const assignedRoots = new Set(receipt.sources.map((witness) => witness.root));
   const proofTrees = new Map<string, ConsumerTreeProof>();
   for (const tree of proof.trees) {
-    const key = `${tree.kind}|${tree.path}`;
-    if (proofTrees.has(key)) refuse(`${label}: the discovery proof lists the ${tree.kind} tree ${tree.path} twice; a duplicated proof is not discovery.`);
+    const key = `${tree.kind}|${tree.root}|${tree.path}`;
+    if (proofTrees.has(key)) refuse(`${label}: the discovery proof lists the ${tree.kind} tree ${key} twice; a duplicated proof is not discovery.`);
+    if (!assignedRoots.has(tree.root)) {
+      refuse(`${label}: the ${tree.kind} tree ${tree.path} is proved under root ${tree.root}, which holds none of this row's assigned bytes; a proof root is bound to the row's own configuration.`);
+    }
+    if (tree.witnesses.length !== tree.files) {
+      refuse(
+        `${label}: the ${tree.kind} tree ${tree.path} declares ${tree.files} entry(ies) but carries ${tree.witnesses.length} witness(es); R1 counts the tree ` +
+          `entries (files and symlinks), so the closure carries exactly one witness per entry.`,
+      );
+    }
+    for (const witness of tree.witnesses) {
+      if (witness.root !== tree.root) {
+        refuse(`${label}: a witness of the ${tree.kind} tree ${tree.path} is configured under root ${witness.root}, not the tree's own ${tree.root}.`);
+      }
+      insideTree(witness.path, tree.path, label, `${tree.kind} tree ${tree.path}`);
+    }
     proofTrees.set(key, tree);
   }
   const declaredTrees: Array<{ kind: "source" | "generated"; root: string; files: number; sha256: string }> = [
@@ -1932,7 +1956,7 @@ function validateConsumerProof(
     ...declared.generated.trees.map((tree) => ({ kind: "generated" as const, ...tree })),
   ];
   for (const tree of declaredTrees) {
-    const found = proofTrees.get(`${tree.kind}|${tree.root}`);
+    const found = [...proofTrees.values()].find((candidate) => candidate.kind === tree.kind && candidate.path === tree.root);
     if (found === undefined) {
       refuse(`${label}: the discovery proof has no ${tree.kind} tree for ${tree.root}; a declared closure the proof does not know is not corroborated.`);
     }
@@ -1942,7 +1966,7 @@ function validateConsumerProof(
           `${tree.files}/${tree.sha256}).`,
       );
     }
-    proofTrees.delete(`${tree.kind}|${tree.root}`);
+    proofTrees.delete(`${found.kind}|${found.root}|${found.path}`);
   }
   if (proofTrees.size > 0) {
     refuse(`${label}: the discovery proof carries ${[...proofTrees.keys()].join(", ")}, which the consumer declaration does not describe; the sets are compared exactly.`);
@@ -1971,6 +1995,37 @@ function validateConsumerProof(
           `${found.sha256}, declaration ${copy.mode}/${copy.files}/${copy.sha256}).`,
       );
     }
+    if (!assignedRoots.has(found.root)) {
+      refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} is proved under root ${found.root}, which holds none of this row's assigned bytes.`);
+    }
+    if (found.sourceWitnesses.length !== copy.files || found.targetWitnesses.length !== copy.files) {
+      refuse(
+        `${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} records ${copy.files} source entry(ies) but carries ` +
+          `${found.sourceWitnesses.length} source and ${found.targetWitnesses.length} target witness(es); both sides carry one witness per recorded entry.`,
+      );
+    }
+    const targets = new Map<string, CoverageWitness>();
+    for (const witness of found.targetWitnesses) {
+      if (witness.root !== found.root) refuse(`${label}: a target witness of the copy ${copy.sourceRoot} -> ${copy.targetRoot} is configured under root ${witness.root}.`);
+      const suffix = insideTree(witness.path, copy.targetRoot, label, `copy target ${copy.targetRoot}`);
+      if (targets.has(suffix)) refuse(`${label}: the copy target ${copy.targetRoot} carries two witnesses for ${suffix}.`);
+      targets.set(suffix, witness);
+    }
+    for (const witness of found.sourceWitnesses) {
+      if (witness.root !== found.root) refuse(`${label}: a source witness of the copy ${copy.sourceRoot} -> ${copy.targetRoot} is configured under root ${witness.root}.`);
+      const suffix = insideTree(witness.path, copy.sourceRoot, label, `copy source ${copy.sourceRoot}`);
+      const target = targets.get(suffix);
+      if (target === undefined) {
+        refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} has no target witness for ${suffix}; a merge target's extra entries belong to a generated-tree proof.`);
+      }
+      if (target.sha256 !== witness.sha256) {
+        refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} pairs ${suffix} with different bytes on each side (${witness.sha256} vs ${target.sha256}).`);
+      }
+      targets.delete(suffix);
+    }
+    if (targets.size > 0) {
+      refuse(`${label}: the copy target ${copy.targetRoot} carries target witness(es) ${[...targets.keys()].join(", ")} with no corresponding source entry.`);
+    }
   }
 
   const assigned = new Map<string, string>();
@@ -1992,7 +2047,9 @@ function validateConsumerProof(
     for (const witness of tree.witnesses) claim(witness, `${label}: a witness of the ${tree.kind} tree ${tree.path}`);
   }
   for (const copy of proof.copies) {
-    for (const witness of copy.witnesses) claim(witness, `${label}: a witness of the copy ${copy.sourceRoot} -> ${copy.targetRoot}`);
+    const what = `${label}: a witness of the copy ${copy.sourceRoot} -> ${copy.targetRoot}`;
+    copy.sourceWitnesses.forEach((witness) => claim(witness, what));
+    copy.targetWitnesses.forEach((witness) => claim(witness, what));
   }
   const unclaimed = [...assigned.keys()].filter((key) => !claimed.has(key));
   if (unclaimed.length > 0) {
@@ -2001,6 +2058,14 @@ function validateConsumerProof(
         `set and the proved closure are the same bytes`,
     );
   }
+}
+
+/** A witness path must sit at or below a tree/copy root; `"."` is the root itself. */
+function insideTree(path: string, root: string, label: string, what: string): string {
+  if (root === ".") return path;
+  if (path === root) refuse(`${label}: the ${what} names the root itself as a witness, which is an entry, not the tree.`);
+  if (!path.startsWith(`${root}/`)) refuse(`${label}: a witness of the ${what} lies at ${path}, outside that root.`);
+  return path.slice(root.length + 1);
 }
 
 function sameWitnesses(left: readonly CoverageWitness[], right: readonly CoverageWitness[]): boolean {

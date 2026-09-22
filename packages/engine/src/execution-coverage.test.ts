@@ -264,17 +264,30 @@ function consumerRow(surface: ExecutionSurface, consumer: string, capability: st
   const copyFile = doc("package", `${packageRoot}/harness-skills/SKILL.md`, "# copied skill\n");
   // C3's proof is a separate input: it is derived from the real bytes/kinds and
   // is never read out of the declaration below.
+  const sourceSkill = doc("package", "skills/mstar-harness-core/SKILL.md", "# copied skill\n");
   const proof = {
     trees: [{ consumerId: consumer, kind: "source", root: "package", path: `${packageRoot}/src`, files: 1, sha256: fakeHex(31), witnesses: [witnessOf(sourceFile)] }],
     copies: copies
-      ? [{ consumerId: consumer, root: "package", sourceRoot: "skills", targetRoot: `${packageRoot}/harness-skills`, mode: "copy", files: 1, sha256: fakeHex(32), witnesses: [witnessOf(copyFile)] }]
+      ? [
+          {
+            consumerId: consumer,
+            root: "package",
+            sourceRoot: "skills",
+            targetRoot: `${packageRoot}/harness-skills`,
+            mode: "copy",
+            files: 1,
+            sha256: fakeHex(32),
+            sourceWitnesses: [witnessOf(sourceSkill)],
+            targetWitnesses: [witnessOf(copyFile)],
+          },
+        ]
       : [],
   };
   return {
     surface,
     workflowId: null,
     disposition: "retain",
-    docs: copies ? [sourceFile, configFile, generatedFile, copyFile] : [sourceFile, configFile, generatedFile],
+    docs: copies ? [sourceFile, configFile, generatedFile, copyFile, sourceSkill] : [sourceFile, configFile, generatedFile],
     consumerProof: proof,
     evidence: doc(
       "package",
@@ -826,6 +839,82 @@ describe("execution-coverage", () => {
     const foreignProof = proofOf(foreignId, "cli-writer");
     setProof(foreignId, "cli-writer", { ...foreignProof, trees: [{ ...(foreignProof.trees as Array<Record<string, unknown>>)[0], consumerId: "omp" }] });
     refuseLeavingState(foreignId);
+
+    // A tree witness count that does not match the recorded entry count.
+    const wrongCount = materialize(buildRows());
+    const countProof = proofOf(wrongCount, "cli-writer");
+    setProof(wrongCount, "cli-writer", {
+      ...countProof,
+      trees: [{ ...(countProof.trees as Array<Record<string, unknown>>)[0], files: 2 }],
+    });
+    refuseLeavingState(wrongCount);
+
+    // A tree witness taken from another root.
+    const foreignRoot = materialize(buildRows());
+    const rootProof = proofOf(foreignRoot, "cli-writer");
+    setProof(foreignRoot, "cli-writer", {
+      ...rootProof,
+      trees: [{ ...(rootProof.trees as Array<Record<string, unknown>>)[0], root: "control" }],
+    });
+    refuseLeavingState(foreignRoot);
+
+    // A tree witness outside the tree's own root path.
+    const outsideTree = materialize(buildRows());
+    const outsideProof = proofOf(outsideTree, "cli-writer");
+    setProof(outsideTree, "cli-writer", {
+      ...outsideProof,
+      trees: [{ ...(outsideProof.trees as Array<Record<string, unknown>>)[0], path: "packages/cli/other" }],
+    });
+    refuseLeavingState(outsideTree);
+
+    // Copy parity: the target side renames one entry, so a suffix has no pair.
+    const copyMismatch = materialize(buildRows());
+    const copyProof = proofOf(copyMismatch, "copied-instructions");
+    const copyEntry = (copyProof.copies as Array<Record<string, unknown>>)[0];
+    setProof(copyMismatch, "copied-instructions", {
+      ...copyProof,
+      copies: [
+        {
+          ...copyEntry,
+          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/RENAMED.md", sha256: sha("# copied skill\n") }],
+        },
+      ],
+    });
+    refuseLeavingState(copyMismatch);
+
+    // Copy parity: the two sides pair the same suffix with different bytes.
+    const copyBytes = materialize(buildRows());
+    const copyBytesProof = proofOf(copyBytes, "copied-instructions");
+    const copyBytesEntry = (copyBytesProof.copies as Array<Record<string, unknown>>)[0];
+    setProof(copyBytes, "copied-instructions", {
+      ...copyBytesProof,
+      copies: [
+        {
+          ...copyBytesEntry,
+          targetWitnesses: [{ root: "package", path: "packages/dsh/harness-skills/SKILL.md", sha256: fakeHex(55) }],
+        },
+      ],
+    });
+    refuseLeavingState(copyBytes);
+
+    // Copy parity: an extra target entry no source entry pairs with.
+    const copyExtra = materialize(buildRows());
+    const copyExtraProof = proofOf(copyExtra, "copied-instructions");
+    const copyExtraEntry = (copyExtraProof.copies as Array<Record<string, unknown>>)[0];
+    setProof(copyExtra, "copied-instructions", {
+      ...copyExtraProof,
+      copies: [
+        {
+          ...copyExtraEntry,
+          files: 2,
+          targetWitnesses: [
+            ...(copyExtraEntry.targetWitnesses as unknown[]),
+            { root: "package", path: "packages/dsh/harness-skills/EXTRA.md", sha256: fakeHex(56) },
+          ],
+        },
+      ],
+    });
+    refuseLeavingState(copyExtra);
 
     // An assigned file under a declared tree root that neither the declaration
     // nor the proof lists: a prefix never excuses an unlisted file.
