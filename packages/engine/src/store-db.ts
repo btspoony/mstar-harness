@@ -16,7 +16,8 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync, type Stats } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
@@ -284,27 +285,37 @@ const SQLITE_FORMAT_MAGIC = "SQLite format 3\u0000";
 const WAL_FILE_FORMAT_VERSION = 2;
 
 /**
- * The store's final path must be a regular file. A symlink — or anything else
- * that is not a regular file — is refused with the store's own `store.corrupt`
- * refusal BEFORE the header probe and before the driver open, so the canonical
- * store interface never follows a link out of the resolved control root even
- * where the driver would happily follow it. A path with no file at all is left
- * to the caller's own existence check and to the open below, which is where a
- * missing store is reported.
+ * The store's final path must be a genuinely missing file or a regular file —
+ * decided WITHOUT following a link (`lstat`). Only a missing path (ENOENT) is
+ * "no store"; every path that EXISTS but is not a regular file — a symlink,
+ * dangling or not, a directory, a device — and every path that cannot even be
+ * examined is an existing-but-unreadable store and refuses `store.corrupt`
+ * here. That is what keeps a link — whose target may sit outside the resolved
+ * control root — from being answered as an absent store and reopening the
+ * retired file route, and it runs before any existence check, header probe or
+ * driver open.
  */
-function assertRegularStoreFile(dbPath: string): void {
-  let stats: Stats;
+function assertAbsentOrRegularStoreFile(dbPath: string): void {
+  let stats: Stats | undefined;
+  let examineError: unknown;
   try {
     stats = lstatSync(dbPath);
-  } catch {
-    return;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return;
+    examineError = error;
   }
-  if (stats.isFile()) return;
-  const kind = stats.isSymbolicLink() ? "a symbolic link" : "not a regular file";
+  if (stats?.isFile()) return;
+  const observed =
+    stats === undefined
+      ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})`
+      : stats.isSymbolicLink()
+        ? "it is a symbolic link"
+        : "it is not a regular file";
   throw new StoreError(
     "store.corrupt",
-    `The store path ${dbPath} is ${kind}. A store is read and written only at its own canonical path ` +
-      `inside the resolved control root; nothing was read or written.`,
+    `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and ` +
+      `written only at its own canonical path inside the resolved control root; nothing was read or written.`,
   );
 }
 
@@ -405,7 +416,7 @@ function openConnection(
     // intent follows a symlink out of it. A read-only connection can also never
     // create the `-wal` a quiesced WAL store needs, so that empty journal is put
     // back before the read open (see the helpers).
-    assertRegularStoreFile(dbPath);
+    assertAbsentOrRegularStoreFile(dbPath);
     if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
@@ -1272,8 +1283,11 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * the SAME `node:sqlite` driver read-only through the synchronous loader.
  *
  * The existence check below is the discrimination the guards act on, taken
- * BEFORE anything else in this function: only a path with no store file can
- * answer `state: null` without having read a store. A store file that EXISTS
+ * BEFORE anything else in this function, and it runs on the final path WITHOUT
+ * following a link: only a path with no store file can answer `state: null`
+ * without having read a store, so a dangling symlink or other non-regular final
+ * path refuses `store.corrupt` first and can never reopen the retired file
+ * route. A store file that EXISTS
  * and fails to open (SQLITE_CANTOPEN / an I/O error) or that another writer
  * holds past the bounded wait answers `unreadable` — never "no authority", so
  * neither guard can fall back to the retired file route for a store that is
@@ -1289,6 +1303,10 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  */
 function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe {
   const dbPath = storeDbPath(context);
+  // The same no-link discrimination the open makes: a dangling symlink or other
+  // non-regular final path is an existing store that cannot be read, never "no
+  // store", so the retired file route cannot answer for it.
+  assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     dropProbeConnection();
     return { kind: "state", dbPath, state: null };
@@ -1395,10 +1413,12 @@ export type StoreHandle = {
 
 /**
  * Open an existing store for reading or writing. Creates no store: a missing
- * database is a `store.not-initialized` refusal. The final path must be a
- * regular file at the store's own canonical path — a symlink or any other
- * non-regular file is refused `store.corrupt` before the driver open, so no
- * intent follows a link out of the resolved control root. Readers open with the
+ * database is a `store.not-initialized` refusal — and "missing" is decided on
+ * the final path without following a link, so a dangling symlink or any other
+ * non-regular file is an existing-but-unreadable store and refuses
+ * `store.corrupt` instead, never answering as an absent store. The final path
+ * must also be a regular file at the store's own canonical path — a link target
+ * outside the resolved control root is never followed. Readers open with the
  * read-only option plus `query_only=ON`; a WAL store whose journal SQLite's own
  * clean close removed gets that empty `-wal` back beside it before the open
  * (`ensureJournalForRead`), because a read-only connection cannot create the
@@ -1408,6 +1428,11 @@ export type StoreHandle = {
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
+  // The existence discrimination runs on the final path WITHOUT following a
+  // link: a dangling symlink or any other non-regular file is an existing store
+  // that cannot be read — `store.corrupt`, never "no store" — so neither this
+  // open nor the retired file route can answer from a link target.
+  assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",

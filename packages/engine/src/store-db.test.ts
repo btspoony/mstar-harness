@@ -22,6 +22,8 @@ import {
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
   StoreError,
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   initializeStore,
@@ -146,6 +148,34 @@ describe("store-db read-open repair", () => {
     await expect(openStore({ harnessDir: linkDir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
     expect(existsSync(`${linkPath}-wal`)).toBe(false);
     expect(readdirSync(targetDir).sort().join(" ")).toBe(targetBefore);
+  });
+
+  test("a dangling store.db link is a corrupt store, never an absent one", async () => {
+    const dir = mkdtempSync(join(ROOT, "dangling-link-"));
+    // The link exists; its target does not. Leftover legacy bytes sit beside it,
+    // so answering "no store" here would hand the retired file route back its
+    // authority over a path that is not genuinely absent.
+    symlinkSync(join(dir, "target-elsewhere.db"), join(dir, "store.db"));
+    writeFileSync(
+      join(dir, "status.json"),
+      JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
+    );
+
+    const refusalCodeOf = (run: () => void): string => {
+      try {
+        run();
+        return "";
+      } catch (error) {
+        return error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      }
+    };
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(openStore({ harnessDir: dir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(refusalCodeOf(() => assertExecutionFileWriteAllowed({ harnessDir: dir }))).toBe("store.corrupt");
+    expect(refusalCodeOf(() => assertExecutionFileReadAllowed({ harnessDir: dir }))).toBe("store.corrupt");
+    // Nothing was created for the refused link, and the leftover bytes stayed.
+    expect(existsSync(`${join(dir, "store.db")}-wal`)).toBe(false);
+    expect(existsSync(join(dir, "status.json"))).toBe(true);
   });
 });
 
