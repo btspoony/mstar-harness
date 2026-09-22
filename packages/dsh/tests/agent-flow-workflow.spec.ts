@@ -2857,6 +2857,44 @@ describe('agent-flow — durability, legacy bound and archive boundaries (F2)', 
     }
   })
 
+  it('a filesystem failure on the archive path refuses the record — no cursor success, and the SAME event records once after repair', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-creation-failure-')
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const T0 = 1_700_000_000_000
+      const pad = 'k'.repeat(180)
+      const seeded = Array.from({ length: AGENT_FLOW_MAX_EVENTS + 10 }, (_, i) => sourcedLine(T0 + i, `run-${i}`, 'sess-archfail', 'sess-archfail', i, pad))
+      await writeFile(file, `${seeded.join('\n')}\n`)
+      await seedIdentityIndex(workflowDir, seeded)
+      // The archive ROOT cannot be a directory: a regular file occupies the slot.
+      const historyPath = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await writeFile(historyPath, 'not a directory')
+
+      const event = { v: 1, ts: T0 + 1000, kind: 'workflow-run', runId: 'run-live', name: 'audit' } as const
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-live'), event })).toBe(false)
+      // Refused: no scan bound, no identity commit, no transaction record (the
+      // failure precedes it) and no compaction — the row itself is durable, so
+      // it stays replayable.
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_COMPACTION_FILE))).toBe(false)
+      expect(indexRows(workflowDir)).toHaveLength(AGENT_FLOW_MAX_EVENTS + 10)
+      expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
+
+      // Repair the archive slot: the SAME event is recognized from its durable
+      // row, indexed once, and the bound commits — no second occurrence.
+      await rm(historyPath, { force: true })
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-live'), event })).toBe(true)
+      const lines = readFileSync(file, 'utf8').trim().split('\n')
+      expect(lines.filter((line) => line.includes('"runId":"run-live"'))).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(AGENT_FLOW_MAX_EVENTS + 11)
+      expect(cursorEntry(workflowDir, 'sess-live')!.next).toBe(1)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('an UNREADABLE history chunk refuses the compaction and leaves the transaction recorded', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-archive-unreadable-')
     const priorSink = setAgentFlowLogger(() => {})

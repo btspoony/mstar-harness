@@ -1421,13 +1421,9 @@ function loadIdentityIndex(workflowDir: string): IdentityIndexRead {
  */
 function appendIdentityIndexLocked(workflowDir: string, eventId: string, digest: string): void {
   const file = join(workflowDir, AGENT_FLOW_INDEX_FILE)
-  const fd = openSync(file, 'a')
-  try {
-    writeSync(fd, `${JSON.stringify({ id: eventId, d: digest })}\n`)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
+  // The shared durable primitive: file bytes AND, on the first entry, the new
+  // directory entry.
+  appendFileDurableSync(file, `${JSON.stringify({ id: eventId, d: digest })}\n`)
   indexCache.delete(workflowDir)
 }
 
@@ -1552,12 +1548,21 @@ export function withWorkflowDirLock<T>(
 }
 
 /**
- * Append bytes durably: one fd, one write, `fsync` before returning. Every
- * accepted ledger row and every identity-index entry goes through here, so a
- * caller can never report success for bytes that are still only in the page
- * cache.
+ * Append bytes durably: one fd, one write, `fsync` before returning — plus,
+ * when THIS call created the file, a fsynced parent directory so the new
+ * directory entry survives a crash (the first `agent-flow.jsonl`,
+ * `agent-flow-ids.jsonl` or history chunk of a workflow dir). Every accepted
+ * ledger row and every identity-index entry goes through here, so a caller can
+ * never report success for bytes that are still only in the page cache.
  */
 function appendFileDurableSync(file: string, bytes: string): void {
+  let created = false
+  try {
+    statSync(file)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    created = true
+  }
   const fd = openSync(file, 'a')
   try {
     writeSync(fd, bytes)
@@ -1565,6 +1570,7 @@ function appendFileDurableSync(file: string, bytes: string): void {
   } finally {
     closeSync(fd)
   }
+  if (created) fsyncDirectory(dirname(file))
 }
 
 /**
@@ -1587,23 +1593,34 @@ function writeFileDurableSync(file: string, content: string): void {
 }
 
 /**
- * Fsync one directory (the rename/create durability boundary). A platform that
- * refuses to open a directory for fsync degrades to a warn: the file bytes and
- * the rename are still ordered, only the dir entry's durability is unproven.
+ * Fsync one directory — the rename/create durability boundary. A failure here
+ * THROWS: the durable write did not commit, so every public advisory write
+ * path reports a refusal instead of a success. There is no platform exemption
+ * and no no-op fallback: an unproven directory entry is not a committed write.
  */
 function fsyncDirectory(dir: string): void {
-  let fd: number
-  try {
-    fd = openSync(dir, 'r')
-  } catch (error) {
-    log('warn', `agent-flow directory fsync unavailable for ${dir} (${errorMessage(error)}) — the rename is ordered but its directory entry is not proven durable`)
-    return
-  }
+  const fd = openSync(dir, 'r')
   try {
     fsyncSync(fd)
   } finally {
     closeSync(fd)
   }
+}
+
+/**
+ * Create one directory durably: an absent directory is created and its OWN
+ * parent entry is fsynced (the file helper fsyncs the new directory itself when
+ * it creates the first file inside it).
+ */
+function ensureDirectoryDurable(dir: string): void {
+  try {
+    statSync(dir)
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  mkdirSync(dir, { recursive: true })
+  fsyncDirectory(dirname(dir))
 }
 
 /**
@@ -1707,9 +1724,8 @@ function ensureArchivedLocked(workflowDir: string, journal: CompactionJournal, b
       log('warn', 'agent-flow compaction archive chunk is missing although the transaction did not start at offset 0 — refusing')
       return false
     }
-    mkdirSync(dir, { recursive: true })
+    ensureDirectoryDurable(dir)
     appendFileDurableSync(path, batchBytes)
-    fsyncDirectory(dir)
     return true
   }
   // A chunk whose length is exactly the recorded offset is the legal ZERO-BYTE
@@ -1839,26 +1855,24 @@ function resolveCompactionLocked(workflowDir: string): boolean {
  * the batch will occupy (the current size — 0 for a chunk that does not exist
  * yet). Read-only; the caller records the result in the journal BEFORE writing.
  */
-function resolveArchiveTarget(workflowDir: string): { chunk: string; path: string; offset: number; created: boolean } {
+function resolveArchiveTarget(workflowDir: string): { chunk: string; path: string; offset: number } {
   const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
-  mkdirSync(dir, { recursive: true })
+  ensureDirectoryDurable(dir)
   const sealed = readdirSync(dir).filter((name) => name.startsWith('chunk-') && name.endsWith('.jsonl')).sort()
   let chunk = sealed.length === 0 ? `chunk-${String(1).padStart(6, '0')}.jsonl` : sealed[sealed.length - 1]!
   let path = join(dir, chunk)
   let size = 0
-  let created = sealed.length === 0
   try {
     size = statSync(path).size
   } catch {
-    created = true
+    size = 0
   }
   if (size >= AGENT_FLOW_SIZE_GATE_BYTES) {
     chunk = `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`
     path = join(dir, chunk)
     size = 0
-    created = true
   }
-  return { chunk, path, offset: size, created }
+  return { chunk, path, offset: size }
 }
 
 /**
@@ -1954,7 +1968,6 @@ function appendLineLocked(workflowDir: string, line: string, index: IdentityInde
   writeFileDurableSync(journalFile, JSON.stringify(journal))
   // 2) …then the archived bytes…
   appendFileDurableSync(target.path, batchBytes)
-  if (target.created) fsyncDirectory(dirname(target.path))
   // 3) …then the display tail…
   writeFileDurableSync(file, afterContent)
   // 4) …and finally the completed transaction is removed.
