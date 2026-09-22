@@ -1862,10 +1862,12 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
     seat: undefined as unknown as Seat,
   } as LifecycleFixture;
   if (route === "report-only") {
+    const workflowState = (await readExecutionState(context)).data.workflows.find((candidate) => candidate.state.id === WORKFLOW_ID);
+    if (workflowState === undefined) throw new Error("fixture: workflow is not registered");
     await mutateExecutionWorkflow(domainContext(context, coordinatorCaller), {
       operationId: `delivery-${label}`,
       session: fixture.coordinator,
-      expected: fixture.coordinator.workflowToken,
+      expected: workflowState.workflowToken,
       workflowId: WORKFLOW_ID,
       operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } },
     });
