@@ -253,7 +253,7 @@ async function seedIssueStore(fixture: Fixture): Promise<void> {
 async function bindFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const fixture = makeFixture(options);
   await seedIssueStore(fixture);
-  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root, sessionId: "fixture-coordinator" });
   expect(bound.outcome).toBe("bound");
   fixture.coordinatorSession = bound.session_file;
   for (const planId of PLAN_IDS) {

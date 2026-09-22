@@ -15,8 +15,12 @@
  * Identity is never a *looked-up* CLI input: no flag here names a holder, role
  * or coordinator — the engine reads the session envelope named by `--session`
  * and re-checks it against the snapshot inside the lock. The one exception is
- * the fresh-bind identity (`--session-id`, else `MSTAR_HOST_SESSION_ID`): the
- * caller states what the new session is called, never what an existing one owns.
+ * the fresh-bind identity (`--session-id`, and for a plan/assignment bind the
+ * injected `MSTAR_HOST_SESSION_ID`): the caller states what the new session is
+ * called, never what an existing one owns. A fresh `--coordinator` bind requires
+ * the explicit `--session-id` — the injected environment does not authorize a
+ * coordinator bootstrap, and the host-owned `mstar_coordinator` tool is the
+ * managed route.
  */
 import { Command } from "commander";
 import { existsSync, readFileSync } from "node:fs";
@@ -25,6 +29,7 @@ import pc from "picocolors";
 import {
   SddScriptError,
   amendPrepareWorkflow,
+  assertSafeSessionId,
   bindPlanSession,
   createFsStore,
   mutatePlanCoordination,
@@ -32,6 +37,7 @@ import {
   readExecutionSource,
   readPlanCoordination,
   readSessionEnvelope,
+  recoverPrepareCoordinator,
   resolveProcessHarnessDir,
   setArtifactStore,
   showPrepareWorkflow,
@@ -45,6 +51,7 @@ import {
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
   type ProgressCoordinationRequest,
+  type RecoverPrepareCoordinatorResult,
   type ResidualInput,
   type TerminalDisposition,
 } from "@mstar-harness/engine";
@@ -172,6 +179,7 @@ const OPERATION_OUTCOME_NAMES: Record<string, string> = {
 const WORKFLOW_VERBS: Record<string, true> = {
   "show-prepare": true,
   "amend-prepare": true,
+  "recover-coordinator": true,
 };
 
 /** The scoped coordination families this module registers, with their verbs. */
@@ -260,7 +268,14 @@ function requireFlag(raw: string | undefined, flag: string, verb: string, what: 
 function requireAbsolutePath(raw: string | undefined, flag: string, verb: string, what: string): string {
   const value = requireFlag(raw, flag, verb, what);
   if (!isAbsolute(value)) {
-    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(value)}`, 2);
+    // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+    // rejected value is never repeated in it: the message states the rule, as
+    // `--stopped` already does. A caller-supplied address — a credential path
+    // as readily as a plan file — never becomes a public diagnostic.
+    throw new SddScriptError(
+      `${flag} must be an absolute path for ${what} \u2014 the received value is not absolute and is not echoed in this diagnostic`,
+      2,
+    );
   }
   return value;
 }
@@ -384,7 +399,12 @@ async function printAuthorityView(
   json: boolean,
 ): Promise<void> {
   if (harnessArg !== undefined && !isAbsolute(harnessArg)) {
-    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harnessArg)}`, 2);
+    // Same non-echoing shape as every absolute-path usage refusal here: a
+    // caller-supplied address never becomes a public diagnostic.
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
   }
   const harnessDir = resolveProcessHarnessDir(process.cwd(), harnessArg);
   if (harnessDir === null) {
@@ -677,20 +697,22 @@ function handoffMismatch(verb: string, planId: string, live: string, named: stri
   });
 }
 
-/** The host-injected session identity channel (plan D1/D2); `plan bind` only. */
+/** The host-injected session identity channel; a plan/assignment bind only. */
 const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
 /**
- * The fresh-bind identity (plan D2): the `--session-id` flag wins, otherwise the
- * host-injected `MSTAR_HOST_SESSION_ID` (trimmed; empty and whitespace-only count
- * as absent), otherwise `undefined` and the engine generates the id. The value
- * itself is the engine's contract — it validates the id and refuses an unusable
- * one with `coordination.invalid-session-id`, so the flag is never silently
- * rewritten here.
+ * The fresh-bind identity. The `--session-id` flag is the explicit input and
+ * always wins. The injected `MSTAR_HOST_SESSION_ID` remains a declared local
+ * input form for a **plan/assignment** bind, but it no longer authorizes a
+ * **coordinator** bootstrap (prerequisite contract §3.2): a managed coordinator
+ * identity comes from the host-owned `mstar_coordinator` tool, and a plain local
+ * operator states `--session-id`. A missing value returns `undefined` and the
+ * engine owns the refusal — it is never silently replaced here.
  */
-function sessionIdOf(options: PlanCliOptions): string | undefined {
+function sessionIdOf(options: PlanCliOptions, family: "coordinator" | "plan"): string | undefined {
   const flag = options.sessionId as string | undefined;
   if (flag !== undefined) return flag;
+  if (family === "coordinator") return undefined;
   const injected = process.env[SESSION_ID_ENV];
   if (injected === undefined || injected.trim() === "") return undefined;
   return injected.trim();
@@ -708,7 +730,10 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   const resume = options.resume as string | undefined;
   const harness = options.harness as string | undefined;
   if (harness !== undefined && !isAbsolute(harness)) {
-    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harness)}`, 2);
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
   }
   const families = [
     coordinator,
@@ -733,10 +758,13 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "coordinator");
     return {
       coordinator: true,
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
+      // This form is a plain local operator bootstrap, so the adapter states
+      // `local` provenance rather than leaving it to be inferred.
+      source: "local",
       ...(harness !== undefined ? { harnessDir: harness } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       cwd,
@@ -749,7 +777,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "plan");
     return {
       scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") },
       ...(sessionId !== undefined ? { sessionId } : {}),
@@ -771,7 +799,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   if (workflow === undefined || plan === undefined) {
     throw new SddScriptError("plan bind --workflow requires --plan <id> (the workflow+plan address form)", 2);
   }
-  const sessionId = sessionIdOf(options);
+  const sessionId = sessionIdOf(options, "plan");
   return {
     scope: {
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
@@ -813,16 +841,21 @@ export function registerPlanCommands(program: Command): void {
     .description(
       "Bind the scoped session for one plan \u2014 fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
         "the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing session file " +
-        "(read-only: no ownership change, no takeover). A fresh bind adopts `--session-id`, else the injected " +
-        "MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
+        "(read-only: no ownership change, no takeover). A fresh `--coordinator` bootstrap requires the explicit " +
+        "`--session-id` (no generated id, and the injected MSTAR_HOST_SESSION_ID does not authorize it); a managed host " +
+        "session binds through the host-owned `mstar_coordinator` tool instead. A plan/assignment bind adopts " +
+        "`--session-id`, else MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
     )
-    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow; one per workflow)")
+    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow and --session-id; one per workflow)")
     .option("--workflow <id>", "Workflow id")
     .option("--plan <id>", "Plan id (workflow+plan address form)")
     .option("--assignment <path>", "Absolute path of the pinned prepared Assignment")
     .option("--resume <path>", "Absolute path of an existing session JSON envelope")
     .option("--harness <path>", "Absolute harness dir override (default: resolved control root)")
-    .option("--session-id <id>", `Session id the fresh bind adopts (default: $${SESSION_ID_ENV}, else generated)`)
+    .option(
+      "--session-id <id>",
+      `Session id the fresh bind adopts (required for --coordinator; else $${SESSION_ID_ENV}, else generated)`,
+    )
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb(
@@ -1123,6 +1156,84 @@ function printWorkflowView(verb: string, result: PrepareWorkflowResult, json: bo
 }
 
 /**
+ * The `recover-coordinator` stop assertion (prerequisite contract §3.3): at
+ * least one prior session id, each a PUBLIC session id under the one shared
+ * rule (single safe path component, bounded length) — the same rule the
+ * acquired identity obeys. An absent, empty or malformed `--stopped` is a
+ * usage refusal (exit 2), never a request the engine answers with
+ * `unauthorized` or persists into the immutable audit — the operator states
+ * the attestation up front.
+ */
+function requireStopAssertion(raw: string | string[] | undefined): string[] {
+  const values = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  const stopped: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes session ids naming the recorded coordinator " +
+          "(and any other prior holder) attested stopped or reloaded",
+        2,
+      );
+    }
+    try {
+      assertSafeSessionId(entry, "--stopped entry");
+    } catch {
+      // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+      // rejected value is never repeated in it: the message states the rule.
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes public session ids \u2014 a single safe path " +
+          "component ([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed",
+        2,
+      );
+    }
+    stopped.push(entry);
+  }
+  if (stopped.length === 0) {
+    throw new SddScriptError(
+      "usage: workflow recover-coordinator requires --stopped <session-id...> naming the recorded coordinator " +
+        "(and any other prior holder) attested stopped or reloaded",
+      2,
+    );
+  }
+  return stopped;
+}
+
+/**
+ * The recovery success payload (prerequisite contract §3.3): the two public
+ * session ids, the replay identity, the versions and the time. The coordinator
+ * envelope path is NOT part of this projection — §3.3 keeps it in
+ * coordinator-owned transport, and this operator CLI's stdout/stderr is a
+ * public diagnostic surface, not that transport. No envelope body, credential,
+ * reason text or path is echoed.
+ */
+function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): void {
+  const receipt = result.recovery;
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        operation: "recover-coordinator",
+        workflow_id: receipt.workflowId,
+        prior_session_id: receipt.priorSessionId,
+        session_id: receipt.sessionId,
+        operation_id: receipt.operationId,
+        replay: receipt.replay,
+        snapshot_version: receipt.snapshotVersion,
+        compass_version: receipt.compassVersion,
+      }),
+    );
+    return;
+  }
+  console.error(
+    pc.green(
+      `workflow recover-coordinator: coordinator of ${receipt.workflowId} is now session ${receipt.sessionId}` +
+        ` (was ${receipt.priorSessionId}, operation ${receipt.operationId}${receipt.replay ? ", replayed" : ""})`,
+    ),
+  );
+  console.error(`workflow recover-coordinator: snapshot ${receipt.snapshotVersion}, compass ${receipt.compassVersion}`);
+}
+
+/**
  * `mstar workflow` — the workflow-level Prepare amendment verbs (spec § New API
  * and CLI). They live in this module because they are the same scoped
  * coordination transport: one coordinator envelope, one engine call, the same
@@ -1133,9 +1244,11 @@ export function registerWorkflowCommands(program: Command): void {
   const workflow = program
     .command("workflow")
     .description(
-      "Workflow-level Prepare amendment: read the current snapshot/compass byte versions and the admission view " +
-        "(`show-prepare`), then apply one approved structural delta (`amend-prepare`) (engine-backed; JSON on stdout " +
-        "with --json, diagnostics on stderr; exit 0 ok, 1 refusal, 2 usage)",
+      "Workflow-level Prepare amendment and coordinator recovery: read the current snapshot/compass byte versions " +
+        "and the admission view (`show-prepare`), apply one approved structural delta (`amend-prepare`), or replace " +
+        "a recorded coordinator binding with an explicitly acquired session under the audited recovery guards " +
+        "(`recover-coordinator`) (engine-backed; JSON on stdout with --json, diagnostics on stderr; exit 0 ok, " +
+        "1 refusal, 2 usage)",
     )
     .exitOverride();
 
@@ -1163,8 +1276,9 @@ export function registerWorkflowCommands(program: Command): void {
   workflow
     .command("amend-prepare")
     .description(
-      "Append approved Todo plan rows, record the reviewed integration checkout and the approved plan parallelism " +
-        "(coordinator session; both byte versions from `workflow show-prepare` are required)",
+      "Append approved Todo plan rows, correct existing rows' malformed plan-file pointers, record the reviewed " +
+        "integration checkout and the approved plan parallelism (coordinator session; both byte versions from " +
+        "`workflow show-prepare` are required)",
     )
     .option("--session <path>", "Absolute coordinator session JSON envelope path")
     .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
@@ -1204,6 +1318,85 @@ export function registerWorkflowCommands(program: Command): void {
           }),
           json,
         );
+      }),
+    );
+
+  // `mstar workflow recover-coordinator` — the JSON Prepare coordinator
+  // recovery (prerequisite contract §3.3). A NEW verb, never an alias for the
+  // existing active-store recovery (`execution-workflow.ts`, which needs a full
+  // execution token and a stop attestation): this one is file/JSON only,
+  // Prepare-only, and narrows the effect to the top-level coordinator binding
+  // plus one audit record. The prior envelope is named EXPLICITLY here (the
+  // operator route), while the host resolves it from the engine's own view; the
+  // replacement identity is stated just as explicitly (`--session-id`) because
+  // the engine never generates one.
+  workflow
+    .command("recover-coordinator")
+    .description(
+      "Replace the recorded coordinator binding of one Prepare workflow with an explicitly acquired session " +
+        "(audited, JSON/Prepare-only): the prior envelope must still authenticate the recorded binding, the prior " +
+        "holder must be named as stopped, and both byte versions from `workflow show-prepare` are required. No " +
+        "lease transfer, no prepared-plan takeover, no force flag",
+    )
+    .option("--prior-session <path>", "Absolute path of the coordinator envelope the workflow records now")
+    .option("--session-id <id>", "Explicitly acquired id of the replacement coordinator session (never generated)")
+    .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
+    .option("--expect-compass <sha256>", "Current compass byte version from `workflow show-prepare`")
+    .option("--operation-id <id>", "Caller-supplied id of this one recovery operation (the replay key)")
+    .option("--reason <text>", "Why the prior coordinator can no longer authenticate")
+    .option("--authorization-ref <ref>", "The operator's authorization reference for this replacement")
+    .option("--stopped <session-id...>", "Stopped/reloaded prior holder(s); must name the recorded coordinator")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("recover-coordinator", options, {}, async (json) => {
+        // Every flag is validated before any engine I/O (exit 2): a malformed
+        // token, payload or missing stop assertion must never surface as a
+        // store refusal (exit 1).
+        const priorSessionPath = requireAbsolutePath(
+          options.priorSession as string | undefined,
+          "--prior-session",
+          "recover-coordinator",
+          "session-json-path",
+        );
+        const sessionId = requireFlag(options.sessionId as string | undefined, "--session-id", "recover-coordinator", "session-id");
+        const expectedSnapshotVersion = parsePrepareVersion(
+          options.expectSnapshot as string | undefined,
+          "--expect-snapshot",
+          "recover-coordinator",
+        );
+        const expectedCompassVersion = parsePrepareVersion(
+          options.expectCompass as string | undefined,
+          "--expect-compass",
+          "recover-coordinator",
+        );
+        const operationId = requireFlag(options.operationId as string | undefined, "--operation-id", "recover-coordinator", "operation-id");
+        const reason = requireFlag(options.reason as string | undefined, "--reason", "recover-coordinator", "reason");
+        const authorizationRef = requireFlag(
+          options.authorizationRef as string | undefined,
+          "--authorization-ref",
+          "recover-coordinator",
+          "authorization-reference",
+        );
+        const stoppedSessionIds = requireStopAssertion(options.stopped as unknown as string[] | undefined);
+        // The prior envelope is the address (its own root and workflow id), not
+        // a looked-up credential: every guard on it is the engine's, inside the
+        // lock, and it must still be the recorded binding.
+        const prior = readSessionEnvelope(priorSessionPath);
+        pinArtifactStoreRoot(prior.harness_root);
+        const result = await recoverPrepareCoordinator({
+          cwd: process.cwd(),
+          harnessDir: prior.harness_root,
+          identity: { source: "local", sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          priorSessionPath,
+          priorSessionId: prior.session_id,
+          expectedSnapshotVersion,
+          expectedCompassVersion,
+          operationId,
+          reason,
+          authorizationRef,
+          stoppedSessionIds,
+        });
+        printRecovery(result, json);
       }),
     );
 

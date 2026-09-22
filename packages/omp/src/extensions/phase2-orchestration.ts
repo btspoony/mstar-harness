@@ -53,10 +53,12 @@
  * observation.
  *
  * The engine's coordinator envelope id and the host's session id are different
- * identities (`mstar plan bind --coordinator` mints its own UUID), so the
- * binding records **both**: the envelope path is the engine-side ownership
- * reference every later probe re-verifies against the snapshot, and the host
- * session id is the exact-session filter for the ledger. What this does not
+ * identities (a CLI `plan bind --coordinator` adopts the explicitly supplied
+ * `--session-id`, while the host-owned `mstar_coordinator` tool derives the
+ * native id from the host), so the binding records **both**: the envelope path
+ * is the engine-side ownership reference every later probe re-verifies against
+ * the snapshot, and the host session id is the exact-session filter for the
+ * ledger. What this does not
  * claim: it is not cryptographic proof that the caller is that host session —
  * the host exposes no attributed identity to extensions. The residency gate,
  * the task-session refusal and the envelope/snapshot agreement are the

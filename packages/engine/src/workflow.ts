@@ -43,6 +43,7 @@ import {
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
+import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
@@ -853,11 +854,39 @@ export async function writeWorkflowSnapshot(
       );
     }
     const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
+    if (current === undefined) assertNoRecoveryHistoryOnCreate(payload, snapshotPath);
     assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
     await withProtectedWrite(snapshotPath, "put", () =>
       store.put({ kind: "snapshot", key: snapshot.id, payload }),
     );
   });
+}
+
+/**
+ * Provenance boundary for the recovery audit (prerequisite contract §3.3).
+ *
+ * `coordination.identity_recoveries` is written ONLY by
+ * `recoverPrepareCoordinator`, which appends one entry under the snapshot write
+ * lock after authenticating the prior binding. The ordinary writer pins an
+ * EXISTING audit to disk (a replacement cannot drop or rewrite it), but a
+ * create-only write has no disk document to pin against: without this boundary
+ * a caller could CREATE a snapshot carrying an arbitrary, schema-valid —
+ * entirely forged — recovery history that never passed through the recovery
+ * transition. Shape validation is not provenance, so the history is refused
+ * outright, whatever its shape, and the only door that establishes it is the
+ * authorized recovery.
+ */
+function assertNoRecoveryHistoryOnCreate(payload: unknown, snapshotPath: string): void {
+  const coordination = isPlainObject(payload) ? payload.coordination : undefined;
+  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
+  if (!Array.isArray(recoveries) || recoveries.length === 0) return;
+  throw new CoordinationError(
+    "coordination.direct-write-refused",
+    `refusing to create snapshot ${snapshotPath} carrying ${recoveries.length} coordination.identity_recoveries ` +
+      `entr${recoveries.length === 1 ? "y" : "ies"} \u2014 recovery history is established only by the coordinator ` +
+      `recovery transition, and this create-only write proves no such provenance`,
+    { path: snapshotPath, recoveries: recoveries.length },
+  );
 }
 
 /**
@@ -1908,7 +1937,10 @@ export function iterationWorkflowSnapshot(
  * requested state transition is never treated as successful registration);
  * `startedAt` must be a valid YYYY-MM-DD / RFC3339 timestamp. Rows are
  * constructed from the declared fields — untrusted row objects are never
- * spread.
+ * spread. Every row `file` is resolved through the one registered-plan path
+ * contract (§4): only a canonical absolute or a normalized harness-relative
+ * pointer to the configured `{PLAN_DIR}/<id>.md` is accepted, and the snapshot
+ * persists that canonical absolute path.
  *
  * Already-registered refusals: inside the root lock, an existing entry for
  * the requested id refuses BEFORE either branch — including a stale entry
@@ -1988,13 +2020,24 @@ export async function registerIterationWorkflow(
   if (!isCloseTimestamp(startedAt)) {
     throw refuse("options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
+  // One registered-plan path contract (prerequisite contract §4): the snapshot
+  // persists the canonical absolute pointer the shared resolver returns, never
+  // the caller's spelling. A repository-relative `.mstar/plans/<id>.md` input
+  // therefore refuses here — before any write — instead of being stored and
+  // later reinterpreted against another base. Run AFTER the field refusals so
+  // a malformed row still reports its own domain refusal first.
+  const resolvedRows = rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    file: resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: row.id, file: row.file }).planPath,
+  }));
 
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const snapshot = iterationWorkflowSnapshot(workflowId, options, startedAt);
+  const snapshot = iterationWorkflowSnapshot(workflowId, { ...options, rows: resolvedRows }, startedAt);
 
   const entry: WorkflowEntry = {
     id: workflowId,

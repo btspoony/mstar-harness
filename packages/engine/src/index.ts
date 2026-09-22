@@ -69,6 +69,12 @@ export {
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
+// The one registered-plan path contract (prerequisite contract §4): iteration
+// registration, the catalog registration preflight, the Prepare append and the
+// readiness readers import THIS resolver instead of restating the
+// `{PLAN_DIR}/<plan-id>.md` convention — one parser, one refusal type.
+export type { PlanPathRefusalCode, RegisteredPlanFile, RegisteredPlanFileInput } from "./plan-path.js";
+export { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile } from "./plan-path.js";
 export type {
   PlanRow,
   ResidualEntry,
@@ -472,6 +478,12 @@ export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type Activ
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 
+// Adapter-only execution identity (prerequisite contract §3.1): one shared
+// tuple + scope validator every adapter and later DB consumer imports instead
+// of declaring a second shape.
+export type { ExecutionIdentity, ExecutionIdentityRole, ExecutionIdentityScope } from "./session-identity.js";
+export { SESSION_ID_MAX_LENGTH, assertSafeSessionId, validateExecutionIdentity } from "./session-identity.js";
+
 export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,
@@ -488,6 +500,8 @@ export {
   replaceCoordinatedArtifact,
   resolvePlanScope,
   resolveProcessHarnessDir,
+  recoverPrepareCoordinator,
+  showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
 } from "./coordination.js";
 export type {
@@ -505,11 +519,16 @@ export type {
   PlanCoordinationView,
   PlanScopeInput,
   PrepareCoordinationRequest,
+  PrepareCoordinatorRecoveryBlocker,
+  PrepareCoordinatorRecoveryReceipt,
+  PrepareCoordinatorRecoveryView,
   PreparePlanAppend,
+  PreparePlanFileCorrection,
   PrepareWorkflowPatch,
   PrepareWorkflowResult,
   PrepareWorkflowView,
   ProgressCoordinationRequest,
+  RecoverPrepareCoordinatorResult,
   ResidualAddCoordinationRequest,
   ResidualCloseCoordinationRequest,
   ResidualInput,

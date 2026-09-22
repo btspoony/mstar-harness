@@ -47,6 +47,13 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.session-not-found",
   "coordination.session-role",
   "coordination.invalid-session-id",
+  // Identity acquisition refusals (prerequisite contract §3.1/§3.2): a fresh
+  // coordinator envelope requires an explicitly acquired identity, so the two
+  // ways an adapter-supplied tuple can fail get their own codes instead of
+  // overloading `invalid-session-id` (a malformed value) or `scope-mismatch`
+  // (an addressing error).
+  "coordination.identity-missing",
+  "coordination.identity-mismatch",
   "coordination.version-conflict",
   "coordination.expected-version-required",
   "coordination.invalid-transition",
@@ -74,6 +81,17 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.prepare-amendment.invalid-plan",
   "coordination.prepare-amendment.compass-mismatch",
   "coordination.prepare-amendment.invalid-worktree",
+  // JSON Prepare coordinator-recovery refusals (prerequisite contract §3.3):
+  // one code per documented reason. Deliberately NOT the DB recovery's verb
+  // (`execution-workflow.ts` owns the active-store route with its token and
+  // stop attestation) and not an alias of it — this family is file/JSON only.
+  "coordination.identity-recovery.invalid-request",
+  "coordination.identity-recovery.stale",
+  "coordination.identity-recovery.not-prepare",
+  "coordination.identity-recovery.execution-started",
+  "coordination.identity-recovery.foreign-owner",
+  "coordination.identity-recovery.unauthorized",
+  "coordination.identity-recovery.operation-conflict",
   "coordination.delivery-source-repair.unsupported-workflow",
   "coordination.delivery-source-repair.terminal",
   "coordination.delivery-source-repair.no-accepted-handoff",
@@ -313,8 +331,45 @@ export type PreparedCoordination = {
 /** A bound session: identity + the canonical envelope that proves it. */
 export type CoordinatorBinding = { session_id: string; session_file: string; bound_at: string };
 
-/** Snapshot-level coordination block (the workflow's coordinator). */
-export type SnapshotCoordination = { coordinator: CoordinatorBinding };
+/**
+ * One immutable coordinator-identity recovery record (prerequisite contract
+ * §3.3). Appended by `recoverPrepareCoordinator` under the snapshot write lock
+ * and never rewritten: `operation_id` + `request_hash` are the replay
+ * identity, `snapshot_version_before`/`compass_version` name the exact bytes
+ * the recovery was authorized against, and no envelope body, bearer material
+ * or credential path is recorded — only the two public session ids.
+ */
+export type CoordinationIdentityRecovery = {
+  /** The caller-supplied recovery operation id (the replay key half). */
+  operation_id: string;
+  /** sha256 (bare hex) over the canonicalized request — the replay key's other half. */
+  request_hash: string;
+  workflow_id: string;
+  /** The coordinator the recovery replaced (the recorded binding at the time). */
+  prior_session_id: string;
+  /** The coordinator the recovery bound. */
+  session_id: string;
+  /** The operator's authorization reference. */
+  authorization_ref: string;
+  reason: string;
+  /** The prior holder(s) the operator attested stopped/reloaded. */
+  stopped_session_ids: string[];
+  /** `sha256:<64 hex>` of the snapshot bytes this recovery was authorized against. */
+  snapshot_version_before: string;
+  /** `sha256:<64 hex>` of the reviewed compass bytes at that moment. */
+  compass_version: string;
+  recovered_at: string;
+};
+
+/**
+ * Snapshot-level coordination block (the workflow's coordinator). The
+ * coordinator binding is the single live owner; `identity_recoveries` is the
+ * append-only audit history of how that owner changed (`recoverPrepareCoordinator`).
+ */
+export type SnapshotCoordination = {
+  coordinator: CoordinatorBinding;
+  identity_recoveries?: CoordinationIdentityRecovery[];
+};
 
 /** Row-level coordination block (one plan). */
 export type RowCoordination = {
@@ -655,11 +710,80 @@ export function validateRowCoordination(
   return violations;
 }
 
-/** Validate a snapshot's top `coordination` block (spec §C2). */
+/**
+ * Validate one stored coordinator-identity recovery record (prerequisite
+ * contract §3.3). Strict in the same way the rest of this module is: the key
+ * set is exact, every required field must be present and well formed, and the
+ * hashes/versions must be the forms this module writes — an append-only audit
+ * entry that cannot be read exactly is a malformed document, never a record
+ * with optional halves.
+ */
+export function validateCoordinationIdentityRecovery(
+  value: unknown,
+  what = "coordination.identity_recoveries[]",
+): ValidationResult[] {
+  if (!isPlainObject(value)) return [invalid("coordination.recovery.shape", `${what} must be an object`)];
+  const allowed = [
+    "operation_id",
+    "request_hash",
+    "workflow_id",
+    "prior_session_id",
+    "session_id",
+    "authorization_ref",
+    "reason",
+    "stopped_session_ids",
+    "snapshot_version_before",
+    "compass_version",
+    "recovered_at",
+  ];
+  const violations: ValidationResult[] = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.recovery.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of [
+    "operation_id",
+    "workflow_id",
+    "prior_session_id",
+    "session_id",
+    "authorization_ref",
+    "reason",
+    "recovered_at",
+  ]) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.recovery.field", `${what}.${key} must be a non-empty string`));
+    }
+  }
+  if (typeof value.request_hash !== "string" || !SHA256_HEX.test(value.request_hash)) {
+    violations.push(invalid("coordination.recovery.hash", `${what}.request_hash must be a bare sha256 hex digest`));
+  }
+  for (const key of ["snapshot_version_before", "compass_version"]) {
+    if (typeof value[key] !== "string" || !HASH_RE.test(value[key])) {
+      violations.push(invalid("coordination.recovery.version", `${what}.${key} must be a "sha256:<64 hex>" version`));
+    }
+  }
+  const stopped = value.stopped_session_ids;
+  if (!Array.isArray(stopped) || stopped.length === 0) {
+    violations.push(invalid("coordination.recovery.stopped", `${what}.stopped_session_ids must be a non-empty array`));
+  } else if (stopped.some((entry) => !isNonEmptyString(entry))) {
+    violations.push(
+      invalid("coordination.recovery.stopped", `${what}.stopped_session_ids entries must be non-empty strings`),
+    );
+  }
+  return violations;
+}
+
+/**
+ * Validate a snapshot's top `coordination` block (spec §C2) plus the
+ * append-only recovery audit the JSON Prepare recovery appends (§3.3). The
+ * validator is the schema OWNER (`workflow.ts` consumes it), so a malformed
+ * audit entry can never be persisted or read as a valid snapshot.
+ */
 export function validateSnapshotCoordination(value: unknown, what = "coordination"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations: ValidationResult[] = [];
-  const extra = Object.keys(value).filter((key) => key !== "coordinator");
+  const allowed = ["coordinator", "identity_recoveries"];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
@@ -667,6 +791,15 @@ export function validateSnapshotCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  if (value.identity_recoveries !== undefined) {
+    if (!Array.isArray(value.identity_recoveries)) {
+      violations.push(invalid("coordination.snapshot.field", `${what}.identity_recoveries must be an array`));
+    } else {
+      value.identity_recoveries.forEach((entry, index) => {
+        violations.push(...validateCoordinationIdentityRecovery(entry, `${what}.identity_recoveries[${String(index)}]`));
+      });
+    }
   }
   return violations;
 }
