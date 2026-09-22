@@ -548,17 +548,105 @@ export async function recoverCoordinatorIdentity(
   }
 }
 
+/** The CLI's own program spellings (`packages/cli` bin map), keyed by word. */
+const CLI_PROGRAMS: Record<string, true> = { mstar: true, "mstar-harness": true };
+/** A leading `NAME=value` word a shell may put before the program. */
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
 /**
- * The managed coordinator bind as a bounded shell-token match: `plan bind`
- * carrying `--coordinator` in one `bash`/`functions.bash` command.
- *
- * This is intentionally not a shell parser and fences no arbitrary native code —
- * it recognizes the one documented transport shape so the shell route can refuse
- * with a redirect instead of relying on an injected environment variable for
- * authority. Unrelated commands are left untouched.
+ * The words of every simple command in one shell line, in order. Bounded by
+ * design: quoting, escaping, comments and the command separators are handled;
+ * substitutions, redirections and control flow are not interpreted.
  */
-const MANAGED_BIND_COMMAND_RE = /(?:^|[^\w-])plan\s+bind\b/;
-const COORDINATOR_FLAG_RE = /(?:^|[^\w-])--coordinator\b/;
+function shellCommandWords(command: string): string[][] {
+  const commands: string[][] = [];
+  let words: string[] = [];
+  let word = "";
+  let started = false;
+  const endWord = (): void => {
+    if (!started) return;
+    words.push(word);
+    word = "";
+    started = false;
+  };
+  const endCommand = (): void => {
+    endWord();
+    if (words.length > 0) commands.push(words);
+    words = [];
+  };
+  let index = 0;
+  while (index < command.length) {
+    const char = command[index]!;
+    if (char === "'" || char === '"') {
+      // A quoted span is one word's data: its closing quote is the next one of
+      // the same kind, and its content is never read as an argument word.
+      const close = command.indexOf(char, index + 1);
+      word += close === -1 ? command.slice(index + 1) : command.slice(index + 1, close);
+      started = true;
+      index = close === -1 ? command.length : close + 1;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      word += command[index + 1];
+      started = true;
+      index += 2;
+      continue;
+    }
+    if (char === "#" && !started) {
+      // A `#` at a word boundary starts a comment: the rest of the line holds
+      // no words at all.
+      const eol = command.indexOf("\n", index);
+      index = eol === -1 ? command.length : eol;
+      continue;
+    }
+    if (char === " " || char === "\t") {
+      endWord();
+      index += 1;
+      continue;
+    }
+    if (char === ";" || char === "&" || char === "|" || char === "\n") {
+      endCommand();
+      index += 1;
+      continue;
+    }
+    word += char;
+    started = true;
+    index += 1;
+  }
+  endCommand();
+  return commands;
+}
+
+/**
+ * The managed coordinator bind, classified from the shell command that is
+ * actually run: the `mstar plan bind` subcommand carrying `--coordinator` as one
+ * of its own argument words.
+ *
+ * This is intentionally not a shell parser and fences no arbitrary native code.
+ * It reads the line as shell *words* — quoted spans, `#` comments and escapes
+ * are data, not structure — and separates the simple commands the line joins
+ * (`;`, `&`, `|`, newline), so a bind is recognized by the command it runs
+ * rather than by tokens that merely occur somewhere in the string. A command
+ * that only mentions these words (an `echo` argument, a commit message, a
+ * generated doc line, a comment) is left untouched, which is what §3.2 requires.
+ *
+ * simplify: bounded to the CLI's own two program spellings and one command
+ * shape. A bind spelled through an unrecognized wrapper (`npx`, a shell alias,
+ * a program path) is not redirected — the shell route carries no authority
+ * anyway, so that is a UX gap, not a security one. Widen only if a real
+ * transport appears.
+ */
+function isManagedCoordinatorBind(command: string): boolean {
+  for (const words of shellCommandWords(command)) {
+    let program = 0;
+    while (program < words.length && ENV_ASSIGNMENT_RE.test(words[program]!)) program += 1;
+    if (CLI_PROGRAMS[words[program] ?? ""] !== true) continue;
+    // The subcommand pair, then `--coordinator` somewhere among its arguments.
+    if (words[program + 1] !== "plan" || words[program + 2] !== "bind") continue;
+    if (words.slice(program + 3).includes("--coordinator")) return true;
+  }
+  return false;
+}
 
 /** The shell tool identities this host may present (bare and namespaced). */
 export const SHELL_TOOL_NAMES = ["bash", "functions.bash"] as const;
@@ -575,8 +663,7 @@ export type ShellCallRefusal = Readonly<{ block: true; reason: string }>;
 export function classifyCoordinatorShellCall(event: Readonly<{ toolName: string; input: unknown }>): ShellCallRefusal | undefined {
   if (!(SHELL_TOOL_NAMES as readonly string[]).includes(event.toolName)) return undefined;
   if (!isPlainObject(event.input) || typeof event.input.command !== "string") return undefined;
-  const command = event.input.command;
-  if (!MANAGED_BIND_COMMAND_RE.test(command) || !COORDINATOR_FLAG_RE.test(command)) return undefined;
+  if (!isManagedCoordinatorBind(event.input.command)) return undefined;
   return {
     block: true,
     reason:

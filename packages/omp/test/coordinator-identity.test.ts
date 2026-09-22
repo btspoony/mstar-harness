@@ -168,6 +168,36 @@ describe("prerequisite identity — managed coordinator bind transport classifie
     const untouched = classifyCoordinatorShellCall({ toolName: "bash", input: { command: "true" } });
     expect(untouched).toBeUndefined();
   });
+
+  test("a bind is recognized by the command it runs, through env prefixes and joined commands", () => {
+    for (const command of [
+      "mstar plan bind --coordinator --workflow fixture-iteration",
+      "mstar-harness plan bind --workflow fixture-iteration --coordinator",
+      "MSTAR_QUIET=1 mstar plan bind --coordinator",
+      "cd /tmp && mstar plan bind --coordinator; echo done",
+    ]) {
+      expect({ command, block: classifyCoordinatorShellCall({ toolName: "bash", input: { command } })?.block }).toEqual({
+        command,
+        block: true,
+      });
+    }
+  });
+
+  test("the same words as data — a quoted argument, a comment, a doc line — are left untouched", () => {
+    for (const command of [
+      'echo "plan bind --coordinator"',
+      `printf '%s\\n' 'mstar plan bind --coordinator'`,
+      "# mstar plan bind --coordinator --workflow fixture-iteration",
+      "git commit -m \"stop using plan bind --coordinator\"",
+      "grep -n 'plan bind --coordinator' docs/plan.md",
+      "echo mstar plan bind --coordinator",
+    ]) {
+      expect({
+        command,
+        result: classifyCoordinatorShellCall({ toolName: "bash", input: { command } }),
+      }).toEqual({ command, result: undefined });
+    }
+  });
 });
 
 /* ---------------------------------------------- coordinator recovery adapter --- */
