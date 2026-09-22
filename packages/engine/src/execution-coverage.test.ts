@@ -1082,25 +1082,29 @@ describe("execution-coverage", () => {
     });
     refuseLeavingState(invalidAttestation);
 
-    // The embedded export may only publish the session its envelope names.
-    const foreignExport = materialize(buildRows());
-    const foreignDocs = hostDocs(WORKFLOW_B);
-    const foreignEntry = JSON.parse(foreignDocs.envelope.text) as { export: { document: unknown } };
-    const smuggled = doc(
+    // The envelope may only publish the session it names: same workflow, so the
+    // single-session rule is the only thing that can refuse this.
+    const wrongSession = materialize(buildRows());
+    const ownEnvelope = JSON.parse(hostDocs(WORKFLOW_A).envelope.text) as {
+      export: { document: { records: Array<Record<string, unknown>> } };
+    };
+    const records = ownEnvelope.export.document.records.map((record) => ({
+      ...record,
+      sessionId: SESSION_B,
+      view: { ...(record.view as Record<string, unknown>), workflowId: WORKFLOW_A },
+    }));
+    const embedded = { ...(ownEnvelope.export.document as Record<string, unknown>), records };
+    const mismatched = doc(
       "host",
       `host-sessions/${WORKFLOW_A}.json`,
       canonical({
-        ...(JSON.parse(foreignDocs.envelope.text) as Record<string, unknown>),
-        workflowId: WORKFLOW_A,
+        ...(JSON.parse(hostDocs(WORKFLOW_A).envelope.text) as Record<string, unknown>),
         hostSessionId: SESSION_A,
-        export: {
-          sha256: sha(canonical({ ...(foreignEntry.export.document as Record<string, unknown>) }).slice(0, -1)),
-          document: foreignEntry.export.document,
-        },
+        export: { sha256: sha(canonical(embedded).slice(0, -1)), document: embedded },
       }),
     );
-    replaceRowDocuments(foreignExport, "omp-hidden-entries", WORKFLOW_A, [smuggled]);
-    refuseLeavingState(foreignExport);
+    replaceRowDocuments(wrongSession, "omp-hidden-entries", WORKFLOW_A, [mismatched]);
+    refuseLeavingState(wrongSession);
 
     // An absent row rebuilt from its own bytes may not carry a populated proof.
     const absentWithProof = materialize(buildRows());
@@ -1125,7 +1129,7 @@ describe("execution-coverage", () => {
       ),
     );
     assign(absentWithProof, "omp-hidden-entries", WORKFLOW_A, []);
-    refusalOf(() => validate(absentWithProof));
+    refuseLeavingState(absentWithProof);
   });
 
   test("execution-coverage-assignment-binds-sources-to-a-row", () => {
