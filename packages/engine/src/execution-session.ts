@@ -85,6 +85,8 @@ export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const roundTrip = Buffer.from(text, "utf8");
     if (!roundTrip.equals(bytes)) throw new Error("invalid utf8");
+  } catch {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid canonical UTF-8 base64url");
   }
   let value: unknown;
   try {
