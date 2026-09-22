@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, dsh
+packages: root, dsh, engine, omp, opencode
 ---
 
 - Renamed the Chinese brand copy to **晨星** across the docs, skill descriptions, host reference, marketplace `zh-CN` display names and the dsh panel locale value.
