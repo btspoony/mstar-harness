@@ -21,6 +21,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -43,10 +44,14 @@ import {
   ExecutionConsumerManifestError,
   type ExecutionConsumerManifest,
   collectExecutionConsumerManifest,
+  executionConsumerEvidenceDocuments,
+  executionConsumerEvidencePaths,
   executionConsumerManifestPaths,
   runExecutionConsumerManifestCli,
+  serializeExecutionConsumerEvidenceDocument,
   verifyExecutionConsumerManifest,
 } from "./execution-consumer-manifest.ts";
+import { serializeExecutionValue } from "../packages/engine/src/index.ts";
 
 const SCRIPT = join(import.meta.dir, "execution-consumer-manifest.ts");
 const INSTRUCTION_ROOTS = ["skills", "commands", "agents"] as const;
@@ -794,4 +799,292 @@ describe("execution-consumer-manifest — CLI", () => {
       );
     }
   });
+});
+
+/**
+ * The reviewed consumer substrate — `packages/engine/src/execution-coverage.ts`,
+ * the module that decodes the `consumer-v1` surfaces — is part of the engine
+ * package once the coverage work is present in this checkout. It is resolved at
+ * runtime so this producer's own suite stays runnable where it has not landed
+ * yet; the drive below is skipped there rather than weakened.
+ */
+const REVIEWED_SUBSTRATE = join(import.meta.dir, "..", "packages", "engine", "src", "execution-coverage.ts");
+const hasReviewedSubstrate = existsSync(REVIEWED_SUBSTRATE);
+
+type EvidenceWitness = Readonly<{ root: "package"; path: string; sha256: string }>;
+
+/** The reviewed decoder entry point this producer's bytes cross: the document
+ * codec `expectConsumerManifest` recomputes a `consumer-v1` row through. */
+interface ReviewedConsumerSubstrate {
+  buildExecutionCoverageReceipt(
+    input: Readonly<{
+      surface: string;
+      workflowId: null;
+      disposition: "retain";
+      manifestId: string;
+      manifestHash: string;
+      storeId: string;
+      epoch: number;
+      sources: readonly EvidenceWitness[];
+      evidence: readonly EvidenceWitness[];
+    }>,
+    evidence: ReadonlyMap<string, Uint8Array>,
+  ): Readonly<{ surface: string; disposition: string; protocol: string }>;
+}
+
+/** §4.2: the surface each consumer's evidence document populates. */
+const SURFACE_BY_CONSUMER: Readonly<Record<string, string>> = {
+  cli: "cli-writer",
+  engine: "engine-cli-package",
+  dsh: "dsh-package",
+  omp: "omp-package",
+  opencode: "opencode-plugin",
+  zcode: "zcode-hook",
+};
+
+/**
+ * Hand one evidence document to the reviewed decoder as the ONLY evidence of
+ * its consumer surface, together with the declared file witnesses the codec
+ * claims — the bytes as written, never reformatted. Returns the recomputed
+ * receipt; a refusal propagates as the decoder's own message.
+ */
+async function decodeConsumerSurface(input: {
+  root: string;
+  manifest: ExecutionConsumerManifest;
+  consumerId: string;
+  surface: string;
+  documentBytes: Uint8Array;
+  documentPath: string;
+}): Promise<Readonly<{ surface: string; disposition: string; protocol: string }>> {
+  const substrate = (await import(REVIEWED_SUBSTRATE)) as ReviewedConsumerSubstrate;
+  const entry = input.manifest.consumers.find((candidate) => candidate.id === input.consumerId);
+  if (entry === undefined) throw new Error(`fixture manifest has no consumer ${input.consumerId}`);
+  const bytesByKey = new Map<string, Uint8Array>();
+  const witnesses: EvidenceWitness[] = [];
+  for (const file of [...entry.sources.files, ...entry.generated.files]) {
+    const key = `package:${file.path}`;
+    if (bytesByKey.has(key)) continue;
+    bytesByKey.set(key, readFileSync(join(input.root, file.path)));
+    witnesses.push({ root: "package", path: file.path, sha256: file.sha256 });
+  }
+  bytesByKey.set(`package:${input.documentPath}`, input.documentBytes);
+  return substrate.buildExecutionCoverageReceipt(
+    {
+      surface: input.surface,
+      workflowId: null,
+      disposition: "retain",
+      manifestId: "fixture-manifest",
+      manifestHash: "0".repeat(64),
+      storeId: "fixture-store",
+      epoch: 1,
+      sources: witnesses,
+      evidence: [
+        {
+          root: "package",
+          path: input.documentPath,
+          sha256: createHash("sha256").update(input.documentBytes).digest("hex"),
+        },
+      ],
+    },
+    bytesByKey,
+  );
+}
+
+async function decoderRefusal(run: () => Promise<unknown>): Promise<string> {
+  try {
+    await run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("expected the reviewed consumer substrate to refuse the document, but it accepted it");
+}
+
+describe("execution-consumer-manifest — canonical per-consumer evidence documents", () => {
+  test("emits one canonical single-consumer document per consumer", () => {
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
+    const documents = executionConsumerEvidenceDocuments(manifest);
+    const targets = executionConsumerEvidencePaths(root);
+    const ids = manifest.consumers.map((consumer) => consumer.id);
+
+    expect(documents.map((document) => document.consumers[0].id)).toEqual(ids);
+    expect(targets.map((target) => target.consumerId)).toEqual(ids);
+    expect(targets.map((target) => relative(root, target.path))).toEqual([
+      "packages/cli/execution-consumer/cli.json",
+      "packages/dsh/execution-consumer/dsh.json",
+      "packages/engine/execution-consumer/engine.json",
+      "packages/omp/execution-consumer/omp.json",
+      "packages/opencode/execution-consumer/opencode.json",
+      "execution-consumer/zcode.json",
+    ]);
+
+    for (const document of documents) {
+      const text = serializeExecutionConsumerEvidenceDocument(document);
+      const parsed = JSON.parse(text) as Record<string, unknown> & {
+        consumers: Array<Record<string, unknown>>;
+      };
+      // The reviewed substrate's `producedDocument` rule, checked with the
+      // engine's own canonicalizer: the bytes have exactly one meaning.
+      expect(serializeExecutionValue(parsed)).toBe(text);
+      expect(text.endsWith("\n")).toBe(true);
+      expect(text.endsWith("\n\n")).toBe(false);
+      // `expectConsumerManifest` decodes exactly one consumer entry per document.
+      expect(parsed.consumers.length).toBe(1);
+      const entry = parsed.consumers[0]!;
+      // The decoder's closed closure: a document outside it is refused, so the
+      // emitted shape must be exactly the released `consumer-v1` shape.
+      expect(Object.keys(parsed).sort()).toEqual(["consumers", "protocol", "repoRoot", "version"]);
+      expect(Object.keys(entry).sort()).toEqual([
+        "capability",
+        "capabilityNote",
+        "copiedInstructions",
+        "entrypoint",
+        "generated",
+        "id",
+        "packageRoot",
+        "runtime",
+        "sources",
+      ]);
+      expect(Object.keys(entry.runtime as object).sort()).toEqual(["declaration", "floor", "target"]);
+      for (const set of [entry.sources, entry.generated] as Array<{ trees: Array<object>; files: Array<object> }>) {
+        expect(Object.keys(set).sort()).toEqual(["files", "trees"]);
+        for (const tree of set.trees) expect(Object.keys(tree).sort()).toEqual(["files", "root", "sha256"]);
+        for (const file of set.files) expect(Object.keys(file).sort()).toEqual(["path", "sha256"]);
+      }
+      for (const copy of entry.copiedInstructions as Array<object>) {
+        expect(Object.keys(copy).sort()).toEqual(["files", "mode", "sha256", "sourceRoot", "targetRoot"]);
+      }
+      expect(parsed.version).toBe(1);
+      expect(parsed.protocol).toBe(CONSUMER_MANIFEST_PROTOCOL);
+      expect(parsed.repoRoot).toBe(root);
+      // The handoff form carries the aggregate's own entry, never a second fact.
+      const aggregate = manifest.consumers.find((consumer) => consumer.id === entry.id);
+      expect(serializeExecutionValue(entry)).toBe(serializeExecutionValue(aggregate));
+    }
+
+    // Publishing evidence cannot invalidate a recorded tree digest: every
+    // evidence path sits outside the consumer's declared closures.
+    for (const [index, target] of targets.entries()) {
+      const consumer = manifest.consumers[index]!;
+      const rel = relative(root, target.path);
+      for (const tree of [...consumer.sources.trees, ...consumer.generated.trees]) {
+        expect(rel === tree.root || rel.startsWith(`${tree.root}/`)).toBe(false);
+      }
+    }
+    // And the manifest this producer already verifies stays valid with them on
+    // disk: the evidence documents are not part of any digested closure.
+    expect(executionConsumerManifestPaths(root).length).toBe(6);
+  });
+
+  test("--write publishes the evidence documents and --check verifies them", async () => {
+    const root = buildFixture();
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(0);
+
+    const targets = executionConsumerEvidencePaths(root);
+    for (const { path } of targets) expect(existsSync(path)).toBe(true);
+    const written = targets.map(({ path }) => readFileSync(path));
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(0);
+    expect(targets.map(({ path }) => readFileSync(path))).toEqual(written);
+
+    // A re-encoded (non-canonical) document is refused, not reformatted.
+    const first = targets[0]!;
+    writeFileSync(
+      first.path,
+      `${JSON.stringify(JSON.parse(readFileSync(first.path, "utf8")), null, 2)}\n`,
+    );
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+
+    // Canonical bytes that disagree with the aggregate are drift.
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(0);
+    const document = JSON.parse(readFileSync(first.path, "utf8")) as {
+      consumers: Array<Record<string, unknown>>;
+    };
+    document.consumers.push({ ...document.consumers[0]!, id: "engine" });
+    writeFileSync(first.path, serializeExecutionValue(document));
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+  });
+
+  test.skipIf(!hasReviewedSubstrate)(
+    "the reviewed consumer substrate decodes the emitted bytes as written",
+    async () => {
+      const root = buildFixture();
+      expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(0);
+      const manifest = collectExecutionConsumerManifest(root);
+      const targets = executionConsumerEvidencePaths(root);
+      const bytesOf = (consumerId: string): { bytes: Uint8Array; relPath: string } => {
+        const target = targets.find((candidate) => candidate.consumerId === consumerId);
+        if (target === undefined) throw new Error(`no evidence path for consumer ${consumerId}`);
+        return { bytes: readFileSync(target.path), relPath: relative(root, target.path) };
+      };
+
+      // Acceptance: every consumer's own emitted bytes, one consumer per
+      // document, decoded by the reviewed decoder through `expectConsumerManifest`.
+      for (const consumerId of ["cli", "engine", "dsh", "omp", "opencode", "zcode"]) {
+        const surface = SURFACE_BY_CONSUMER[consumerId]!;
+        const { bytes, relPath } = bytesOf(consumerId);
+        const receipt = await decodeConsumerSurface({
+          root,
+          manifest,
+          consumerId,
+          surface,
+          documentBytes: bytes,
+          documentPath: relPath,
+        });
+        expect(receipt.protocol).toBe("consumer-v1");
+        expect(receipt.disposition).toBe("retain");
+        expect(receipt.surface).toBe(surface);
+      }
+      // `copied-instructions` decodes the consumers that actually bundle the
+      // corpus; the aggregate's copied-instruction records are the ones decoded.
+      for (const consumerId of ["dsh", "omp", "opencode"]) {
+        const { bytes, relPath } = bytesOf(consumerId);
+        const receipt = await decodeConsumerSurface({
+          root,
+          manifest,
+          consumerId,
+          surface: "copied-instructions",
+          documentBytes: bytes,
+          documentPath: relPath,
+        });
+        expect(receipt.protocol).toBe("consumer-v1");
+      }
+
+      // Negatives: the aggregate artifact as written (indented, six
+      // consumers), a canonical multi-entry document, a re-encoded single
+      // document, a doubled terminal LF, and a document reused across surfaces.
+      const aggregateBytes = readFileSync(executionConsumerManifestPaths(root)[0]!);
+      const cli = bytesOf("cli");
+      const engine = bytesOf("engine");
+      const decodeRejected = (consumerId: string, surface: string, documentBytes: Uint8Array, documentPath: string) =>
+        decoderRefusal(() =>
+          decodeConsumerSurface({ root, manifest, consumerId, surface, documentBytes, documentPath }),
+        );
+
+      // The measured cross-package encoding conflict: the operator-facing
+      // aggregate is not canonical §3.1, so the decoder refuses its bytes.
+      expect(await decodeRejected("cli", "cli-writer", aggregateBytes, cli.relPath)).toContain("canonical");
+
+      const readDocument = (bytes: Uint8Array): { consumers: Array<Record<string, unknown>> } =>
+        JSON.parse(new TextDecoder().decode(bytes)) as { consumers: Array<Record<string, unknown>> };
+      const multiEntry = new TextEncoder().encode(
+        serializeExecutionValue({
+          version: 1,
+          protocol: CONSUMER_MANIFEST_PROTOCOL,
+          repoRoot: root,
+          consumers: [readDocument(cli.bytes).consumers[0]!, readDocument(engine.bytes).consumers[0]!],
+        }),
+      );
+      expect(await decodeRejected("cli", "cli-writer", multiEntry, cli.relPath)).toContain("consumer entries");
+
+      const reencoded = new TextEncoder().encode(
+        `${JSON.stringify(JSON.parse(new TextDecoder().decode(cli.bytes)), null, 2)}\n`,
+      );
+      expect(await decodeRejected("cli", "cli-writer", reencoded, cli.relPath)).toContain("canonical");
+
+      const doubleLf = new TextEncoder().encode(`${new TextDecoder().decode(cli.bytes)}\n`);
+      expect(await decodeRejected("cli", "cli-writer", doubleLf, cli.relPath)).toContain("canonical");
+
+      expect(await decodeRejected("cli", "cli-writer", engine.bytes, engine.relPath)).toContain("never reused");
+    },
+  );
 });

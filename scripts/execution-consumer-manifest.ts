@@ -53,7 +53,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "../packages/engine/src/index.ts";
+import { MIN_BUN_VERSION, MIN_NODE_VERSION, serializeExecutionValue } from "../packages/engine/src/index.ts";
 
 export const CONSUMER_MANIFEST_PROTOCOL = "consumer-v1" as const;
 
@@ -136,6 +136,19 @@ export interface ExecutionConsumerManifest {
   readonly protocol: typeof CONSUMER_MANIFEST_PROTOCOL;
   readonly repoRoot: string;
   readonly consumers: readonly ExecutionConsumerEntry[];
+}
+
+/** One per-consumer evidence document: the same facts as the aggregate, but
+ * shaped as the reviewed execution-coverage substrate decodes them — exactly
+ * ONE consumer entry per document (§4.2 `expectConsumerManifest`) — and
+ * serialized canonically (engine §3.1, one terminal LF). The aggregate stays
+ * the operator-facing artifact; this is the handoff form a coverage row can
+ * take as its evidence document verbatim, with no reformatting or projection. */
+export interface ExecutionConsumerEvidenceDocument {
+  readonly version: 1;
+  readonly protocol: typeof CONSUMER_MANIFEST_PROTOCOL;
+  readonly repoRoot: string;
+  readonly consumers: readonly [ExecutionConsumerEntry];
 }
 
 /** Stable refusal codes; callers match on these, never on prose. */
@@ -1021,6 +1034,51 @@ export function executionConsumerManifestPaths(repoRoot: string): readonly strin
   return [...packageManifests.sort(), `hooks/${MANIFEST_BASENAME}`].map((rel) => join(repoRoot, rel));
 }
 
+/** The directory a consumer publishes its evidence document in, relative to its
+ * own package root. It is deliberately OUTSIDE every declared source and
+ * generated closure: publishing evidence cannot invalidate a recorded tree
+ * digest, so the manifest stays self-consistent across a write. */
+const EVIDENCE_DIRNAME = "execution-consumer";
+const EVIDENCE_SUFFIX = ".json";
+
+/** One per-consumer evidence document per consumer, in the canonical inventory
+ * order. Derived from the aggregate so the handoff form cannot disagree with
+ * the operator-facing artifact: the entry is the aggregate's own entry. */
+export function executionConsumerEvidenceDocuments(
+  manifest: ExecutionConsumerManifest,
+): readonly ExecutionConsumerEvidenceDocument[] {
+  return manifest.consumers.map((entry) => ({
+    version: 1,
+    protocol: CONSUMER_MANIFEST_PROTOCOL,
+    repoRoot: manifest.repoRoot,
+    consumers: [entry],
+  }));
+}
+
+/** Every per-consumer evidence path `--write` publishes, paired with the
+ * consumer each document declares — `${consumer}/execution-consumer/<id>.json`
+ * under its own package root, in the manifest's canonical consumer order so an
+ * evidence target and its document stay index-aligned. */
+export function executionConsumerEvidencePaths(
+  repoRoot: string,
+): readonly Readonly<{ consumerId: string; path: string }>[] {
+  return [...CONSUMER_LAYOUTS]
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+    .map((layout) => ({
+      consumerId: layout.id,
+      path: join(repoRoot, toPosix(layout.packageRoot), EVIDENCE_DIRNAME, `${layout.id}${EVIDENCE_SUFFIX}`),
+    }));
+}
+
+/** Canonical serialization of one evidence document through the engine's own
+ * §3.1 canonical value form, so the bytes this producer writes are byte-stable
+ * — the exact bytes the reviewed consumer substrate decodes. */
+export function serializeExecutionConsumerEvidenceDocument(
+  document: ExecutionConsumerEvidenceDocument,
+): string {
+  return serializeExecutionValue(document);
+}
+
 const USAGE =
   "usage: bun scripts/execution-consumer-manifest.ts --repo <path> (--write | --check)";
 
@@ -1103,6 +1161,57 @@ function readManifestCopy(repoAbs: string, target: string): string {
   return readFileSync(canonicalInsideRepo(repoAbs, target, `manifest ${target}`), "utf8");
 }
 
+/** Verify one published per-consumer evidence document against the aggregate it
+ * was derived from: it must exist, be the canonical §3.1 bytes this producer
+ * writes, declare exactly one consumer entry, and declare the aggregate's own
+ * entry for that consumer — the reviewed substrate decodes that shape and
+ * nothing looser. */
+function verifyEvidenceDocument(
+  repoAbs: string,
+  target: string,
+  consumerId: string,
+  entry: ExecutionConsumerEntry,
+): void {
+  if (!existsSync(target)) {
+    refuse("consumer.manifest-missing", `per-consumer evidence document not written yet: ${target}`);
+  }
+  const text = readManifestCopy(repoAbs, target);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    refuse("consumer.schema-invalid", `evidence document is not valid JSON: ${target}`);
+  }
+  if (serializeExecutionValue(parsed) !== text) {
+    refuse(
+      "consumer.schema-invalid",
+      `evidence document ${target} is not canonical JSON with exactly one terminal LF; the reviewed consumer substrate decodes only byte-stable documents`,
+    );
+  }
+  const document = assertRecord(parsed, `evidence document ${target}`);
+  const consumers = assertArray(document.consumers, `evidence document ${target}.consumers`);
+  if (consumers.length !== 1) {
+    refuse(
+      "consumer.schema-invalid",
+      `evidence document ${target} carries ${consumers.length} consumer entries; the reviewed consumer substrate decodes exactly one consumer per evidence document`,
+    );
+  }
+  const declared = assertRecord(consumers[0], `evidence document ${target}.consumers[0]`);
+  const declaredId = assertString(declared.id, `evidence document ${target}.consumers[0].id`);
+  if (declaredId !== consumerId) {
+    refuse(
+      "consumer.manifest-drift",
+      `evidence document ${target} declares consumer ${declaredId}, not ${consumerId}; an evidence document is never reused for another consumer`,
+    );
+  }
+  if (serializeExecutionValue(declared) !== serializeExecutionValue(entry)) {
+    refuse(
+      "consumer.manifest-drift",
+      `evidence document ${target} disagrees with the aggregate manifest for consumer ${consumerId}`,
+    );
+  }
+}
+
 /** Run the CLI. Returns the process exit code (0 ok, 1 refusal, 2 usage). */
 export async function runExecutionConsumerManifestCli(
   argv: readonly string[],
@@ -1128,13 +1237,28 @@ export async function runExecutionConsumerManifestCli(
     }
     const repoAbs = realpathSync(repoInput);
     const targets = executionConsumerManifestPaths(repoAbs);
+    const evidenceTargets = executionConsumerEvidencePaths(repoAbs);
 
     if (options.mode === "write") {
       const manifest = collectExecutionConsumerManifest(options.repo);
       const text = serializeExecutionConsumerManifest(manifest);
       for (const target of targets) writeManifestCopy(repoAbs, target, text);
+      const evidence: Record<string, string | undefined> = {};
+      for (const document of executionConsumerEvidenceDocuments(manifest)) {
+        evidence[document.consumers[0].id] = serializeExecutionConsumerEvidenceDocument(document);
+      }
+      for (const { consumerId, path } of evidenceTargets) {
+        const document = evidence[consumerId];
+        if (document === undefined) {
+          refuse(
+            "consumer.consumer-set-mismatch",
+            `the manifest declares no consumer ${consumerId}; one evidence document per consumer is the published shape`,
+          );
+        }
+        writeManifestCopy(repoAbs, path, document);
+      }
       console.log(
-        `execution-consumer-manifest: wrote ${targets.length} manifest(s) for ${manifest.consumers.length} consumers`,
+        `execution-consumer-manifest: wrote ${targets.length} manifest(s) and ${evidenceTargets.length} evidence document(s) for ${manifest.consumers.length} consumers`,
       );
       return 0;
     }
@@ -1172,8 +1296,18 @@ export async function runExecutionConsumerManifestCli(
     // field it reads, so this boundary cast adds no unchecked access.
     const validated = document as unknown as ExecutionConsumerManifest;
     verifyExecutionConsumerManifest(validated);
+    for (const { consumerId, path } of evidenceTargets) {
+      const entry = validated.consumers.find((candidate) => candidate.id === consumerId);
+      if (entry === undefined) {
+        refuse(
+          "consumer.consumer-set-mismatch",
+          `the manifest declares no consumer ${consumerId}; one evidence document per consumer is the published shape`,
+        );
+      }
+      verifyEvidenceDocument(repoAbs, path, consumerId, entry);
+    }
     console.log(
-      `execution-consumer-manifest: verified ${targets.length} manifest(s) for ${validated.consumers.length} consumers`,
+      `execution-consumer-manifest: verified ${targets.length} manifest(s) and ${evidenceTargets.length} evidence document(s) for ${validated.consumers.length} consumers`,
     );
     return 0;
   } catch (error) {
