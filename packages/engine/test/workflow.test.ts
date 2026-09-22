@@ -37,7 +37,7 @@ import {
   closeWorkflow,
   consultDeliveryEvidence,
   declareWorkflowDeliveryKind,
-  isTerminalSnapshot,
+  isStandaloneReportOnlyWorkflow,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
   recordWorkflowDelivery,
@@ -2200,6 +2200,17 @@ describe("standalone-completion-shape", () => {
     const result = validateWorkflowSnapshot(snapshot);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+
+  test("accepts a single-row report-only completed shape without integration or branch anchors", () => {
+    const snapshot = standaloneSnapshot({
+      delivery_kind: "verification/report-only",
+      completion_policy: "acceptance report",
+      branch: undefined,
+      delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
+    });
+    expect(isStandaloneReportOnlyWorkflow(snapshot)).toBe(true);
+    expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, violations: [] });
   });
 
   test("refuses the same completed shape on the iteration route", () => {

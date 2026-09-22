@@ -1965,6 +1965,27 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
   }, 30000);
 
+  test("report-only completion accepts matching policy evidence without integration or merge proof", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const snapshot = snapshotOf(fixture) as Record<string, unknown>;
+    snapshot.delivery_kind = "verification/report-only";
+    snapshot.completion_policy = "acceptance report";
+    delete snapshot.branch;
+    delete snapshot.integration_worktree_path;
+    delete snapshot.integration_merge_lease;
+    snapshot.delivery = { completion: { policy: "acceptance report", evidence: "report.md" } };
+    writeJson(fixture.snapshotPath, snapshot);
+
+    const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(completed.outcome).toBe("completed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
+    expect(planRowOf(fixture, PLAN_ID).execution_lease).toBeUndefined();
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).integration).toBeUndefined();
+    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" })).outcome).toBe("already-completed");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+  }, 30000);
+
   test("delivery evidence refuses before Done and succeeds after Done with a full registered tail", async () => {
     const fixture = await acceptedStandaloneFixture();
     const before = readFileSync(fixture.snapshotPath);

@@ -222,17 +222,32 @@ export function isStandaloneDevelopmentWorkflow(snapshot: WorkflowSnapshot): boo
   );
 }
 
-/** Classify row coordination validation: standalone development vs integration delivery. */
+/** True exactly for a single-row verification/report-only plan workflow (spec A1). */
+export function isStandaloneReportOnlyWorkflow(snapshot: WorkflowSnapshot): boolean {
+  return (
+    snapshot.type === "plan" &&
+    snapshot.delivery_kind === "verification/report-only" &&
+    Array.isArray(snapshot.plans) &&
+    snapshot.plans.length === 1
+  );
+}
+
+/** Classify row coordination validation: standalone delivery vs integration delivery. */
 export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
   }
   return "integration";
 }
 
 function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
   const violations: ValidationResult[] = [];
-  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id) return violations;
+  const standalone =
+    isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
   const coordination = row.coordination;
   if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
   const handoff = coordination.handoff as Record<string, unknown>;
@@ -264,18 +279,18 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
       ),
     );
   }
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        "standalone completed handoff requires nonblank branch.source and branch.target",
-      ),
-    );
-  } else {
-    if (handoff.source_branch !== source) {
+  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+    const source = snapshot.branch?.source;
+    const target = snapshot.branch?.target;
+    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "standalone completed handoff requires nonblank branch.source and branch.target",
+        ),
+      );
+    } else if (handoff.source_branch !== source) {
       violations.push(
         violation(
           "high",
@@ -287,6 +302,7 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
   }
   return violations;
 }
+
 
 /** Stable JSON for change detection (sorted keys, recursive). */
 export function stableJson(value: unknown): string {

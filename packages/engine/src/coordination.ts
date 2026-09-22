@@ -151,7 +151,9 @@ import {
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   isStandaloneDevelopmentWorkflow,
+  isStandaloneReportOnlyWorkflow,
   rowValidationRoute,
+  consultDeliveryEvidence,
   readWorkflowSnapshot,
   stableJson,
   validateWorkflowSnapshot,
@@ -161,7 +163,6 @@ import {
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
-
 /* ------------------------------------------------------------------------ *
  * § Types — public surface
  * ------------------------------------------------------------------------ */
@@ -4254,10 +4255,10 @@ function validateRowCoordinationInContext(context: RowContext, coordination: Row
 }
 
 function assertStandaloneRoute(snapshot: WorkflowSnapshot, planId: string, what: string): void {
-  if (!isStandaloneDevelopmentWorkflow(snapshot)) {
+  if (!isStandaloneDevelopmentWorkflow(snapshot) && !isStandaloneReportOnlyWorkflow(snapshot)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires a standalone development workflow for plan ${planId}`,
+      `${what} requires a single-row standalone workflow for plan ${planId}`,
       { plan_id: planId },
     );
   }
@@ -4427,6 +4428,73 @@ async function assertStandaloneCompletionPrecheck(
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "complete");
   assertStandaloneSourceGitProof(scope.worktreePath, handoff, anchors.source, "complete", scope.planId);
+}
+function assertReportOnlyCompletionEvidence(context: RowContext, planId: string, what: string): void {
+  const violations = consultDeliveryEvidence(context.snapshot);
+  const failure = violations.find((entry) => !entry.ok);
+  if (failure !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires matching report-only completion evidence for ${planId}: ${failure.message}`,
+      { plan_id: planId, code: failure.code },
+    );
+  }
+}
+
+async function assertStandaloneReportOnlyCompletionPrecheck(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  handoff: PlanHandoff,
+): Promise<void> {
+  assertStandaloneRoute(context.snapshot, scope.planId, "complete");
+  if (!isStandaloneReportOnlyWorkflow(context.snapshot)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires verification/report-only delivery for plan ${scope.planId}`,
+      { plan_id: scope.planId },
+    );
+  }
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires workflow ${context.snapshot.id} to still be running — got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+  if (handoff.state !== "accepted") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `plan ${scope.planId} handoff is ${handoff.state} — report-only complete requires an accepted handoff`,
+      { plan_id: scope.planId, state: handoff.state },
+    );
+  }
+  if (rowStatusOf(context.row) !== "InReview") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `complete requires ${scope.planId} to still be InReview`,
+      { plan_id: scope.planId, status: context.row.status },
+    );
+  }
+  const prepared = context.coordination?.prepared;
+  if (prepared === undefined) {
+    throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} is not prepared in this workflow`, {
+      plan_id: scope.planId,
+    });
+  }
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "complete" });
+  assertEvidenceDigests(handoff);
+  assertAcceptedReviewDecision(handoff, scope.planId, "complete");
+  if (handoff.qa.gate !== prepared.qa_gate) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `complete qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+      { plan_id: scope.planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+    );
+  }
+  await assertFindingsClosed(scope, prepared, "complete");
+  assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
+  assertReportOnlyCompletionEvidence(context, scope.planId, "complete");
 }
 
 
@@ -4748,7 +4816,7 @@ function assertStandaloneCompletedReplay(
   const storedHandoffViolations = validatePlanHandoff(
     handoff,
     `plan ${scope.planId} coordination.handoff`,
-    "standalone-development",
+    rowValidationRoute(context.snapshot, context.row),
   );
   const storedHandoffFailure = storedHandoffViolations.find((entry) => !entry.ok);
   if (storedHandoffFailure !== undefined) {
@@ -4757,6 +4825,10 @@ function assertStandaloneCompletedReplay(
       storedHandoffFailure.message,
       { plan_id: scope.planId },
     );
+  }
+  if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
+    assertReportOnlyCompletionEvidence(context, scope.planId, "reconcile");
+    return;
   }
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
   assertStandaloneBranchIdentity(context, scope, handoff, anchors, "reconcile", false);
@@ -4865,6 +4937,10 @@ async function mutateComplete(
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
+      if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
+        await assertStandaloneReportOnlyCompletionPrecheck(context, scope, session, handoff);
+        return;
+      }
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
         await assertStandaloneCompletionPrecheck(context, scope, session, handoff);
         return;
@@ -4873,6 +4949,11 @@ async function mutateComplete(
     },
     mutate: (context) => {
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
+      if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
+        completeStandaloneMutateGapForTest?.();
+        assertReportOnlyCompletionEvidence(context, scope.planId, "complete");
+        return completeStandaloneRow(context, scope, handoff);
+      }
       if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
         completeStandaloneMutateGapForTest?.();
         const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
@@ -4941,7 +5022,11 @@ async function classifyReconcile(
       plan_id: planId,
     });
   }
-  if (handoff.state === "completed") {
+    if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
+      assertStandaloneCompletedReplay(context, scope, handoff);
+      assertReportOnlyCompletionEvidence(context, planId, "reconcile");
+      return { outcome: "already-completed", apply: () => null };
+    }
     if (isStandaloneDevelopmentWorkflow(context.snapshot)) {
       assertStandaloneCompletedReplay(context, scope, handoff);
       return { outcome: "already-completed", apply: () => null };
@@ -4957,6 +5042,13 @@ async function classifyReconcile(
     const head = gitRead(repository, ["rev-parse", integration.target_branch]);
     assertRecordedResult(repository, planId, integration, handoff.source_sha, head);
     return { outcome: "already-completed", apply: () => null };
+  }
+  if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile refuses report-only handoff ${handoff.state} for ${planId} because integration contamination is not permitted`,
+      { plan_id: planId, state: handoff.state },
+    );
   }
   if (handoff.state === "integrating" || handoff.state === "merged") {
     assertEvidenceDigests(handoff);
