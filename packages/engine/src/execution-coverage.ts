@@ -690,7 +690,7 @@ function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string;
   return { sha256, durable: kind.startsWith("workflow-") };
 }
 
-\1
+function agentFlowCodec(context: RowContext): unknown {
   let tail: Readonly<{ path: string; sha256: string; count: number; records: readonly unknown[] }> | null = null;
   let index: Readonly<{ path: string; sha256: string; count: number; entries: readonly unknown[] }> | null = null;
   const chunks: Array<Readonly<{ path: string; sha256: string; count: number; records: readonly unknown[] }>> = [];
@@ -712,7 +712,7 @@ function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string;
         expectExactKeys(record, ["id", "d"], entry_);
         const id = expectString(record.id, `${entry_}.id`);
         if (!id.startsWith(WORKFLOW_EVENT_ID_PREFIX)) {
-          refuse(`${entry_}.id ${id} is not a durable workflow-event identity (${WORKFLOW_EVENT_ID_PREFIX}…); live tool-call rows are never indexed.`);
+          refuse(`${entry_}.id ${id} is not a durable workflow-event identity (${WORKFLOW_EVENT_ID_PREFIX}\u2026); live tool-call rows are never indexed.`);
         }
         const d = expectString(record.d, `${entry_}.d`);
         if (!/^[0-9a-f]{32}$/.test(d)) refuse(`${entry_}.d must be the first 32 lowercase hex characters of the line digest.`);
@@ -785,7 +785,7 @@ function agentFlowRecord(line: string, what: string): Readonly<{ sha256: string;
   return { sources: sourceRefs(context), format: "agent-flow-v2", tail, index, history: chunks };
 }
 
-\2: the versioned cursor sidecar. */
+/** `selection-v1` for `workflow-ledger-cursors`: the versioned cursor sidecar. */
 function cursorCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
     const what = `${context.label} cursor sidecar ${witness.path}`;
@@ -1021,7 +1021,7 @@ function hiddenCodec(context: RowContext): unknown {
     return { root: witness.root, path: witness.path, sha256: witness.sha256, document: "execution-host-history", count: records.length, sessions, records };
   });
   refuse(
-    `${context.label} cannot be populated yet: the retained host export is decoded, but §4.2 also requires the explicit host session inventory and the ` +
+    `${context.label} cannot be populated yet: the retained host export is decoded, but \u00a74.2 also requires the explicit host session inventory and the ` +
       `stop/adoption attestation, which H2's evidence-file wrapper carries and which no reviewed producer publishes yet. The H1 export alone is not ` +
       `complete retain coverage.`,
   );
@@ -1200,7 +1200,7 @@ function consumerCodec(context: RowContext): unknown {
 /** `consumer-v1` for the injected store inventory: no reviewed producer exists yet. */
 function injectorCodec(context: RowContext): unknown {
   refuse(
-    `${context.label} cannot be populated yet: no reviewed injector-inventory producer exists beside R1's consumer manifest, and §4.2's deployed ` +
+    `${context.label} cannot be populated yet: no reviewed injector-inventory producer exists beside R1's consumer manifest, and \u00a74.2's deployed ` +
       `injector inventory is not a shape this module may invent.`,
   );
 }
