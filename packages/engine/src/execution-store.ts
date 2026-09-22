@@ -836,15 +836,14 @@ function readWorkflowView(
     }
     // The row column is the revision; the stored block carries the rest (§2.2).
     const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    // §2.2/§D the block is validated by the SHARED rules, with the one transport
-    // difference this authority has: the bound plan session lives in
-    // `execution_sessions`, never in the block, so `handoff`'s "requires a bound
-    // plan session" half is checked against the plan's own session row here.
-    const sessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const historicalSessionRow = sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    // The handoff validator needs historical association, while the projected
+    // view exposes an authorized session only when that row is currently active.
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState as PlanRow),
-      sessionBound: sessionRow !== undefined,
+      sessionBound: historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (coordinationViolations.length > 0) {
@@ -892,7 +891,7 @@ function readWorkflowView(
       coordination: hasCoordination
         ? (projectedCoordination as unknown as Omit<RowCoordination, "session">)
         : null,
-      session: sessionRow ? sessionRef(store, workflowId, sessionRow) : null,
+      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
       executionLease,
       integrationLease,
       frozenInput: inputRow
