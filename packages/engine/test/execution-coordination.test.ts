@@ -1751,7 +1751,7 @@ type Seat = { caller: ExecutionCaller; session: ExecutionSessionRef };
  * standalone workflow with delivery anchors only; `integration` carries the
  * integration branch and checkout every iteration attempt is proven against.
  */
-type LifecycleRoute = "development" | "integration";
+type LifecycleRoute = "development" | "integration" | "report-only";
 
 type LifecycleFixture = LiveFixture & {
   route: LifecycleRoute;
@@ -1781,7 +1781,7 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
-  const planIds = route === "development" ? [OWN_PLAN] : [OWN_PLAN, PEER_PLAN];
+  const planIds = route === "integration" ? [OWN_PLAN, PEER_PLAN] : [OWN_PLAN];
   for (const planId of planIds) await registerPlan(context, planId);
 
   // The plan's own branch and checkout: the source_sha a handoff pins is this
@@ -1794,10 +1794,11 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
   const featureSha = headOf(featurePath);
   const baseSha = headOf(repoRoot);
   const integrationPath = join(repoRoot, "wt-integration");
-  const branch: Record<string, string> = { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
+  const branch: Record<string, string> | undefined =
+    route === "report-only" ? undefined : { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
   if (route === "integration") {
     runGit(["worktree", "add", "-q", "-b", `integration/${OWN_PLAN}`, integrationPath], repoRoot);
-    branch.integration = `integration/${OWN_PLAN}`;
+    branch!.integration = `integration/${OWN_PLAN}`;
   }
 
   const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator", null);
@@ -1810,9 +1811,10 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
       status: "running",
       started_at: TS,
       updated_at: TS,
-      delivery_kind: "development",
-      branch,
-      ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}),
+      delivery_kind: route === "report-only" ? "verification/report-only" : "development",
+      ...(route === "report-only"
+        ? { completion_policy: "acceptance report", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } }
+        : { branch, ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}) }),
       plans: planIds.map((planId) => ({
         id: planId,
         title: `${planId} title`,
@@ -2516,6 +2518,63 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     expect(
       parsedJson(rows(standalone.context, "select state_json from execution_workflows")[0]!.state_json).status,
     ).toBe("running");
+  });
+
+  test("report-only completion uses matching policy evidence, releases only its own lease, and reconciles completed state", async () => {
+    const fixture = await lifecycleFixture("complete-report-only", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    expect(done.data.coordination!.handoff!.state).toBe("completed");
+    expect(done.data.coordination!.handoff!.integration).toBeUndefined();
+    expect(done.data.executionLease).toMatchObject({ status: "released", released_by: COORDINATOR_ID });
+    expect(done.data.integrationLease).toBeNull();
+    const completedAt = done.data.coordination!.handoff!.completed_at;
+    const state = planStateFootprint(fixture.context, OWN_PLAN);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only", {
+      kind: "reconcile",
+      handoffId,
+    }, token);
+    expect(replay.data.plan.status).toBe("Done");
+    expect(replay.data.coordination!.handoff!.completed_at).toBe(completedAt);
+    expect(replay.data.executionLease).toMatchObject({ status: "released" });
+    expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual({
+      ...state,
+      plan_revision: Number(state.plan_revision) + 1,
+    });
+    const exact = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only", {
+      kind: "reconcile",
+      handoffId,
+    }, token);
+    expect(exact.replayed).toBe(true);
+  });
+
+  test("report-only completion rechecks policy at the transaction boundary and preserves rejected state", async () => {
+    const fixture = await lifecycleFixture("complete-report-only-drift", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-drift");
+    const before = planStateFootprint(fixture.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+        const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
+        snapshot.completion_policy = "changed policy";
+        db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() => planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-drift", {
+        kind: "complete",
+        handoffId,
+      }));
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(before);
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
   });
 
   test("an integration branch moved between the completion proof and its commit refuses with no DB mutation", async () => {

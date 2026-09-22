@@ -137,7 +137,13 @@ import {
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
 import { findingsCleanupGate } from "./project.js";
 import { storeDbPath } from "./store-db.js";
-import { isStandaloneDevelopmentWorkflow, rowValidationRoute, type WorkflowSnapshot } from "./workflow.js";
+import {
+  consultDeliveryEvidence,
+  isStandaloneDevelopmentWorkflow,
+  isStandaloneReportOnlyWorkflow,
+  rowValidationRoute,
+  type WorkflowSnapshot,
+} from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
 import type { PlanHandoff, RowCoordination } from "./coordination-write.js";
 import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
@@ -1723,6 +1729,17 @@ function assertStandaloneBranchIdentity(
   }
 }
 
+function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string, what: string): void {
+  const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
+  if (failure !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires matching report-only completion evidence for ${planId}: ${failure.message}`,
+      { plan_id: planId, code: failure.code },
+    );
+  }
+}
+
 /**
  * §E the standalone replay of an already completed plan (spec §E): a `Done` row
  * with no lease and no merge lease, whose completed handoff is coherent and
@@ -1759,13 +1776,18 @@ function assertStandaloneCompletedReplay(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId, handoff, what: "reconcile" });
+  const route = rowValidationRoute(snapshot, plan as unknown as PlanRow);
   assertViolationFree(
     storedCoordinationViolations(
       { ...(view.coordination ?? {}) } as Record<string, unknown>,
-      { revision: view.coordination?.revision ?? 0, route: "standalone-development", sessionBound: view.session !== null, what: `plan ${planId} coordination` },
+      { revision: view.coordination?.revision ?? 0, route, sessionBound: view.session !== null, what: `plan ${planId} coordination` },
     ),
     `plan ${planId} coordination`,
   );
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    assertReportOnlyCompletionEvidence(snapshot, planId, "reconcile");
+    return;
+  }
   const anchors = standaloneDeliveryAnchors(snapshot, planId);
   assertStandaloneBranchIdentity(view, planId, handoff, anchors, "reconcile", false);
   const repository = proofRepository([handoff.worktree_path, planScopeOrUndefined(view, planId), harnessRoot]);
@@ -1885,9 +1907,17 @@ export async function completeExecutionPlan(
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "complete");
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
   const standalone = isStandaloneDevelopmentWorkflow(snapshot);
+  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
   let resultSha: string | null = null;
-  let gitWitness: GitProofWitness;
-  if (standalone) {
+  let gitWitness: GitProofWitness | undefined;
+  if (reportOnly) {
+    assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
+    requireHandoffState(named, ["accepted"], planId, "complete");
+    assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
+    assertAcceptedReviewDecision(named, planId, "complete");
+    assertHandoffQaGate(named, prepared, planId, "complete");
+    assertPreparedFresh(prepared.assignment_path, prepared);
+  } else if (standalone) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     assertAcceptedReviewDecision(named, planId, "complete");
     assertHandoffQaGate(named, prepared, planId, "complete");
@@ -1895,8 +1925,6 @@ export async function completeExecutionPlan(
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
     const worktree = planScopeOf(before.data, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
-    // §7 seal the whole proof: the checkout, `HEAD`, the delivery ref, the
-    // index, every tracked path and the object inventory the proof read.
     gitWitness = captureGitProofWitness(worktree);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
@@ -1918,21 +1946,26 @@ export async function completeExecutionPlan(
     const sealed = requirePrepared(coordinationOf(witness), planId, "complete");
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "complete", { still: true });
     const committed = witnessSnapshot(witness);
-    if (isStandaloneDevelopmentWorkflow(committed)) {
+    if (isStandaloneReportOnlyWorkflow(committed)) {
+      assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
+      requireHandoffState(handoff, ["accepted"], planId, "complete");
+      assertReportOnlyCompletionEvidence(committed, planId, "complete");
+      assertAcceptedReviewDecision(handoff, planId, "complete");
+      assertHandoffQaGate(handoff, sealed, planId, "complete");
+      assertPlanOwnedWrite(witness, "complete");
+    } else if (isStandaloneDevelopmentWorkflow(committed)) {
       assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
       assertAcceptedReviewDecision(handoff, planId, "complete");
       assertHandoffQaGate(handoff, sealed, planId, "complete");
       assertStandaloneBranchIdentity(witness.view, planId, handoff, standaloneDeliveryAnchors(committed, planId), "complete");
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     } else {
       requireHandoffState(handoff, ["merged"], planId, "complete");
       assertMergeLeaseOwn(witness, tx, handoff, "complete");
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     }
     assertEvidenceDigests(handoff);
-    assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    // §7 the commit-window revalidation: every fact the sealed proof was read
-    // from must still be those bytes, so the proof commits with the row or not
-    // at all. It reads the filesystem only — no child process, no await.
-    revalidateGitProofWitness(gitWitness);
+    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -1983,10 +2016,11 @@ export async function reconcileExecutionPlan(
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "reconcile");
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
   const repository = controlHarnessRoot(context);
+  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
   let decision: ReconcileDecision;
   if (named.state === "completed") {
-    if (isStandaloneDevelopmentWorkflow(snapshot)) {
-      assertStandaloneCompletedReplay(before.data, snapshot, planId, named, controlHarnessRoot(context));
+    if (isStandaloneDevelopmentWorkflow(snapshot) || reportOnly) {
+      assertStandaloneCompletedReplay(before.data, snapshot, planId, named, repository);
     } else {
       const integration = requireIntegration(named, planId);
       const target = proofRepository([integration.worktree_path, named.worktree_path, repository]);
@@ -2000,6 +2034,12 @@ export async function reconcileExecutionPlan(
       assertRecordedResult(target, planId, integration, named.source_sha, head);
     }
     decision = { outcome: "already-completed" };
+  } else if (reportOnly) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile refuses report-only handoff ${named.state} for ${planId} because integration contamination is not permitted`,
+      { plan_id: planId, state: named.state },
+    );
   } else if (named.state === "integrating" || named.state === "merged") {
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
@@ -2056,6 +2096,10 @@ export async function reconcileExecutionPlan(
       // rewritten. The accepted operation itself is not a replay — this
       // authority records it and advances the addressed plan's CAS exactly once
       // (§3.1), so its receipt and the token it returns are one operation's.
+      const committed = witnessSnapshot(witness);
+      if (isStandaloneReportOnlyWorkflow(committed)) {
+        assertReportOnlyCompletionEvidence(committed, planId, "reconcile");
+      }
       advancePlanRowRevision(tx, witness);
       const settled = readExecutionPlanWitness(tx, resolved.read);
       return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
