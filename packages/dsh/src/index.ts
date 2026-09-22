@@ -45,6 +45,7 @@ import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
+import { registerExecutionSessionCommand } from './gates/execution-session.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import {
@@ -720,6 +721,7 @@ export function apply(ctx: Context, config: Config): void {
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)
+  registerExecutionSessionCommand(ctx, resolver)
 
   // Skills mount — single canonical mount: register configured
   // skill roots with the dsh skill-filesystem provider contract. The object form
