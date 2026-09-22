@@ -820,7 +820,11 @@ it('serves an execution target only for the current canonical session, refusing 
       { operationId: 'register-plan-a', actor: 'workflow-selection.spec' },
     )
     const created = await createExecutionWorkflow(
-      { harnessDir, caller: { sessionId: 'creator-a', role: 'coordinator', workflowId: wfId, planId: null } },
+      // The creating identity IS the coordinator that may bind: the engine
+      // refuses a coordinator bind from any other caller (only the validated
+      // recovery transition replaces the creator), so the fixture keeps one
+      // identity for create + bind.
+      { harnessDir, caller: { sessionId, role: 'coordinator', workflowId: wfId, planId: null } },
       {
         entry: { id: wfId, type: 'plan', started_at: stamp, dir: `workflows/${wfId}` },
         snapshot: {
@@ -878,8 +882,11 @@ it('serves an execution target only for the current canonical session, refusing 
     expect(updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { executionBinding: binding, excludedBeforeSeq: 0 }).kind).toBe('written')
     const db = new DatabaseSync(storeDbPath({ harnessDir }))
     try {
+      // The engine's own revocation statement (`revokeSessionRow`): the prior
+      // holder's row is KEPT as history and stops being an ACTIVE binding.
       db.prepare(
-        "update execution_sessions set state = 'revoked', revision = revision + 1 where workflow_id = ? and role = ? and session_id = ?",
+        "update execution_sessions set state = 'revoked', revision = revision + 1 " +
+          "where workflow_id = ? and role = ? and session_id = ? and state <> 'revoked'",
       ).run(wfId, 'coordinator', sessionId)
     } finally {
       db.close()
