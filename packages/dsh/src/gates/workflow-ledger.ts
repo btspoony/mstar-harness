@@ -27,23 +27,19 @@
  * the next expected envelope `seq` (session-log position) — persisted to
  * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` (a small
  * bounded sidecar next to the workflow-dir `agent-flow.jsonl`; the retired
- * harness-root cursor file is NOT read — no fallback). The cursor bounds
- * every scan (cold / created-backfill / live) and gates display-tail
- * compaction, but the DEDUP AUTHORITY is the record identity: every row this
- * consumer records carries a stable `eventId` derived from
- * `{sessionId, streamId, seq}` where `streamId` is the native log
- * INCARNATION (never the store epoch, so an epoch change cannot duplicate
- * history). The cursor store and the append/cursor critical section live in
- * `agent-flow.ts` (ONE owner for both files): `recordWorkflowEvent` loads a
- * fresh cursor, looks the event id up in the bounded durable tail, appends,
- * and writes the cursor atomically under the per-workflow lock. A crash
- * between the append and the cursor write therefore replays into a FOUND id
- * with identical bytes and only advances the cursor. A reused log identity
- * with different bytes and a torn record that could be this event are
- * advisory refusals (warn, no append, no durable advance — the row stays
- * eligible). The cursor is consulted here to bound the walk; an unreadable
- * cursor degrades to in-memory only with one warn (in-process scans stay
- * deduped; a restart re-reads).
+ * harness-root cursor file is NOT read — no fallback). The cursor is only the
+ * SCAN BOUND: the DEDUP AUTHORITY is the row's stable `eventId`
+ * (`wfe1:<kind>:<sessionId>:<streamId>:<seq>`, where `streamId` is the
+ * VERIFIED native log incarnation — the log's immutable head, never the store
+ * epoch) recorded in the durable accepted-identity index
+ * (`agent-flow-ids.jsonl`), which survives tail compaction and cursor
+ * eviction. The cursor entry stores the incarnation it belongs to, so a
+ * rebuilt log is scanned from its own floor instead of being skipped by a
+ * stale session bound, and a session whose head is unreadable records nothing
+ * rather than inventing an incarnation. The append, the index entry and the
+ * cursor move in one critical section owned by `recordWorkflowEvent` (see
+ * `agent-flow.ts`); an unreadable cursor or index is an advisory refusal,
+ * never accepted success.
  *
  * EXPLICIT TARGETS (resolver route) : when the host adapter supplies a
  * {@link ResolveWorkflowLedgerTarget}, the consumer AWAITS it at each event
@@ -136,6 +132,7 @@
  * NEVER a refusal path.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { createHash } from 'node:crypto'
 import {
   loadWatermark,
   recordWorkflowEvent,
@@ -253,8 +250,7 @@ interface AgentsView {
  * is deliberately not part of this view — the scan never copies a whole log.
  */
 interface SessionView {
-  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown; streamId?: unknown }
-  streamId?: unknown
+  header?: { id?: unknown; cwd?: unknown; delegationDepth?: unknown }
   seq?: unknown
   inheritedEventCount?: unknown
   eventAt?(seq: number): unknown
@@ -328,18 +324,71 @@ function sessionEventAtOf(session: unknown): ((seq: number) => unknown) | undefi
 }
 
 /**
- * The session log's native INCARNATION id, when the installed surface
- * carries one (`streamId` on the session or its header). It is deliberately
- * not the store epoch: the epoch is provenance, while a log rebuild / id
- * reuse is a DIFFERENT incarnation whose records must stay distinct. The
- * installed DSh `Session` carries no such member, so the log's incarnation is
- * the session id itself — a reused id is then detected by the record
- * identity check (an existing `eventId` with different bytes is refused).
+ * The VERIFIED native log INCARNATION of one session — derived from the
+ * durable log itself, not from a guess. The anchor is the log's IMMUTABLE
+ * HEAD: the event stored at seq 0 (`eventAt(0)`), fingerprinted by its type,
+ * its envelope time and a canonical serialization of its payload. A resumed
+ * session replays the same stored head → the same incarnation; a rebuilt or
+ * reused session id starts a different head → a different incarnation. The
+ * store epoch is deliberately NOT an input (an epoch change is not a new log
+ * and must not fork history), and neither is a file mtime.
+ *
+ * SDK evidence (`@deepseek-ai/dsh-session`): the real `Session` exposes
+ * `header` (id/createdAt/lineage), `seq` and `eventAt(seq)`; the header
+ * creation stamp is a stronger native fact but reading it is OPTIONAL here,
+ * because the log head is the fact that also holds for the structural session
+ * surfaces this consumer is handed, and because the identity must be the SAME
+ * one the cursor and the compaction window are keyed on. The fingerprint is
+ * canonical so two reads of one stored event always agree.
+ *
+ * Returns `undefined` when no verified head is readable (no `eventAt`, an
+ * empty log, a malformed head): the caller then REFUSES the identity-bearing
+ * association instead of falling back to the bare session id — an
+ * unverifiable incarnation must never be presented as a stable stream.
  */
-function sessionStreamIdOf(session: unknown, sessionId: string): string {
-  const view = session as SessionView | null | undefined
-  const streamId = view?.streamId ?? view?.header?.streamId
-  return typeof streamId === 'string' && streamId !== '' ? streamId : sessionId
+function sessionStreamIdOf(session: unknown, sessionId: string): string | undefined {
+  if (typeof session !== 'object' || session === null) return undefined
+  const cached = streamIncarnationCache.get(session)
+  if (cached !== undefined) return cached.value
+  const head = sessionEventAtOf(session)?.(0)
+  const fingerprint = logHeadFingerprint(head)
+  const value = fingerprint === undefined ? undefined : `s1-${createHash('sha256').update(`${sessionId}\u0000${fingerprint}`).digest('hex').slice(0, 32)}`
+  streamIncarnationCache.set(session, { value })
+  return value
+}
+
+/** Per-session-object memo of the verified incarnation (the object identity is the live incarnation). */
+const streamIncarnationCache = new WeakMap<object, { value: string | undefined }>()
+
+/**
+ * The immutable-head fingerprint of one stored log event, or `undefined` when
+ * the value is not a readable event envelope. Canonical (sorted object keys,
+ * bounded depth and size) so two reads of the same stored event agree.
+ */
+function logHeadFingerprint(head: unknown): string | undefined {
+  const rec = asRecord(head)
+  if (rec === undefined) return undefined
+  const type = rec.type
+  if (typeof type !== 'string' || type === '') return undefined
+  const time = typeof rec.time === 'number' && Number.isFinite(rec.time) ? rec.time : null
+  return `${type}\u0000${time}\u0000${canonicalJson(rec.data)}`
+}
+
+/** A canonical, size-bounded JSON rendering of one value (sorted keys; `undefined` for the absent value). */
+function canonicalJson(value: unknown, depth = 0): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return String(value)
+  if (typeof value === 'string') return JSON.stringify(value.length > 256 ? value.slice(0, 256) : value)
+  if (value === undefined) return 'undefined'
+  if (depth >= 4) return '[depth]'
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 16).map((item) => canonicalJson(item, depth + 1))
+    return `[${items.join(',')}${value.length > 16 ? ',…' : ''}]`
+  }
+  const rec = asRecord(value)
+  if (rec === undefined) return '[opaque]'
+  const keys = Object.keys(rec).sort()
+  const rendered = keys.slice(0, 32).map((key) => `${JSON.stringify(key)}:${canonicalJson(rec[key], depth + 1)}`)
+  return `{${rendered.join(',')}${keys.length > 32 ? ',…' : ''}}`
 }
 
 /* ---------------------------------- explicit ledger target ---------------------------------- */
@@ -610,6 +659,15 @@ export function registerWorkflowLedger(
   // per-apply (reset on re-registration), so it never grows across applies
     // depth-warn latch (reset per apply).
   const depthWarned = new Set<string>()
+  /** Sessions whose missing verified incarnation was already reported (ONE warn per apply). */
+  const identityWarned = new Set<string>()
+
+  /** Report (once per session) that a row's identity could not be verified. */
+  const noteUnverifiedIdentity = (sid: string): void => {
+    if (identityWarned.has(sid)) return
+    identityWarned.add(sid)
+    log('warn', `workflow-ledger identity unavailable for session ${sid} — the native log head is not readable, so its rows are not recorded (no fabricated log incarnation)`)
+  }
 
   // The exclusion floor is a per-SCAN durable fact, not a per-row one. A cold
   // scan / created-backfill walks EVERY row of a session log, and an unbound
@@ -673,15 +731,24 @@ export function registerWorkflowLedger(
    * the record identity a replay can recognize.
    */
   const recordRow = (session: unknown, sid: string, harnessDir: string, row: WorkflowLedgerRow, workflowDir: string): void => {
-    // Record-then-advance is INTERNAL to recordWorkflowEvent now: the row and
-    // its cursor move in one shared-lock critical section, so a crash between
-    // them replays into a found event id and only advances the cursor.
+    // The row's identity needs the VERIFIED native log incarnation: without a
+    // readable immutable head there is no stable stream, so the association is
+    // refused (advisory, one warn per session) instead of fabricating one.
+    const streamId = sessionStreamIdOf(session, sid)
+    if (streamId === undefined) {
+      noteUnverifiedIdentity(sid)
+      return
+    }
+    // Record-then-advance is INTERNAL to recordWorkflowEvent: the row, its
+    // durable identity and its scan bound move in one shared-lock critical
+    // section, so a crash between them replays into a found id and only
+    // advances the bound.
     if (
       recordWorkflowEvent({
         harnessDir,
         workflowDir,
         event: row.event,
-        source: { sessionId: sid, streamId: sessionStreamIdOf(session, sid), seq: row.seq },
+        source: { sessionId: sid, streamId, seq: row.seq },
         isEvictable: (candidate) => sessions.get(candidate) === undefined,
       })
     ) {
@@ -891,8 +958,21 @@ export function registerWorkflowLedger(
     }
     const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
     if (workflowDir === null) return bounded
-    const cursor = loadWatermark(workflowDir).get(sid) ?? 0
-    return Math.max(bounded, cursor > endSeq ? 0 : cursor)
+    const cursorRead = loadWatermark(workflowDir)
+    if (cursorRead.kind === 'unreadable') {
+      // Fail closed: an unreadable bound is NOT "no bound". Scanning from the
+      // floor is always safe — the durable identity index dedupes the re-walk.
+      log('warn', `workflow-ledger scan bound unreadable for ${workflowDir} (${cursorRead.reason}) — scanning from the floor (the identity index still dedupes)`)
+      return bounded
+    }
+    // The bound is usable only for the incarnation it was WRITTEN for: a
+    // rebuilt log starts at its own floor instead of being skipped by a stale
+    // session bound. A legacy v1 entry (no recorded incarnation) is adopted
+    // once — its next durable write re-stamps the verified incarnation.
+    const streamId = sessionStreamIdOf(session, sid)
+    const entry = cursorRead.cursors.get(sid)
+    const verified = streamId !== undefined && entry !== undefined && (entry.stream === undefined || entry.stream === streamId) ? entry.next : 0
+    return Math.max(bounded, verified > endSeq ? 0 : verified)
   }
 
   /**
@@ -945,6 +1025,13 @@ export function registerWorkflowLedger(
     if (startSeq >= endSeq) return
     const eventAt = sessionEventAtOf(session)
     if (eventAt === undefined) return
+    // Without a verified incarnation no row of this session can be recorded —
+    // skip the walk (ONE warn, shared with the live path's latch) instead of
+    // re-reading a log whose every row would be refused.
+    if (sessionStreamIdOf(session, sid) === undefined) {
+      noteUnverifiedIdentity(sid)
+      return
+    }
     scanDepth += 1
     const settle = (): void => {
       scanDepth -= 1

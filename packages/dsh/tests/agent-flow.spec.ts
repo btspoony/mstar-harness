@@ -1411,6 +1411,27 @@ describe('agent-flow settle — real completion pairing ', () => {
     }
   })
 
+  it('a live row without a verified carrying session gets NO fabricated identity — never `wfc1::`', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-live-identity-missing-')
+    try {
+      // An exec-less/agent-less call carrying a callId: the row still records
+      // with its advisory semantics, but no identity is invented from an empty
+      // namespace — this is the exact shape that used to produce `wfc1::<id>`.
+      recordDispatch({ harnessDir, exec: { callId: 'c-nosession', name: 'subagent' }, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, outcome: 'ok', callId: 'c-nosession' })
+      // The SAME call id with a verified session DOES carry one.
+      recordDispatch({ harnessDir, exec: dispatchExec('c-withsession', 'sess-1', VALID_PLANNED), prompt: VALID_PLANNED, violations: [], hard: false })
+
+      const ids = ledgerEventIds(workflowDir)
+      expect(ids.filter((id) => id === '')).toHaveLength(2)
+      expect(ids).toContain('wfc1:sess-1:c-withsession:dispatch')
+      expect(ids.some((id) => id.startsWith('wfc1:'))).toBe(true)
+      expect(ids.some((id) => id.startsWith('wfc1::'))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('the dispatchByCallId entry is pruned once the post-execute branch resolves the call ', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-prune-callid-')
     const ctx = new Context()

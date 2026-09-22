@@ -55,36 +55,44 @@
  *
  * RECORD IDENTITY + THE ONE APPEND/CURSOR CRITICAL SECTION : every NEW row
  * carries a stable `eventId` on its JSONL line. Durable workflow events
- * (`recordWorkflowEvent`) carry the required source position
- * `{sessionId, streamId, seq}` and id
- * `wfe1:<kind>:<streamId>:<seq>` — `streamId` is the native session-log
- * INCARNATION, never the store epoch, so an epoch change cannot duplicate
- * history. Live tool-call rows (`dispatch` / `settle` / `subagent-link` /
- * `workflow-verdict`) carry `wfc1:<sessionId>:<callId>:<kind>` when the seam
- * supplies a call id (never fabricated otherwise). Older rows keep their
- * exact bytes and line-offset identity — they simply have no `eventId`.
- * `recordWorkflowEvent` owns ONE critical section under the per-workflow
- * lock (the consumer no longer advances the cursor separately):
- * fresh cursor → detect an existing event id in the bounded durable tail →
- * append → cursor atomic write. A crash between append and cursor leaves the
- * row in the tail, so the replay finds the SAME id with identical bytes and
- * only advances the cursor (no duplicate). An event id that is already
- * present with DIFFERENT bytes (a reused stream/log identity) and a torn
- * record that could be this event are ADVISORY REFUSALS: warn, no append, no
- * durable cursor advance — the row stays eligible. The cursor sidecar stays
- * `workflow-ledger-cursors.json` in the SAME workflow dir; the retired
- * harness-root cursor file is never read as a fallback.
+ * (`recordWorkflowEvent`) carry the required verified source position
+ * `{sessionId, streamId, seq}` and the id
+ * `wfe1:<kind>:<sessionId>:<streamId>:<seq>` — BOTH the carrying session and
+ * the native log INCARNATION (`streamId`, never the store epoch) are part of
+ * the id, so neither a session cross nor a rebuilt log can collide. Live
+ * tool-call rows (`dispatch` / `settle` / `subagent-link` / `workflow-verdict`)
+ * carry `wfc1:<sessionId>:<callId>:<kind>` only when the seam supplies BOTH a
+ * verified carrying session id and a call id — an exec/Call without them
+ * records its row without an id, never `wfc1::`. Older rows keep their exact
+ * bytes and line-offset identity — they simply have no `eventId`.
+ *
+ * `recordWorkflowEvent` owns ONE critical section under the per-workflow lock
+ * (the consumer no longer advances the cursor separately), moving three
+ * durable stores in order: the accepted-identity INDEX (the dedup authority),
+ * the bounded display tail, and the scan-bound CURSOR. A crash between the
+ * append and the index entry is healed from the tail; a crash between the
+ * index entry and the cursor costs a re-walk, never a duplicate. An event id
+ * already present with DIFFERENT bytes (a reused stream/log identity) and a
+ * torn record that could be this event are ADVISORY REFUSALS — warn, no
+ * append, no durable cursor advance. A PRESENT-but-unreadable index or cursor
+ * is a refusal too: an unreadable authority is never "nothing recorded yet",
+ * and a read failure is never accepted success. The cursor sidecar
+ * (`workflow-ledger-cursors.json`, v2 `{next, stream}` with v1 read
+ * compatibility) lives in the SAME workflow dir; the retired harness-root
+ * cursor file is never read as a fallback.
  *
  * BOUNDED DISPLAY TAIL + IMMUTABLE HISTORY : the 500-event display bound is
  * unchanged, but evicted lines are first archived — byte-exact, `fsync`ed —
  * into a sealed append-only chunk under
  * `<workflowDir>/agent-flow-history/chunk-NNNNNN.jsonl` BEFORE the tail is
- * rewritten, and only records whose source cursor checkpoint is already
- * durable are evicted. A record from a log incarnation the cursor has not
- * covered (the pending crash window) stays in the live tail, so the dedup
- * window can never be compacted away from under a replay. Rows without a
- * source (older rows, live tool-call rows) are archived by their line
- * position — their bytes are preserved, never rewritten.
+ * rewritten, and a retry after a crash appends only the not-yet-archived
+ * remainder (byte comparison at the line boundary), so the same accepted
+ * occurrence is never archived twice. DISPLAY RETENTION and DEDUP RETENTION
+ * are separate concerns: a row may leave the live tail as soon as its record
+ * id is in the durable identity index, whatever incarnation it belongs to,
+ * because the index — not the tail and not the scan bound — proves the record
+ * can never be appended again. Rows without a source (older rows, live
+ * tool-call rows) keep their bytes and are archived by line position.
  *
  * Settle (real completion
  * signals, paired to the dispatch record): `tools/post-execute` IS part of
@@ -183,6 +191,7 @@
  * verbatim by the entry.
  */
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
@@ -753,7 +762,17 @@ export function taskIdOf(prompt: string): string | undefined {
   return `T${match[1]!}`
 }
 
-/** Ledger event's optional agent id, derived from the exec record (structural read). */
+/**
+ * The live-call row's CARRYING NATIVE SESSION id, read from the exec's agent.
+ * SDK evidence (`@deepseek-ai/dsh-agent` `types.ts`): `Agent.id` is declared as
+ * `SessionId` — "Session-backed Agent identity" — and the typert context map
+ * keys the agent context by `SessionId`, so `exec.agent.id` IS the carrying
+ * session id (one Agent per session), not an opaque handle. `ToolExecution.agent`
+ * is OPTIONAL (set by the agent loop), so an exec-less host-hook call carries
+ * no session identity at all: `undefined` here means "no verified carrying
+ * session", and every identity-bearing write then omits its id rather than
+ * substituting an empty string.
+ */
 function agentOfExec(exec: unknown): string | undefined {
   if (exec === undefined) return undefined
   return sessionIdOf(exec as ToolExecution)
@@ -884,7 +903,7 @@ export interface AgentFlowEventSource {
  * rows carry neither — their identity is their bytes and line offset.
  */
 export interface AgentFlowRecordIdentity {
-  /** The stable record id ({@link workflowEventId} / {@link callEventId}). */
+  /** The stable record id ({@link workflowEventId} / {@link callIdentity}). */
   eventId: string
   /** The durable source position (durable workflow events only). */
   source?: AgentFlowEventSource
@@ -892,23 +911,29 @@ export interface AgentFlowRecordIdentity {
 
 /**
  * The deterministic event id of one durable workflow event:
- * `wfe1:<kind>:<streamId>:<seq>`. Deterministic by construction — a replay
- * after a crash rebuilds the SAME id, so the ledger can recognize its own
- * already-appended row and advance only the cursor.
+ * `wfe1:<kind>:<sessionId>:<streamId>:<seq>` — the COMPLETE verified identity
+ * tuple. BOTH the carrying native session id and the verified log incarnation
+ * are part of the id, so two records can never collide across sessions or
+ * across log incarnations of one session. Deterministic by construction: a
+ * replay after a crash rebuilds the SAME id, so the ledger recognizes its own
+ * already-appended row and never appends it twice.
  */
 export function workflowEventId(event: AgentFlowWorkflowEvent, source: AgentFlowEventSource): string {
-  return `${WORKFLOW_EVENT_ID_PREFIX}:${event.kind}:${source.streamId}:${source.seq}`
+  return `${WORKFLOW_EVENT_ID_PREFIX}:${event.kind}:${source.sessionId}:${source.streamId}:${source.seq}`
 }
 
 /**
- * The deterministic event id of one live tool-call row:
- * `wfc1:<sessionId>:<callId>:<kind>` — the carrying session NAMESPACES the
- * call id (a raw `callId` is not globally unique across sessions in one
- * process), so two sessions running the same call id stay distinct records.
- * Never a role/task pairing: separate real calls are separate events.
+ * The identity transport of one live tool-call row, formed ONLY from a
+ * verified carrying native session id AND the call id. Either one missing
+ * (an exec without an agent, a call without a callId) yields NO identity —
+ * the row is still recorded with its documented advisory semantics, but no id
+ * is fabricated from an empty string or an unrelated handle, and the row can
+ * never collide with another session's call. The carrying session namespaces
+ * the call id because a raw `callId` is not globally unique in one process.
  */
-export function callEventId(kind: AgentFlowEvent['kind'], sessionId: string, callId: string): string {
-  return `${CALL_EVENT_ID_PREFIX}:${sessionId}:${callId}:${kind}`
+export function callIdentity(kind: AgentFlowEvent['kind'], sessionId: string | undefined, callId: string | undefined): AgentFlowRecordIdentity | undefined {
+  if (sessionId === undefined || sessionId === '' || callId === undefined || callId === '') return undefined
+  return { eventId: `${CALL_EVENT_ID_PREFIX}:${sessionId}:${callId}:${kind}` }
 }
 
 /** Validate one source position: non-empty ids and an integer seq in `[0, 2^31)`. */
@@ -930,6 +955,11 @@ function ledgerLineOf(event: AgentFlowEvent, identity?: AgentFlowRecordIdentity)
   return JSON.stringify(row)
 }
 
+/** The content digest of one serialized ledger line (the identity index's byte check). */
+export function digestOfLedgerLine(line: string): string {
+  return createHash('sha256').update(line).digest('hex').slice(0, 32)
+}
+
 /** The `eventId` carried by one raw ledger line, when it parses and carries one. */
 function eventIdOfLine(line: string): string | undefined {
   try {
@@ -944,204 +974,333 @@ function eventIdOfLine(line: string): string | undefined {
 /* ---------------------------------- durable cursor ---------------------------------- */
 
 /**
- * The durable cursor sidecar file name under one workflow dir: session id →
- * next expected envelope `seq` (the consumer's dedup checkpoint and the
- * compaction eligibility gate). It lives beside `agent-flow.jsonl` in the
- * ACTIVE workflow dir — the retired harness-root cursor file is never read
- * as a fallback.
+ * The durable cursor sidecar file name under one workflow dir. It carries the
+ * SCAN BOUND per session — `{ "<sessionId>": { next, stream } }` — where
+ * `stream` is the VERIFIED log incarnation the bound belongs to. It lives
+ * beside `agent-flow.jsonl` in the ACTIVE workflow dir; the retired
+ * harness-root cursor file is never read as a fallback.
  */
 export const WORKFLOW_LEDGER_WATERMARK_FILE = 'workflow-ledger-cursors.json'
 /**
  * Session-count cap for ONE cursor file (bounds the sidecar). Eviction
- * prefers a session the caller reports as no longer live; the file is a
- * dedup checkpoint, so the residual of dropping one entry is the documented
- * bounded re-record (the archived rows' bytes are never lost).
+ * prefers a session the caller reports as no longer live. The cursor is only
+ * a scan bound, so dropping an entry costs re-walking (never a lost or
+ * duplicated record): the durable identity index remains the dedup authority.
  */
 export const WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS = 256
+
+/** One durable scan bound: the next expected envelope seq of ONE log incarnation. */
+export interface LedgerCursor {
+  /** The next expected envelope seq for this session's current incarnation. */
+  next: number
+  /**
+   * The VERIFIED log incarnation this bound belongs to. ABSENT only on a
+   * pre-existing v1 entry (written before incarnations were recorded): the
+   * first scan that reads it adopts the bound once and the next durable write
+   * re-stamps the verified incarnation — the documented migration boundary.
+   */
+  stream?: string
+}
+
+/** Loaded scan bounds: session id → its current incarnation's bound. */
+type Watermark = Map<string, LedgerCursor>
+
 /**
- * Workflow-dir count cap for the module-level cursor cache: a long-lived
- * process can touch many workflow ids over its lifetime, and the cache must
- * stay bounded. The FILE is the durable store — an evicted dir is re-read on
- * its next visit, so eviction never loses a cursor.
+ * Module-level scan-bound cache, keyed by WORKFLOW DIR and bounded by
+ * {@link AGENT_FLOW_LEDGER_CACHE_MAX_DIRS}. Only the non-fresh
+ * (scan-start) read uses it; the append/cursor transaction always re-reads the
+ * file under the lock.
  */
-export const WORKFLOW_LEDGER_WATERMARK_MAX_DIRS = 64
-
-/** One loaded cursor: session id → next expected envelope seq (per workflow dir). */
-type Watermark = Map<string, number>
+const cursorCache = new Map<string, Watermark>()
 
 /**
- * Module-level cursor cache — the durable file's in-memory mirror, keyed by
- * WORKFLOW DIR (the file's actual location). Bounded by
- * {@link WORKFLOW_LEDGER_WATERMARK_MAX_DIRS} (oldest dir evicted first).
+ * Dir-count cap for the module-level ledger caches (scan bounds + identity
+ * index): a long-lived process can touch many workflow ids over its lifetime,
+ * and the caches must stay bounded. The FILES are the durable stores — an
+ * evicted dir is re-read on its next visit.
  */
-const watermarkCache = new Map<string, Watermark>()
+const AGENT_FLOW_LEDGER_CACHE_MAX_DIRS = 64
 
-/** Cache one workflow dir's cursor with the bounded dir-count eviction. */
-function cacheWatermark(workflowDir: string, watermark: Watermark): void {
-  watermarkCache.set(workflowDir, watermark)
-  while (watermarkCache.size > WORKFLOW_LEDGER_WATERMARK_MAX_DIRS) {
-    const oldest = watermarkCache.keys().next().value
+/** Insert into one bounded dir-keyed cache, evicting the oldest dir at the cap. */
+function cacheBounded<V>(cache: Map<string, V>, key: string, value: V): void {
+  cache.set(key, value)
+  while (cache.size > AGENT_FLOW_LEDGER_CACHE_MAX_DIRS) {
+    const oldest = cache.keys().next().value
     if (oldest === undefined) break
-    watermarkCache.delete(oldest)
+    cache.delete(oldest)
   }
 }
 
-/** The number of workflow dirs currently mirrored in the module-level cursor cache. */
-export function workflowLedgerWatermarkCacheSize(): number {
-  return watermarkCache.size
-}
+/**
+ * The cursor read verdict. A PRESENT-but-unreadable sidecar is never an empty
+ * cursor: the caller refuses (advisory) instead of treating an unreadable
+ * authority as "nothing recorded yet".
+ */
+export type LedgerCursorRead =
+  | { kind: 'ok' | 'absent'; cursors: Watermark }
+  | { kind: 'unreadable'; cursors: Watermark; reason: string }
 
 /**
- * Load (or return the cached) cursor for one workflow dir. A missing file is
- * the normal first run — silent, empty map. A present-but-corrupt file warns
- * once and degrades to in-memory-only (contained — never throws). Persisted
- * values are validated (integer `next` in `[1, 2^31)`); invalid entries are
- * dropped.
+ * Load the scan bounds of one workflow dir. `fresh` re-reads the file — the
+ * append/cursor transaction always does, so its read-modify-write starts from
+ * the other process's last save; the scan-start path may reuse the bounded
+ * module cache instead (a stale-but-lower bound only costs a re-walk, and the
+ * durable identity index — not the bound — is what prevents duplicates).
  *
- * `fresh` re-reads the FILE and replaces the in-memory map — used ONLY under
- * the per-workflow write lock, so a read-modify-write starts from the other
- * process's last save instead of a stale in-memory view. A fresh read that
- * cannot reach the file (missing/corrupt) falls back to the in-memory map.
+ * Accepted shapes: `{v:2, cursors:{<sid>:{next, stream?}}}` (current) and
+ * `{v:1, cursors:{<sid>:<number>}}` (legacy — the number becomes the bound of
+ * an entry with NO recorded incarnation). Any other shape is `unreadable`.
  */
-export function loadWatermark(workflowDir: string, fresh = false): Watermark {
-  const cached = watermarkCache.get(workflowDir)
-  if (cached !== undefined && !fresh) return cached
-  const watermark: Watermark = new Map()
+export function loadWatermark(workflowDir: string, fresh = false): LedgerCursorRead {
+  const cached = cursorCache.get(workflowDir)
+  if (cached !== undefined && !fresh) return { kind: 'ok', cursors: cached }
+  let raw: string
   try {
-    const raw = readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
-    const record = asRecord(JSON.parse(raw) as unknown)
-    const cursors = asRecord(record?.cursors)
-    if (cursors !== undefined) {
-      for (const [sid, next] of Object.entries(cursors)) {
-        // An entry is only written after the first recorded row, so a stored
-        // next-seq below 1 is malformed (drop). 2^31 is the sequence bound.
-        if (
-          typeof next === 'number' &&
-          Number.isInteger(next) &&
-          next >= 1 &&
-          next < WORKFLOW_LEDGER_MAX_SEQ &&
-          sid !== ''
-        ) {
-          watermark.set(sid, next)
-        }
-      }
-    }
+    raw = readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
   } catch (error) {
     const err = error as NodeJS.ErrnoException
-    if (err?.code !== 'ENOENT') {
-      log('warn', `workflow-ledger watermark unreadable for ${workflowDir} — degrading to in-memory-only (restart re-records): ${errorMessage(error)}`)
-    }
-    if (fresh && cached !== undefined) return cached
+    if (err?.code === 'ENOENT') return { kind: 'absent', cursors: new Map() }
+    return { kind: 'unreadable', cursors: new Map(), reason: errorMessage(error) }
   }
-  cacheWatermark(workflowDir, watermark)
-  return watermark
+  let cursors: Watermark
+  try {
+    cursors = parseWatermark(raw)
+  } catch (error) {
+    return { kind: 'unreadable', cursors: new Map(), reason: errorMessage(error) }
+  }
+  cacheBounded(cursorCache, workflowDir, cursors)
+  return { kind: 'ok', cursors }
+}
+
+/** Parse one cursor sidecar (v1 numeric or v2 entry form) — throws on any other shape. */
+function parseWatermark(raw: string): Watermark {
+  const record = asRecord(JSON.parse(raw) as unknown)
+  const entries = asRecord(record?.cursors)
+  if (record === undefined || entries === undefined || (record.v !== 1 && record.v !== 2)) {
+    throw new Error('unrecognized cursor sidecar shape')
+  }
+  const cursors: Watermark = new Map()
+  for (const [sid, value] of Object.entries(entries)) {
+    if (sid === '') continue
+    if (typeof value === 'number') {
+      // v1 legacy entry: the bound has NO recorded incarnation.
+      if (Number.isInteger(value) && value >= 1 && value < WORKFLOW_LEDGER_MAX_SEQ) cursors.set(sid, { next: value })
+      continue
+    }
+    const entry = asRecord(value)
+    const next = entry?.next
+    const stream = entry?.stream
+    if (entry === undefined || typeof next !== 'number' || !Number.isInteger(next) || next < 1 || next >= WORKFLOW_LEDGER_MAX_SEQ) continue
+    if (stream !== undefined && (typeof stream !== 'string' || stream === '')) continue
+    cursors.set(sid, stream === undefined ? { next } : { next, stream })
+  }
+  return cursors
 }
 
 /**
- * Persist one cursor map atomically (write `*.json.tmp` → rename). ALWAYS
- * called under the per-workflow write lock. A failing write degrades to
- * in-memory-only with one warn: the ledger rows are already appended (never
- * lost); only cross-restart dedup is lost. Contained — never throws.
+ * Persist the scan bounds atomically (write `*.json.tmp` → rename). The
+ * verdict is returned, never swallowed: a failed write is an authority
+ * failure the caller must report as an advisory refusal (the row's durability
+ * is proven by the ledger + identity index, but the scan bound did not
+ * commit).
  */
-function saveWatermark(workflowDir: string, watermark: Watermark): void {
+function saveWatermark(workflowDir: string, cursors: Watermark): { kind: 'ok' } | { kind: 'failed'; reason: string } {
   try {
     const file = join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE)
     const tmp = `${file}.tmp`
-    writeFileSync(tmp, JSON.stringify({ v: 1, cursors: Object.fromEntries(watermark) }))
+    const entries: Record<string, LedgerCursor> = {}
+    for (const [sid, entry] of cursors) entries[sid] = entry
+    writeFileSync(tmp, JSON.stringify({ v: 2, cursors: entries }))
     renameSync(tmp, file)
   } catch (error) {
-    log('warn', `workflow-ledger watermark write failed for ${workflowDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
+    return { kind: 'failed', reason: errorMessage(error) }
   }
+  cacheBounded(cursorCache, workflowDir, cursors)
+  return { kind: 'ok' }
 }
 
 /**
- * Advance one session's cursor entry and persist it. Runs the whole
- * read-modify-write under the per-workflow inter-process lock: the fresh
- * load starts from the latest durable cursors, so two processes sharing one
- * lifecycle never clobber each other's advances. When a NEW session would
- * push the map past the cap, an evictable entry is dropped first (falling
- * back to the oldest entry when every entry is live).
- *
- * DEGRADED PATH : a lock timeout (another writer stuck for the full timeout
- * — a crashed/stuck peer), a reentrancy error, or a throwing critical
- * section leaves the durable file untouched, but the in-memory mirror is
- * STILL advanced (the same monotonic `Math.max`; eviction skipped — the cap
- * bounds the durable sidecar only), so re-applies in THIS process stay
- * deduped. One warn names the actual state (durable cursor NOT advanced).
+ * Advance one session's scan bound to `nextSeq` for the verified incarnation
+ * `streamId` and persist it. The whole read-modify-write runs under the
+ * per-workflow inter-process lock (the caller holds it): the fresh load
+ * starts from the latest durable cursors, so two processes sharing one
+ * lifecycle never clobber each other. A bound for a DIFFERENT incarnation is
+ * replaced (the new log owns its own positions); a matching bound — or an
+ * adopted legacy entry with no recorded incarnation — advances monotonically
+ * (`Math.max`). When a NEW session would push the map past the cap, an
+ * evictable entry is dropped first (falling back to the oldest entry).
  *
  * Exported as the degraded-path test seam: {@link withWorkflowDirLock}'s
  * `lockOpts` (`timeoutMs`) lets a test shorten the otherwise-30 s wait.
  *
- * @param isEvictable - `true` for a candidate session that is safe to evict
- *   (not live in the sessions store).
- * @param lockOpts - pass-through to {@link withWorkflowDirLock}
- *   (`timeoutMs` / `pollMs` overrides; production callers never set them).
+ * @returns `true` only when the durable write committed.
+ * @param isEvictable - `true` for a candidate session that is safe to evict.
+ * @param lockOpts - pass-through to {@link withWorkflowDirLock}.
  */
 export function advanceWatermark(
   workflowDir: string,
   sid: string,
   nextSeq: number,
+  streamId: string,
   isEvictable: (candidate: string) => boolean,
   lockOpts: { timeoutMs?: number; pollMs?: number } = {},
-): void {
+): boolean {
   try {
-    withWorkflowDirLock(
+    return withWorkflowDirLock(
       workflowDir,
       () => {
-        const watermark = loadWatermark(workflowDir, true)
-        advanceWatermarkLocked(watermark, sid, nextSeq, isEvictable)
-        saveWatermark(workflowDir, watermark)
+        const read = loadWatermark(workflowDir, true)
+        if (read.kind === 'unreadable') {
+          log('warn', `workflow-ledger cursor advance refused — the durable cursor is unreadable (${read.reason}); the bound is NOT advanced`)
+          return false
+        }
+        return advanceCursorLocked(workflowDir, read.cursors, sid, nextSeq, streamId, isEvictable)
       },
       lockOpts,
     )
   } catch (error) {
-    // The durable write did NOT happen (lock timeout / reentrancy / throwing
-    // critical section). Keep the IN-MEMORY mirror advanced (the same
-    // monotonic `Math.max`, idempotent with the locked path) so re-applies in
-    // this process stay deduped.
-    // simplify: degraded-path advance skips the session-cap eviction — the
-    // cap bounds the durable sidecar only; a transient in-memory over-cap
-    // entry is dropped by the next locked fresh load (bounded by the outage
-    // window).
-    const watermark = loadWatermark(workflowDir)
-    advanceWatermarkLocked(watermark, sid, nextSeq, () => false)
-    log('warn', `workflow-ledger watermark durable advance failed for ${workflowDir} — in-memory cursor advanced, durable cursor NOT (restart reloads the file; outage rows re-record once — bounded duplicate): ${errorMessage(error)}`)
+    log('warn', `workflow-ledger cursor advance refused — the durable cursor did not commit (${errorMessage(error)}); the bound is NOT advanced`)
+    return false
   }
 }
 
 /**
- * The UNLOCKED cursor mutation shared by the combined append/cursor
- * transaction and {@link advanceWatermark} — the caller already holds the
- * per-workflow lock. Cap eviction runs first; `nextSeq` is monotonic (`Math.max`)
- * so a stale concurrent advance never regresses an already-higher cursor —
- * EXCEPT when the caller reports a rebuilt log (`reset`), where the record's
- * position is below the stale checkpoint and the checkpoint must follow the
- * new incarnation instead of blocking its rows forever.
+ * The UNLOCKED scan-bound mutation — the caller already holds the
+ * per-workflow lock. Cap eviction runs first; the bound advances
+ * monotonically within one incarnation and is REPLACED when the stored entry
+ * belongs to a different one. Returns `false` (with a warn) when the durable
+ * write did not commit; the caller must then refuse the record.
  */
-function advanceWatermarkLocked(
-  watermark: Watermark,
+function advanceCursorLocked(
+  workflowDir: string,
+  cursors: Watermark,
   sid: string,
   nextSeq: number,
+  streamId: string,
   isEvictable: (candidate: string) => boolean,
-  reset = false,
-): void {
-  if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
+): boolean {
+  if (!cursors.has(sid) && cursors.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
     let victim: string | undefined
-    for (const key of watermark.keys()) {
+    for (const key of cursors.keys()) {
       if (isEvictable(key)) {
         victim = key
         break
       }
     }
-    victim ??= watermark.keys().next().value as string | undefined
+    victim ??= cursors.keys().next().value as string | undefined
     if (victim !== undefined) {
-      watermark.delete(victim)
-      log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
+      cursors.delete(victim)
+      log('warn', `workflow-ledger cursor capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (the evicted session is re-walked; the identity index still dedupes its rows)`)
     }
   }
-  const prior = watermark.get(sid) ?? 0
-  watermark.set(sid, reset ? nextSeq : Math.max(prior, nextSeq))
+  const prior = cursors.get(sid)
+  // A stored bound for ANOTHER incarnation describes a log that no longer
+  // exists at these positions — replace it. A matching bound, or an adopted
+  // legacy entry with no recorded incarnation, advances monotonically.
+  const sameIncarnation = prior !== undefined && (prior.stream === undefined || prior.stream === streamId)
+  const next = sameIncarnation && prior !== undefined ? Math.max(prior.next, nextSeq) : nextSeq
+  cursors.set(sid, { next, stream: streamId })
+  const saved = saveWatermark(workflowDir, cursors)
+  if (saved.kind === 'failed') {
+    log('warn', `workflow-ledger cursor write failed for ${workflowDir} (${saved.reason}) — the scan bound did NOT commit; the record is refused so the row stays eligible`)
+    return false
+  }
+  return true
 }
+
+/* ---------------------------------- accepted-identity index ---------------------------------- */
+
+/**
+ * The durable ACCEPTED-IDENTITY INDEX file name under one workflow dir: one
+ * JSON line `{"id": "<eventId>", "d": "<line digest>"}` per accepted durable
+ * event, fsynced as part of acceptance. It is the ledger's dedup authority —
+ * compaction, the bounded cursor sidecar and the in-memory state are display
+ * or performance concerns only, and none of them can lose an accepted id.
+ */
+export const AGENT_FLOW_INDEX_FILE = 'agent-flow-ids.jsonl'
+
+/** Accepted record id → the content digest of its ledger line. */
+type IdentityIndex = Map<string, string>
+
+/**
+ * The index read verdict. A present-but-unreadable index (unreadable bytes or
+ * a malformed line) is NEVER an empty index: the caller refuses, because an
+ * unreadable dedup authority cannot prove that an event was not accepted.
+ */
+export type IdentityIndexRead =
+  | { kind: 'ok' | 'absent'; index: IdentityIndex }
+  | { kind: 'unreadable'; index: IdentityIndex; reason: string }
+
+/**
+ * Module-level index cache (size-guarded). The index is append-only, so a
+ * matching file size proves the cached view is current — including after
+ * another process appended (its write changes the size).
+ */
+const indexCache = new Map<string, { index: IdentityIndex; size: number }>()
+
+/** The number of workflow dirs mirrored in each module-level ledger cache (test seam). */
+export function agentFlowLedgerCacheDirCounts(): { cursors: number; index: number } {
+  return { cursors: cursorCache.size, index: indexCache.size }
+}
+
+/** Load the accepted-identity index of one workflow dir (size-guarded cache, always re-verified under the lock). */
+function loadIdentityIndex(workflowDir: string): IdentityIndexRead {
+  const file = join(workflowDir, AGENT_FLOW_INDEX_FILE)
+  let size: number
+  try {
+    size = statSync(file).size
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err?.code === 'ENOENT') return { kind: 'absent', index: new Map() }
+    return { kind: 'unreadable', index: new Map(), reason: errorMessage(error) }
+  }
+  const cached = indexCache.get(workflowDir)
+  if (cached !== undefined && cached.size === size) return { kind: 'ok', index: cached.index }
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch (error) {
+    return { kind: 'unreadable', index: new Map(), reason: errorMessage(error) }
+  }
+  const index: IdentityIndex = new Map()
+  for (const line of raw.split('\n')) {
+    if (line === '') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      return { kind: 'unreadable', index: new Map(), reason: 'malformed index line' }
+    }
+    const rec = asRecord(parsed)
+    const id = rec?.id
+    const digest = rec?.d
+    if (rec === undefined || typeof id !== 'string' || id === '' || typeof digest !== 'string' || digest === '') {
+      return { kind: 'unreadable', index: new Map(), reason: 'malformed index line' }
+    }
+    if (!index.has(id)) index.set(id, digest)
+  }
+  cacheBounded(indexCache, workflowDir, { index, size })
+  return { kind: 'ok', index }
+}
+
+/**
+ * Append one accepted identity to the index and `fsync` it — the durable
+ * dedup commit. Throws on any fs failure; the caller refuses the record, and
+ * the row that is already in the ledger is healed on the next retry (the
+ * bounded-tail lookup finds it).
+ */
+function appendIdentityIndexLocked(workflowDir: string, eventId: string, digest: string): void {
+  const file = join(workflowDir, AGENT_FLOW_INDEX_FILE)
+  const fd = openSync(file, 'a')
+  try {
+    writeSync(fd, `${JSON.stringify({ id: eventId, d: digest })}\n`)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  indexCache.delete(workflowDir)
+}
+
 
 /**
  * Lock-directory name for the per-workflow write lock :
@@ -1268,36 +1427,77 @@ export function withWorkflowDirLock<T>(
  * `<workflowDir>/agent-flow-history/` (`chunk-NNNNNN.jsonl`): evictions keep
  * filling the newest chunk until it reaches the same byte gate as the ledger,
  * then the next eviction starts the following chunk — so the directory grows
- * with the retained VOLUME, not with one file per event, and a sealed chunk
- * is never rewritten. The archive is append-only: a crash between the chunk
- * `fsync` and the tail rewrite can leave the same evicted bytes archived
- * twice (no loss, a bounded duplicate), which the next successful compaction
- * does not repeat.
+ * with the retained VOLUME, not with one file per event, and a sealed chunk is
+ * never rewritten.
+ *
+ * CRASH IDEMPOTENCE: a process death after the chunk `fsync` but before the
+ * tail rewrite leaves the batch in BOTH places. The retry therefore appends
+ * only the part of the batch that is not already the chunk's tail (a byte
+ * comparison at the line boundary): the same accepted occurrence is archived
+ * exactly once, and legacy lines without an identity are handled by the same
+ * byte rule.
  *
  * May throw (fs) — callers contain.
  */
 function archiveHistoryLines(workflowDir: string, lines: readonly string[]): void {
-  const body = `${lines.join('\n')}\n`
   const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
   mkdirSync(dir, { recursive: true })
   const sealed = readdirSync(dir).filter((name) => name.startsWith('chunk-') && name.endsWith('.jsonl')).sort()
-  let path = sealed.length === 0 ? join(dir, `chunk-${String(1).padStart(6, '0')}.jsonl`) : join(dir, sealed[sealed.length - 1]!)
-  try {
-    if (statSync(path).size >= AGENT_FLOW_SIZE_GATE_BYTES) {
-      path = join(dir, `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`)
+  const activeName = sealed.length === 0 ? `chunk-${String(1).padStart(6, '0')}.jsonl` : sealed[sealed.length - 1]!
+  let path = join(dir, activeName)
+  let existing = readChunkLines(path)
+  // A retry may find part (or all) of this batch already archived — append
+  // only the remainder; never archive the same occurrence twice.
+  const overlap = archivedOverlap(existing, lines)
+  if (overlap >= lines.length) return
+  if (overlap === 0) {
+    try {
+      if (statSync(path).size >= AGENT_FLOW_SIZE_GATE_BYTES) {
+        path = join(dir, `chunk-${String(sealed.length + 1).padStart(6, '0')}.jsonl`)
+        existing = []
+      }
+    } catch {
+      // brand-new chunk path — nothing to stat yet
     }
-  } catch {
-    // brand-new chunk path — nothing to stat yet
   }
   const fd = openSync(path, 'a')
   try {
-    writeSync(fd, body)
+    writeSync(fd, `${lines.slice(overlap).join('\n')}\n`)
     // Fsync the chunk BEFORE the tail rewrite: the display tail is only ever
     // compacted after its evicted bytes are durable somewhere else.
     fsyncSync(fd)
   } finally {
     closeSync(fd)
   }
+}
+
+/** The lines of one history chunk (`[]` when it does not exist yet). */
+function readChunkLines(path: string): string[] {
+  try {
+    const raw = readFileSync(path, 'utf8')
+    return raw === '' ? [] : raw.replace(/\n$/, '').split('\n')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The largest `k` such that the chunk's last `k` lines equal the batch's
+ * first `k` lines — the already-archived prefix of a crash-retried batch.
+ */
+function archivedOverlap(existing: readonly string[], batch: readonly string[]): number {
+  const max = Math.min(existing.length, batch.length)
+  for (let k = max; k >= 1; k -= 1) {
+    let match = true
+    for (let i = 0; i < k; i += 1) {
+      if (existing[existing.length - k + i] !== batch[i]) {
+        match = false
+        break
+      }
+    }
+    if (match) return k
+  }
+  return 0
 }
 
 /**
@@ -1318,13 +1518,15 @@ export function listAgentFlowHistoryChunks(workflowDir: string): string[] {
 
 /**
  * Whether one display-tail line may leave the live ledger for the immutable
- * history: a record carrying a durable source is evictable only once its
- * session's DURABLE cursor has passed it, so the dedup window can never be
- * compacted away from under a replay. Rows without a source (older rows, live
- * tool-call rows) carry no cursor checkpoint and are archived by line
- * position — their bytes are preserved, never rewritten.
+ * history. The DISPLAY bound is separate from DEDUP: a row carrying a durable
+ * source is evictable once its record id is in the durable accepted-identity
+ * index — the checkpoint that actually proves the record can never be
+ * appended twice, whatever happens to the scan bound or to another
+ * incarnation's rows. Rows without a source (older rows, live tool-call rows)
+ * carry no identity checkpoint and are archived by line position; an
+ * unreadable index (`undefined`) keeps every identified row in the tail.
  */
-function compactionEvictable(line: string, watermark: Watermark): boolean {
+function compactionEvictable(line: string, index: IdentityIndex | undefined): boolean {
   let rec: Record<string, unknown> | undefined
   try {
     rec = asRecord(JSON.parse(line) as unknown)
@@ -1333,11 +1535,10 @@ function compactionEvictable(line: string, watermark: Watermark): boolean {
     // rather than keep it in the display window forever.
     return true
   }
-  const source = asRecord(rec?.source)
-  const sessionId = source?.sessionId
-  const seq = source?.seq
-  if (typeof sessionId !== 'string' || sessionId === '' || typeof seq !== 'number' || !Number.isInteger(seq)) return true
-  return (watermark.get(sessionId) ?? 0) > seq
+  if (asRecord(rec?.source) === undefined) return true
+  if (index === undefined) return false
+  const eventId = rec?.eventId
+  return typeof eventId === 'string' && index.has(eventId)
 }
 
 /**
@@ -1345,15 +1546,14 @@ function compactionEvictable(line: string, watermark: Watermark): boolean {
  * keep the DISPLAY file bounded — the caller holds the per-workflow lock.
  * The common path stays append-ONLY: the file is `stat`-gated, and only a
  * file that crossed {@link AGENT_FLOW_SIZE_GATE_BYTES} AND holds more than
- * {@link AGENT_FLOW_MAX_EVENTS} lines is compacted. Compaction first copies
- * the evictable prefix into an `fsync`ed immutable chunk
- * ({@link writeHistoryChunk}) and only then replaces the tail via an atomic
+ * {@link AGENT_FLOW_MAX_EVENTS} lines is compacted. Compaction archives the
+ * evictable prefix into an `fsync`ed chunk
+ * ({@link archiveHistoryLines}) and only then replaces the tail via an atomic
  * temp-file + `renameSync` write, so concurrent readers never observe a torn
- * file and no accepted record is lost to the bound. A prefix line whose
- * cursor checkpoint is not yet durable stays in the live tail (the pending
- * record is never compacted out of the dedup window).
+ * file, the display bound holds, and every accepted identity stays durable in
+ * the index even after its row leaves the live tail.
  */
-function appendLineLocked(workflowDir: string, line: string): void {
+function appendLineLocked(workflowDir: string, line: string, index: IdentityIndex | undefined): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
   appendFileSync(file, line)
   if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
@@ -1363,11 +1563,10 @@ function appendLineLocked(workflowDir: string, line: string): void {
   const lines = content.replace(/\n$/, '').split('\n')
   if (lines.length <= AGENT_FLOW_MAX_EVENTS) return
   const cut = lines.length - AGENT_FLOW_MAX_EVENTS
-  const watermark = loadWatermark(workflowDir, true)
   const archive: string[] = []
   const retained: string[] = []
   for (const candidate of lines.slice(0, cut)) {
-    if (compactionEvictable(candidate, watermark)) archive.push(candidate)
+    if (compactionEvictable(candidate, index)) archive.push(candidate)
     else retained.push(candidate)
   }
   if (archive.length === 0) return
@@ -1384,8 +1583,10 @@ function appendLineLocked(workflowDir: string, line: string): void {
  * append + stat + chunk + truncate sequence runs inside the per-workflow
  * inter-process lock: two processes sharing one active lifecycle serialize
  * here — a concurrent compacting read-modify-write can no longer drop the
- * other writer's just-appended lines. May throw (fs / lock timeout) —
- * callers contain.
+ * other writer's just-appended lines. An unreadable identity index only
+ * narrows compaction (identified rows stay in the tail) — the live-call row
+ * itself carries no durability claim beyond the ledger append. May throw
+ * (fs / lock timeout) — callers contain.
  * @param workflowDir - the ACTIVE workflow dir (`<harnessDir>/workflows/<id>`)
  *   — the ledger lives there, never in the harness root (v3 layout).
  * @param event - the v1 event to record.
@@ -1395,7 +1596,10 @@ function appendLineLocked(workflowDir: string, line: string): void {
 function appendEvent(workflowDir: string, event: AgentFlowEvent, identity?: AgentFlowRecordIdentity): void {
   const line = ledgerLineOf(event, identity)
   // Non-reentrant lock: the shared-lock append primitive.
-  withWorkflowDirLock(workflowDir, () => appendLineLocked(workflowDir, `${line}\n`))
+  withWorkflowDirLock(workflowDir, () => {
+    const read = loadIdentityIndex(workflowDir)
+    appendLineLocked(workflowDir, `${line}\n`, read.kind === 'unreadable' ? undefined : read.index)
+  })
 }
 
 /**
@@ -1470,7 +1674,7 @@ export function recordDispatch(input: {
       verdict: verdictOf(input.violations, input.hard),
       hard: input.hard,
     }
-    appendEvent(workflowDir, event, callId !== undefined ? { eventId: callEventId('dispatch', agent ?? '', callId) } : undefined)
+    appendEvent(workflowDir, event, callIdentity('dispatch', agent, callId))
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -1580,7 +1784,7 @@ export function recordSettle(input: {
       ...(childId !== undefined ? { childId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    appendEvent(workflowDir, event, input.callId !== undefined ? { eventId: callEventId('settle', input.agent ?? '', input.callId) } : undefined)
+    appendEvent(workflowDir, event, callIdentity('settle', input.agent, input.callId))
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -1605,35 +1809,37 @@ export function recordSettle(input: {
  *
  * v3 write path: the event appends to the ACTIVE workflow dir (root v2
  * `workflows[]` first entry). The consumer passes the already-resolved
- * `workflowDir` (an explicit target wins); a direct caller without it
- * resolves from `harnessDir`. No active lifecycle → `false` (skipped with a
- * one-time warn — never a root v1 write, never a terminal snapshot write).
+ * explicit `workflowDir`; a direct caller without it resolves from
+ * `harnessDir`. No active lifecycle → `false` (skipped with a one-time warn —
+ * never a root v1 write, never a terminal snapshot write).
  *
- * ONE CRITICAL SECTION (the caller no longer advances the cursor
- * separately): under the per-workflow lock, a fresh cursor is loaded, the
- * record's stable `eventId` is looked up in the bounded durable tail, the
- * row is appended, and the cursor is written atomically — in that order. A
- * crash between the append and the cursor write leaves the row in the tail,
- * so the replay finds the SAME id with identical bytes and only advances the
- * cursor (no duplicate, no loss). An existing id with DIFFERENT bytes is a
- * reused stream/log identity: ADVISORY REFUSAL, no append, no durable cursor
- * advance (the row stays eligible). A torn record that could be this event
- * is refused the same way — an unknown outcome is never accepted success.
+ * ONE CRITICAL SECTION, three durable stores, in this order: load the
+ * accepted-identity INDEX and the scan-bound CURSOR (a present-but-unreadable
+ * either one is an ADVISORY REFUSAL — an unreadable authority is never
+ * "nothing recorded yet"), decide by identity (index, then the bounded tail
+ * for the crash window and for legacy rows), append the row, `fsync` the
+ * index entry (the durable dedup commit), advance the cursor. A crash between
+ * the append and the index entry leaves the row in the tail, where the next
+ * attempt finds it by id and heals the index; a crash between the index entry
+ * and the cursor leaves the bound behind, which costs a re-walk and never a
+ * duplicate. An id already present with DIFFERENT bytes is a reused
+ * stream/log identity, and a torn record that could be this event is an
+ * unknown outcome — both are refusals (no append, no cursor advance).
  * @param input - harness dir + optional pre-resolved active workflow dir +
- * the fully-shaped v1 workflow event + the REQUIRED durable source position +
- * the carrying session's `hint` for the no-dir fallback (a pinned dir always
- * wins) + the optional eviction hint for the cursor cap.
- * @returns `true` when the row is in the ledger (appended now or already
- *   present with identical bytes — the cursor is advanced durably in both
- *   cases); `false` on a contained failure, a refusal, or when no active
- *   lifecycle is bound — the caller leaves the cursor behind so the row is
- *   re-attempted at the next scan.
+ * the fully-shaped v1 workflow event + the REQUIRED verified source position
+ * (session + log incarnation + seq) + the carrying session's `hint` for the
+ * no-dir fallback (a pinned dir always wins) + the optional eviction hint for
+ * the cursor cap.
+ * @returns `true` only when the row is recorded AND its identity and scan
+ *   bound are durable; `false` on a contained failure, a refusal, or when no
+ *   active lifecycle is bound — the caller leaves the cursor behind so the
+ *   row is re-attempted at the next scan.
  */
 export function recordWorkflowEvent(input: {
   harnessDir: string
   workflowDir?: string
   event: AgentFlowWorkflowEvent
-  /** The durable source position this event was read from (required — it is the record identity). */
+  /** The verified source position this event was read from (required — it is the record identity). */
   source: AgentFlowEventSource
   /** The carrying session's selection hint — consulted ONLY when no `workflowDir` is pinned. */
   hint?: SessionHint
@@ -1649,39 +1855,57 @@ export function recordWorkflowEvent(input: {
     if (workflowDir === null) return false
     const eventId = workflowEventId(input.event, input.source)
     const line = ledgerLineOf(input.event, { eventId, source: input.source })
+    const digest = digestOfLedgerLine(line)
+    const evictable = input.isEvictable ?? (() => false)
     let accepted = false
     withWorkflowDirLock(workflowDir, () => {
-      const file = join(workflowDir, AGENT_FLOW_FILE)
-      const watermark = loadWatermark(workflowDir, true)
-      const cursor = watermark.get(input.source.sessionId) ?? 0
-      const lookup = findLedgerLine(file, eventId)
-      if (lookup.kind === 'torn') {
-        // The identity appears in an unparseable line: we cannot know whether
-        // this event was already accepted. Refuse (advisory) and leave the
-        // durable cursor behind — an unknown outcome is not accepted success.
+      const indexRead = loadIdentityIndex(workflowDir)
+      if (indexRead.kind === 'unreadable') {
+        log('warn', `workflow record refused — the accepted-identity index is unreadable (${indexRead.reason}); no append, no cursor advance (the row stays eligible)`)
+        return
+      }
+      const cursorRead = loadWatermark(workflowDir, true)
+      if (cursorRead.kind === 'unreadable') {
+        log('warn', `workflow record refused — the durable cursor is unreadable (${cursorRead.reason}); no append, no cursor advance (the row stays eligible)`)
+        return
+      }
+      const index = indexRead.index
+      const indexed = index.get(eventId)
+      // The bounded tail is the crash-window (and legacy-row) fallback of the
+      // identity index: a row appended just before a crash, or a row written
+      // before identities existed, is still found here.
+      const tail = indexed === undefined ? findLedgerLine(join(workflowDir, AGENT_FLOW_FILE), eventId) : { kind: 'absent' as const }
+      if (tail.kind === 'torn') {
         log('warn', `workflow record refused — a torn ledger record may already carry event id ${eventId}; no append, durable cursor NOT advanced (the row stays eligible)`)
         return
       }
-      if (lookup.kind === 'found') {
-        if (lookup.line !== line) {
+      if (indexed !== undefined || tail.kind === 'found') {
+        if ((indexed !== undefined && indexed !== digest) || (tail.kind === 'found' && tail.line !== line)) {
           log('warn', `workflow record refused — event id ${eventId} is already recorded with different bytes (reused stream/log identity); no append, durable cursor NOT advanced`)
           return
         }
-        // Crash-window replay: the row is already durable, so only the cursor
-        // moves (monotonic — an already-higher checkpoint never regresses).
-        advanceWatermarkLocked(watermark, input.source.sessionId, input.source.seq + 1, input.isEvictable ?? (() => false))
-        saveWatermark(workflowDir, watermark)
+        // Already accepted: only the missing provenance moves — heal the index
+        // for a crash-window row, then advance the scan bound.
+        if (indexed === undefined) {
+          try {
+            appendIdentityIndexLocked(workflowDir, eventId, digest)
+          } catch (error) {
+            log('warn', `workflow record refused — the accepted-identity index write failed (${errorMessage(error)}); the row is in the ledger but its identity is not indexed (the row stays eligible)`)
+            return
+          }
+        }
+        if (!advanceCursorLocked(workflowDir, cursorRead.cursors, input.source.sessionId, input.source.seq + 1, input.source.streamId, evictable)) return
         accepted = true
         return
       }
-      appendLineLocked(workflowDir, `${line}\n`)
-      // A record BELOW the checkpoint that was absent from the ledger is a
-      // rebuilt log incarnation (id reuse): the checkpoint must follow the new
-      // log instead of blocking its rows forever. Otherwise the advance is
-      // monotonic (`Math.max`), so a stale concurrent advance never regresses
-      // an already-higher cursor.
-      advanceWatermarkLocked(watermark, input.source.sessionId, input.source.seq + 1, input.isEvictable ?? (() => false), input.source.seq < cursor)
-      saveWatermark(workflowDir, watermark)
+      appendLineLocked(workflowDir, `${line}\n`, index)
+      try {
+        appendIdentityIndexLocked(workflowDir, eventId, digest)
+      } catch (error) {
+        log('warn', `workflow record refused — the accepted-identity index write failed (${errorMessage(error)}); the row is in the ledger but its identity is not indexed (the row stays eligible)`)
+        return
+      }
+      if (!advanceCursorLocked(workflowDir, cursorRead.cursors, input.source.sessionId, input.source.seq + 1, input.source.streamId, evictable)) return
       accepted = true
     })
     if (accepted) {
@@ -1795,7 +2019,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
       verdict: input.verdict,
       ...(input.code !== undefined && input.code !== '' ? { code: input.code } : {}),
     }
-    appendEvent(workflowDir, event, callId !== undefined ? { eventId: callEventId('workflow-verdict', agent ?? '', callId) } : undefined)
+    appendEvent(workflowDir, event, callIdentity('workflow-verdict', agent, callId))
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -2797,7 +3021,7 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
       ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    appendEvent(ref.workflowDir, event, ref.callId !== undefined ? { eventId: callEventId('subagent-link', ref.agent ?? '', ref.callId) } : undefined)
+    appendEvent(ref.workflowDir, event, callIdentity('subagent-link', ref.agent, ref.callId))
     try {
       invalidator?.(ref.harnessDir)
     } catch (error) {
