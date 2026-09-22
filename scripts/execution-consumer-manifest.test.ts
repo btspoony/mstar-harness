@@ -861,7 +861,13 @@ async function decodeConsumerSurface(input: {
   if (entry === undefined) throw new Error(`fixture manifest has no consumer ${input.consumerId}`);
   const bytesByKey = new Map<string, Uint8Array>();
   const witnesses: EvidenceWitness[] = [];
-  for (const file of [...entry.sources.files, ...entry.generated.files]) {
+  // The engine's witness list is canonical by (root, path) and refuses any
+  // other order or a duplicate; every witness this drive hands in is configured
+  // under the `package` root, so the canonical order is the path order.
+  const declaredFiles = [...entry.sources.files, ...entry.generated.files].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  for (const file of declaredFiles) {
     const key = `package:${file.path}`;
     if (bytesByKey.has(key)) continue;
     bytesByKey.set(key, readFileSync(join(input.root, file.path)));
