@@ -2473,6 +2473,8 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
       ),
     ).rejects.toMatchObject({ code: "execution.session-unavailable" });
     expect(migratedPlan?.session).toBeNull();
+    const beforeMalformedRows = sessionRows(context);
+    const beforeMalformedFootprint = executionFootprint(context);
     const malformed = rawDb(storePath(context));
     try {
       const row = one(malformed, "select coordination_json from execution_plans where workflow_id = 'wf-1' and plan_id = 'p-1'");
@@ -2484,7 +2486,9 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     } finally {
       malformed.close();
     }
-    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+    await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(sessionRows(context)).toEqual(beforeMalformedRows);
+    expect(executionFootprint(context)).toEqual(beforeMalformedFootprint);
   });
   test("reads the committed authority after a clean close folded the journal into the store file", async () => {
 
