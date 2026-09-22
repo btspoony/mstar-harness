@@ -27,8 +27,12 @@
  * injected non-FsStore refuses the protected control targets (root register,
  * workflow snapshot, and a `json` alias of either) while the CANONICAL control
  * authority is active — before its own method runs, judged against a root the
- * injector's `root` claim cannot establish — while body refs still round-trip,
- * optional members stay absent when declined, and the pre-activation route is
+ * injector's `root` claim cannot establish — and it refuses the retired
+ * project register unconditionally (the stale runtime kind, and a `json` alias
+ * of the register). The wrapper exposes no `root` at all: a custom adapter's
+ * claim is not the FsStore capability the path-agreement check and the direct
+ * CAS/versioned consumers verify against. Body refs still round-trip, optional
+ * members stay absent when declined, and the pre-activation route is
  * unchanged.
  * - `list?` interface + FsStore enumeration (exists-conditional status,
  * snapshot dir scans through the single path table, review
@@ -898,6 +902,77 @@ describe("injected ArtifactStore \u2014 canonical control-target guard", () => {
     } finally {
       rmSync(legacy, { recursive: true, force: true });
       rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store cannot recreate, read or delete the retired project register", async () => {
+    const root = await legacyControlRoot("injected-guard-register-");
+    try {
+      const store = probeStore();
+      setArtifactStore(store);
+      const active = getArtifactStore();
+
+      // The stale runtime kind: refused on every data port, and — unlike the
+      // protected control documents — refused whatever the execution state.
+      const putKind = withEnv(root, () =>
+        active.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } } as never),
+      );
+      await expect(putKind).rejects.toThrow(/no longer persists project registers/);
+      const getKind = withEnv(root, () => active.get({ kind: "residuals", key: "proj-1" } as never));
+      await expect(getKind).rejects.toThrow(/no longer persists project registers/);
+      const deleteKind = withEnv(root, () => active.delete!({ kind: "residuals", key: "proj-1" } as never));
+      await expect(deleteKind).rejects.toThrow(/no longer persists project registers/);
+
+      // A `json` alias is classified by its CANONICAL target: the register path
+      // the project layer would use, the same path before it exists (a missing
+      // leaf must not create one), and a symlink onto it.
+      const register = join(root, "projects", "proj-1", "residuals.json");
+      const missingLeaf = withEnv(root, () => active.put({ kind: "json", key: register, payload: { entries: [] } }));
+      await expect(missingLeaf).rejects.toThrow(/project registers are retired migration history/);
+
+      mkdirSync(join(root, "projects", "proj-1"), { recursive: true });
+      writeFileSync(register, `${JSON.stringify({ entries: [] })}\n`, "utf8");
+      const alias = join(root, "register-alias.json");
+      symlinkSync(register, alias);
+      const aliasRead = withEnv(root, () => active.get({ kind: "json", key: alias }));
+      await expect(aliasRead).rejects.toThrow(/project registers are retired migration history/);
+      const aliasDelete = withEnv(root, () => active.delete!({ kind: "json", key: alias }));
+      await expect(aliasDelete).rejects.toThrow(/project registers are retired migration history/);
+
+      // Refuse before the injected callback, and the planted register is intact.
+      expect(store.puts).toEqual([]);
+      expect(store.gets).toEqual([]);
+      expect(store.deletes).toEqual([]);
+      expect(existsSync(register)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store's root claim is not exposed as an FsStore capability", async () => {
+    const root = tmpRoot("injected-guard-rootcap-");
+    const elsewhere = tmpRoot("injected-guard-rootcap-other-");
+    try {
+      const store = probeStore(root);
+      setArtifactStore(store);
+      const injected = getArtifactStore();
+      // A custom adapter's `root` is a claim about a directory it may write
+      // somewhere else entirely, so the active store exposes NO root: the
+      // path-agreement check skips it (the adapter owns its own mapping) and the
+      // direct byte/CAS and `--versioned` consumers find no FsStore capability.
+      expect("root" in injected).toBe(false);
+      expect(() => assertFsStorePath(injected, { kind: "status", key: "root" }, join(root, "status.json"))).not.toThrow();
+
+      // The engine's own FsStore keeps the capability it is verified by: the
+      // same diverging target is refused for it.
+      setArtifactStore(createFsStore(elsewhere));
+      expect("root" in getArtifactStore()).toBe(true);
+      expect(() =>
+        assertFsStorePath(getArtifactStore(), { kind: "status", key: "root" }, join(root, "status.json")),
+      ).toThrow(/routed writer path mismatch/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
     }
   });
 });

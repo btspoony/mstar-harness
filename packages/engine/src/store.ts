@@ -360,12 +360,23 @@ function injectedControlKind(controlRoot: string, ref: ArtifactRef): ProtectedWr
 
 /**
  * Canonical control-target guard for an injected store (retained-body
- * contract): while the canonical control root's execution authority is ACTIVE,
- * the protected control documents are not a body-storage target, so an
- * injected `put` / `get` / `delete` reaching one refuses BEFORE the injected
- * method runs — the same refusal the FsStore applies to a direct write or read
- * of the same document. Every body ref, and every ref while the control
- * authority is not active, keeps the injected store's declared route.
+ * contract): the protected control documents and the retired project register
+ * are not a body-storage target, so an injected `put` / `get` / `delete`
+ * reaching one refuses BEFORE the injected method runs.
+ *
+ * Two rules, with different reach:
+ *
+ * - the retired register refuses unconditionally — the runtime `residuals`
+ *   kind and a `json` alias whose canonical target is the control root's
+ *   project register, through the same `assertNotRetiredRegisterTarget` rule
+ *   the FsStore applies, so an injected adapter never turns the retired
+ *   findings authority into a body route (active and legacy state behave
+ *   alike);
+ * - the root register and a workflow snapshot (or a `json` alias of either)
+ *   refuse while the canonical control root's execution authority is ACTIVE —
+ *   the same refusal the FsStore applies to a direct write or read of the same
+ *   document. Every body ref, and every ref while that authority is not
+ *   active, keeps the injected store's declared route.
  *
  * The class decides whether the control root is resolved at all: the common
  * body ref returns before any root or authority probe.
@@ -374,9 +385,15 @@ function injectedControlKind(controlRoot: string, ref: ArtifactRef): ProtectedWr
  * injected call.
  */
 function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write"): void {
+  const retirableKind = (ref.kind as string) === "residuals";
+  const aliasKind = ref.kind === "json";
   const declaredControlKind = ref.kind === "status" || ref.kind === "snapshot";
-  if (!declaredControlKind && ref.kind !== "json") return;
+  if (!retirableKind && !aliasKind && !declaredControlKind) return;
   const controlRoot = processControlRoot();
+  if (retirableKind || aliasKind) {
+    // The third argument is `filePath`, read only by the alias arm of the rule.
+    assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
+  }
   if (!declaredControlKind && injectedControlKind(controlRoot, ref) === null) return;
   const context = { harnessDir: controlRoot };
   if (access === "read") assertExecutionFileReadAllowed(context);
@@ -384,14 +401,18 @@ function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write")
 }
 
 /**
- * Guard a non-FsStore store's data ports. The wrapper delegates everything
- * else, keeps the injected store's optional members absent when it declines
- * them (`delete` / `list`), and mirrors a `root` the injected store claims
- * instead of inventing or hiding one — the routed writers' path-agreement
- * check keeps its input, while the guard above never trusts it.
+ * Guard a non-FsStore store's data ports. The wrapper delegates `list` when the
+ * injected store implements it and keeps the optional members absent when the
+ * injected store declines them, and it deliberately exposes **no** `root`: a
+ * custom adapter's `root` is a claim about a directory it may not write to at
+ * all, while consumers read a string `root` as the FsStore capability that
+ * authorizes path agreement (`assertFsStorePath`) and the direct byte/CAS and
+ * `--versioned` routes. Dropping the claim makes an injected adapter a body
+ * store by construction; the engine-created FsStore is served unwrapped and
+ * keeps its own root.
  */
 function guardedInjectedStore(store: ArtifactStore): ArtifactStore {
-  const guarded: ArtifactStore & { root?: unknown } = {
+  const guarded: ArtifactStore = {
     async put(doc: ArtifactDoc): Promise<void> {
       assertInjectedAccessAllowed(doc, "write");
       return store.put(doc);
@@ -412,14 +433,13 @@ function guardedInjectedStore(store: ArtifactStore): ArtifactStore {
   if (list !== undefined) {
     guarded.list = (kind: ArtifactKind) => list.call(store, kind);
   }
-  if ("root" in store && typeof store.root === "string") guarded.root = store.root;
   return guarded;
 }
 
-/** Inject the active store. An FsStore guards its own protected targets from
- * its own root, so it is served as it is; any other store is wrapped in the
- * canonical control-target guard, because it has no root of its own to verify
- * against (see `guardedInjectedStore`). */
+/** Inject the active store. An `FsStore` guards its own protected targets from
+ * its own root and keeps the root capability consumers verify against, so it is
+ * served as it is; any other store is wrapped in the canonical control-target
+ * guard and keeps no root claim (see `guardedInjectedStore`). */
 export function setArtifactStore(store: ArtifactStore | undefined): void {
   injectedStore = store === undefined || fsStoreInstances.has(store) ? store : guardedInjectedStore(store);
 }
