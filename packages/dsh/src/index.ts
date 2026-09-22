@@ -48,6 +48,7 @@ import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
 import { registerExecutionSessionCommand } from './gates/execution-session.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
+import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
 import {
   preExecuteListener,
   DISPATCH_LOGGER,
@@ -640,7 +641,7 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'warn') logger.warn(message)
     else logger.debug(message)
   })
-  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
+  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache, resolveExecutionLedgerTarget)
 
   // Goal bridge : observe-only blocked-goal advisory — ONE
   // `session/event` firehose listener (a `goal/change` envelope whose goal is
