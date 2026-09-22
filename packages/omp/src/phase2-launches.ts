@@ -92,7 +92,6 @@ import {
   probeCheckoutRoot,
   readExecutionAuthority,
   readMainWorktree,
-  resolvePlanScope,
   resolveWorkflowDir,
   resumeExecutionSession,
   storeDbPath,
@@ -107,7 +106,6 @@ import type {
   ExecutionSessionRef,
   ExecutionState,
   ExecutionToken,
-  ResolvedPlanScope,
 } from "@mstar-harness/engine";
 import { readPhase2Settings, type Phase2Request } from "./phase2-orchestration";
 
@@ -766,11 +764,39 @@ function assertPreparedHash(prepared: Record<string, unknown>, planId: string): 
 }
 
 /**
+ * The plan scope a launch admits against, taken entirely from the DB plan view:
+ * the row's own worktree/branch metadata (the same fields `planLeaseScope`
+ * requires of any bindable plan) plus the prepared Assignment pin. Nothing here
+ * reads the retired workflow snapshot — on an ACTIVE root that file is refused
+ * as a source outright, so a snapshot-reading resolver cannot serve this route.
+ */
+type LaunchScope = Readonly<{ assignmentPath: string; worktreePath: string; workingBranch: string }>;
+
+function launchScopeOf(
+  view: ExecutionPlanView,
+  prepared: Record<string, unknown>,
+  planId: string,
+): { ok: true; scope: LaunchScope } | { ok: false; code: string; message: string } {
+  const metadata = isPlainRecord(view.plan.metadata) ? view.plan.metadata : null;
+  const worktreePath = metadata?.worktree_path;
+  const workingBranch = metadata?.working_branch;
+  if (!nonEmpty(worktreePath) || !isAbsolute(worktreePath) || !nonEmpty(workingBranch)) {
+    return {
+      ok: false,
+      code: "launch.plan-unavailable",
+      message:
+        `plan ${planId} records no plan worktree/branch scope (metadata.worktree_path must be an absolute path and ` +
+        `metadata.working_branch a non-empty branch), so no launch can be admitted for it`,
+    };
+  }
+  return { ok: true, scope: { assignmentPath: prepared.assignment_path as string, worktreePath, workingBranch } };
+}
+/**
  * The assigned worktree must be an existing, canonical, distinct feature
- * checkout of the same repository, on the Assignment's Working branch — and
+ * checkout of the same repository, on the plan row's recorded branch — and
  * never the lifecycle's integration checkout (spec §C).
  */
-function assertLaunchWorktree(scope: ResolvedPlanScope, authority: ExecutionLaunchAuthority, workflow: ActiveWorkflow): Refusal {
+function assertLaunchWorktree(scope: LaunchScope, authority: ExecutionLaunchAuthority, workflow: ActiveWorkflow): Refusal {
   const worktreePath = scope.worktreePath;
   let isDirectory = false;
   try {
@@ -1009,18 +1035,14 @@ export async function reservePlanLaunch(
       const drift = assertPreparedHash(prepared, planId);
       if (drift !== null) return drift;
 
-      // The Assignment-scope form of P2's resolver (§6 "reuse the P2 resolver").
-      // The pin is the DB's (`coordination.prepared`, validated by
-      // assertPreparedHash above); the resolver additionally CROSS-CHECKS the
-      // Assignment against the workflow snapshot FILE, which on an ACTIVE root is
-      // historical input — present until the operator retirement step moves it
-      // (reported gap: without it this call refuses "workflow snapshot not found").
-      let scope: ResolvedPlanScope;
-      try {
-        scope = await resolvePlanScope({ assignmentPath: prepared.assignment_path as string }, authority.cwd);
-      } catch (error) {
-        return refuse("launch.plan-unavailable", `plan ${planId} scope is not resolvable for a launch: ${messageOf(error)}`);
-      }
+      // The scope comes from the DB plan view (§6): the row's own
+      // worktree/branch metadata plus the prepared pin validated above. The
+      // retired-snapshot resolver is NOT used — on an ACTIVE root the snapshot is
+      // refused as a source (`execution.consumer-not-ready`), so a
+      // snapshot-reading resolver cannot serve this route at all.
+      const scoped = launchScopeOf(view, prepared, planId);
+      if (scoped.ok === false) return scoped;
+      const scope = scoped.scope;
 
       const worktree = assertLaunchWorktree(scope, authority, workflow);
       if (worktree !== null) return worktree;
