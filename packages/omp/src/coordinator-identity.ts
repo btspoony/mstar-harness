@@ -436,11 +436,16 @@ export async function bindCoordinatorIdentity(
         { workflowId, harnessRoot },
       );
     }
-    for (const [field, value] of [
-      ["expected", shape.request.expected],
-      ["operationId", shape.request.operationId],
-    ] as const) {
-      if (!isNonEmpty(value)) return refuse("invalid-input", `${field} is required for the active coordinator bind`);
+    // A tuple loop widens every field back to `unknown`, so each guard is spelled
+    // per field: the refusal text and its order are unchanged, and the value the
+    // engine verb receives is a narrowed `string` rather than a cast.
+    const activeExpected = shape.request.expected;
+    const activeOperationId = shape.request.operationId;
+    if (!isNonEmpty(activeExpected)) {
+      return refuse("invalid-input", "expected is required for the active coordinator bind");
+    }
+    if (!isNonEmpty(activeOperationId)) {
+      return refuse("invalid-input", "operationId is required for the active coordinator bind");
     }
     const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
     try {
@@ -453,8 +458,8 @@ export async function bindCoordinatorIdentity(
         harnessDir: harnessRoot,
         identity,
         workflowId,
-        expected: shape.request.expected as ExecutionToken,
-        operationId: shape.request.operationId,
+        expected: activeExpected as ExecutionToken,
+        operationId: activeOperationId,
       });
       // The DB session reference is an identity, not a credential: the text
       // names the already-public workflow/session ids and the store epoch, and
@@ -977,12 +982,20 @@ async function recoverActiveCoordinator(
       );
     }
   }
-  for (const [field, value] of [
-    ["expected", request.expected],
-    ["operationId", request.operationId],
-    ["reason", request.reason],
-  ] as const) {
-    if (!isNonEmpty(value)) return refuse("invalid-input", `${field} is required for the active coordinator recovery`);
+  // Same per-field spelling as the active bind: a tuple loop widens the request's
+  // `unknown` fields back to `unknown`, while these guards hand the engine real
+  // strings with the identical refusal text and order.
+  const activeExpected = request.expected;
+  const activeOperationId = request.operationId;
+  const activeReason = request.reason;
+  if (!isNonEmpty(activeExpected)) {
+    return refuse("invalid-input", "expected is required for the active coordinator recovery");
+  }
+  if (!isNonEmpty(activeOperationId)) {
+    return refuse("invalid-input", "operationId is required for the active coordinator recovery");
+  }
+  if (!isNonEmpty(activeReason)) {
+    return refuse("invalid-input", "reason is required for the active coordinator recovery");
   }
   if (!isPlainObject(request.attestation)) {
     return refuse(
@@ -1012,10 +1025,10 @@ async function recoverActiveCoordinator(
     const result = await authority.recover({
       harnessDir: harnessRoot,
       identity,
-      expected: request.expected as ExecutionToken,
-      operationId: request.operationId,
+      expected: activeExpected as ExecutionToken,
+      operationId: activeOperationId,
       priorSessionId: prior,
-      reason: request.reason,
+      reason: activeReason,
       attestation: request.attestation,
     });
     return {
