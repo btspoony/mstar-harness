@@ -4458,14 +4458,14 @@ async function assertStandaloneReportOnlyCompletionPrecheck(
   if (context.snapshot.status !== "running") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running — got ${context.snapshot.status}`,
+      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
       { workflow_id: context.snapshot.id, status: context.snapshot.status },
     );
   }
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `plan ${scope.planId} handoff is ${handoff.state} — report-only complete requires an accepted handoff`,
+      `plan ${scope.planId} handoff is ${handoff.state} \u2014 report-only complete requires an accepted handoff`,
       { plan_id: scope.planId, state: handoff.state },
     );
   }
