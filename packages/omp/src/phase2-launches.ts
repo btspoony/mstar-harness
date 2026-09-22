@@ -947,8 +947,13 @@ function assertCurrentSessionSynchronously(authority: ExecutionLaunchAuthority):
   return null;
 }
 
-/** The owner block this call would write (§6): its own store, epoch and native session. */
-function ownerOf(authority: ExecutionLaunchAuthority): JournalOwner {
+/**
+ * The owner block this call would write (§6): its own store, epoch and native
+ * session. Named apart from the journal reader's `ownerOf(value)` — the two take
+ * different inputs, and a module-level name collision would silently hand the
+ * parsed-owner decode a value it cannot read.
+ */
+function ownerFromAuthority(authority: ExecutionLaunchAuthority): JournalOwner {
   return {
     storeId: authority.binding.session.storeId,
     epoch: authority.binding.session.epoch,
@@ -983,7 +988,7 @@ export async function reservePlanLaunch(
   const own = assertOwnCoordinator(authority.identity, workflow);
   if (own !== null) return own;
 
-  const owner = ownerOf(authority);
+  const owner = ownerFromAuthority(authority);
 
   return withMaintenanceExclusion(harnessRoot, () =>
     withStatusWriteLock(snapshotPath, async () => {
@@ -1102,7 +1107,7 @@ export async function recordPlanLaunch(
   const own = assertOwnCoordinator(authority.identity, workflow);
   if (own !== null) return own;
 
-  const owner = ownerOf(authority);
+  const owner = ownerFromAuthority(authority);
 
   return withMaintenanceExclusion(harnessRoot, () =>
     withStatusWriteLock(snapshotPath, async () => {

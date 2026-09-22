@@ -734,18 +734,37 @@ describe("phase2 launch admission journal", () => {
       planAuthority,
     )).code).toBe("launch.invalid-request");
 
-    // A journal whose owner is a session that is NOT this workflow's current
-    // coordinator is never taken over: the DB authority is what continues it,
-    // and a binding this authority does not own refuses before any write.
-    const stale: ExecutionLaunchAuthority = {
+    // A binding that no longer describes the authority's current state is never
+    // taken over: the DB authority is what continues the journal, and the refusal
+    // is the ENGINE's own code for the state the reference is actually in — this
+    // module renames nothing.
+    const reservePlanB = (authority: ExecutionLaunchAuthority): Promise<PlanLaunchResult> =>
+      reservePlanLaunch(
+        { operation: "reserve-launch", planId: "plan-b", transport: "herdr", skill: { name: "herdr", source: "herdr" }, capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" } },
+        authority,
+      );
+
+    // (a) A reference from a superseded epoch is the §2.1 reference-authority
+    //     fence, which the engine answers with the shared store-level
+    //     `store.stale-epoch` before anything is read (`assertReferenceAuthority`).
+    const supersededEpoch: ExecutionLaunchAuthority = {
       cwd: fixture.root,
       identity: { source: "host", sessionId: fixture.coordinator.sessionId, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
-      binding: { version: 1, harnessRoot: fixture.harness, session: { ...fixture.coordinator, epoch: fixture.coordinator.epoch + 1 } },
+      binding: { version: 1, harnessRoot: fixture.harness, session: { ...plainRef(fixture.coordinator), epoch: fixture.coordinator.epoch + 1 } },
     };
-    expect(refusalOf(await reservePlanLaunch(
-      { operation: "reserve-launch", planId: "plan-b", transport: "herdr", skill: { name: "herdr", source: "herdr" }, capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" } },
-      stale,
-    )).code).toBe("execution.session-unavailable");
+    expect(refusalOf(await reservePlanB(supersededEpoch)).code).toBe("store.stale-epoch");
+
+    // (b) A well-formed reference the store holds no ACTIVE row for — what the
+    //     epoch fence never reaches — is the engine's own
+    //     `execution.session-unavailable`: a session reference authorizes only
+    //     the binding the store records at the current epoch.
+    const unheldSession = "fixture-unbound-coordinator";
+    const unheldAuthority: ExecutionLaunchAuthority = {
+      cwd: fixture.root,
+      identity: { source: "host", sessionId: unheldSession, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
+      binding: { version: 1, harnessRoot: fixture.harness, session: { ...plainRef(fixture.coordinator), sessionId: unheldSession } },
+    };
+    expect(refusalOf(await reservePlanB(unheldAuthority)).code).toBe("execution.session-unavailable");
     expect(journalIntents(fixture).some((entry) => entry.planId === "plan-b")).toBe(false);
 
     // A duplicate identical request returns the recorded intent and consumes no

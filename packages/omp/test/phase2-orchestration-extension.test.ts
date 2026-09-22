@@ -1473,7 +1473,10 @@ describe("phase2 host adapter", () => {
 
     for (const observation of ["starting", "created", "submitting"]) {
       const step = await record(observation, observation === "created" ? { target: "pane-42" } : {});
-      expect(step.isError).toBe(false);
+      // The step's own outcome code is asserted, not only `isError`: a step this
+      // transport refused reports WHICH refusal it was (e.g. `phase2.journal-failed`
+      // for a failure inside the journal) instead of an anonymous boolean.
+      expect({ code: codeOf(step), isError: step.isError }).toEqual({ code: "recorded", isError: false });
       expect(step.details.mstarPhase2).toMatchObject({ applied: true });
     }
     // A stalled prompt is uncertainty, not a retryable failure.
