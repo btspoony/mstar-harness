@@ -233,6 +233,23 @@ async function seedIssueStore(fixture: Fixture): Promise<void> {
   handle.close();
 }
 
+/**
+ * A canonical PLAIN copy of an engine-returned session reference. The engine's
+ * canonical-value rule accepts only objects whose prototype is `Object.prototype`
+ * or `null`, so a reference that travels back into a request has to be projected
+ * field by field — never handed over as the engine's own object.
+ */
+function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
+  return {
+    storeId: ref.storeId,
+    epoch: ref.epoch,
+    workflowId: ref.workflowId,
+    role: ref.role,
+    sessionId: ref.sessionId,
+    planId: ref.planId,
+  };
+}
+
 /** The trusted caller this fixture's DB verbs run as (the workflow's creator). */
 function coordinatorContextOf(fixture: Fixture): ExecutionContext {
   return {
@@ -301,8 +318,8 @@ async function seedActiveAuthority(fixture: Fixture): Promise<void> {
   for (const planId of PLAN_IDS) {
     await mutateExecutionPlan(context, {
       operationId: `prepare-${planId}`,
-      session: fixture.coordinator,
-      expected: planTokenOf(fixture, planId),
+      session: plainRef(fixture.coordinator),
+      expected: await planTokenOf(fixture, planId),
       planId,
       operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! } as never,
     });
@@ -338,7 +355,7 @@ async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
 async function coordinatorOp(fixture: Fixture, planId: PlanId, operation: Record<string, unknown>): Promise<ExecutionReceipt<ExecutionPlanView>> {
   return mutateExecutionPlan(coordinatorContextOf(fixture), {
     operationId: `coordinator-op-${planId}-${operation.kind}`,
-    session: fixture.coordinator,
+    session: plainRef(fixture.coordinator),
     expected: await planTokenOf(fixture, planId),
     planId,
     operation: operation as never,
@@ -376,7 +393,7 @@ function authorityOf(fixture: Fixture): ExecutionLaunchAuthority {
   return {
     cwd: fixture.root,
     identity: { source: "host", sessionId: fixture.coordinator.sessionId, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
-    binding: { version: 1, harnessRoot: fixture.harness, session: fixture.coordinator },
+    binding: { version: 1, harnessRoot: fixture.harness, session: plainRef(fixture.coordinator) },
   };
 }
 
@@ -492,7 +509,8 @@ async function handoffIdOf(fixture: Fixture, planId: PlanId): Promise<string> {
 
 /** The child's own path to its scoped stop: bind, report InReview, hand off. */
 async function handOffPlan(fixture: Fixture, planId: PlanId): Promise<string> {
-  const session = await bindPlanSessionOf(fixture, planId);
+  const bound = await bindPlanSessionOf(fixture, planId);
+  const session = plainRef(bound);
   const context = planContextOf(fixture, planId, session.sessionId);
   const progressed = await mutateExecutionPlan(context, {
     operationId: `progress-${planId}`,

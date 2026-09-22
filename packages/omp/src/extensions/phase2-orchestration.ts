@@ -853,8 +853,23 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     }
   };
 
-  /** Codes that mean the binding is no longer current: the DB binding went stale, or the bound envelope is gone/replaced. */
-  const STALE_CODES = ["phase2.binding-stale", "phase2.envelope-unreadable", "phase2.ownership-drift"];
+  /**
+   * Codes that mean the binding is no longer current for THIS session, so the
+   * local (process-scoped) marker and its "re-run bind" hint apply: the DB
+   * authority says the reference is stale, revoked or foreign
+   * (`store.stale-epoch`, `execution.session-unavailable`,
+   * `execution.scope-mismatch` — the active-route analogue of the retired
+   * envelope's gone/replaced cases), the adopted binding refused for a binding
+   * reason of this adapter's own, or a legacy envelope record is gone/replaced.
+   */
+  const STALE_CODES = [
+    "store.stale-epoch",
+    "execution.session-unavailable",
+    "execution.scope-mismatch",
+    "phase2.binding-stale",
+    "phase2.envelope-unreadable",
+    "phase2.ownership-drift",
+  ];
 
   /** The identity terms of the session's current binding record, whichever generation wrote it. */
   const bindingTermsOf = (state: Phase2SessionState): Readonly<{ workflowId: string; hostSessionId: string }> | null => {

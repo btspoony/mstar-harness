@@ -251,12 +251,28 @@ const DEFAULT_AUTHORITY_DEPS: CoordinatorAuthorityDeps = {
  * durable selection record hosts persist in their own native state. It is a
  * value shape — persisting it grants no authority, and an epoch mismatch
  * invalidates the reference it carries, never the host's own selection.
+ *
+ * The reference is PROJECTED field by field rather than stored as handed over:
+ * the engine's canonical-value rule accepts only objects whose prototype is
+ * `Object.prototype` or `null`, and this binding is serialized (compared and
+ * persisted) by its host, so an engine-returned object never travels into it.
  */
 export function executionBindingOf(harnessRoot: string, session: ExecutionSessionRef): ExecutionBinding {
   if (!isNonEmpty(harnessRoot)) {
     throw new Error("an execution binding needs the canonical control harness root it was adopted from");
   }
-  return { version: 1, harnessRoot, session };
+  return {
+    version: 1,
+    harnessRoot,
+    session: {
+      storeId: session.storeId,
+      epoch: session.epoch,
+      workflowId: session.workflowId,
+      role: session.role,
+      sessionId: session.sessionId,
+      planId: session.planId,
+    },
+  };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

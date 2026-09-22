@@ -650,7 +650,7 @@ function phase2BindingEntry(fixture: Fixture, coordinatorSessionPath: string): S
 }
 
 /** The ACTIVE binding record the migrated `bind` writes: the session's own §3.1 `ExecutionBinding`. */
-function phase2ActiveBindingEntry(fixture: Fixture, session: ExecutionSessionRef): SessionEntry {
+function phase2ActiveBindingEntry(fixture: Fixture, ref: ExecutionSessionRef): SessionEntry {
   return {
     type: "custom",
     customType: PHASE2_CUSTOM_TYPE,
@@ -659,7 +659,21 @@ function phase2ActiveBindingEntry(fixture: Fixture, session: ExecutionSessionRef
       kind: "bind",
       workflowId: WORKFLOW_ID,
       hostSessionId: SESSION_ID,
-      executionBinding: { version: 1, harnessRoot: fixture.harness, session },
+      // A canonical PLAIN copy: the engine's canonical-value rule accepts only
+      // Object.prototype/null prototypes, and the extension re-serializes the
+      // binding it compares, so the record never carries the engine's own object.
+      executionBinding: {
+        version: 1,
+        harnessRoot: fixture.harness,
+        session: {
+          storeId: ref.storeId,
+          epoch: ref.epoch,
+          workflowId: ref.workflowId,
+          role: ref.role,
+          sessionId: ref.sessionId,
+          planId: ref.planId,
+        },
+      },
     },
   } as unknown as SessionEntry;
 }
