@@ -299,6 +299,31 @@ export function forgetOpenCodeSessionRef(sessionId: string): void {
   openCodeSessionRefs.delete(sessionId);
 }
 
+/** The canonical reference wire this plugin recognises inside observed argv. */
+const SESSION_REF_WIRE_RE = /exec-session-v1:[A-Za-z0-9_-]+/g;
+
+/**
+ * Learn this native session's reference from its OWN CLI traffic: a `bash`
+ * invocation (or a dispatch prompt) that carries `--session-ref` /
+ * `--resume-ref` names a reference the session was already issued, so the next
+ * consultation can take the session-authorized read instead of the weaker
+ * authority/register read. Only a well-formed wire whose own session id IS this
+ * native session is remembered — a foreign or malformed value is not a
+ * reference this consumer holds.
+ */
+export function observeOpenCodeSessionRefs(nativeSessionId: unknown, text: unknown): void {
+  if (typeof nativeSessionId !== "string" || nativeSessionId.trim() === "") return;
+  if (typeof text !== "string" || text === "") return;
+  for (const wire of text.match(SESSION_REF_WIRE_RE) ?? []) {
+    try {
+      if (decodeExecutionSessionRef(wire).sessionId !== nativeSessionId) continue;
+    } catch {
+      continue;
+    }
+    openCodeSessionRefs.set(nativeSessionId, wire);
+  }
+}
+
 /** The CLI entrypoint this consumer invokes; a repo whose CLI is not on PATH sets it. */
 export const OPENCODE_EXECUTION_CLI_ENV = "MSTAR_EXECUTION_CLI";
 
@@ -306,7 +331,7 @@ export const OPENCODE_EXECUTION_CLI_ENV = "MSTAR_EXECUTION_CLI";
 const CLI_CONSULT_TIMEOUT_MS = 15_000;
 
 /** What one consultation actually proved — the log must claim no more. */
-type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "authority-read" | "register-read" };
+export type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "authority-read" | "register-read" };
 
 /**
  * The real CLI invocation for one bound association. Preference order:
@@ -315,7 +340,10 @@ type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "auth
  * row read, caller currency NOT verified); otherwise `status validate` with no
  * flags, whose argument-less form reads the ACTIVE register.
  */
-function openCodeConsultPlan(association: OpenCodeAssociation & { kind: "bound" }, root: string | null): OpenCodeConsultPlan {
+export function openCodeConsultPlan(
+  association: OpenCodeAssociation & { kind: "bound" },
+  root: string | null,
+): OpenCodeConsultPlan {
   const { identity, sessionRef } = association;
   const harnessFlags = root === null ? [] : ["--harness", root];
   if (sessionRef !== null && identity.role === "plan-pm") {
@@ -1593,6 +1621,13 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const args = (output?.args ?? {}) as Record<string, unknown>;
       const prompt = args.prompt;
       const rawFilePath = args.filePath;
+      // Native-session reference association: this session's OWN CLI traffic
+      // (a `bash` invocation or a dispatch prompt carrying `--session-ref` /
+      // `--resume-ref`) names a reference it was already issued, so later
+      // gated-write consultations can take the session-authorized read that
+      // revalidates caller, root, store, epoch and row.
+      observeOpenCodeSessionRefs(input.sessionID, typeof args.command === "string" ? args.command : undefined);
+      observeOpenCodeSessionRefs(input.sessionID, typeof prompt === "string" ? prompt : undefined);
       const rawPath = args.path;
       const filePath =
         typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;

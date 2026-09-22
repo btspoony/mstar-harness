@@ -37,7 +37,10 @@ import {
   LEGACY_SESSION_ID_ENV,
   MorningStarHarnessPlugin,
   OPENCODE_EXECUTION_CLI_ENV,
+  forgetOpenCodeSessionRef,
+  observeOpenCodeSessionRefs,
   openCodeAssociation,
+  openCodeConsultPlan,
   openCodeExecutionEnvOverrides,
   openCodeExecutionIdentity,
   resumeOpenCodeExecutionSession,
@@ -64,6 +67,7 @@ const previousCliEnv = process.env[OPENCODE_EXECUTION_CLI_ENV];
 afterEach(() => {
   if (previousCliEnv === undefined) delete process.env[OPENCODE_EXECUTION_CLI_ENV];
   else process.env[OPENCODE_EXECUTION_CLI_ENV] = previousCliEnv;
+  forgetOpenCodeSessionRef(reference.sessionId);
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
 
@@ -178,6 +182,42 @@ describe("OpenCode native association (decision-only)", () => {
     expect(association.kind).toBe("unavailable");
     expect(association.capability).toBe("decision-only");
   });
+
+  test("a reference learned from this session's own CLI traffic selects the session-authorized read", () => {
+    const planPmIdentity: ExecutionIdentity = { source: "host", sessionId: reference.sessionId, ...planScope };
+    const wire = encodeExecutionSessionRef({ ...reference, role: "plan-pm", planId: planScope.planId });
+
+    // Before any observation the plugin holds no reference: the weaker read.
+    const withoutRef = openCodeAssociation({ sessionID: reference.sessionId }, ambientEnv(planPmIdentity));
+    expect(withoutRef.kind).toBe("bound");
+    if (withoutRef.kind !== "bound") throw new Error("unreachable");
+    expect(withoutRef.sessionRef).toBeNull();
+    expect(openCodeConsultPlan(withoutRef, "/root")).toEqual({
+      argv: ["plan", "show", "--workflow", planScope.workflowId, "--plan", planScope.planId, "--json", "--harness", "/root"],
+      proof: "authority-read",
+    });
+
+    // The session's own `bash` traffic names the reference it was issued.
+    observeOpenCodeSessionRefs(reference.sessionId, `mstar plan show --session-ref ${wire} --json`);
+    const withRef = openCodeAssociation({ sessionID: reference.sessionId }, ambientEnv(planPmIdentity));
+    expect(withRef.kind).toBe("bound");
+    if (withRef.kind !== "bound") throw new Error("unreachable");
+    expect(withRef.sessionRef).toBe(wire);
+    expect(openCodeConsultPlan(withRef, "/root")).toEqual({
+      argv: ["plan", "show", "--session-ref", wire, "--plan", planScope.planId, "--json", "--harness", "/root"],
+      proof: "session-authorized",
+    });
+  });
+
+  test("a foreign or malformed wire is never remembered as this session's reference", () => {
+    const foreign = encodeExecutionSessionRef({ ...reference, sessionId: "another-session" });
+    observeOpenCodeSessionRefs(reference.sessionId, `mstar plan show --session-ref ${foreign}`);
+    observeOpenCodeSessionRefs(reference.sessionId, "mstar plan show --session-ref exec-session-v1:not-base64url!!");
+    const association = openCodeAssociation({ sessionID: reference.sessionId }, ambientEnv(nativeIdentity));
+    expect(association.kind).toBe("bound");
+    if (association.kind !== "bound") throw new Error("unreachable");
+    expect(association.sessionRef).toBeNull();
+  });
 });
 
 describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
@@ -262,6 +302,36 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
       expect(exclusion).toContain("NOT stopped");
     } finally {
       if (previousIdentity !== undefined) process.env[EXECUTION_IDENTITY_ENV] = previousIdentity;
+    }
+  });
+
+  test("a reference observed in this session's own CLI traffic makes the next gated write session-authorized", async () => {
+    const { project, statusPath } = makeHarnessProject();
+    const planPmIdentity: ExecutionIdentity = { source: "host", sessionId: reference.sessionId, ...planScope };
+    const wire = encodeExecutionSessionRef({ ...reference, role: "plan-pm", planId: planScope.planId });
+    process.env[OPENCODE_EXECUTION_CLI_ENV] = makeCliLauncher(project);
+    process.env[EXECUTION_IDENTITY_ENV] = serializeExecutionValue(planPmIdentity);
+
+    try {
+      const hooks = await MorningStarHarnessPlugin();
+      const lines = await withCapturedLogs(async () => {
+        // 1) The session's own bash call carries the reference it was issued.
+        await hooks["tool.execute.before"]!({ tool: "bash", sessionID: reference.sessionId, callID: "c1" }, {
+          args: { command: `mstar plan show --session-ref ${wire} --json` },
+        });
+        // 2) A gated write now consults the session-authorized read.
+        await hooks["tool.execute.before"]!({ tool: "write", sessionID: reference.sessionId, callID: "c2" }, {
+          args: {
+            filePath: statusPath,
+            content: JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] }),
+          },
+        });
+      });
+      const consultation = lines.find((line) => line.includes("plan show")) ?? "";
+      expect(consultation).toContain("--session-ref");
+      expect(consultation).toContain("session-authorized read");
+    } finally {
+      delete process.env[EXECUTION_IDENTITY_ENV];
     }
   });
 });
