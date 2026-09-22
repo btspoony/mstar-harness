@@ -73,6 +73,7 @@ import {
   registerWorkflowLedger,
   setWorkflowLedgerLogger,
 } from './gates/workflow-ledger.ts'
+import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
 import {
   GOAL_BRIDGE_LOGGER,
   registerGoalBridge,
@@ -150,6 +151,13 @@ export type { RolePersonaLogLevel, RolePersonaLogSink, SubagentStartRequestView,
 export { ADVISORY_LOGGER, runFallbacksAdvisory, setAdvisoryLogger } from './gates/fallbacks-advisory.ts'
 export type { AdvisoryLogLevel, AdvisoryLogSink, AdvisoryPassReport } from './gates/fallbacks-advisory.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
+export {
+  executionIdentityForSession,
+  nativeSessionCwdOf,
+  nativeSessionIdOf,
+  resumeNativeExecutionSession,
+} from './gates/execution-session.ts'
+export type { ExecutionSessionScope } from './gates/execution-session.ts'
 export type { DshHostAdapterOptions } from './gates/adapter.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
@@ -639,7 +647,7 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'warn') logger.warn(message)
     else logger.debug(message)
   })
-  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
+  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache, resolveExecutionLedgerTarget)
 
   // Goal bridge : observe-only blocked-goal advisory — ONE
   // `session/event` firehose listener (a `goal/change` envelope whose goal is

@@ -46,7 +46,7 @@ import type {
   WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, sessionHeaderIdOf, agentIdOf } from './_shared.ts'
 import type { Config, SessionHintRead } from './_shared.ts'
 // Type-only (erased at runtime): the carrying-session hint the gate forwards
 // to the shared resolver.
@@ -360,15 +360,12 @@ export function planIdOf(headerRegion: string): string | undefined {
 }
 
 /**
- * The dispatching session's stable id, when the seam exposes it (dsh
- * Agent.id). Exported for the agent-flow ledger's dispatch derivation (the
- * ledger records the same agent identity the lease gate compares — one
- * grammar).
+ * The native carrying session identity. DSh's Agent.id is only the lease
+ * holder; it is not a session identity and must never authorize a workflow
+ * association. The SDK-owned session header is the sole source.
  */
 export function sessionIdOf(exec: ToolExecution): string | undefined {
-  const agent = asRecord(exec.agent)
-  const id = agent?.id
-  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+  return sessionHeaderIdOf(exec.agent)
 }
 
 /**
@@ -495,7 +492,7 @@ export function leaseGateViolations(
   // violations (when present) already surfaced above; skip comparisons so raw
   // fields of a broken lease never produce misleading mismatch noise.
   if (lease !== undefined && validateExecutionLease(lease).ok) {
-    const sessionId = sessionIdOf(exec)
+    const sessionId = agentIdOf(exec.agent)
     // Holder contract: `lease.holder` must be recorded as the dsh
     // Agent.id this dispatch runs under. The mstar control-side holder
     // convention is `<host>:<stable-session-id>` — a lease claimed under that

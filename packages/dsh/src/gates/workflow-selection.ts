@@ -46,8 +46,6 @@ import {
   resolveExecutionReadRoute,
   resolveWorkflowDir,
   resolveHarnessDir,
-  executionContextFor,
-  resumeExecutionSession,
   validateExecutionLease,
   validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
@@ -57,6 +55,7 @@ import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
 import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+import { resumeNativeExecutionSession } from './execution-session.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** The active-set resolver result: the session's active lifecycle or a clear error. */
@@ -698,14 +697,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
     executionBinding.session.sessionId !== sessionId ||
     executionBinding.session.workflowId !== source.workflowId) return null
   try {
-    const context = executionContextFor({ harnessDir }, {
-      source: 'host',
-      sessionId,
-      workflowId: executionBinding.session.workflowId,
-      role: executionBinding.session.role,
-      planId: executionBinding.session.planId,
-    })
-    const resumed = await resumeExecutionSession(context, executionBinding.session)
+    const resumed = await resumeNativeExecutionSession(harnessDir, sessionId, executionBinding)
     if (resumed.storeId !== source.storeId || resumed.epoch !== source.epoch) return null
   } catch {
     return null
