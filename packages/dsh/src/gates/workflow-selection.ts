@@ -45,14 +45,19 @@ import {
   readJson,
   resolveExecutionReadRoute,
   resolveWorkflowDir,
+  resolveHarnessDir,
+  executionContextFor,
+  resumeExecutionSession,
   validateExecutionLease,
   validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
 } from '@mstar-harness/engine'
-import type { ExecutionPlanView, ExecutionRead, ExecutionState, StoreContext } from '@mstar-harness/engine'
+import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState, StoreContext } from '@mstar-harness/engine'
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
+import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** The active-set resolver result: the session's active lifecycle or a clear error. */
 export type ActiveWorkflowSelection = WorkflowSelectionView
@@ -521,6 +526,8 @@ export type ExecutionWorkflowSourceRead =
       readonly workflowId: string
       readonly dir: string
       readonly snapshot: Record<string, unknown>
+      readonly storeId: string
+      readonly epoch: number
     }
   | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection }
   | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
@@ -625,7 +632,92 @@ export async function readExecutionWorkflowSource(
       },
     }
   }
-  return { kind: 'active', workflowId: selection.workflowId, dir: selection.dir, snapshot }
+  return { kind: 'active', workflowId: selection.workflowId, dir: selection.dir, snapshot, storeId: read.storeId, epoch: read.epoch }
+}
+/**
+ * Persist an explicitly native-adopted canonical C1 binding. Picker selection
+ * never manufactures this authority witness.
+ */
+export function adoptExecutionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+  executionBinding: ExecutionBinding,
+): boolean {
+  if (executionBinding.harnessRoot !== harnessDir || executionBinding.session.sessionId !== sessionId) return false
+  const existing = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (existing.kind === 'unavailable') return false
+  const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+    selectedWorkflowId: executionBinding.session.workflowId,
+    executionBinding,
+    excludedBeforeSeq: existing.binding?.excludedBeforeSeq ?? 0,
+  })
+  return written.kind === 'written'
+}
+
+/** Clear a stale native binding while preserving the user selection/floor. */
+export function clearExecutionBinding(harnessDir: string, sessionId: string, cwd: string): boolean {
+  const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (binding.kind !== 'ok') return false
+  return updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+    executionBinding: null,
+    excludedBeforeSeq: binding.binding?.excludedBeforeSeq ?? 0,
+  }).kind === 'written'
+}
+
+/**
+ * Resolve the explicit target consumed by the workflow ledger. Active targets
+ * require a canonical C1 binding and a current SQL session row.
+ */
+export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
+  if (sessionId === '' || cwd === '') return null
+  const harnessDir = resolveHarnessDir(cwd, { workspaceRoot: cwd })
+  if (harnessDir === null) return null
+  const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (binding.kind === 'unavailable') return null
+  const executionBinding = binding.binding?.executionBinding
+  const selected = binding.binding?.selectedWorkflowId
+  const hint: SessionHint = { sessionId, cwd, ...(selected === undefined ? {} : { selectedWorkflowId: selected }) }
+  const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+  if (source.kind === 'unavailable' || source.kind === 'error') return null
+  if (source.kind === 'files') {
+    if (executionBinding !== undefined && executionBinding !== null) return null
+    const legacy = resolveActiveWorkflow(harnessDir, hint)
+    if (legacy.kind !== 'active') return null
+    const targetDir = join(resolveWorkflowDir(harnessDir, { harnessDir }), legacy.workflowId)
+    if (!existsSync(targetDir)) return null
+    try {
+      if (!statSync(targetDir).isDirectory()) return null
+      return { workflowId: legacy.workflowId, workflowDir: realpathSync(targetDir), sessionId, source: 'legacy', epoch: null }
+    } catch {
+      return null
+    }
+  }
+  if (executionBinding === undefined || executionBinding === null) return null
+  if (executionBinding.harnessRoot !== harnessDir ||
+    executionBinding.session.sessionId !== sessionId ||
+    executionBinding.session.workflowId !== source.workflowId) return null
+  try {
+    const context = executionContextFor({ harnessDir }, {
+      source: 'host',
+      sessionId,
+      workflowId: executionBinding.session.workflowId,
+      role: executionBinding.session.role,
+      planId: executionBinding.session.planId,
+    })
+    const resumed = await resumeExecutionSession(context, executionBinding.session)
+    if (resumed.storeId !== source.storeId || resumed.epoch !== source.epoch) return null
+  } catch {
+    return null
+  }
+  const targetDir = join(resolveWorkflowDir(harnessDir, { harnessDir }), source.workflowId)
+  if (!existsSync(targetDir)) return null
+  try {
+    if (!statSync(targetDir).isDirectory()) return null
+    return { workflowId: source.workflowId, workflowDir: realpathSync(targetDir), sessionId, source: 'execution', epoch: source.epoch }
+  } catch {
+    return null
+  }
 }
 
 /** The plan rows of one materialized snapshot ([] when the doc has no plans

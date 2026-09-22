@@ -594,6 +594,7 @@ export {
   readExecutionState,
   serializeExecutionValue,
 } from "./execution-store.js";
+export type { ExecutionBinding } from "./execution-session.js";
 export {
   assertExecutionSessionCurrent,
   createLocalExecutionIdentity,

@@ -4,11 +4,13 @@
  * (status / snapshot / residuals / review) round-trip through an
  * `ArtifactStore`; the default `FsStore` keeps today's `.mstar/` paths
  * and atomic write semantics. No concrete non-FS adapter lives in this
- * package (roadmap §8.4 discipline).
+ * package (roadmap §8.4 discipline), and an injected one stays a body store:
+ * its data ports are guarded at the canonical control targets, never at a
+ * root the injector claims.
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import {
@@ -17,7 +19,11 @@ import {
   resolveProjectDir,
   resolveWorkflowDir,
 } from "./path.js";
-import { assertExecutionFileReadAllowed, assertExecutionFileWriteAllowed } from "./store-db.js";
+import {
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
+  storeDbPath,
+} from "./store-db.js";
 
 /** JSON coordination-doc kinds the store persists. The former `residuals`
  * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
@@ -186,6 +192,15 @@ function tryResolveGetPath(root: string, kind: ArtifactKind, key: string): strin
   }
 }
 
+/**
+ * Every store `createFsStore` built. Membership is what marks a store as the
+ * filesystem adapter, and it is the ONLY thing that does: an injected store's
+ * own `root` claim is not evidence, because any custom store can name any
+ * root — the protected-target guard below therefore resolves the root it
+ * consults itself.
+ */
+const fsStoreInstances = new WeakSet<ArtifactStore>();
+
 /** Default local adapter: maps kinds to the existing `.mstar/` paths.
  * `put` uses the sync `writeJson` (atomic temp+rename unchanged) and
  * returns a resolved Promise; locks stay with callers (architect-locked
@@ -198,7 +213,7 @@ function tryResolveGetPath(root: string, kind: ArtifactKind, key: string): strin
  * backing dir/file → `[]`, `json` throws, keys sorted ascending. */
 export function createFsStore(harnessRoot: string): ArtifactStore & { root: string } {
   const root = resolve(harnessRoot);
-  return {
+  const store: ArtifactStore & { root: string } = {
     root,
     async put(doc: ArtifactDoc): Promise<void> {
  // D3 schema fail-loud: FsStore writes only `doc.payload`, so it
@@ -308,14 +323,125 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       return keys.sort().map((key) => ({ kind, key }));
     },
   };
+  fsStoreInstances.add(store);
+  return store;
 }
 
 /** In-process injected store (Inspector / tests); `undefined` resets to
- * the default FsStore. */
+ * the default FsStore. A non-FsStore is guarded (see `guardedInjectedStore`),
+ * so `injectedStore` always holds the wrapper the accessors serve. */
 let injectedStore: ArtifactStore | undefined;
 
+/**
+ * The canonical CONTROL harness root this process resolves to. `storeDbPath`
+ * is what normalizes it: it routes any path through `resolveProcessHarnessDir`,
+ * so a linked feature worktree or a cwd-local artifact directory cannot select
+ * the root whose execution authority the guard below consults.
+ */
+function processControlRoot(): string {
+  return dirname(storeDbPath({ harnessDir: process.cwd() }));
+}
+
+/**
+ * Protected control-document class of an injected ref, decided against the
+ * canonical control root and never against the injector's `root`: the root
+ * register and a workflow snapshot by kind, plus a `json` alias whose
+ * canonical target is either — the same classification the FsStore applies to
+ * its own writes, so no alias dodges the boundary by entering through
+ * injection. Every other ref (review/document bodies, unrelated `json`) is not
+ * a control document and keeps the injected store's own route.
+ */
+function injectedControlKind(controlRoot: string, ref: ArtifactRef): ProtectedWriteKind | null {
+  if (ref.kind === "status") return "root";
+  if (ref.kind === "snapshot") return "snapshot";
+  if (ref.kind !== "json") return null;
+  return protectedKindOf(controlRoot, ref, ref.key);
+}
+
+/**
+ * Canonical control-target guard for an injected store (retained-body
+ * contract): the protected control documents and the retired project register
+ * are not a body-storage target, so an injected `put` / `get` / `delete`
+ * reaching one refuses BEFORE the injected method runs.
+ *
+ * Two rules, with different reach:
+ *
+ * - the retired register refuses unconditionally — the runtime `residuals`
+ *   kind and a `json` alias whose canonical target is the control root's
+ *   project register, through the same `assertNotRetiredRegisterTarget` rule
+ *   the FsStore applies, so an injected adapter never turns the retired
+ *   findings authority into a body route (active and legacy state behave
+ *   alike);
+ * - the root register and a workflow snapshot (or a `json` alias of either)
+ *   refuse while the canonical control root's execution authority is ACTIVE —
+ *   the same refusal the FsStore applies to a direct write or read of the same
+ *   document. Every body ref, and every ref while that authority is not
+ *   active, keeps the injected store's declared route.
+ *
+ * The class decides whether the control root is resolved at all: the common
+ * body ref returns before any root or authority probe.
+ *
+ * Synchronous by contract, like the guards it reuses: the verdict precedes the
+ * injected call.
+ */
+function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write"): void {
+  const retirableKind = (ref.kind as string) === "residuals";
+  const aliasKind = ref.kind === "json";
+  const declaredControlKind = ref.kind === "status" || ref.kind === "snapshot";
+  if (!retirableKind && !aliasKind && !declaredControlKind) return;
+  const controlRoot = processControlRoot();
+  if (retirableKind || aliasKind) {
+    // The third argument is `filePath`, read only by the alias arm of the rule.
+    assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
+  }
+  if (!declaredControlKind && injectedControlKind(controlRoot, ref) === null) return;
+  const context = { harnessDir: controlRoot };
+  if (access === "read") assertExecutionFileReadAllowed(context);
+  else assertExecutionFileWriteAllowed(context);
+}
+
+/**
+ * Guard a non-FsStore store's data ports. The wrapper delegates `list` when the
+ * injected store implements it and keeps the optional members absent when the
+ * injected store declines them, and it deliberately exposes **no** `root`: a
+ * custom adapter's `root` is a claim about a directory it may not write to at
+ * all, while consumers read a string `root` as the FsStore capability that
+ * authorizes path agreement (`assertFsStorePath`) and the direct byte/CAS and
+ * `--versioned` routes. Dropping the claim makes an injected adapter a body
+ * store by construction; the engine-created FsStore is served unwrapped and
+ * keeps its own root.
+ */
+function guardedInjectedStore(store: ArtifactStore): ArtifactStore {
+  const guarded: ArtifactStore = {
+    async put(doc: ArtifactDoc): Promise<void> {
+      assertInjectedAccessAllowed(doc, "write");
+      return store.put(doc);
+    },
+    async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+      assertInjectedAccessAllowed(ref, "read");
+      return store.get<T>(ref);
+    },
+  };
+  const remove = store.delete;
+  if (remove !== undefined) {
+    guarded.delete = async (ref: ArtifactRef): Promise<void> => {
+      assertInjectedAccessAllowed(ref, "write");
+      return remove.call(store, ref);
+    };
+  }
+  const list = store.list;
+  if (list !== undefined) {
+    guarded.list = (kind: ArtifactKind) => list.call(store, kind);
+  }
+  return guarded;
+}
+
+/** Inject the active store. An `FsStore` guards its own protected targets from
+ * its own root and keeps the root capability consumers verify against, so it is
+ * served as it is; any other store is wrapped in the canonical control-target
+ * guard and keeps no root claim (see `guardedInjectedStore`). */
 export function setArtifactStore(store: ArtifactStore | undefined): void {
-  injectedStore = store;
+  injectedStore = store === undefined || fsStoreInstances.has(store) ? store : guardedInjectedStore(store);
 }
 
 /** The active store: the injected one when set, otherwise a lazily
