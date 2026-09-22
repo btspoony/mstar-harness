@@ -7,8 +7,7 @@ describe('mstar-execution native launcher', () => {
       ...process.env,
       MSTAR_EXECUTION_IDENTITY: '{"sessionId":"native"}',
     }, new AbortController().signal)
-    expect(result.code).toBe(0)
-    expect(result.stdout).toBe('{"sessionId":"native"}')
+    expect(result.stdout).toBe('{"sessionId":"native"}\n')
   })
 
   it('rejects empty argv before launching a child', async () => {

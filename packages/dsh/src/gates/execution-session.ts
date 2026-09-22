@@ -3,6 +3,7 @@ import {
   decodeExecutionSessionRef,
   executionContextFor,
   resumeExecutionSession,
+  serializeExecutionValue,
   type ExecutionBinding,
   type ExecutionCaller,
   type ExecutionSessionRef,
@@ -69,11 +70,10 @@ function parseRequest(raw: string): ExecutionRequest {
   }
   throw new Error('unknown execution operation')
 }
-
 function identityEnv(base: NodeJS.ProcessEnv, scope: { sessionId: string } & SessionScope): NodeJS.ProcessEnv {
   const env = { ...base }
   for (const key of SPOOF_KEYS) delete env[key]
-  env.MSTAR_EXECUTION_IDENTITY = JSON.stringify(scope)
+  env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue({ source: 'host', ...scope })
   return env
 }
 
