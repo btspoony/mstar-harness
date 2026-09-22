@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { encodeExecutionSessionRef, serializeExecutionValue } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -2638,4 +2639,145 @@ describe("prepare coordinator recovery — CLI transport", () => {
     expect(readText(fixture.snapshotPath)).toBe(before);
     expect(existsSync(join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`))).toBe(false);
   }, 60000);
+});
+
+/**
+ * The ACTIVE transport (`--execution` / `--session-ref` / full-token `--expect`)
+ * as this family sees it: the two transports are disjoint BEFORE any IO, a
+ * malformed active invocation is usage (exit 2), and an active call against a
+ * pre-activation harness reaches the ENGINE's DB verb — which refuses
+ * `execution.not-active` (exit 1) — instead of falling back to the file route.
+ * Every case asserts the file-route bytes are untouched, so "cannot write" is
+ * observed, not claimed. The successful bind→resume→mutation chain lives in
+ * `execution-session.test.ts`, which owns the active DB fixture.
+ */
+describe("mstar plan \u2014 execution transport", () => {
+  /** A canonical, engine-produced reference the active flags can carry. */
+  function activeRefWire(): string {
+    return encodeExecutionSessionRef({
+      storeId: "stores/execution-test",
+      epoch: 1,
+      workflowId: WORKFLOW_ID,
+      role: "plan-pm",
+      sessionId: "execution-ref-session",
+      planId: PLAN_ID,
+    });
+  }
+
+  function activeIdentityEnv(): Record<string, string> {
+    return {
+      MSTAR_EXECUTION_IDENTITY: serializeExecutionValue({
+        source: "local",
+        sessionId: "execution-ref-session",
+        workflowId: WORKFLOW_ID,
+        role: "plan-pm",
+        planId: PLAN_ID,
+      }),
+    };
+  }
+
+  test("the active flags never mix with the pre-activation ones, and write nothing (exit 2)", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+
+    const mixed = runCli(
+      [
+        "plan",
+        "progress",
+        "--session",
+        join(fixture.harness, "sessions", "plan-a.json"),
+        "--session-ref",
+        activeRefWire(),
+        "--expect",
+        "exec-v1:plan:store:1:key:1",
+        "--operation",
+        "progress-mixed",
+        "--file",
+        join(fixture.root, "progress.json"),
+      ],
+      fixture.root,
+    );
+    expect(mixed.exitCode).toBe(2);
+    expect(jsonOf(mixed).code).toBe("usage");
+    expect(mixed.stderr).toContain("disjoint transports");
+
+    const stated = runCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--session-id", "some-session"],
+      fixture.root,
+    );
+    expect(stated.exitCode).toBe(2);
+    expect(stated.stderr).toContain("--session-id");
+
+    expect(snapshotBytes(fixture)).toBe(before);
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+  });
+
+  test("a numeric execution expectation, a missing operation or a missing identity is usage (exit 2)", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+    const progressPath = join(fixture.root, "progress.json");
+    writeJson(progressPath, { status: "InReview", summary: "no write expected", evidence_paths: [fixture.evidencePath] });
+
+    const numeric = runCli(
+      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "3", "--operation", "progress-numeric", "--file", progressPath],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(numeric.exitCode).toBe(2);
+    expect(numeric.stderr).toContain("full execution token");
+
+    const noOperation = runCli(
+      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(noOperation.exitCode).toBe(2);
+    expect(noOperation.stderr).toContain("--operation");
+
+    const noIdentity = runCli(
+      [
+        "plan",
+        "show",
+        "--session-ref",
+        activeRefWire(),
+        "--plan",
+        PLAN_ID,
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(noIdentity.exitCode).toBe(2);
+    expect(jsonOf(noIdentity).code).toBe("usage");
+    expect(noIdentity.stderr).toContain("MSTAR_EXECUTION_IDENTITY");
+
+    expect(snapshotBytes(fixture)).toBe(before);
+  });
+
+  test("an active call against a pre-activation harness is the engine's refusal, never a file-route write", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+    const progressPath = join(fixture.root, "progress.json");
+    writeJson(progressPath, { status: "InReview", summary: "no write expected", evidence_paths: [fixture.evidencePath] });
+
+    const refused = runCli(
+      [
+        "plan",
+        "progress",
+        "--session-ref",
+        activeRefWire(),
+        "--expect",
+        "exec-v1:plan:stores%2Fexecution-test:1:key64:1",
+        "--operation",
+        "progress-not-active",
+        "--file",
+        progressPath,
+        "--json",
+      ],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("execution.not-active");
+    expect(snapshotBytes(fixture)).toBe(before);
+  });
 });
