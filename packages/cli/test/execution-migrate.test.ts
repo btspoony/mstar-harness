@@ -17,7 +17,9 @@
  *   apply → activate (with a real stop attestation naming every imported owner)
  *   → current-epoch stopped-coordinator recovery under an independent caller
  *   identity → retire, with the imported authority revoked, the imported held
- *   lease represented rather than adopted, and a stable replay per verb.
+ *   lease represented rather than adopted, and a stable replay per verb; a
+ *   staged manifest returns to legacy through `abort` with every source byte
+ *   preserved.
  * - `refusals`: a missing coverage / attestation / loss confirmation and a
  *   reviewed inventory that does not match the manifest each refuse without
  *   writing authority; an unknown flag is exit 2.
@@ -629,6 +631,51 @@ describe("mstar store execution \u2014 the operator family over populated input"
     expect(replayedRetire.exitCode).toBe(0);
     expect(dataOf(replayedRetire).phase).toBe("retired");
     expect(dataOf(replayedRetire).replayed).toBe(true);
+  });
+
+  test("abort returns a staged manifest to legacy and preserves every source byte", async () => {
+    const fixture = await legacyFixture("cli-c6-abort");
+    const reviewed = previewAndCover(fixture, "abort");
+    const point = takeRecoveryPoint(fixture, "abort");
+    const protectedPaths = [fixture.statusPath, fixture.snapshotPath, fixture.coordinatorEnvelope, fixture.planEnvelope];
+    const protectedBefore = protectedPaths.map((path) => readFileSync(path).toString("base64"));
+
+    const applied = runCli(applyFamily(fixture, reviewed, point.receiptPath, "abort-apply"));
+    expectSuccess(applied, "apply");
+    expect(executionAuthorityOf(fixture).authority_state).toBe("staged");
+
+    const abortArgs = [
+      "store",
+      "execution",
+      "abort",
+      "--manifest",
+      reviewed.manifestPath,
+      "--reason",
+      "legacy input changed while the manifest was staged",
+      "--operation",
+      "abort-1",
+      "--operator",
+      OPERATOR,
+      "--harness",
+      fixture.harnessDir,
+      "--json",
+    ];
+    const aborted = runCli(abortArgs);
+    expectSuccess(aborted, "abort");
+    expect(dataOf(aborted).phase).toBe("aborted");
+    expect(dataOf(aborted).replayed).toBe(false);
+    // The staged rows are gone, the authority is legacy again and every source
+    // byte — root register, snapshot and session envelopes — is preserved.
+    const executionAfterAbort = executionAuthorityOf(fixture);
+    expect(executionAfterAbort.authority_state).toBe("legacy");
+    expect(executionAfterAbort.manifest_id).toBeNull();
+    expect(protectedPaths.map((path) => readFileSync(path).toString("base64"))).toEqual(protectedBefore);
+
+    // An aborted manifest is never re-staged: the replay reports the recorded abort.
+    const replayedAbort = runCli(abortArgs);
+    expect(replayedAbort.exitCode).toBe(0);
+    expect(dataOf(replayedAbort).phase).toBe("aborted");
+    expect(dataOf(replayedAbort).replayed).toBe(true);
   });
 
   test("a missing coverage, attestation, loss confirmation or reviewed inventory refuses without writing authority", async () => {
