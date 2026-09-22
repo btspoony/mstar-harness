@@ -1089,7 +1089,7 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
   });
 });
 
-describe("harness root declaration (plan-conventions § Git 跟踪策略)", () => {
+describe("harness root declaration", () => {
   test("recognizes harness-root rules of both layouts, with or without a leading slash", () => {
     for (const line of [".mstar", ".mstar/", ".mstar/**", "/.mstar/", ".mstar/plans/", ".agents", ".agents/", ".agents/**", "/.agents/"]) {
       expect(hasHarnessRootDeclaration(line)).toBe(true);

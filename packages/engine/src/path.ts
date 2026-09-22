@@ -666,7 +666,7 @@ export function emitGitignoreSnippet(kind?: HarnessKind): string {
 
 /**
  * Harness-root declaration rule: a trimmed, non-blank, non-comment line
- * matching `^!?/?\.(?:mstar|agents)(?:\/|$)` (plan-conventions § Git 跟踪策略).
+ * matching `^!?/?\.(?:mstar|agents)(?:\/|$)`.
  * Both root spellings count, with or without a leading slash, as does a
  * negation (`!`); `.mstarc` alone does not declare. This is a mechanical
  * line scan — no escaping, glob, precedence or custom-root semantics.
@@ -691,18 +691,17 @@ export function hasHarnessRootDeclaration(content: string): boolean {
 }
 
 /**
- * Validate that `<root>/.gitignore` carries a harness ignore policy per
- * plan-conventions § Git 跟踪策略. An authored harness-root declaration
- * makes the file author-owned and the gate passes as
- * `gitignore.author-declared` — regardless of the DETECTED harness kind, and
- * without proposing a rewrite, normalization or canonical-completion append.
- * A file with no such declaration is undeclared: it reports the canonical
- * entries it lacks for the detected kind — `.mstar/` for a `.mstar` harness,
- * `.agents/` for a legacy `.agents` harness, the default `.mstar/` set for a
- * layout without a canonical snippet (rung-3 `.plans`/`plans`, or no harness
- * yet) — plus the fix that appends the canonical snippet. A missing file
- * stays `gitignore.missing`. Non-blocking: returns a `ValidationResult` (v1
- * enforcement depth, roadmap §8.5).
+ * Validate that `<root>/.gitignore` carries a harness ignore policy. An
+ * authored harness-root declaration makes the file author-owned and the gate
+ * passes as `gitignore.author-declared` — regardless of the DETECTED harness
+ * kind, and without proposing a rewrite, normalization or canonical-completion
+ * append. A file with no such declaration is undeclared: it reports the
+ * canonical entries it lacks for the detected kind — `.mstar/` for a `.mstar`
+ * harness, `.agents/` for a legacy `.agents` harness, the default `.mstar/`
+ * set for a layout without a canonical snippet (rung-3 `.plans`/`plans`, or no
+ * harness yet) — plus the fix that appends the canonical snippet. A missing
+ * file stays `gitignore.missing`. Non-blocking: returns a `ValidationResult`
+ * instead of throwing.
  */
 export function validateGitignore(root: string): ValidationResult {
   const gitignorePath = join(resolve(root), ".gitignore");
