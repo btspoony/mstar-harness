@@ -4,17 +4,26 @@
  *
  * The fixture is a self-contained temporary checkout: a small instruction
  * corpus (`skills/`, `commands/`, `agents/`, including a relative symlink), the
- * five package layouts and the committed ZCode hook artifact. Nothing outside
- * the fixture is read — the "no installed state" case proves a recorded
- * out-of-root path refuses before any bytes are touched.
+ * five package build layouts (source trees, config, build scripts, output
+ * trees), the OMP convention mirrors and the committed ZCode hook artifact.
+ *
+ * Instruction copies are replicated with `replicateTree`, which preserves a
+ * link's tree-relative target — the semantics a package copy must have to stay
+ * portable once installed (the real corpus currently holds no symlinks).
+ *
+ * Nothing outside the fixture is read: the containment cases prove a recorded
+ * path or a symlinked root that would leave the checkout refuses before any
+ * bytes are touched.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  cpSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -34,7 +43,7 @@ import {
 
 const SCRIPT = join(import.meta.dir, "execution-consumer-manifest.ts");
 const INSTRUCTION_ROOTS = ["skills", "commands", "agents"] as const;
-const OMP_TOOLS = [
+const OMP_MIRROR_TOOLS = [
   "mstar_dispatch_validate",
   "mstar_iteration_gate",
   "mstar_lease_verify",
@@ -43,9 +52,9 @@ const OMP_TOOLS = [
   "mstar_worktree_check",
 ] as const;
 
-/** Structure of a JSON-round-tripped manifest; the type-only refusals under
- * test need a writable shape, and the manifest contract stays the source of
- * truth via the `verifyExecutionConsumerManifest` calls around each mutation. */
+/** Structure of a JSON-round-tripped manifest; the refusals under test need a
+ * writable shape, and `verifyExecutionConsumerManifest` stays the source of
+ * truth via the calls around each mutation. */
 interface MutableManifest {
   version: number;
   protocol: string;
@@ -56,9 +65,15 @@ interface MutableManifest {
     capability: string;
     capabilityNote: string | null;
     entrypoint: string;
-    runtime: { target: string; floor: string; declaration: string };
-    sources: { path: string; sha256: string }[];
-    generated: { path: string; sha256: string }[];
+    runtime: { target: string; floor: string; declaration: string } | null;
+    sources: {
+      trees: { root: string; files: number; sha256: string }[];
+      files: { path: string; sha256: string }[];
+    } | null;
+    generated: {
+      trees: { root: string; files: number; sha256: string }[];
+      files: { path: string; sha256: string }[];
+    } | null;
     copiedInstructions: {
       sourceRoot: string;
       targetRoot: string;
@@ -77,10 +92,27 @@ function write(root: string, rel: string, content: string): void {
   writeFileSync(abs, content);
 }
 
-function copyInto(root: string, from: string, to: string): void {
-  const dest = join(root, to);
-  mkdirSync(dirname(dest), { recursive: true });
-  cpSync(join(root, from), dest, { recursive: true });
+/** Self-contained tree replication: files are copied by bytes and symlinks keep
+ * their tree-relative link text, so the copy stays inside its own tree. */
+function replicateTree(root: string, from: string, to: string): void {
+  const sourceAbs = join(root, from);
+  const targetAbs = join(root, to);
+  const walk = (dirAbs: string, rel: string): void => {
+    for (const dirent of readdirSync(dirAbs, { withFileTypes: true })) {
+      const source = join(dirAbs, dirent.name);
+      const target = join(targetAbs, rel, dirent.name);
+      mkdirSync(dirname(target), { recursive: true });
+      if (dirent.isDirectory()) {
+        walk(source, join(rel, dirent.name));
+      } else if (dirent.isSymbolicLink()) {
+        symlinkSync(readlinkSync(source), target);
+      } else {
+        copyFileSync(source, target);
+      }
+    }
+  };
+  mkdirSync(targetAbs, { recursive: true });
+  walk(sourceAbs, "");
 }
 
 function packageJson(root: string, dir: string, engines: Record<string, string>): void {
@@ -91,12 +123,19 @@ function packageJson(root: string, dir: string, engines: Record<string, string>)
   );
 }
 
+/** Mirror one built file to its package-root convention path (OMP's `cp -R`). */
+function mirrorFile(root: string, from: string, to: string): void {
+  const target = join(root, to);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(join(root, from), target);
+}
+
 function scaffoldInstructions(root: string): void {
   write(root, "skills/mstar-demo/SKILL.md", "# demo skill\n");
   write(root, "skills/shared/note.md", "shared note\n");
   write(root, "commands/mstar-demo.md", "# demo command\n");
   write(root, "agents/mstar-demo.md", "# demo agent\n");
-  // Relative link that stays inside the tree after `cpSync` preserves it.
+  // Relative link that stays inside the copied tree after replication.
   symlinkSync("../shared/note.md", join(root, "skills/mstar-demo/linked.md"));
 }
 
@@ -105,47 +144,86 @@ function buildFixture(): string {
   fixtures.push(root);
   scaffoldInstructions(root);
 
+  write(root, "scripts/escape-dist-literals.ts", "export const escape = 1;\n");
+  write(root, "scripts/ascii-literal-utils.ts", "export const mask = 1;\n");
+  write(root, "scripts/build-zcode-hooks.ts", "export const hooks = 1;\n");
+
   packageJson(root, "packages/engine", { bun: ">=1.4.0", node: ">=24.18.0" });
+  write(root, "packages/engine/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/engine/src/index.ts", "export const engine = 1;\n");
+  write(root, "packages/engine/src/store-db.ts", "export const store = 1;\n");
   write(root, "packages/engine/dist/engine.js", "// engine bundle\n");
   write(root, "packages/engine/dist/audit.js", "// audit bundle\n");
+  write(root, "packages/engine/dist/index.d.ts", "export declare const engine: number;\n");
+  write(root, "packages/engine/dist/audit.d.ts", "export declare const audit: number;\n");
 
   packageJson(root, "packages/cli", { bun: ">=1.4.0", node: ">=24.18.0" });
+  write(root, "packages/cli/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/cli/src/index.ts", "export const cli = 1;\n");
+  write(root, "packages/cli/scripts/build-web.ts", "export const web = 1;\n");
   write(root, "packages/cli/dist/mstar-harness.js", "// cli bundle\n");
 
   packageJson(root, "packages/dsh", { bun: ">=1.4.0" });
+  write(root, "packages/dsh/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/dsh/src/index.ts", "export const dsh = 1;\n");
   write(root, "packages/dsh/src/invariant.ts", "export const invariant = 1;\n");
+  write(root, "packages/dsh/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
+  write(root, "packages/dsh/scripts/build-client-bundle.ts", "export const client = 1;\n");
   write(root, "packages/dsh/dist/index.js", "// dsh bundle\n");
   write(root, "packages/dsh/dist/invariant.js", "// dsh invariant bundle\n");
+  write(root, "packages/dsh/dist/client.js", "// dsh client bundle\n");
+  write(root, "packages/dsh/dist/index.d.ts", "export declare const dsh: number;\n");
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    copyInto(root, instructionRoot, `packages/dsh/harness-${instructionRoot}`);
+    replicateTree(root, instructionRoot, `packages/dsh/harness-${instructionRoot}`);
   }
 
   packageJson(root, "packages/omp", { bun: ">=1.4.0" });
+  write(root, "packages/omp/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/omp/src/hooks/pre/mstar-gates.ts", "export const gates = 1;\n");
   write(root, "packages/omp/src/extensions/model-handoff.ts", "export const handoff = 1;\n");
   write(root, "packages/omp/src/extensions/phase2-orchestration.ts", "export const phase2 = 1;\n");
+  write(root, "packages/omp/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
   write(root, "packages/omp/dist/hooks/pre/mstar-gates.js", "// omp pre hook\n");
   write(root, "packages/omp/dist/extensions/model-handoff.js", "// omp handoff\n");
   write(root, "packages/omp/dist/extensions/phase2-orchestration.js", "// omp phase2\n");
-  for (const tool of OMP_TOOLS) {
+  for (const tool of OMP_MIRROR_TOOLS) {
     write(root, `packages/omp/dist/tools/${tool}/index.js`, `// omp tool ${tool}\n`);
+    // Build script mirrors dist/tools/<name>/index.js to tools/<name>.js.
+    mirrorFile(root, `packages/omp/dist/tools/${tool}/index.js`, `packages/omp/tools/${tool}.js`);
   }
+  mirrorFile(
+    root,
+    "packages/omp/dist/hooks/pre/mstar-gates.js",
+    "packages/omp/hooks/pre/mstar-gates.js",
+  );
+  mirrorFile(
+    root,
+    "packages/omp/dist/extensions/model-handoff.js",
+    "packages/omp/extensions/model-handoff.js",
+  );
+  mirrorFile(
+    root,
+    "packages/omp/dist/extensions/phase2-orchestration.js",
+    "packages/omp/extensions/phase2-orchestration.js",
+  );
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    copyInto(root, instructionRoot, `packages/omp/harness-${instructionRoot}`);
-    copyInto(root, instructionRoot, `packages/omp/${instructionRoot}`);
+    replicateTree(root, instructionRoot, `packages/omp/harness-${instructionRoot}`);
+    replicateTree(root, instructionRoot, `packages/omp/${instructionRoot}`);
   }
+  write(root, "assets/logo.txt", "brand asset\n");
+  replicateTree(root, "assets", "packages/omp/assets");
+  write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
+  mirrorFile(root, ".omp-plugin/plugin.json", "packages/omp/plugin.json");
 
   packageJson(root, "packages/opencode", { bun: ">=1.4.0", node: ">=24.18.0" });
   write(root, "packages/opencode/src/mstar.ts", "export const mstar = 1;\n");
+  write(root, "packages/opencode/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
   write(root, "packages/opencode/dist/mstar.js", "// opencode bundle\n");
   write(root, "packages/opencode/agents/pm.md", "# opencode-only primary\n");
   for (const instructionRoot of INSTRUCTION_ROOTS) {
-    copyInto(root, instructionRoot, `packages/opencode/harness-${instructionRoot}`);
+    replicateTree(root, instructionRoot, `packages/opencode/harness-${instructionRoot}`);
   }
-  copyInto(root, "packages/opencode/agents", "packages/opencode/harness-agents");
+  replicateTree(root, "packages/opencode/agents", "packages/opencode/harness-agents");
 
   write(root, "hooks/src/mstar-write-gate.ts", "export const writeGate = 1;\n");
   write(root, "hooks/mstar-write-gate.mjs", "#!/usr/bin/env node\n// zcode hook\n");
@@ -164,7 +242,7 @@ function consumerIn(manifest: MutableManifest, id: string): MutableManifest["con
   return consumer;
 }
 
-function asManifest(manifest: MutableManifest): ExecutionConsumerManifest {
+function asManifest(manifest: MutableManifest | Record<string, unknown>): ExecutionConsumerManifest {
   // Intentionally-invalid documents under test: the refusals below assert that
   // verification rejects the tampered value before trusting it.
   return manifest as unknown as ExecutionConsumerManifest;
@@ -202,27 +280,62 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "zcode",
     ]);
 
-    const cli = manifest.consumers.find((consumer) => consumer.id === "cli");
-    expect(cli?.capability).toBe("writer");
-    expect(cli?.runtime).toEqual({
+    const cli = consumerIn(cloneManifest(manifest), "cli");
+    expect(cli.capability).toBe("writer");
+    expect(cli.runtime).toEqual({
       target: "node",
       declaration: "package-engines",
       floor: ">=24.18.0",
     });
+    expect(cli.sources?.trees.map((tree) => tree.root)).toEqual([
+      "packages/cli/scripts",
+      "packages/cli/src",
+    ]);
+    expect(cli.generated?.trees.map((tree) => tree.root)).toEqual(["packages/cli/dist"]);
+    expect(cli.generated?.files.map((file) => file.path)).toEqual([
+      "packages/cli/dist/mstar-harness.js",
+    ]);
+
     const omp = manifest.consumers.find((consumer) => consumer.id === "omp");
     expect(omp?.runtime.target).toBe("bun");
     expect(omp?.runtime.floor).toBe(">=1.4.0");
+    // The plugin loads the package-root convention mirrors, so they are part of
+    // the generated closure, not only `dist`.
+    expect(omp?.generated.trees.map((tree) => tree.root)).toEqual([
+      "packages/omp/dist",
+      "packages/omp/extensions",
+      "packages/omp/hooks",
+      "packages/omp/tools",
+    ]);
+
+    // The public entry surface includes DSh's `./client` build output.
+    const dsh = manifest.consumers.find((consumer) => consumer.id === "dsh");
+    expect(dsh?.generated.files.map((file) => file.path)).toEqual([
+      "packages/dsh/dist/client.js",
+      "packages/dsh/dist/index.js",
+      "packages/dsh/dist/invariant.js",
+    ]);
+    // ...and engine's declaration output is inside the recorded dist tree.
+    const engineDist = manifest.consumers
+      .find((consumer) => consumer.id === "engine")
+      ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
+    expect(engineDist?.files).toBe(4);
 
     // decision-only is explicit, never an absent or writer capability.
     const opencode = manifest.consumers.find((consumer) => consumer.id === "opencode");
     expect(opencode?.capability).toBe("decision-only");
     expect(opencode?.capabilityNote).toContain("decision-only");
 
-    // ZCode has no package metadata; its floor is declared as the canonical one.
+    // ZCode has no package metadata; its floor is declared as the canonical
+    // one and the inlined engine source is part of its input closure.
     const zcode = manifest.consumers.find((consumer) => consumer.id === "zcode");
     expect(zcode?.runtime.declaration).toBe("canonical-floor");
     expect(zcode?.runtime.floor).toBe(">=24.18.0");
     expect(zcode?.entrypoint).toBe("hooks/mstar-write-gate.mjs");
+    expect(zcode?.sources.trees.map((tree) => tree.root)).toEqual([
+      "hooks/src",
+      "packages/engine/src",
+    ]);
 
     const dshCopies = manifest.consumers.find((consumer) => consumer.id === "dsh")?.copiedInstructions ?? [];
     expect(dshCopies.map((tree) => `${tree.sourceRoot}->${tree.targetRoot}`)).toEqual([
@@ -235,6 +348,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
     const ompCopies = manifest.consumers.find((consumer) => consumer.id === "omp")?.copiedInstructions ?? [];
     expect(ompCopies.map((tree) => tree.targetRoot)).toEqual([
       "packages/omp/agents",
+      "packages/omp/assets",
       "packages/omp/commands",
       "packages/omp/harness-agents",
       "packages/omp/harness-commands",
@@ -242,17 +356,35 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/omp/skills",
     ]);
 
+    const opencodeCopies =
+      manifest.consumers.find((consumer) => consumer.id === "opencode")?.copiedInstructions ?? [];
+    expect(opencodeCopies.map((tree) => `${tree.targetRoot}:${tree.mode}`)).toEqual([
+      "packages/opencode/harness-agents:merge",
+      "packages/opencode/harness-agents:merge",
+      "packages/opencode/harness-commands:copy",
+      "packages/opencode/harness-skills:copy",
+    ]);
+
     verifyExecutionConsumerManifest(manifest);
   });
 
-  test("refuses to collect when build output is missing instead of fabricating parity", () => {
-    const root = buildFixture();
-    unlinkSync(join(root, "packages/engine/dist/engine.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.path-missing");
+  test("refuses to collect when build output is missing or empty instead of fabricating parity", () => {
+    const missing = buildFixture();
+    unlinkSync(join(missing, "packages/engine/dist/engine.js"));
+    expectRefusal(() => collectExecutionConsumerManifest(missing), "consumer.path-missing");
 
-    const emptyRoot = buildFixture();
-    writeFileSync(join(emptyRoot, "packages/cli/dist/mstar-harness.js"), "");
-    expectRefusal(() => collectExecutionConsumerManifest(emptyRoot), "consumer.generated-empty");
+    const emptyArtifact = buildFixture();
+    writeFileSync(join(emptyArtifact, "packages/cli/dist/mstar-harness.js"), "");
+    expectRefusal(() => collectExecutionConsumerManifest(emptyArtifact), "consumer.generated-empty");
+
+    const emptyTree = buildFixture();
+    rmSync(join(emptyTree, "packages/omp/tools"), { recursive: true, force: true });
+    mkdirSync(join(emptyTree, "packages/omp/tools"), { recursive: true });
+    expectRefusal(() => collectExecutionConsumerManifest(emptyTree), "consumer.generated-empty");
+
+    const missingClient = buildFixture();
+    unlinkSync(join(missingClient, "packages/dsh/dist/client.js"));
+    expectRefusal(() => collectExecutionConsumerManifest(missingClient), "consumer.path-missing");
   });
 
   test("refuses a package whose engines floor is not the canonical runtime floor", () => {
@@ -263,13 +395,31 @@ describe("execution-consumer-manifest — canonical collection", () => {
 });
 
 describe("execution-consumer-manifest — verification refusals", () => {
-  test("passes on the exact fixture tree and refuses a stale generated artifact", () => {
+  test("passes on the exact fixture tree and refuses stale generated artifacts", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
     verifyExecutionConsumerManifest(manifest);
 
     writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
     expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+
+    const declarationDrift = buildFixture();
+    const declarationManifest = collectExecutionConsumerManifest(declarationDrift);
+    writeFileSync(join(declarationDrift, "packages/engine/dist/index.d.ts"), "// stale types\n");
+    expectRefusal(
+      () => verifyExecutionConsumerManifest(declarationManifest),
+      "consumer.digest-mismatch",
+    );
+
+    const clientDrift = buildFixture();
+    const clientManifest = collectExecutionConsumerManifest(clientDrift);
+    writeFileSync(join(clientDrift, "packages/dsh/dist/client.js"), "// stale client bundle\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(clientManifest), "consumer.digest-mismatch");
+
+    const mirrorDrift = buildFixture();
+    const mirrorManifest = collectExecutionConsumerManifest(mirrorDrift);
+    writeFileSync(join(mirrorDrift, "packages/omp/hooks/pre/mstar-gates.js"), "// stale mirror\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(mirrorManifest), "consumer.digest-mismatch");
   });
 
   test("refuses a stale committed ZCode hook and a stale source entry", () => {
@@ -284,31 +434,43 @@ describe("execution-consumer-manifest — verification refusals", () => {
     expectRefusal(() => verifyExecutionConsumerManifest(staleSource), "consumer.digest-mismatch");
   });
 
-  test("refuses a stale copied instruction corpus", () => {
+  test("refuses a changed transitive build input with the old bundle still in place", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
+    // `store-db.ts` is not an entry file, but it is a real engine build input —
+    // engine and the ZCode hook (which inlines the engine) both consume it.
+    writeFileSync(join(root, "packages/engine/src/store-db.ts"), "export const store = 2;\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+    expect(readFileSync(join(root, "packages/engine/dist/engine.js"), "utf8")).toBe(
+      "// engine bundle\n",
+    );
+  });
+
+  test("refuses a stale copied instruction corpus and a repointed copied symlink", () => {
+    const corpusDrift = buildFixture();
+    const corpusManifest = collectExecutionConsumerManifest(corpusDrift);
     writeFileSync(
-      join(root, "packages/dsh/harness-skills/mstar-demo/SKILL.md"),
+      join(corpusDrift, "packages/dsh/harness-skills/mstar-demo/SKILL.md"),
       "# drifted skill\n",
     );
-    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+    expectRefusal(() => verifyExecutionConsumerManifest(corpusManifest), "consumer.digest-mismatch");
+
+    const linkDrift = buildFixture();
+    const linkManifest = collectExecutionConsumerManifest(linkDrift);
+    writeFileSync(join(linkDrift, "packages/dsh/harness-skills/shared/other.md"), "shared note\n");
+    unlinkSync(join(linkDrift, "packages/dsh/harness-skills/mstar-demo/linked.md"));
+    symlinkSync("../shared/other.md", join(linkDrift, "packages/dsh/harness-skills/mstar-demo/linked.md"));
+    expectRefusal(() => verifyExecutionConsumerManifest(linkManifest), "consumer.digest-mismatch");
   });
 
-  test("refuses a copied symlink repointed at another same-content file", () => {
-    const root = buildFixture();
-    const manifest = collectExecutionConsumerManifest(root);
-    writeFileSync(join(root, "packages/dsh/harness-skills/shared/other.md"), "shared note\n");
-    unlinkSync(join(root, "packages/dsh/harness-skills/mstar-demo/linked.md"));
-    symlinkSync("../shared/other.md", join(root, "packages/dsh/harness-skills/mstar-demo/linked.md"));
-    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
-  });
-
-  test("refuses runtime, capability and digest tampering in the manifest itself", () => {
+  test("refuses runtime, capability, packageRoot, protocol and set tampering", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
 
     const runtimeTamper = cloneManifest(manifest);
-    consumerIn(runtimeTamper, "engine").runtime.floor = ">=22.0.0";
+    const engineRuntime = consumerIn(runtimeTamper, "engine").runtime;
+    if (engineRuntime === null) throw new Error("fixture engine runtime missing");
+    engineRuntime.floor = ">=22.0.0";
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(runtimeTamper)), "consumer.runtime-mismatch");
 
     const capabilityTamper = cloneManifest(manifest);
@@ -325,8 +487,17 @@ describe("execution-consumer-manifest — verification refusals", () => {
       "consumer.capability-mismatch",
     );
 
+    const packageRootTamper = cloneManifest(manifest);
+    consumerIn(packageRootTamper, "cli").packageRoot = "packages/dsh";
+    expectRefusal(
+      () => verifyExecutionConsumerManifest(asManifest(packageRootTamper)),
+      "consumer.schema-invalid",
+    );
+
     const hashTamper = cloneManifest(manifest);
-    consumerIn(hashTamper, "cli").generated[0]!.sha256 = "0".repeat(64);
+    const cliGenerated = consumerIn(hashTamper, "cli").generated;
+    if (cliGenerated === null) throw new Error("fixture cli generated set missing");
+    cliGenerated.files[0]!.sha256 = "0".repeat(64);
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(hashTamper)), "consumer.digest-mismatch");
 
     const protocolTamper = cloneManifest(manifest);
@@ -342,6 +513,44 @@ describe("execution-consumer-manifest — verification refusals", () => {
       () => verifyExecutionConsumerManifest(asManifest(setTamper)),
       "consumer.consumer-set-mismatch",
     );
+
+    const treeTamper = cloneManifest(manifest);
+    const cliSources = consumerIn(treeTamper, "cli").sources;
+    if (cliSources === null) throw new Error("fixture cli source set missing");
+    cliSources.trees[0]!.files = 0;
+    expectRefusal(() => verifyExecutionConsumerManifest(asManifest(treeTamper)), "consumer.digest-mismatch");
+  });
+
+  test("refuses malformed documents with stable schema refusals", () => {
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
+
+    const nullConsumer = cloneManifest(manifest) as unknown as Record<string, unknown>;
+    nullConsumer.consumers = [null];
+    expectRefusal(() => verifyExecutionConsumerManifest(asManifest(nullConsumer)), "consumer.schema-invalid");
+
+    const emptyConsumers = cloneManifest(manifest) as unknown as Record<string, unknown>;
+    emptyConsumers.consumers = [];
+    expectRefusal(
+      () => verifyExecutionConsumerManifest(asManifest(emptyConsumers)),
+      "consumer.schema-invalid",
+    );
+
+    const nullRuntime = cloneManifest(manifest);
+    consumerIn(nullRuntime, "engine").runtime = null;
+    expectRefusal(
+      () => verifyExecutionConsumerManifest(asManifest(nullRuntime)),
+      "consumer.schema-invalid",
+    );
+
+    const nullSets = cloneManifest(manifest);
+    consumerIn(nullSets, "engine").sources = null;
+    expectRefusal(() => verifyExecutionConsumerManifest(asManifest(nullSets)), "consumer.schema-invalid");
+
+    expectRefusal(
+      () => verifyExecutionConsumerManifest(asManifest({ version: 1, protocol: "consumer-v1" })),
+      "consumer.schema-invalid",
+    );
   });
 
   test("refuses a recorded path that would leave the repo root, without inspecting it", () => {
@@ -352,23 +561,60 @@ describe("execution-consumer-manifest — verification refusals", () => {
       const manifest = collectExecutionConsumerManifest(root);
 
       const escaped = cloneManifest(manifest);
-      consumerIn(escaped, "cli").generated[0]!.path = "../outside-consumer-artifact.js";
+      const generated = consumerIn(escaped, "cli").generated;
+      if (generated === null) throw new Error("fixture cli generated set missing");
+      generated.files[0]!.path = "../outside-consumer-artifact.js";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(escaped)), "consumer.path-outside-root");
 
       const absolute = cloneManifest(manifest);
-      consumerIn(absolute, "cli").generated[0]!.path = "/etc/hosts";
+      const absoluteGenerated = consumerIn(absolute, "cli").generated;
+      if (absoluteGenerated === null) throw new Error("fixture cli generated set missing");
+      absoluteGenerated.trees[0]!.root = "/etc";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(absolute)), "consumer.path-outside-root");
     } finally {
       rmSync(outside, { force: true });
     }
   });
 
-  test("refuses a symlink that resolves outside the repository", () => {
+  test("refuses file, root and output symlinks that point outside the checkout", () => {
+    const fileLink = buildFixture();
+    const outsideFile = join(dirname(fileLink), "outside-package.json");
+    writeFileSync(outsideFile, '{ "engines": { "node": ">=24.18.0" } }\n');
+    try {
+      unlinkSync(join(fileLink, "packages/cli/package.json"));
+      symlinkSync(outsideFile, join(fileLink, "packages/cli/package.json"));
+      expectRefusal(() => collectExecutionConsumerManifest(fileLink), "consumer.path-outside-root");
+    } finally {
+      rmSync(outsideFile, { force: true });
+    }
+
+    const rootLink = buildFixture();
+    const outsideDir = mkdtempSync(join(tmpdir(), "execution-consumer-outside-"));
+    fixtures.push(outsideDir);
+    write(outsideDir, "note.md", "foreign corpus\n");
+    rmSync(join(rootLink, "packages/dsh/harness-skills"), { recursive: true, force: true });
+    symlinkSync(outsideDir, join(rootLink, "packages/dsh/harness-skills"));
+    expectRefusal(() => collectExecutionConsumerManifest(rootLink), "consumer.path-outside-root");
+
+    const artifactLink = buildFixture();
+    const outsideArtifact = join(dirname(artifactLink), "outside-bundle.js");
+    writeFileSync(outsideArtifact, "// foreign bundle\n");
+    try {
+      unlinkSync(join(artifactLink, "packages/opencode/dist/mstar.js"));
+      symlinkSync(outsideArtifact, join(artifactLink, "packages/opencode/dist/mstar.js"));
+      expectRefusal(
+        () => collectExecutionConsumerManifest(artifactLink),
+        "consumer.symlink-escapes-tree",
+      );
+    } finally {
+      rmSync(outsideArtifact, { force: true });
+    }
+  });
+
+  test("refuses a symlink that resolves outside its own tree", () => {
     const root = buildFixture();
-    const outside = join(dirname(root), "outside-link.md");
-    writeFileSync(outside, "outside target\n");
-    symlinkSync(outside, join(root, "skills/mstar-demo/escaped.md"));
-    expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.copy-symlink-escapes-tree");
+    symlinkSync("../skills/shared/note.md", join(root, "agents/escaped.md"));
+    expectRefusal(() => collectExecutionConsumerManifest(root), "consumer.symlink-escapes-tree");
   });
 });
 
@@ -397,12 +643,36 @@ describe("execution-consumer-manifest — CLI", () => {
     }
     expect(written[0]).toBe(written[written.length - 1]);
 
+    // The written manifest lives inside the recorded dist trees; the digest must
+    // stay stable across the write (the manifest basename is excluded).
+    const before = readFileSync(join(root, "packages/cli/dist/mstar-harness.js"), "utf8");
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(0);
     expect(targets.map((target) => readFileSync(target, "utf8"))).toEqual(written);
+    expect(readFileSync(join(root, "packages/cli/dist/mstar-harness.js"), "utf8")).toBe(before);
 
     // A drifted copy of one manifest refuses rather than silently winning.
     writeFileSync(join(root, "hooks/execution-consumer.json"), "{}\n");
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+
+    // Invalid JSON in every copy is a stable schema refusal, not a raw SyntaxError.
+    for (const target of targets) writeFileSync(target, "{ not json");
+    expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+  });
+
+  test("refuses to read or write a manifest through a symlink", async () => {
+    const root = buildFixture();
+    const outside = join(dirname(root), "outside-manifest.json");
+    writeFileSync(outside, "{}\n");
+    try {
+      const target = executionConsumerManifestPaths(root)[5]!;
+      mkdirSync(dirname(target), { recursive: true });
+      symlinkSync(outside, target);
+      expect(await runExecutionConsumerManifestCli(["--repo", root, "--write"], root)).toBe(1);
+      expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
+      expect(readFileSync(outside, "utf8")).toBe("{}\n");
+    } finally {
+      rmSync(outside, { force: true });
+    }
   });
 
   test("the real entrypoint runs under bun from an arbitrary cwd", () => {
