@@ -2456,6 +2456,84 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
   })
 })
 
+describe('agent-flow — index fail-closed boundaries (F2)', () => {
+  const EVENT = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
+
+  it('a CONFLICTING duplicate index entry refuses the record — the authority is not resolved to its first line', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-conflict-')
+    const indexPath = join(workflowDir, AGENT_FLOW_INDEX_FILE)
+    try {
+      // One record id with two contradictory digests.
+      const id = 'wfe1:workflow-run:sess-a:s1-00000000000000000000000000000000:0'
+      const conflicting = `${JSON.stringify({ id, d: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' })}\n${JSON.stringify({ id, d: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' })}\n`
+      await writeFile(indexPath, conflicting)
+
+      expect(recordWorkflowEvent({
+        harnessDir,
+        workflowDir,
+        source: src(0, 'sess-a', 's1-00000000000000000000000000000000'),
+        event: EVENT,
+      })).toBe(false)
+      // Nothing durable moved, and the contradictory bytes are left as found.
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      expect(readFileSync(indexPath, 'utf8')).toBe(conflicting)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a REPEATED identical index entry is tolerated: the row is recognized as already accepted', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-repeat-')
+    const indexPath = join(workflowDir, AGENT_FLOW_INDEX_FILE)
+    try {
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(true)
+      const entry = readFileSync(indexPath, 'utf8')
+      await writeFile(indexPath, `${entry}${entry}`)
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a MISSING index over IDENTIFIED retained history refuses the record — no silent rebuild, no re-append', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-identified-')
+    try {
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(dir, { recursive: true })
+      // One accepted, IDENTIFIED row that already left the live tail.
+      await writeFile(join(dir, 'chunk-000001.jsonl'), `${sourcedLine(1_700_000_000_000, 'run-old', 'sess-old', 'sess-old', 0, 'x')}\n`)
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(false)
+      expect(existsSync(join(workflowDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      // The lost authority is NOT rebuilt or auto-repaired.
+      expect(existsSync(join(workflowDir, AGENT_FLOW_INDEX_FILE))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a missing index over LEGACY-only history is a legitimate first run: the row records once', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-index-missing-legacy-')
+    try {
+      const dir = join(workflowDir, AGENT_FLOW_HISTORY_DIR)
+      await mkdir(dir, { recursive: true })
+      // A pre-identity row: no eventId, never indexed, its bytes stay untouched.
+      await writeFile(join(dir, 'chunk-000001.jsonl'), `${dispatchLine(1_700_000_000_000)}\n`)
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event: EVENT })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('workflow-ledger — verified native incarnation (F2 identity)', () => {
   it('a session whose header carries no creation stamp records nothing — no fabricated identity', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-no-incarnation-')

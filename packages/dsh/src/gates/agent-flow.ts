@@ -1243,7 +1243,42 @@ export function agentFlowLedgerCacheDirCounts(): { cursors: number; index: numbe
   return { cursors: cursorCache.size, index: indexCache.size }
 }
 
-/** Load the accepted-identity index of one workflow dir (size-guarded cache, always re-verified under the lock). */
+/**
+ * Whether the retained HISTORY (`agent-flow-history/chunk-*.jsonl`) already
+ * holds at least one IDENTIFIED accepted row — a row whose stable record id
+ * only the identity index can dedupe once it has left the live tail. Read in
+ * chunk order and stop at the first identified line; an unreadable chunk makes
+ * the question undecidable, which is treated as "identified" (refuse) rather
+ * than risking a re-append of archived accepted rows. Legacy lines (no
+ * `eventId`) are deliberately NOT counted — they were never indexed, their
+ * bytes are untouched, and only the bounded tail can match them.
+ */
+function historyHoldsIdentifiedRows(workflowDir: string): boolean {
+  for (const name of listAgentFlowHistoryChunks(workflowDir)) {
+    let content: string
+    try {
+      content = readFileSync(join(workflowDir, AGENT_FLOW_HISTORY_DIR, name), 'utf8')
+    } catch (error) {
+      log('warn', `agent-flow history chunk ${name} is unreadable (${errorMessage(error)}) — treating the retained history as identified`)
+      return true
+    }
+    for (const line of content.split('\n')) {
+      if (line !== '' && eventIdOfLine(line) !== undefined) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Load the accepted-identity index of one workflow dir (size-guarded cache, always re-verified under the lock).
+ *
+ * A MISSING file is a legitimate first run ONLY when the retained history holds
+ * no identified row: an accepted row that already left the live tail needs its
+ * index entry to be deduped, so an index that should exist is a LOST authority
+ * (fail closed) rather than an empty one. Legacy rows carry no identity, were
+ * never indexed and keep their exact bytes, so legacy-only history (or no
+ * history at all) still proceeds.
+ */
 function loadIdentityIndex(workflowDir: string): IdentityIndexRead {
   const file = join(workflowDir, AGENT_FLOW_INDEX_FILE)
   let size: number
@@ -1251,7 +1286,10 @@ function loadIdentityIndex(workflowDir: string): IdentityIndexRead {
     size = statSync(file).size
   } catch (error) {
     const err = error as NodeJS.ErrnoException
-    if (err?.code === 'ENOENT') return { kind: 'absent', index: new Map() }
+    if (err?.code === 'ENOENT') {
+      if (!historyHoldsIdentifiedRows(workflowDir)) return { kind: 'absent', index: new Map() }
+      return { kind: 'unreadable', index: new Map(), reason: 'identity index missing while retained history holds identified rows' }
+    }
     return { kind: 'unreadable', index: new Map(), reason: errorMessage(error) }
   }
   const cached = indexCache.get(workflowDir)
@@ -1277,7 +1315,16 @@ function loadIdentityIndex(workflowDir: string): IdentityIndexRead {
     if (rec === undefined || typeof id !== 'string' || id === '' || typeof digest !== 'string' || digest === '') {
       return { kind: 'unreadable', index: new Map(), reason: 'malformed index line' }
     }
-    if (!index.has(id)) index.set(id, digest)
+    const prior = index.get(id)
+    // Two entries for one record id that disagree on the row bytes are
+    // contradictory: the authority cannot be trusted, so the record is refused
+    // rather than silently resolved to the first occurrence. A REPEATED
+    // identical entry (the same id with the same digest) is harmless and keeps
+    // the first occurrence.
+    if (prior !== undefined && prior !== digest) {
+      return { kind: 'unreadable', index: new Map(), reason: 'conflicting duplicate index entry' }
+    }
+    if (prior === undefined) index.set(id, digest)
   }
   cacheBounded(indexCache, workflowDir, { index, size })
   return { kind: 'ok', index }
