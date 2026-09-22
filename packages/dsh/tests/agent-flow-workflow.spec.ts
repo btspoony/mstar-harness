@@ -3322,6 +3322,62 @@ describe('workflow-ledger — explicit awaited target (F2 resolver route)', () =
     }
   })
 
+  it('a selection flip during the maintenance window refuses, and the retry lands in the NEW target only — never in both', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-target-flip-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const parent = fakeSession([], { id: 'sess-a', header: { cwd: root } })
+    sessions.register(parent)
+    const priorRunner = process.env.MSTAR_STORE_TEST_RUNNER
+    const priorWait = process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS
+    process.env.MSTAR_STORE_TEST_RUNNER = '1'
+    process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS = '120'
+    // The selection flips mid-session: the first resolve sees epoch 1 / target
+    // A, every later resolve sees epoch 2 / target B.
+    let call = 0
+    const targetA = workflowDir
+    const targetB = join(harnessDir, 'workflows', 'wf-flipped')
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, async (sessionId) => {
+        call += 1
+        return call === 1
+          ? { workflowId: 'wf-1', workflowDir: targetA, sessionId, source: 'execution', epoch: 1 }
+          : { workflowId: 'wf-flipped', workflowDir: targetB, sessionId, source: 'execution', epoch: 2 }
+      })
+      // The activation window is open while the route changes: the append is
+      // refused, so nothing lands in the OLD target.
+      const maintenance = join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR)
+      await mkdir(maintenance, { recursive: true })
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-flip' }))
+      await idle()
+      expect(existsSync(join(targetA, AGENT_FLOW_FILE))).toBe(false)
+      expect(existsSync(join(targetB, AGENT_FLOW_FILE))).toBe(false)
+
+      // The window closes: the re-scan resolves the NEW target and records the
+      // row exactly once — the OLD target still carries no copy of it.
+      await rm(maintenance, { recursive: true, force: true })
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, async (sessionId) => ({
+        workflowId: 'wf-flipped',
+        workflowDir: targetB,
+        sessionId,
+        source: 'execution',
+        epoch: 2,
+      }))
+      await idle()
+
+      expect(readAgentFlow(targetB)!.events.map((e) => e.runId)).toEqual(['run-flip'])
+      expect(existsSync(join(targetA, AGENT_FLOW_FILE))).toBe(false)
+      expect(cursorEntry(targetB, 'sess-a')!.next).toBe(1)
+    } finally {
+      if (priorRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER
+      else process.env.MSTAR_STORE_TEST_RUNNER = priorRunner
+      if (priorWait === undefined) delete process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS
+      else process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS = priorWait
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('a null or inconsistent target records NOTHING and never falls back to the file-based active set', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-ledger-target-refuse-')
     const ctx = new Context()
