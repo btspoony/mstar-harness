@@ -44,7 +44,15 @@ describe("harness authored ignore", () => {
   });
 
   test("missingHarnessProcessGitignoreEntries still reports the canonical set for an undeclared file", () => {
-    expect(missingHarnessProcessGitignoreEntries("node_modules/\n.mstarc\n")).toEqual(HARNESS_PROCESS_GITIGNORE);
+    // `.mstarc` is the config entry, not a harness-root rule: a file holding
+    // only `node_modules/` and `.mstarc` stays undeclared (the canonical set is
+    // still reported), and the `.mstarc` entry already present is not
+    // re-reported — the report is the absent subset, never a duplicate.
+    const missing = missingHarnessProcessGitignoreEntries("node_modules/\n.mstarc\n");
+    expect(missing).not.toHaveLength(0);
+    expect(missing).toContain(".mstar/**");
+    expect(missing).not.toContain(".mstarc");
+    expect(missing).toEqual(HARNESS_PROCESS_GITIGNORE.filter((entry) => entry !== ".mstarc"));
     expect(missingHarnessProcessGitignoreEntries("")).toEqual(HARNESS_PROCESS_GITIGNORE);
   });
 
