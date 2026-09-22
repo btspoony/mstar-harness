@@ -12,11 +12,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { adoptExecutionBinding, clearExecutionBinding } from './workflow-selection.ts'
 import type { HarnessResolver } from './_shared.ts'
-
 const SPOOF_KEYS = [
   'MSTAR_EXECUTION_IDENTITY',
   'MSTAR_EXECUTION_SESSION_ID',
   'MSTAR_HOST_SESSION_ID',
+  'MSTAR_HARNESS_DIR',
   'MSTAR_SESSION_ID',
   'MSTAR_CALLER_ID',
 ] as const
@@ -51,6 +51,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function parseExecutionRequest(raw: string): ExecutionRequest {
+  let value: unknown
   try { value = JSON.parse(raw) } catch { throw new Error('execution command input must be JSON') }
   if (!isRecord(value) || typeof value.operation !== 'string') throw new Error('execution command input must be a closed JSON object')
   if (value.operation === 'clear') {
