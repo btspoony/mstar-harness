@@ -174,13 +174,12 @@ describe("OpenCode native association (decision-only)", () => {
 });
 
 describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
-  test("overwrites the identity channel and the root, and never inherits the legacy key", () => {
-    const overrides = openCodeExecutionEnvOverrides(nativeIdentity, "/resolved/root");
+  test("overwrites the identity channel and removes BOTH legacy keys", () => {
+    const overrides = openCodeExecutionEnvOverrides(nativeIdentity);
     expect(overrides[EXECUTION_IDENTITY_ENV]).toBe(serializeExecutionValue(nativeIdentity));
     expect(overrides[LEGACY_SESSION_ID_ENV]).toBeUndefined();
-    expect(overrides.MSTAR_HARNESS_DIR).toBe("/resolved/root");
-    // With no resolved root the inherited global is removed, not forwarded.
-    expect(openCodeExecutionEnvOverrides(nativeIdentity).MSTAR_HARNESS_DIR).toBeUndefined();
+    // Root selection stays explicit (--harness / cwd): the env key never decides it.
+    expect(overrides.MSTAR_HARNESS_DIR).toBeUndefined();
   });
 
   test("the coordinator register read is a real CLI invocation that really exits 0", () => {
@@ -188,7 +187,9 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
     const result = runOpenCodeExecutionCli(["status", "validate"], nativeIdentity, {
       command: makeCliLauncher(harness),
       env: ambientEnv(nativeIdentity),
-      harnessRoot: harness,
+      // No root env key: the child's cwd is the only root signal this verb has,
+      // and the CLI's own `resolveProcessHarnessDir` walk must find it.
+      cwd: harness,
     });
     // An invented flag on this verb would exit 2 with a commander usage error:
     // the real exit code IS the argv contract this consumer must speak.
@@ -202,7 +203,7 @@ describe("OpenCode shared-CLI transport (real CLI syntax)", () => {
     const result = runOpenCodeExecutionCli(
       ["plan", "show", "--workflow", planScope.workflowId, "--plan", planScope.planId, "--json", "--harness", harness],
       { source: "host", sessionId: reference.sessionId, ...planScope },
-      { command: makeCliLauncher(harness), env: ambientEnv(nativeIdentity), harnessRoot: harness },
+      { command: makeCliLauncher(harness), env: ambientEnv(nativeIdentity) },
     );
     // The route decision is the real one: no ACTIVE execution authority here,
     // so the CLI refuses in its own words instead of printing an empty view.

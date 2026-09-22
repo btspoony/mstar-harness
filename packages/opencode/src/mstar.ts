@@ -126,19 +126,17 @@ export const LEGACY_SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 export const OPENCODE_EXECUTION_CLI = "mstar";
 
 /**
- * The channel overrides one invocation must install: the identity overwritten
- * from native facts, the legacy identity key removed, and the harness root
- * replaced by the RESOLVED root (the launcher parity rule) instead of an
- * inherited global — `null` removes it so nothing stale reaches the child.
+ * The channel overrides one invocation must install — exactly the launcher's
+ * rule: the identity is overwritten from native facts, while BOTH legacy keys
+ * (`MSTAR_HOST_SESSION_ID`, `MSTAR_HARNESS_DIR`) are removed. Root selection
+ * stays explicit — the `--harness` flag where a verb accepts it, otherwise the
+ * child's own cwd — so an inherited root variable never decides the target.
  */
-export function openCodeExecutionEnvOverrides(
-  identity: ExecutionIdentity,
-  harnessRoot: string | null = null,
-): Record<string, string | undefined> {
+export function openCodeExecutionEnvOverrides(identity: ExecutionIdentity): Record<string, string | undefined> {
   return {
     [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(identity),
     [LEGACY_SESSION_ID_ENV]: undefined,
-    MSTAR_HARNESS_DIR: harnessRoot ?? undefined,
+    MSTAR_HARNESS_DIR: undefined,
   };
 }
 
@@ -238,11 +236,11 @@ export type OpenCodeCliResult = Readonly<{
 export function runOpenCodeExecutionCli(
   argv: readonly string[],
   identity: ExecutionIdentity,
-  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv; harnessRoot?: string | null } = {},
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): OpenCodeCliResult {
   const source = options.env ?? process.env;
   const env: NodeJS.ProcessEnv = { ...source };
-  const overrides = openCodeExecutionEnvOverrides(identity, options.harnessRoot ?? null);
+  const overrides = openCodeExecutionEnvOverrides(identity);
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = value;
@@ -363,10 +361,10 @@ function consultSharedCliForGatedWrite(association: OpenCodeAssociation, targetP
   }
   const root = resolveHarnessRootOf(path.dirname(targetPath)) ?? resolveHarnessDir(path.dirname(targetPath));
   const plan = openCodeConsultPlan(association, root);
-  const result = runOpenCodeExecutionCli(plan.argv, association.identity, {
-    cwd: root ?? undefined,
-    harnessRoot: root,
-  });
+  // The root reaches the CLI explicitly: `--harness` where the verb accepts it
+  // (see `openCodeConsultPlan`) and, for the argument-less register read, the
+  // child's own cwd. No environment variable decides the target.
+  const result = runOpenCodeExecutionCli(plan.argv, association.identity, { cwd: root ?? undefined });
   const code = result.envelope?.code;
   const proofNote =
     plan.proof === "session-authorized"
