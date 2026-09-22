@@ -297,7 +297,8 @@ describe("mstar workflow \u2014 documented invocation", () => {
     const registered = registerReportOnlyWorkflow(fixture, identity, await rootTokenOf(fixture));
     expect(registered.exitCode).toBe(0);
     expect(jsonOf(registered).route).toBe("execution");
-    expect((await storedHeader(fixture)) as Record<string, unknown>).toMatchObject({
+    expect(dataOf(registered).workflowId).toBe(WORKFLOW_ID);
+    expect(await storedHeader(fixture)).toMatchObject({
       id: WORKFLOW_ID,
       type: "plan",
       status: "running",
@@ -421,18 +422,20 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(stopped.exitCode).toBe(0);
     expect(jsonOf(stopped).operation_id).toBe("stop-1");
     expect(jsonOf(stopped).replayed).toBe(false);
-    // The accepted transaction advanced the store: its root token moved.
     expect(jsonOf(stopped).token).not.toBe(beforeStopToken);
-    // The committed graph this transition returned no longer holds the
-    // lifecycle: a terminal close drops the registry membership in the SAME
-    // transaction, and the active adapter keeps no terminal lifecycle — which is
-    // exactly why the workflow-id read afterwards must answer not-found.
-    const committed = dataOf(stopped) as unknown as ExecutionState;
-    expect(committed.workflows.some((entry) => entry.state.id === WORKFLOW_ID)).toBe(false);
 
+    // The terminal state IS persisted and readable: a terminal lifecycle keeps
+    // its workflow-table row while the SAME transaction drops its root registry
+    // membership (migration contract §4.2: terminal history lives in the
+    // workflow/plan tables without a root registry entry). The whole-register
+    // read is that view; the workflow-SELECTED read is the registry-filtered one
+    // and therefore answers `coordination.workflow-not-found` after a close.
     const register = await readExecutionAuthority(fixture.context);
     if (!("workflows" in register.data)) throw new Error("the register read did not return the whole state");
-    expect(register.data.workflows.some((entry) => entry.state.id === WORKFLOW_ID)).toBe(false);
+    const closedRow = register.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+    expect(closedRow?.state.status).toBe("stopped");
+    expect(typeof closedRow?.state.ended_at).toBe("string");
+    expect(register.data.root.workflows.some((entry) => entry.id === WORKFLOW_ID)).toBe(false);
 
     // A closed lifecycle is never reopened: the authority holds no active
     // lifecycle for it, so any further transition is its own refusal.
