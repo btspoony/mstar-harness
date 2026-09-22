@@ -2533,8 +2533,8 @@ describe("execution-abort", () => {
 const PRODUCER_WORKFLOW = "20260921-producer-workflow";
 const PRODUCER_SESSION = "native-session-c3-producer";
 const PRODUCER_ENVELOPE =
-  '{"export":{"document":{"diagnostics":[],"document":"execution-host-history","records":[{"entryId":"entry-handoff-1","index":0,"payload":{"action":"arm","baselineModelChangeId":null,"binding":{"sessionId":"native-session-c3-producer","workflowId":"20260921-producer-workflow"},"observedModel":null,"operationId":"op-1","reason":null,"state":"pending","version":1},"payloadHash":"4076bdd1fa1fe6ac20157efb3022e724c323b6a454aa09c936c9e33a4999aaa7","sessionId":"native-session-c3-producer","type":"mstar:model-handoff","view":{"cancelled":false,"checkpointId":null,"declaredAction":"arm","declaredKind":null,"declaredState":"pending","dedupKey":"op-1","generation":1,"operationId":"op-1","provenance":[],"workflowId":"20260921-producer-workflow"}}],"version":1},"sha256":"76fd241d56abe57968f9d8aab4434c207e7af373b2b648991f44988f20427e98"},"host":"omp","hostSessionId":"native-session-c3-producer","protocol":"host-hidden-inventory-v1","version":1,"workflowId":"20260921-producer-workflow"}\n';
-const PRODUCER_ENVELOPE_SHA = "a0c5445165feb263e166a91179933f550564cd0f776106e9542cc8cffd8ce656";
+  '{"export":{"document":{"diagnostics":[],"document":"execution-host-history","records":[{"entryId":"entry-handoff-1","index":0,"payload":{"action":"arm","baselineModelChangeId":null,"binding":{"sessionId":"native-session-c3-producer","workflowId":"20260921-producer-workflow"},"observedModel":null,"operationId":"op-1","reason":null,"state":"pending","version":1},"payloadHash":"4076bdd1fa1fe6ac20157efb3022e724c323b6a454aa09c936c9e33a4999aaa7","sessionId":"native-session-c3-producer","type":"mstar:model-handoff","view":{"cancelled":false,"checkpointId":null,"declaredAction":"arm","declaredKind":null,"declaredState":"pending","dedupKey":"op-1","generation":1,"operationId":"op-1","provenance":[],"workflowId":"20260921-producer-workflow"}}],"version":1},"sha256":"5a96c5bc766f91c5d44cfff7ef34a12c1a8ab2083137535f15031f08bbfa0ab7"},"host":"omp","hostSessionId":"native-session-c3-producer","protocol":"host-hidden-inventory-v1","version":1,"workflowId":"20260921-producer-workflow"}\n';
+const PRODUCER_ENVELOPE_SHA = "0643293fa09da5be7e89728b3595e41e3d29d0c2647ac9c570ba1cbde49c80c8";
 
 const TERMINAL_WORKFLOW = "20260921-terminal-history";
 const TERMINAL_PLAN = `${TERMINAL_WORKFLOW}-plan`;
@@ -2577,7 +2577,7 @@ type PopulatedWorkspace = Fixture & {
  * audit) plus one TERMINAL workflow dir the root register no longer lists (an
  * unreferenced envelope, so its session surface is `retire`).
  */
-async function populatedWorkspace(name: string, options: { hostSession?: boolean } = {}): Promise<PopulatedWorkspace> {
+async function populatedWorkspace(name: string): Promise<PopulatedWorkspace> {
   const fixture = workspace(name);
   const handle = await initializeStore(fixture.context);
   handle.close();
@@ -2683,13 +2683,9 @@ async function populatedWorkspace(name: string, options: { hostSession?: boolean
 
   // §4.2 the explicit inventory: every root and every evidence pointer.
   writeInventory(fixture, {
-    // The host-session row is declared only by the case that pins the
-    // producer/substrate digest-domain disagreement; the coverage flow itself
-    // runs without it (see the report).
-    hostSessions:
-      options.hostSession === true
-        ? [{ workflowId, host: "omp", sessionId: PRODUCER_SESSION, envelope: hostEnvelopePath, attestation: coverageAttestationPath }]
-        : [],
+    hostSessions: [
+      { workflowId, host: "omp", sessionId: PRODUCER_SESSION, envelope: hostEnvelopePath, attestation: coverageAttestationPath },
+    ],
     sddEvidence: [{ workflowId, path: sddPath }],
     injectors: [injectorPath],
     injectorInventory: injectorInventoryPath,
@@ -2727,6 +2723,10 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     expect(manifest.roots.control).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.surfaces.length).toBeGreaterThan(0);
     expect(manifest.surfaces.find((row) => row.surface === "artifact-store-injectors")?.consumerProof).toBeUndefined();
+    const hiddenRow = manifest.surfaces.find((row) => row.surface === "omp-hidden-entries" && row.workflowId === fixture.workflowId)!;
+    expect(hiddenRow.sources.map((witness) => witness.path)).toEqual(["host-sessions/producer.json"]);
+    expect(hiddenRow.hostProof).toMatchObject({ sessions: [{ host: "omp", sessionId: PRODUCER_SESSION }] });
+    expect(hiddenRow.sources[0]!.sha256).toBe(PRODUCER_ENVELOPE_SHA);
 
     const coverage = await coverageOf(fixture, manifest);
     expect(coverage.manifestId).toBe(manifest.id);
@@ -2737,6 +2737,11 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
       expect(receipt.sources).toEqual(row.sources);
     }
     expect(coverage.receipts.find((receipt) => receipt.surface === "workflow-notes-ledger")!.disposition).toBe("retain");
+    expect(coverage.receipts.find((receipt) => receipt.surface === "omp-hidden-entries")!).toMatchObject({
+      disposition: "retain",
+      protocol: "omp-hidden-v1",
+      workflowId: PRODUCER_WORKFLOW,
+    });
     const terminalEnvelopeReceipt = coverage.receipts.find(
       (receipt) => receipt.surface === "workflow-session-envelopes" && receipt.workflowId === TERMINAL_WORKFLOW,
     )!;
@@ -2793,38 +2798,47 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     expect(readFileSync(fixture.sddPath, "utf8")).toContain("populated workflow report");
   });
 
-  test("Phase 2b pins the host-envelope digest-domain disagreement with the real producer bytes", async () => {
+  test("Phase 2b closes the host-inventory row against the real producer bytes", async () => {
     // The `omp-hidden-entries` row is built from bytes the real H2 producer
-    // (`packages/omp/src/execution-host-inventory.ts`) emits, and the row's
-    // witness and proof are the producer's own. Closing it through C2 exposes a
-    // BLOCKING cross-package disagreement of exactly one byte: H2's
-    // `historyExportDigest` hashes `exportExecutionHostHistory(document)` - the
-    // canonical form INCLUDING its one terminal LF - while C2's `hiddenCodec`
-    // recomputes over `serializeExecutionValue(document).slice(0, -1)`, i.e. the
-    // same bytes WITHOUT that LF. C3 reports it, changes neither side and never
-    // writes an envelope that satisfies the other side by hand.
-    const fixture = await populatedWorkspace("c3-host-digest-domain", { hostSession: true });
+    // (`packages/omp/src/execution-host-inventory.ts`) emits, and the closed
+    // substrate decodes those bytes UNCHANGED: `export.sha256` covers the
+    // canonical serialization of the embedded document with the exporter's
+    // framing LF excluded (contract section 4.2, one rule), while the envelope's
+    // own digest covers the bytes as delivered.
+    const fixture = await populatedWorkspace("c3-host-interop");
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-host-preview"));
     const row = manifest.surfaces.find((candidate) => candidate.surface === "omp-hidden-entries")!;
-    expect(row.sources.map((witness) => witness.path)).toEqual(["host/host-sessions/producer.json"]);
+    expect(row.sources.map((witness) => witness.path)).toEqual(["host-sessions/producer.json"]);
     expect(row.hostProof).toMatchObject({ sessions: [{ host: "omp", sessionId: PRODUCER_SESSION }] });
     expect(row.hostProof!.sessions[0]!.source.sha256).toBe(PRODUCER_ENVELOPE_SHA);
     expect(row.hostProof!.attestation.sha256).toBe(sha256OfBytes(readFileSync(fixture.coverageAttestationPath)));
 
-    // The producer's own rule, recomputed here from its real bytes: the recorded
-    // digest IS the digest of the exporter's bytes including the terminal LF.
+    // The producer's own bytes, recomputed here: the envelope file digest covers
+    // the delivered bytes; the embedded digest covers the export without the
+    // framing LF that the canonical serializer appends.
+    expect(sha256OfBytes(readFileSync(fixture.hostEnvelopePath))).toBe(PRODUCER_ENVELOPE_SHA);
     const envelope = JSON.parse(PRODUCER_ENVELOPE) as { export: { sha256: string; document: unknown } };
     const exported = serializeExecutionValue(envelope.export.document);
-    const withLf = sha256OfBytes(Buffer.from(exported, "utf8"));
-    const withoutLf = sha256OfBytes(Buffer.from(exported.slice(0, -1), "utf8"));
-    expect(envelope.export.sha256).toBe(withLf);
-    expect(envelope.export.sha256).not.toBe(withoutLf);
+    expect(envelope.export.sha256).toBe(sha256OfBytes(Buffer.from(exported.slice(0, -1), "utf8")));
+    expect(envelope.export.sha256).not.toBe(sha256OfBytes(Buffer.from(exported, "utf8")));
 
-    // ...and the reviewed substrate reads the other domain, so the row refuses.
-    const refusal = await refusalOf(async () => coverageOf(fixture, manifest));
+    // ...and the row closes through the closed substrate.
+    const coverage = await coverageOf(fixture, manifest);
+    const receipt = coverage.receipts.find((candidate) => candidate.surface === "omp-hidden-entries")!;
+    expect(receipt).toMatchObject({ disposition: "retain", protocol: "omp-hidden-v1", workflowId: PRODUCER_WORKFLOW });
+    expect(receipt.sources).toEqual([{ root: "host", path: "host-sessions/producer.json", sha256: PRODUCER_ENVELOPE_SHA }]);
+    expect(receipt.evidence).toEqual([
+      { root: "host", path: "attestation.json", sha256: sha256OfBytes(readFileSync(fixture.coverageAttestationPath)) },
+    ]);
+
+    // ONE byte of the producer's payload and the closed comparison refuses: the
+    // embedded export digest is recomputed from the bytes, never carried on
+    // trust.
+    writeFileSync(fixture.hostEnvelopePath, PRODUCER_ENVELOPE.replace('"action":"arm"', '"action":"arm!"'));
+    const mutated = await previewExecutionMigration(migrationInput(fixture, "op-host-mutated-preview"));
+    const refusal = await refusalOf(async () => coverageOf(fixture, mutated));
     expect(refusal.code).toBe("execution.coverage-incomplete");
     expect(refusal.message).toContain("export.sha256");
-    expect(refusal.message).toContain("without the trailing LF");
   });
 
   test("Phase 2b refuses a present agent-flow compaction journal before any receipt", async () => {
@@ -2883,7 +2897,9 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     );
     expect(drifted.code).toBe("execution.migration-conflict");
     expect(storeFootprint(fixture.dbPath)).toEqual(staged);
-    expect(authorityOf(fixture.dbPath).authority_state).toBe("legacy");
+    // The EXECUTION authority never left `legacy`: a refused staging attempt
+    // writes nothing at all.
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("legacy");
   });
 
   test("Phase 2b replay preserves issue/catalog state and the archive identity", async () => {
@@ -3023,10 +3039,29 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
   /** §4.2 a fixture consumer package whose declaration is written in the shape the reviewed substrate decodes. */
   async function consumerWorkspace(name: string): Promise<ConsumerFixture> {
     const fixture = workspace(name);
-    // The migration route opens the store; a fixture without one refuses
-    // `store.not-initialized` before any discovery can run.
+    // The migration route opens the store AND reads the v2 root register, so the
+    // fixture carries both: a store and one registered workflow dir.
     const handle = await initializeStore(fixture.context);
     handle.close();
+    const workflowId = "20260921-consumer-fixture";
+    const workflowDir = join(fixture.harness, "workflows", workflowId);
+    writeJson(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), {
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-01",
+      updated_at: "2026-09-02",
+      delivery_kind: "development",
+      project: "_default",
+      branch: { source: `feature/${workflowId}`, target: "main" },
+      plans: [{ id: `${workflowId}-plan`, title: "Consumer fixture plan", file: "plans/consumer.md", status: "Todo", metadata: {} }],
+    });
+    writeJson(join(fixture.harness, "status.json"), {
+      version: 2,
+      updated_at: ROOT_UPDATED_AT,
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-01", dir: join("workflows", workflowId) }],
+    });
     const packageRoot = join(fixture.root, "packages", "cli");
     const sourceRoot = join(packageRoot, "src");
     const generatedRoot = join(packageRoot, "dist");
@@ -3125,10 +3160,12 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
       { root: "package", path: "packages/cli/execution-consumer/cli.json", sha256: sha256OfBytes(readFileSync(fixture.manifestPath)) },
     ]);
 
-    // ONE changed source byte and the declared closure no longer holds.
+    // ONE changed source byte and the declared closure no longer holds: the
+    // frozen manifest no longer describes the discovered world (a conflict, the
+    // same verdict `apply` gives for source drift).
     writeText(join(fixture.sourceRoot, "index.ts"), "export const index = 2;");
     const drift = await refusalOf(async () => coverageOf(fixture, manifest));
-    expect(drift.code).toBe("execution.coverage-incomplete");
+    expect(drift.code).toBe("execution.migration-conflict");
     expect(drift.message).toContain("surface discovery no longer holds the reviewed bytes");
 
     // Re-discovering the drifted tree still refuses: the proof is recomputed

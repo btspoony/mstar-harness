@@ -2168,16 +2168,17 @@ export async function collectExecutionCoverage(input: ExecutionMigrationCoverage
   if (canonicalPath(manifest.root) !== root) {
     throw conflict(`the manifest was reviewed for control root ${manifest.root}, not ${root}; nothing was collected.`);
   }
-  if (canonicalPath(input.inventoryPath) !== canonicalPath(resolved.inventoryPath)) {
-    throw conflict("the coverage request carries two different inventory paths; one request names one discovery.");
-  }
-  if (resolved.inventoryPath === undefined) {
+  // `resolveMigrationInput` hands the same request back, so the one inventory
+  // path it names is the discovery scope - and it must be named for coverage:
+  // a control-root-only manifest has no non-control evidence to collect.
+  const inventoryPath = resolved.inventoryPath;
+  if (inventoryPath === undefined) {
     throw conflict(
       "coverage collection requires the explicit inventory path: a manifest reviewed under a control-root-only scope has no non-control " +
         "evidence to collect, and re-previewing with the inventory is the only way to cover those surfaces.",
     );
   }
-  const discovered = discoverExecutionSources(resolved.context, { inventoryPath: resolved.inventoryPath });
+  const discovered = discoverExecutionSources(resolved.context, { inventoryPath });
   return coverageFromDiscovery({ discovered, manifest, manifestHash: executionManifestHash(manifest) }).set;
 }
 
