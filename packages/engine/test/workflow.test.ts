@@ -2213,6 +2213,27 @@ describe("standalone-completion-shape", () => {
     expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, violations: [] });
   });
 
+  test("refuses completed report-only integration contamination", () => {
+    const contaminated = [
+      { integration_worktree_path: "/tmp/integration" },
+      { branch: { integration: "integration/fixture" } },
+      { plans: [ { ...standaloneCompletedRow(), coordination: {
+        ...standaloneCompletedRow().coordination,
+        handoff: { ...(standaloneCompletedRow().coordination as Record<string, unknown>).handoff, integration: {} },
+      } } ] },
+    ];
+    for (const overrides of contaminated) {
+      const snapshot = standaloneSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: "acceptance report",
+        branch: undefined,
+        delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
+        ...overrides,
+      });
+      expect(validateWorkflowSnapshot(snapshot).ok).toBe(false);
+    }
+  });
+
   test("refuses the same completed shape on the iteration route", () => {
     const snapshot = validSnapshot({
       type: "iteration",

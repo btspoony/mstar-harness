@@ -245,13 +245,41 @@ export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): Ro
 
 function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
   const violations: ValidationResult[] = [];
-  const standalone =
-    isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
   if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
   const coordination = row.coordination;
   if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
   const handoff = coordination.handoff as Record<string, unknown>;
-  if (handoff.state !== "completed" || handoff.integration !== undefined) return violations;
+  if (handoff.state !== "completed") return violations;
+  if (handoff.integration !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone completed handoff must not carry integration for row ${String(row.id)}`,
+      ),
+    );
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    if (snapshot.integration_worktree_path !== undefined) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry integration_worktree_path",
+        ),
+      );
+    }
+    if (isNonEmptyString(snapshot.branch?.integration)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry branch.integration",
+        ),
+      );
+    }
+  }
   if (row.status !== "Done") {
     violations.push(
       violation(
