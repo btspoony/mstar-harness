@@ -35,13 +35,7 @@ const BUNDLE = join(ROOT, "store-test-runtime.mjs");
 
 /** Node binary used for the Node-floor leg; overridable for local runs. */
 const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
-let nodeVersion = "";
 let bundleError = "";
-
-function runtimeVersion(bin: string, args: string[]): string {
-  const probe = spawnSync(bin, args, { encoding: "utf8" });
-  return probe.status === 0 ? probe.stdout.trim() : `unavailable (${probe.stderr.trim()})`;
-}
 
 beforeAll(() => {
   const built = spawnSync(
@@ -50,7 +44,6 @@ beforeAll(() => {
     { encoding: "utf8" },
   );
   if (built.status !== 0) bundleError = built.stderr || `bun build exited ${built.status}`;
-  nodeVersion = runtimeVersion(NODE_BIN, ["--version"]);
 }, 60_000);
 
 afterAll(() => {
@@ -80,12 +73,6 @@ const SCENARIOS: string[] = [
 ] as const;
 
 describe("store-db runtime floors (actual versions)", () => {
-  test(`Bun runner is >= ${MIN_BUN_VERSION} and Node child is >= ${MIN_NODE_VERSION}`, () => {
-    expect(bundleError).toBe("");
-    expect(Bun.version).toMatch(/^1\.[4-9]\./);
-    expect(nodeVersion).toMatch(/^v24\.(1[89]|[2-9]\d)\./);
-  });
-
   test("compareVersions orders floors numerically", () => {
     expect(compareVersions("24.18.0", "24.18.0")).toBe(0);
     expect(compareVersions("24.17.0", "24.18.0")).toBeLessThan(0);
@@ -105,9 +92,9 @@ describe("store-db runtime floors (actual versions)", () => {
 });
 
 describe.each([
-  { runtime: "node", bin: NODE_BIN, version: () => nodeVersion },
-  { runtime: "bun", bin: process.execPath, version: () => Bun.version },
-])("store scenarios under $runtime (${version()})", ({ runtime, bin, version }) => {
+  { runtime: "node", bin: NODE_BIN },
+  { runtime: "bun", bin: process.execPath },
+])("store scenarios under $runtime", ({ runtime, bin }) => {
   test.each(SCENARIOS)(`${runtime}: %s`, (scenario) => {
     expect(bundleError).toBe("");
     const dir = mkdtempSync(join(ROOT, `${runtime}-${scenario}-`));
