@@ -26,7 +26,7 @@ Phase 2–5 共享内容（PM invariants、assignment preflight、session todos�
 | 调用形态 | 走向 |
 |---|---|
 | **无参数** | 下方 Boot → Phase 2 → 3 → 4 → 5 → 6（**语义不变**） |
-| `--assignment <绝对 md 路径>` / `--workflow <id> --plan <id>` / `--resume <绝对 session json 路径>` | **scoped route** → **`mstar-iteration/references/plan-scoped-pm.md`**（scoped boot 先于全局 boot；不加载 compound / Phase 3–6 detail） |
+| `--assignment <绝对 md 路径>` / `--workflow <id> --plan <id>` / `--resume <绝对 session json 路径>` | **scoped route** → **`mstar-iteration/references/plan-scoped-pm.md`**（scoped boot 先于全局 boot；不加载 compound / Phase 3–6 detail）。`--resume` 是 **pre-activation** 文件形态：执行 authority 为 active 的 harness 上它以 `execution.consumer-not-ready` 拒绝，本会话的只读续接改走 `mstar plan bind --execution --resume-ref <wire>` |
 | 其他任何非空参数形态（重复 flag、未知 flag、位置参数、缺值/空值、混用形态、半对 `--workflow`/`--plan`） | **fail closed**：在 bind 与 boot 之前停止并报告接受的形态；**禁止**回落为整迭代路线 |
 
 **Leaf 边界**：leaf executor 收到本命令 → 角色边界拒绝（`mstar-dispatch-gates`），**不得**晋升为 PM 或递归分派。

@@ -31,10 +31,12 @@ import {
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
   setCompleteWitnessGapForTest,
+  setReconcileWitnessGapForTest,
   withExecutionPlanAuthority,
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
+import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -1751,7 +1753,7 @@ type Seat = { caller: ExecutionCaller; session: ExecutionSessionRef };
  * standalone workflow with delivery anchors only; `integration` carries the
  * integration branch and checkout every iteration attempt is proven against.
  */
-type LifecycleRoute = "development" | "integration";
+type LifecycleRoute = "development" | "integration" | "report-only";
 
 type LifecycleFixture = LiveFixture & {
   route: LifecycleRoute;
@@ -1781,7 +1783,7 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
-  const planIds = route === "development" ? [OWN_PLAN] : [OWN_PLAN, PEER_PLAN];
+  const planIds = route === "integration" ? [OWN_PLAN, PEER_PLAN] : [OWN_PLAN];
   for (const planId of planIds) await registerPlan(context, planId);
 
   // The plan's own branch and checkout: the source_sha a handoff pins is this
@@ -1794,10 +1796,11 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
   const featureSha = headOf(featurePath);
   const baseSha = headOf(repoRoot);
   const integrationPath = join(repoRoot, "wt-integration");
-  const branch: Record<string, string> = { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
+  const branch: Record<string, string> | undefined =
+    route === "report-only" ? undefined : { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
   if (route === "integration") {
     runGit(["worktree", "add", "-q", "-b", `integration/${OWN_PLAN}`, integrationPath], repoRoot);
-    branch.integration = `integration/${OWN_PLAN}`;
+    branch!.integration = `integration/${OWN_PLAN}`;
   }
 
   const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator", null);
@@ -1810,9 +1813,10 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
       status: "running",
       started_at: TS,
       updated_at: TS,
-      delivery_kind: "development",
-      branch,
-      ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}),
+      delivery_kind: route === "report-only" ? "verification/report-only" : "development",
+      ...(route === "report-only"
+        ? { completion_policy: "acceptance report" }
+        : { branch, ...(route === "integration" ? { integration_worktree_path: integrationPath } : {}) }),
       plans: planIds.map((planId) => ({
         id: planId,
         title: `${planId} title`,
@@ -1858,6 +1862,17 @@ async function lifecycleFixture(label: string, route: LifecycleRoute): Promise<L
     evidence: { [OWN_PLAN]: planEvidenceOf(harnessRoot, OWN_PLAN) },
     seat: undefined as unknown as Seat,
   } as LifecycleFixture;
+  if (route === "report-only") {
+    const workflowState = (await readExecutionState(context)).data.workflows.find((candidate) => candidate.state.id === WORKFLOW_ID);
+    if (workflowState === undefined) throw new Error("fixture: workflow is not registered");
+    await mutateExecutionWorkflow(domainContext(context, coordinatorCaller), {
+      operationId: `delivery-${label}`,
+      session: fixture.coordinator,
+      expected: workflowState.workflowToken,
+      workflowId: WORKFLOW_ID,
+      operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } },
+    });
+  }
   await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
     operationId: `prepare-${label}`,
     session: fixture.coordinator,
@@ -2516,6 +2531,184 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     expect(
       parsedJson(rows(standalone.context, "select state_json from execution_workflows")[0]!.state_json).status,
     ).toBe("running");
+  });
+
+  test("report-only completion uses matching policy evidence, releases only its own lease, and reconciles completed state", async () => {
+    const fixture = await lifecycleFixture("complete-report-only", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    expect(done.data.coordination!.handoff!.state).toBe("completed");
+    expect(done.data.coordination!.handoff!.integration).toBeUndefined();
+    expect(done.data.executionLease).toMatchObject({ status: "released", released_by: COORDINATOR_ID });
+    expect(done.data.integrationLease).toBeNull();
+    const completedAt = done.data.coordination!.handoff!.completed_at;
+    const state = planStateFootprint(fixture.context, OWN_PLAN);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    const replay = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only", {
+      kind: "reconcile",
+      handoffId,
+    }, token);
+    expect(replay.data.plan.status).toBe("Done");
+    expect(replay.data.coordination!.handoff!.completed_at).toBe(completedAt);
+    expect(replay.data.executionLease).toMatchObject({ status: "released" });
+    expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual({
+      ...state,
+      plan_revision: Number(state.plan_revision) + 1,
+    });
+    const exact = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only", {
+      kind: "reconcile",
+      handoffId,
+    }, token);
+    expect(exact.replayed).toBe(true);
+  });
+
+  test("report-only completion rechecks policy at the transaction boundary and preserves rejected state", async () => {
+    const fixture = await lifecycleFixture("complete-report-only-drift", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-drift");
+    const before = planStateFootprint(fixture.context, OWN_PLAN);
+    // The SELF-CONSISTENT rewrite: both the registered policy and the fulfilment
+    // record it is compared against move together, so a rule that only checks the
+    // pair against itself would commit. The pinned policy refuses instead.
+    setCompleteWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+        const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
+        snapshot.completion_policy = "changed policy";
+        snapshot.delivery = { completion: { policy: "changed policy", evidence: "acceptance.md" } };
+        db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() => planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-drift", {
+        kind: "complete",
+        handoffId,
+      }));
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(String(refusal.message)).toContain("completion policy pinned");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(before);
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  });
+
+  test("report-only completion refuses a delivery route changed after its preflight", async () => {
+    const fixture = await lifecycleFixture("complete-report-only-route", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-route");
+    const before = planStateFootprint(fixture.context, OWN_PLAN);
+    setCompleteWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+        const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
+        snapshot.delivery_kind = "development";
+        snapshot.branch = { base: "main", source: `feature/${OWN_PLAN}`, target: "main" };
+        delete snapshot.completion_policy;
+        delete snapshot.delivery;
+        db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() => planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-route", {
+        kind: "complete",
+        handoffId,
+      }));
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(before);
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  });
+
+  test("a completed report-only reconcile revalidates the pinned QC/QA digests inside its transaction", async () => {
+    const fixture = await lifecycleFixture("reconcile-report-only-digests", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-digests");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-digests", {
+      kind: "complete",
+      handoffId,
+    });
+    const completedAt = done.data.coordination!.handoff!.completed_at;
+    const state = planStateFootprint(fixture.context, OWN_PLAN);
+    const footprint = planFootprint(fixture.context, OWN_PLAN);
+    // The report is rewritten AFTER the replay's own preflight read, so only the
+    // transaction's re-read of the pinned digests can see it: the plan token and
+    // the workflow header are both unchanged in this window.
+    setReconcileWitnessGapForTest(() => {
+      writeText(fixture.evidence[OWN_PLAN]!.qc[1]!, "# rewritten after the replay preflight\n");
+    });
+    try {
+      const token = await planTokenOf(fixture, OWN_PLAN);
+      const refusal = await refusalOf(() =>
+        planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only-digests", {
+          kind: "reconcile",
+          handoffId,
+        }, token),
+      );
+      expect(refusal.code).toBe("coordination.evidence-stale");
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(state);
+      expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(footprint);
+      expect(parsedJson(state.plan_coordination).handoff).toMatchObject({ state: "completed", completed_at: completedAt });
+    } finally {
+      setReconcileWitnessGapForTest(undefined);
+    }
+  });
+
+  test("a completed report-only reconcile refuses a stored handoff state rewritten after its preflight", async () => {
+    const fixture = await lifecycleFixture("reconcile-report-only-state", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-state");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-state", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+    const before = planFootprint(fixture.context, OWN_PLAN);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    // The classification sees `completed`; the block is then rewritten into an
+    // adopted-but-uncompleted state with NO revision change, so the plan token
+    // cannot see it and only the transaction's own re-read of the stored handoff
+    // can. Without that re-read the replay would apply the completed decision to
+    // an accepted handoff.
+    let corrupted: Record<string, unknown> | undefined;
+    let corruptedState: Record<string, unknown> | undefined;
+    setReconcileWitnessGapForTest(() => {
+      withRaw(fixture.context, (db) => {
+        const row = db.prepare("select coordination_json from execution_plans where plan_id = ?").get(OWN_PLAN) as {
+          coordination_json: string;
+        };
+        const coordination = JSON.parse(row.coordination_json) as Record<string, unknown>;
+        coordination.handoff = { ...(coordination.handoff as Record<string, unknown>), state: "accepted" };
+        db.prepare("update execution_plans set coordination_json = ? where plan_id = ?").run(
+          JSON.stringify(coordination),
+          OWN_PLAN,
+        );
+      });
+      corrupted = planFootprint(fixture.context, OWN_PLAN);
+      corruptedState = planStateFootprint(fixture.context, OWN_PLAN);
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-report-only-state", {
+          kind: "reconcile",
+          handoffId,
+        }, token),
+      );
+      expect(refusal.code).toBe("coordination.invalid-transition");
+      expect(String(refusal.message)).toContain("requires completed");
+      // The rewrite really left an uncompleted stored handoff on a Done row, and
+      // itself moved no CAS and no receipt.
+      expect(parsedJson(corruptedState!.plan_coordination).handoff).toMatchObject({ state: "accepted" });
+      expect(parsedJson(corruptedState!.plan_state).status).toBe("Done");
+      expect(corrupted!.plan_revision).toBe(before.plan_revision);
+      expect(corrupted!.operations).toBe(before.operations);
+      // The rejection moved nothing at all: the frame rolled back onto exactly
+      // the state it was refused on.
+      expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(corrupted);
+      expect(planStateFootprint(fixture.context, OWN_PLAN)).toEqual(corruptedState);
+    } finally {
+      setReconcileWitnessGapForTest(undefined);
+    }
   });
 
   test("an integration branch moved between the completion proof and its commit refuses with no DB mutation", async () => {

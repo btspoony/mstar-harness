@@ -1,0 +1,476 @@
+{
+  "version": 1,
+  "protocol": "consumer-v1",
+  "repoRoot": ".",
+  "consumers": [
+    {
+      "id": "cli",
+      "packageRoot": "packages/cli",
+      "capability": "writer",
+      "capabilityNote": null,
+      "entrypoint": "packages/cli/dist/mstar-harness.js",
+      "runtime": {
+        "target": "node",
+        "floor": ">=24.18.0",
+        "declaration": "package-engines"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "packages/cli/scripts",
+            "files": 1,
+            "sha256": "68066f1234deaeff1d6ecd50cdd9c4b1a1705db7cac9cfd6cbcaaaf59e2f7d67"
+          },
+          {
+            "root": "packages/cli/src",
+            "files": 35,
+            "sha256": "87135ffa166c06e5fe73aef71beee8187b795332ba0f26a54f9b06a8b1dd9eb3"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/cli/package.json",
+            "sha256": "c5469d5de3bf6f735cbd9d0f8bc55f4ca72737c703e43da7a4c3597efe7e1d36"
+          },
+          {
+            "path": "packages/cli/tsconfig.json",
+            "sha256": "c45561d9fec41d0dc1150d98ed7e678296b00449077e954ef08b60e251247f1f"
+          },
+          {
+            "path": "scripts/ascii-literal-utils.ts",
+            "sha256": "744c558af7350cc8d3e6d8d1294be6b35dfa69369b8c992bf1560b6fa9a4e563"
+          },
+          {
+            "path": "scripts/escape-dist-literals.ts",
+            "sha256": "853f4c419c94115baf560fb109434928a542b4891b7734f896371955bf8bbd80"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [
+          {
+            "root": "packages/cli/dist",
+            "files": 1,
+            "sha256": "ed7b08dee3e59ffc96ccb2da57c05f2ef66ea14369a5bb8f478a03d4b49a9135"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/cli/dist/mstar-harness.js",
+            "sha256": "a6bc0e727278c4569d5dde7bba5fa229ad4b7c587dfc30d40c700a9b50d4c0b7"
+          }
+        ]
+      },
+      "copiedInstructions": []
+    },
+    {
+      "id": "dsh",
+      "packageRoot": "packages/dsh",
+      "capability": "writer",
+      "capabilityNote": null,
+      "entrypoint": "packages/dsh/dist/index.js",
+      "runtime": {
+        "target": "bun",
+        "floor": ">=1.4.0",
+        "declaration": "package-engines"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "packages/dsh/scripts",
+            "files": 2,
+            "sha256": "53867112989cb6f4a80710e396cf2af699dd407e044be92377a20f73965c52f4"
+          },
+          {
+            "root": "packages/dsh/src",
+            "files": 61,
+            "sha256": "ad983a6e457824f8506e84bef4dbaf955785ae0e7894a7ed73eb7b8975a561cf"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/dsh/package.json",
+            "sha256": "90fbdd170ca9630431af7570cfdbd7a2b8a381e495554f5cfd00f29e8ab62918"
+          },
+          {
+            "path": "packages/dsh/tsconfig.json",
+            "sha256": "dcc19c596325c422086479f3df5d97c51d792f7b5b5ed3546cb5c5763e5c44b5"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [
+          {
+            "root": "packages/dsh/dist",
+            "files": 60,
+            "sha256": "8579fe18bcd0e6af374fdb6296acbe1c00d6a07f033798d30c2874edd9b68273"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/dsh/dist/client.js",
+            "sha256": "3763e7c0294b69f0e3b42fa94748ee2bd73cf69abfb2d83cec7238231d24731f"
+          },
+          {
+            "path": "packages/dsh/dist/index.js",
+            "sha256": "86512249341da255607ad189daf0a680345bbea3deca4e5cd0571500668588a1"
+          },
+          {
+            "path": "packages/dsh/dist/invariant.js",
+            "sha256": "dca7971889aa3093f68a4ca2be67976c555cff88633747d9119f00f75832efa9"
+          }
+        ]
+      },
+      "copiedInstructions": [
+        {
+          "sourceRoot": "agents",
+          "targetRoot": "packages/dsh/harness-agents",
+          "mode": "copy",
+          "files": 13,
+          "sha256": "3be3505d21514911d19bc626309fa471cb7e8ab30781ee06c13d30801540caec"
+        },
+        {
+          "sourceRoot": "commands",
+          "targetRoot": "packages/dsh/harness-commands",
+          "mode": "copy",
+          "files": 6,
+          "sha256": "1b0ee121159ae2b955f34fb89079fcba0ef0643222f8fdb85427071a5f9a1277"
+        },
+        {
+          "sourceRoot": "skills",
+          "targetRoot": "packages/dsh/harness-skills",
+          "mode": "copy",
+          "files": 122,
+          "sha256": "e48e501a037069a18dcc5c3a4ba3c5303c27f5762e1a015141b9e1387ae3aff8"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "packageRoot": "packages/engine",
+      "capability": "writer",
+      "capabilityNote": null,
+      "entrypoint": "packages/engine/dist/engine.js",
+      "runtime": {
+        "target": "node",
+        "floor": ">=24.18.0",
+        "declaration": "package-engines"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "packages/engine/src",
+            "files": 78,
+            "sha256": "f04cc80f9975569a8b7b3ff916d6b94649bbbe09c2176177ab023fc61e28822d"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/engine/package.json",
+            "sha256": "c92a565fed574ed2646298e52c1478bb27c397241c8f26572a3fabe7c6d7c830"
+          },
+          {
+            "path": "packages/engine/tsconfig.json",
+            "sha256": "b4aa798afbc27ed0d48a7d9e0c6720222f9f6cbdffe6de73546a0ddb0e9760c1"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [
+          {
+            "root": "packages/engine/dist",
+            "files": 80,
+            "sha256": "a3f81eb8fb37048e1d7afaeca9cb539af7832331045bc4a956daa9c3f21fd923"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/engine/dist/audit.js",
+            "sha256": "ff4a21aa424a667e6a2792489eae317abde6f12383fe5b67d461abc94b82b0ad"
+          },
+          {
+            "path": "packages/engine/dist/engine.js",
+            "sha256": "ac79e61117e14ff4d74fd81f3d0155e031155f972dfd07d30547f1d842727b08"
+          }
+        ]
+      },
+      "copiedInstructions": []
+    },
+    {
+      "id": "omp",
+      "packageRoot": "packages/omp",
+      "capability": "writer",
+      "capabilityNote": null,
+      "entrypoint": "packages/omp/dist/hooks/pre/mstar-gates.js",
+      "runtime": {
+        "target": "bun",
+        "floor": ">=1.4.0",
+        "declaration": "package-engines"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "packages/omp/scripts",
+            "files": 1,
+            "sha256": "edffdace7c760ad698ef4dd732462e12f36d4a96d22518704827b9c9ea1f3edf"
+          },
+          {
+            "root": "packages/omp/src",
+            "files": 17,
+            "sha256": "1107d946ee771d43e55c6735a2ec21eee966c3313645475e227a96edfd5c8bd1"
+          }
+        ],
+        "files": [
+          {
+            "path": ".omp-plugin/plugin.json",
+            "sha256": "00781e81aa521767bd5f3483dd066d24f2634476d346dc335a1b04783e5c90bb"
+          },
+          {
+            "path": "packages/omp/package.json",
+            "sha256": "b97b1d80ed22ccfca73904fce3a9686eb4a2e0adf54192010628fbfe73a884ff"
+          },
+          {
+            "path": "packages/omp/tsconfig.json",
+            "sha256": "d16db5d375ab7249b6d0a6a1a0bf70883d5882ff2f93985a298f80e1d9b624a1"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [
+          {
+            "root": "packages/omp/dist",
+            "files": 9,
+            "sha256": "e48151c9110f783f0d2b5fe15ee669a3993f2a959f2bd9026c5d76ef91f9cb64"
+          },
+          {
+            "root": "packages/omp/extensions",
+            "files": 2,
+            "sha256": "ff1f36c556df3482ac9645e75edfddaebb798b7132dc5b343c97c499b671ce12"
+          },
+          {
+            "root": "packages/omp/hooks",
+            "files": 1,
+            "sha256": "c6476d98afa7a289fa8a61959424f24f83c8f85ab3079dbc1ea0a4dc0544e2aa"
+          },
+          {
+            "root": "packages/omp/tools",
+            "files": 6,
+            "sha256": "f95aef05a10001a7d1599d7fac9ce0053b23a14fd58601b2ff116b32900a7826"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/omp/dist/extensions/model-handoff.js",
+            "sha256": "1ea2543e642ad37ba95a74e37835ae3c5f951afd9f6338b1c05c4ac0e6148ccb"
+          },
+          {
+            "path": "packages/omp/dist/extensions/phase2-orchestration.js",
+            "sha256": "0f3084ec7e38ccd42b8436c2f8e87b8bd1d8a4df963915cb3360fa694e469fea"
+          },
+          {
+            "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
+            "sha256": "8b76f6f42ed2a143c17f506142445b5af9779486c64f116e8cfcb31122f414a0"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_dispatch_validate/index.js",
+            "sha256": "2f3e98cf02d00c145c3e3b3f0559045e8ccf27717e495f6998dea5cb96688e0c"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_iteration_gate/index.js",
+            "sha256": "40b660303ec5371d30d809a95bae1d04ab1f034ef9fa0621e3a9240864eb13e9"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_lease_verify/index.js",
+            "sha256": "6aafc7662afd4fa541a601902e7fabfcc3753e06ec4becc4607b75a25a0920c4"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_path_resolve/index.js",
+            "sha256": "d6ec329575c110ec411c68c6f8eb06b6febc32b7eeef1e34f69cd67a503dc3dd"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_status_validate/index.js",
+            "sha256": "13ec1bc8b07bed8ad7210ce1b0d9ef64a60cbff4236a032fb722b0e1c042c8c9"
+          },
+          {
+            "path": "packages/omp/dist/tools/mstar_worktree_check/index.js",
+            "sha256": "787c20c2ddbea9018c618703ede896307d0b39da58f3fab6dc306d3bc99b9858"
+          },
+          {
+            "path": "packages/omp/plugin.json",
+            "sha256": "00781e81aa521767bd5f3483dd066d24f2634476d346dc335a1b04783e5c90bb"
+          }
+        ]
+      },
+      "copiedInstructions": [
+        {
+          "sourceRoot": "agents",
+          "targetRoot": "packages/omp/agents",
+          "mode": "copy",
+          "files": 13,
+          "sha256": "3be3505d21514911d19bc626309fa471cb7e8ab30781ee06c13d30801540caec"
+        },
+        {
+          "sourceRoot": "assets",
+          "targetRoot": "packages/omp/assets",
+          "mode": "copy",
+          "files": 5,
+          "sha256": "a0df17290116ea3673e55b6c170c896204572003340f39dd4b09825bca5a0497"
+        },
+        {
+          "sourceRoot": "commands",
+          "targetRoot": "packages/omp/commands",
+          "mode": "copy",
+          "files": 6,
+          "sha256": "1b0ee121159ae2b955f34fb89079fcba0ef0643222f8fdb85427071a5f9a1277"
+        },
+        {
+          "sourceRoot": "agents",
+          "targetRoot": "packages/omp/harness-agents",
+          "mode": "copy",
+          "files": 13,
+          "sha256": "3be3505d21514911d19bc626309fa471cb7e8ab30781ee06c13d30801540caec"
+        },
+        {
+          "sourceRoot": "commands",
+          "targetRoot": "packages/omp/harness-commands",
+          "mode": "copy",
+          "files": 6,
+          "sha256": "1b0ee121159ae2b955f34fb89079fcba0ef0643222f8fdb85427071a5f9a1277"
+        },
+        {
+          "sourceRoot": "skills",
+          "targetRoot": "packages/omp/harness-skills",
+          "mode": "copy",
+          "files": 122,
+          "sha256": "e48e501a037069a18dcc5c3a4ba3c5303c27f5762e1a015141b9e1387ae3aff8"
+        },
+        {
+          "sourceRoot": "skills",
+          "targetRoot": "packages/omp/skills",
+          "mode": "copy",
+          "files": 122,
+          "sha256": "e48e501a037069a18dcc5c3a4ba3c5303c27f5762e1a015141b9e1387ae3aff8"
+        }
+      ]
+    },
+    {
+      "id": "opencode",
+      "packageRoot": "packages/opencode",
+      "capability": "decision-only",
+      "capabilityNote": "OpenCode hook is log/decision-only: without native per-call session identity the writer association is refused and this consumer is excluded operationally (contract §6 H4 / S15).",
+      "entrypoint": "packages/opencode/dist/mstar.js",
+      "runtime": {
+        "target": "node",
+        "floor": ">=24.18.0",
+        "declaration": "package-engines"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "packages/opencode/scripts",
+            "files": 1,
+            "sha256": "d47f18fc66f03e99ea373571deac5ae51defa5a1fe3e656ad2a0fb4a4215aeb5"
+          },
+          {
+            "root": "packages/opencode/src",
+            "files": 1,
+            "sha256": "33f5fd64683628e99032018ef9fa915ce57d638e14300a67e57906efd2c7f5b1"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/opencode/package.json",
+            "sha256": "cb7e4d4a12c3cfbb4bbab8ae72b48f3c828e5b01c8958d0d7f6860fbefc1250f"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [
+          {
+            "root": "packages/opencode/dist",
+            "files": 1,
+            "sha256": "5052bc4ee43a7c67483314d5f33ea26194cca86c7143acecffac06214ea430d7"
+          }
+        ],
+        "files": [
+          {
+            "path": "packages/opencode/dist/mstar.js",
+            "sha256": "932b51d7062184ea864f498c3226050ed5ca7a1deb4ef0855ff2fbce580418c0"
+          }
+        ]
+      },
+      "copiedInstructions": [
+        {
+          "sourceRoot": "agents",
+          "targetRoot": "packages/opencode/harness-agents",
+          "mode": "merge",
+          "files": 13,
+          "sha256": "3be3505d21514911d19bc626309fa471cb7e8ab30781ee06c13d30801540caec"
+        },
+        {
+          "sourceRoot": "packages/opencode/agents",
+          "targetRoot": "packages/opencode/harness-agents",
+          "mode": "merge",
+          "files": 1,
+          "sha256": "1c19d7383fc8356e27391257043b712bb3a7a81e8c4c128870dd9ac3b6897db1"
+        },
+        {
+          "sourceRoot": "commands",
+          "targetRoot": "packages/opencode/harness-commands",
+          "mode": "copy",
+          "files": 6,
+          "sha256": "1b0ee121159ae2b955f34fb89079fcba0ef0643222f8fdb85427071a5f9a1277"
+        },
+        {
+          "sourceRoot": "skills",
+          "targetRoot": "packages/opencode/harness-skills",
+          "mode": "copy",
+          "files": 122,
+          "sha256": "e48e501a037069a18dcc5c3a4ba3c5303c27f5762e1a015141b9e1387ae3aff8"
+        }
+      ]
+    },
+    {
+      "id": "zcode",
+      "packageRoot": ".",
+      "capability": "writer",
+      "capabilityNote": null,
+      "entrypoint": "hooks/mstar-write-gate.mjs",
+      "runtime": {
+        "target": "node",
+        "floor": ">=24.18.0",
+        "declaration": "canonical-floor"
+      },
+      "sources": {
+        "trees": [
+          {
+            "root": "hooks/src",
+            "files": 4,
+            "sha256": "fbf84b4e1afb1ba8685cf3c19ff187f9b23a3b0fec96f16432bfaba81508c77f"
+          },
+          {
+            "root": "packages/engine/src",
+            "files": 78,
+            "sha256": "f04cc80f9975569a8b7b3ff916d6b94649bbbe09c2176177ab023fc61e28822d"
+          }
+        ],
+        "files": [
+          {
+            "path": "scripts/build-zcode-hooks.ts",
+            "sha256": "d5875218a5e6d9553ccf45e121f39c17af508e0f0cb8671a2727999dcb2268fd"
+          }
+        ]
+      },
+      "generated": {
+        "trees": [],
+        "files": [
+          {
+            "path": "hooks/mstar-write-gate.mjs",
+            "sha256": "c3427b3f3e5c2b098796478f1765f3be08922fe320c49f0c0fd157ad858cf6ee"
+          }
+        ]
+      },
+      "copiedInstructions": []
+    }
+  ]
+}

@@ -137,7 +137,13 @@ import {
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
 import { findingsCleanupGate } from "./project.js";
 import { storeDbPath } from "./store-db.js";
-import { isStandaloneDevelopmentWorkflow, rowValidationRoute, type WorkflowSnapshot } from "./workflow.js";
+import {
+  consultDeliveryEvidence,
+  isStandaloneDevelopmentWorkflow,
+  isStandaloneReportOnlyWorkflow,
+  rowValidationRoute,
+  type WorkflowSnapshot,
+} from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
 import type { PlanHandoff, RowCoordination } from "./coordination-write.js";
 import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
@@ -1723,19 +1729,80 @@ function assertStandaloneBranchIdentity(
   }
 }
 
+function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string, what: string): void {
+  const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
+  if (failure !== undefined) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires matching report-only completion evidence for ${planId}: ${failure.message}`,
+      { plan_id: planId, code: failure.code },
+    );
+  }
+}
+
+/** §E the delivery route one workflow snapshot declares, as the shared classifiers read it. */
+type DeliveryRoute = "report-only" | "development" | "integration";
+
+function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
+  if (isStandaloneReportOnlyWorkflow(snapshot)) return "report-only";
+  if (isStandaloneDevelopmentWorkflow(snapshot)) return "development";
+  return "integration";
+}
+
 /**
- * §E the standalone replay of an already completed plan (spec §E): a `Done` row
- * with no lease and no merge lease, whose completed handoff is coherent and
- * whose pinned source is still an object of a readable repository. Read-only:
- * replay resurrects no ownership and rewrites no timestamp.
+ * §4.1 the delivery route and registered completion policy a transition proved
+ * BEFORE SQLite ownership must still be the ones the transaction commits
+ * against. The plan's CAS guards the ROW; it cannot guard the workflow header,
+ * whose revision a workflow-level transition advances — so a completion that
+ * pinned report-only evidence refuses when the header moved to another route or
+ * re-registered another policy in the window, instead of judging the changed
+ * pair against itself.
  */
-function assertStandaloneCompletedReplay(
+function requirePinnedDeliveryRoute(
+  snapshot: WorkflowSnapshot,
+  pinned: { route: DeliveryRoute; completionPolicy: string | undefined },
+  planId: string,
+  what: string,
+): void {
+  const route = deliveryRouteOf(snapshot);
+  if (route !== pinned.route) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires plan ${planId} to keep the ${pinned.route} delivery route proven before the transaction \u2014 the workflow now declares ${route}`,
+      { plan_id: planId, expected: pinned.route, actual: route },
+    );
+  }
+  if (route === "report-only" && snapshot.completion_policy !== pinned.completionPolicy) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires plan ${planId} to keep the completion policy pinned before the transaction \u2014 recorded ` +
+        `${JSON.stringify(snapshot.completion_policy)}, pinned ${JSON.stringify(pinned.completionPolicy)}`,
+      { plan_id: planId, expected: pinned.completionPolicy, actual: snapshot.completion_policy },
+    );
+  }
+}
+
+/**
+ * §E the stored invariants and pinned digests of an already completed standalone
+ * plan (spec §E): a COMPLETED handoff on a `Done` row with no lease and no merge
+ * lease, whose recorded QC/QA bytes are still the ones its verdicts were sealed
+ * against. Everything here is stored state or a file read and nothing launches a
+ * process, so the reconcile transaction can re-run it at the commit boundary
+ * (§4.1). Read-only: replay resurrects no ownership and rewrites no timestamp.
+ *
+ * The state is required HERE and not only by the caller's classification: the
+ * stored handoff a replay is applied to is read again inside the transaction,
+ * and a coordination block rewritten into an accepted/merged state without a
+ * revision change would otherwise be replayed as if it were the completion the
+ * decision was made for.
+ */
+function assertCompletedReplayInvariants(
   view: ExecutionPlanView,
   snapshot: WorkflowSnapshot,
   planId: string,
   handoff: PlanHandoff,
-  harnessRoot: string,
 ): void {
+  requireHandoffState(handoff, ["completed"], planId, "reconcile");
   const plan = planRowOf(view);
   if (rowStatusOf(plan) !== "Done") {
     throw new CoordinationError(
@@ -1759,15 +1826,38 @@ function assertStandaloneCompletedReplay(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId, handoff, what: "reconcile" });
+  const route = rowValidationRoute(snapshot, plan as unknown as PlanRow);
   assertViolationFree(
     storedCoordinationViolations(
       { ...(view.coordination ?? {}) } as Record<string, unknown>,
-      { revision: view.coordination?.revision ?? 0, route: "standalone-development", sessionBound: view.session !== null, what: `plan ${planId} coordination` },
+      { revision: view.coordination?.revision ?? 0, route, sessionBound: view.session !== null, what: `plan ${planId} coordination` },
     ),
     `plan ${planId} coordination`,
   );
+  assertEvidenceDigests(handoff);
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    assertReportOnlyCompletionEvidence(snapshot, planId, "reconcile");
+    return;
+  }
   const anchors = standaloneDeliveryAnchors(snapshot, planId);
   assertStandaloneBranchIdentity(view, planId, handoff, anchors, "reconcile", false);
+}
+
+/**
+ * §E the preflight half of that replay: the same invariants plus the one read
+ * that needs a Git process — the pinned source still being an object of a
+ * readable repository. A report-only plan owns no delivery source, so its
+ * replay is the invariants alone and stays process-free.
+ */
+function assertStandaloneCompletedReplay(
+  view: ExecutionPlanView,
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+  harnessRoot: string,
+): void {
+  assertCompletedReplayInvariants(view, snapshot, planId, handoff);
+  if (isStandaloneReportOnlyWorkflow(snapshot)) return;
   const repository = proofRepository([handoff.worktree_path, planScopeOrUndefined(view, planId), harnessRoot]);
   if (repository !== undefined && !gitObjectExists(repository, handoff.source_sha)) {
     throw gitProof(`reconcile cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${planId}`, {
@@ -1849,14 +1939,22 @@ function applyCompletion(input: {
  * the completed handoff, the released execution lease and the released merge
  * lease commit together or not at all.
  *
- * The route decides which proof is required. A standalone development workflow
- * completes on its accepted handoff, its delivery anchors and a source checkout
- * that still carries the pinned commit, and refuses any integration
- * contamination. Every other route requires a MERGED attempt whose recorded
- * result is the pinned two-parent merge and is still reachable from the observed
- * integration HEAD — a standalone completion is never accepted for it, and no
- * completion of either kind is iteration integration: nothing here merges, and
- * the workflow's own terminal close is a separate transition (W6).
+ * The route decides which proof is required, and it is re-checked with the
+ * registered completion policy INSIDE the transaction, because the plan's CAS
+ * guards the row and not the workflow header:
+ *
+ * - a single-row `verification/report-only` workflow completes on its accepted
+ *   handoff plus the recorded policy's fulfilment evidence, needs no source,
+ *   integration or merge and drops only its own execution lease;
+ * - a standalone development workflow completes on its accepted handoff, its
+ *   delivery anchors and a source checkout that still carries the pinned commit;
+ * - every other route requires a MERGED attempt whose recorded result is the
+ *   pinned two-parent merge and is still reachable from the observed integration
+ *   HEAD.
+ *
+ * A report-only completion is never accepted for another route and vice versa,
+ * and no completion of any kind is iteration integration: nothing here merges,
+ * and the workflow's own terminal close is a separate transition (W6).
  *
  * §4.1/§7 the external Git read happens before SQLite ownership and the SEALED
  * Git proof it produced is re-read from the filesystem immediately before the
@@ -1869,6 +1967,16 @@ function applyCompletion(input: {
 let completeWitnessGapForTest: (() => void) | undefined;
 export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
   completeWitnessGapForTest = callback;
+}
+
+/**
+ * The same observation point for `reconcile`: its classification is a
+ * pre-transaction read too, so a regression needs to move the evidence or the
+ * header in that window.
+ */
+let reconcileWitnessGapForTest: (() => void) | undefined;
+export function setReconcileWitnessGapForTest(callback: (() => void) | undefined): void {
+  reconcileWitnessGapForTest = callback;
 }
 
 export async function completeExecutionPlan(
@@ -1885,9 +1993,20 @@ export async function completeExecutionPlan(
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "complete");
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
   const standalone = isStandaloneDevelopmentWorkflow(snapshot);
+  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
+  // §4.1 the route/policy pair this preflight proved; the transaction below
+  // re-reads the header and refuses if either moved in the window.
+  const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
   let resultSha: string | null = null;
-  let gitWitness: GitProofWitness;
-  if (standalone) {
+  let gitWitness: GitProofWitness | undefined;
+  if (reportOnly) {
+    assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
+    requireHandoffState(named, ["accepted"], planId, "complete");
+    assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
+    assertAcceptedReviewDecision(named, planId, "complete");
+    assertHandoffQaGate(named, prepared, planId, "complete");
+    assertPreparedFresh(prepared.assignment_path, prepared);
+  } else if (standalone) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     assertAcceptedReviewDecision(named, planId, "complete");
     assertHandoffQaGate(named, prepared, planId, "complete");
@@ -1895,8 +2014,6 @@ export async function completeExecutionPlan(
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
     const worktree = planScopeOf(before.data, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
-    // §7 seal the whole proof: the checkout, `HEAD`, the delivery ref, the
-    // index, every tracked path and the object inventory the proof read.
     gitWitness = captureGitProofWitness(worktree);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
@@ -1918,21 +2035,28 @@ export async function completeExecutionPlan(
     const sealed = requirePrepared(coordinationOf(witness), planId, "complete");
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "complete", { still: true });
     const committed = witnessSnapshot(witness);
-    if (isStandaloneDevelopmentWorkflow(committed)) {
+    requirePinnedDeliveryRoute(committed, pinned, planId, "complete");
+    if (isStandaloneReportOnlyWorkflow(committed)) {
+      assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
+      requireHandoffState(handoff, ["accepted"], planId, "complete");
+      assertReportOnlyCompletionEvidence(committed, planId, "complete");
+      assertAcceptedReviewDecision(handoff, planId, "complete");
+      assertHandoffQaGate(handoff, sealed, planId, "complete");
+      assertPreparedFresh(sealed.assignment_path, sealed);
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
+    } else if (isStandaloneDevelopmentWorkflow(committed)) {
       assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
       assertAcceptedReviewDecision(handoff, planId, "complete");
       assertHandoffQaGate(handoff, sealed, planId, "complete");
       assertStandaloneBranchIdentity(witness.view, planId, handoff, standaloneDeliveryAnchors(committed, planId), "complete");
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     } else {
       requireHandoffState(handoff, ["merged"], planId, "complete");
       assertMergeLeaseOwn(witness, tx, handoff, "complete");
+      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     }
     assertEvidenceDigests(handoff);
-    assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    // §7 the commit-window revalidation: every fact the sealed proof was read
-    // from must still be those bytes, so the proof commits with the row or not
-    // at all. It reads the filesystem only — no child process, no await.
-    revalidateGitProofWitness(gitWitness);
+    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -1957,7 +2081,10 @@ type ReconcileDecision =
  *   proof, complete normally (the same one-transaction delta);
  * - `completed` with a valid recorded proof is a domain no-op: replay never
  *   resurrects ownership or rewrites timestamps; the accepted operation still
- *   advances the addressed plan's CAS and records its own receipt;
+ *   advances the addressed plan's CAS and records its own receipt. A standalone
+ *   replay re-runs its stored invariants, its registered policy and its pinned
+ *   QC/QA digests inside the transaction, so a report edited in the window still
+ *   refuses;
  * - an unfinished/dirty integration checkout is `integration-unresolved`, and a
  *   moved branch, an unexpected parent graph, several matching merges or
  *   unavailable objects are `integration-diverged`.
@@ -1983,10 +2110,14 @@ export async function reconcileExecutionPlan(
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "reconcile");
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
   const repository = controlHarnessRoot(context);
+  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
+  // §4.1 the route/policy pair this classification proved; the completed replay
+  // below re-reads the header before it advances anything.
+  const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
   let decision: ReconcileDecision;
   if (named.state === "completed") {
-    if (isStandaloneDevelopmentWorkflow(snapshot)) {
-      assertStandaloneCompletedReplay(before.data, snapshot, planId, named, controlHarnessRoot(context));
+    if (deliveryRouteOf(snapshot) !== "integration") {
+      assertStandaloneCompletedReplay(before.data, snapshot, planId, named, repository);
     } else {
       const integration = requireIntegration(named, planId);
       const target = proofRepository([integration.worktree_path, named.worktree_path, repository]);
@@ -2000,6 +2131,12 @@ export async function reconcileExecutionPlan(
       assertRecordedResult(target, planId, integration, named.source_sha, head);
     }
     decision = { outcome: "already-completed" };
+  } else if (reportOnly) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `reconcile refuses report-only handoff ${named.state} for ${planId} because integration contamination is not permitted`,
+      { plan_id: planId, state: named.state },
+    );
   } else if (named.state === "integrating" || named.state === "merged") {
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
@@ -2046,6 +2183,7 @@ export async function reconcileExecutionPlan(
   if (decision.outcome !== "already-completed") {
     await assertFindingsClosed(context, planId, prepared, "complete");
   }
+  reconcileWitnessGapForTest?.();
   const requestHash = planOperationRequestHash(context.caller, "reconcile", resolved.read, resolved.call.expected, {
     handoff_id: operation.handoffId,
   });
@@ -2056,6 +2194,14 @@ export async function reconcileExecutionPlan(
       // rewritten. The accepted operation itself is not a replay — this
       // authority records it and advances the addressed plan's CAS exactly once
       // (§3.1), so its receipt and the token it returns are one operation's.
+      const committed = witnessSnapshot(witness);
+      requirePinnedDeliveryRoute(committed, pinned, planId, "reconcile");
+      if (deliveryRouteOf(committed) !== "integration") {
+        // §4.1 the replay re-runs the stored invariants and the pinned QC/QA
+        // digests here, not only before ownership: the row token cannot see a
+        // report rewritten inside the window, and neither can the header.
+        assertCompletedReplayInvariants(witness.view, committed, planId, handoff);
+      }
       advancePlanRowRevision(tx, witness);
       const settled = readExecutionPlanWitness(tx, resolved.read);
       return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };

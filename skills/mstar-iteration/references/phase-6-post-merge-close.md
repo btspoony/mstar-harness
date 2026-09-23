@@ -15,15 +15,17 @@ Ordered pipeline（HARD —— 顺序固定，禁止跳步/倒置）：
 ## §6.1 Terminal snapshot write（先写终态）
 
 ```text
-mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]
+mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> \
+  --operation <id> --reason <text> [--harness <absolute-path>] [--json]      # active (canonical)
+mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]   # pre-activation only
 ```
 
 - 引擎 `closeWorkflow`：在 snapshot 写锁内**重读最新快照** → identity/shape 校验 → 已 valid terminal 则 no-op；否则要求全部 plan 行 `Done` 且**无任何** `execution_lease` / `integration_merge_lease` → 写 `completed` + `ended_at`
 - fail-loud：dangling lease / 非 `Done` 行 / snapshot 缺失或身份不符 → exit 1，**snapshot 字节不变**（无部分写）
-- **`type: plan` 交付证据 consult**：写终态**前** engine 咨询已注册 delivery kind 的证据（`consultDeliveryEvidence`）——`development` 缺 compound 处置 / PR 身份 / 已核实合并记录（或 PR 的 `head`/`target` 不等于注册的 `branch.source`/`branch.target`），或 `verification/report-only` 缺其完成策略的履行记录 → `PHASE6_DELIVERY_*` 拒绝，snapshot 保持 `running`、根条目保持注册（字节不变、可恢复）；补齐用 `mstar workflow evidence --workflow <id> --file <payload.json> [--session <path>]`（与 close 同一 coordinator-session 门、幂等；**PR 身份一次写入**，compound/merge 可覆写）。仅 `completed` close 咨询：`failed`/`stopped` 永不要求交付证据（§5）。write path 与 read-only `mstar iteration gate --phase 6` **共享同一实现**，两侧判定不走偏
-- **kind 在注册期显式声明**（§1/§4a）：`workflow register` / `audit promote --delivery-kind`（必填）/ `migrate --delivery-kind`（会产生 ACTIVE 无 kind plan 快照却缺 flag → exit 2；声明是**一个**交付身份，故一次 lift 若产生 2+ 个 ACTIVE standalone plan 同样以 exit 2 拒绝并列出 plan id —— 分批迁移，每批单 plan 声明）——绝不推断、绝不在代码内默认；`development` 需 `--branch-source`/`--branch-target`，`verification/report-only` 需 `--completion-policy`。历史遗留在 **ACTIVE** 无 kind 快照用 `mstar workflow evidence --workflow <id> --declare-kind <kind> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]` 一次性修复（二次声明含同值一律拒绝、terminal 快照拒绝；supplied 锚只**填缺失**或与已注册锚同值复述，冲突值拒绝——已注册锚即交付身份，永不覆盖；legacy **terminal** 无 kind 死路按既有 owner amendment 路径）
+- **`type: plan` 交付证据 consult**：写终态**前** engine 咨询已注册 delivery kind 的证据（`consultDeliveryEvidence`）——`development` 缺 compound 处置 / PR 身份 / 已核实合并记录（或 PR 的 `head`/`target` 不等于注册的 `branch.source`/`branch.target`），或 `verification/report-only` 缺其完成策略的履行记录 → `PHASE6_DELIVERY_*` 拒绝，snapshot 保持 `running`、根条目保持注册（字节不变、可恢复）；补齐用 `mstar workflow evidence --workflow <id> --file <payload.json>`（active：再加 `--session-ref <wire> --expect <全执行令牌> --operation <id>`，在独立获取的身份下；pre-activation：再加 `--session <path>`；与 close 同一 authority 门、幂等；**PR 身份一次写入**，compound/merge 可覆写）。仅 `completed` close 咨询：`failed`/`stopped` 永不要求交付证据（§5）。write path 与 read-only `mstar iteration gate --phase 6` **共享同一实现**，两侧判定不走偏
+- **kind 在注册期显式声明**（§1/§4a）：`workflow register` / `audit promote --delivery-kind`（必填）/ `migrate --delivery-kind`（会产生 ACTIVE 无 kind plan 快照却缺 flag → exit 2；声明是**一个**交付身份，故一次 lift 若产生 2+ 个 ACTIVE standalone plan 同样以 exit 2 拒绝并列出 plan id —— 分批迁移，每批单 plan 声明）——绝不推断、绝不在代码内默认；`development` 需 `--branch-source`/`--branch-target`，`verification/report-only` 需 `--completion-policy`。历史遗留在 **ACTIVE** 无 kind 快照用 `mstar workflow evidence --workflow <id> --declare-kind <kind> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]` 一次性修复（**pre-activation** 重写：DB 创建路线在注册时声明 kind，故不存在 active 形态；二次声明含同值一律拒绝、terminal 快照拒绝；supplied 锚只**填缺失**或与已注册锚同值复述，冲突值拒绝——已注册锚即交付身份，永不覆盖；legacy **terminal** 无 kind 死路按既有 owner amendment 路径）
 - **禁止**为通过 close 释放 lease —— lease release 是独立的 owner 动作，close 从不释放（甚至 caller 自己的）
-- `--ended-at` 省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数
+- `--ended-at` 只属于 **pre-activation** 形态（省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数）；active 形态记录其自身时间戳，带 `--ended-at` 是 usage 拒绝
 
 ## §6.2 Unregister（removal-at-terminal）
 
@@ -50,7 +52,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 
 - cleanup **永不自动**、永不绕过 ownership / merge-evidence 守卫 —— 契约本体（ownership、合并证据、refusals、apply 顺序）唯一 home → **`mstar-branch-worktree`**「Worktree / branch cleanup」；本节只放 call site，不复制规则
 - `mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]` —— dry-run 默认，逐候选打印 `verdict | kind | ref | reason`（标志语义、默认候选范围与守卫本体见上方 owning-contract 指针）；先 dry-run 核对受保护行全部 `keep`/`refuse`，再 `--apply`
-- **lease 释放是手工 owner 动作、cleanup 范围外**：§6.1 close 已拒绝 dangling lease，但 cleanup 仍**从不**替 owner 释放——残留 lease 的候选只会得到 `cleanup.refuse.active-lease`；先手工释放，再重跑 dry-run/apply
+- **lease 释放是 owner 动作、cleanup 范围外**：§6.1 close 已拒绝 dangling lease，但 cleanup 仍**从不**替 owner 释放——残留 lease 的候选只会得到 `cleanup.refuse.active-lease`；先由 owner 经其所属 authority 的动词释放（scoped route：`mstar plan accept | return | complete` 中的合适者；整迭代路线：owner 的同轮 `Done` + 删 lease 写入），再重跑 dry-run/apply。**禁止**用手写 snapshot 代替该动词
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 
 Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
