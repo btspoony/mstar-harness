@@ -736,7 +736,7 @@ describe("execution-consumer-manifest — CLI", () => {
       "packages/engine/dist/execution-consumer.json",
       "packages/omp/dist/execution-consumer.json",
       "packages/opencode/dist/execution-consumer.json",
-      "hooks/execution-consumer.json",
+      "scripts/packaging-manifests/manifest.json",
     ]);
 
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
@@ -759,7 +759,7 @@ describe("execution-consumer-manifest — CLI", () => {
     expect(targets.map((target) => readFileSync(target, "utf8"))).toEqual(written);
 
     // A drifted copy of one manifest refuses rather than silently winning.
-    writeFileSync(join(root, "hooks/execution-consumer.json"), "{}\n");
+    writeFileSync(join(root, "scripts/packaging-manifests/manifest.json"), "{}\n");
     expect(await runExecutionConsumerManifestCli(["--repo", root, "--check"], root)).toBe(1);
 
     // Invalid JSON in every copy is a stable schema refusal, not a raw SyntaxError.
@@ -941,13 +941,15 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
 
     expect(documents.map((document) => document.consumers[0].id)).toEqual(ids);
     expect(targets.map((target) => target.consumerId)).toEqual(ids);
+    // ONE directory, named by consumer: the aggregate and the evidence
+    // documents live together under the repo-root `scripts/` tree.
     expect(targets.map((target) => relative(root, target.path))).toEqual([
-      "packages/cli/execution-consumer/cli.json",
-      "packages/dsh/execution-consumer/dsh.json",
-      "packages/engine/execution-consumer/engine.json",
-      "packages/omp/execution-consumer/omp.json",
-      "packages/opencode/execution-consumer/opencode.json",
-      "execution-consumer/zcode.json",
+      "scripts/packaging-manifests/cli.json",
+      "scripts/packaging-manifests/dsh.json",
+      "scripts/packaging-manifests/engine.json",
+      "scripts/packaging-manifests/omp.json",
+      "scripts/packaging-manifests/opencode.json",
+      "scripts/packaging-manifests/zcode.json",
     ]);
 
     for (const document of documents) {

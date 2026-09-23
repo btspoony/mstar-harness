@@ -24,8 +24,8 @@
  *    runs via `node`. It is spawned as a subprocess with real PreToolUse
  *    envelopes against a populated database fixture and against a
  *    pre-activation harness fixture.
- * 4. THE GENERATED CONSUMER MANIFESTS — `hooks/execution-consumer.json` plus
- *    every `<consumer>/execution-consumer/<id>.json` evidence document. Every
+ * 4. THE GENERATED CONSUMER MANIFESTS — `scripts/packaging-manifests/manifest.json`
+ *    plus the `<id>.json` evidence document beside it for every consumer. Every
  *    recorded digest is RE-DERIVED from the bytes on disk (declared files,
  *    source/generated trees, copied instruction trees), so a stale generated
  *    artifact, a stale copy or a hand-edited manifest fails here.
@@ -91,7 +91,7 @@ const CLI_ROOT = resolve(TEST_DIR, "..");
 const REPO = resolve(CLI_ROOT, "..", "..");
 const CLI_ENTRY = join(CLI_ROOT, "dist", "mstar-harness.js");
 const HOOK_ENTRY = join(REPO, "hooks", "mstar-write-gate.mjs");
-const MANIFEST_PATH = join(REPO, "hooks", "execution-consumer.json");
+const MANIFEST_PATH = join(REPO, "scripts", "packaging-manifests", "manifest.json");
 const MANIFEST_BASENAME = "execution-consumer.json";
 
 // The resolution above is load-bearing for EVERY manifest/artifact path in this
@@ -573,8 +573,10 @@ test("generated consumer manifests agree with the bytes on disk (all six consume
 test("per-consumer evidence documents mirror the aggregate manifest", () => {
   const manifest = readManifest();
   for (const consumer of manifest.consumers) {
-    const packageRoot = consumer.packageRoot === "." ? REPO : join(REPO, consumer.packageRoot);
-    const evidencePath = join(packageRoot, "execution-consumer", `${consumer.id}.json`);
+    // The ONE tracked verification directory: the aggregate and the evidence
+    // documents live together under `scripts/`, never in per-package
+    // `execution-consumer/` directories.
+    const evidencePath = join(REPO, "scripts", "packaging-manifests", `${consumer.id}.json`);
     assert.ok(existsSync(evidencePath), `missing evidence document for ${consumer.id}`);
     const raw = readFileSync(evidencePath, "utf8");
     assert.equal(raw.endsWith("\n"), true, `${consumer.id} evidence document has no terminal LF`);

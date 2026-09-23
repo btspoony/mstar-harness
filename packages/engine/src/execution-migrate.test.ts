@@ -3094,10 +3094,10 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     const copyEntries = referenceTreeEntries(join(fixture.root, "skills"));
     const mergeEntries = referenceTreeEntries(join(fixture.root, "agents"));
     // The producer's OWN handoff form and location
-    // (`packages/<consumer>/execution-consumer/<consumer>.json`, canonical §3.1,
-    // outside every declared tree), so the migration chain takes its evidence
-    // straight from producer bytes and never from an operator projection.
-    const manifestPath = join(packageRoot, "execution-consumer", "cli.json");
+    // (`scripts/packaging-manifests/<consumer>.json`, canonical §3.1, outside
+    // every declared tree), so the migration chain takes its evidence straight
+    // from producer bytes and never from an operator projection.
+    const manifestPath = join(fixture.root, "scripts", "packaging-manifests", "cli.json");
     writeText(
       manifestPath,
       serializeExecutionValue({
@@ -3166,7 +3166,7 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     expect(row.sources.some((witness) => witness.path.includes("host-only.md"))).toBe(false);
     // The row's evidence document IS the producer-side artifact at its own path.
     expect(row.evidence).toEqual([
-      { root: "package", path: "packages/cli/execution-consumer/cli.json", sha256: sha256OfBytes(readFileSync(fixture.manifestPath)) },
+      { root: "package", path: "scripts/packaging-manifests/cli.json", sha256: sha256OfBytes(readFileSync(fixture.manifestPath)) },
     ]);
 
     // ONE changed source byte and the declared closure no longer holds: the
