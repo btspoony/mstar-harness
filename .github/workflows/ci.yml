@@ -47,7 +47,51 @@ on:
 permissions:
   contents: read
 
+# Job layout — parallel test surfaces, ordered delivery-form gate.
+#
+# The former single `validate` job ran 25 steps sequentially under fail-fast:
+# one red step masked every later surface (a CLI test failure never revealed
+# whether dsh, the hooks tests or the pack guard would also fail) and wall clock
+# was the sum of every step.
+#
+# `validate` now keeps only the gate that is genuinely ordered and cheap (dep
+# tree, root typecheck, committed-bundle freshness, CLI smoke). Every
+# independent surface is its own job; no job declares `needs:`, so all of them
+# start together and each reports its own pass/fail — one failing surface no
+# longer cancels or hides the others.
+#
+# Every job re-runs the setup it needs (`bun install`, then
+# `bun run engine:build`) instead of waiting on a shared prerequisite job: the
+# engine dist (packages/engine/dist, gitignored) is what the
+# `@mstar-harness/engine` package export resolves to, every consumer build
+# inlines it and every consumer test imports it. That duplication is
+# deliberate — it is what buys the parallelism. No check was dropped, weakened
+# or given a different command: each `run:` line below is byte-identical to the
+# pre-split step it replaces; only the job it lives in changed.
+#
+# Invariants kept: `standalone-smoke` still runs without `bun install`;
+# `drift-lint` still checks out with `fetch-depth: 0`; `paths:` triggers and
+# `permissions: contents: read` are untouched.
+#
+# Why there is no `needs:` edge (a DAG was evaluated): wall clock = the slowest
+# job, and the slowest job is the CLI suite (~243s of tests). Its own share of
+# the duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
+# 1s each), while a shared `prepare` job would add ITS whole duration — ~40s of
+# preamble+builds, plus artifact upload/download — in front of every test job.
+# Modelled from the first run's measured job durations: independent jobs = 250s
+# wall / 11.9 runner-min; prepare + artifact handoff = 324s wall / 18.2
+# runner-min (node_modules is 1.2GB and cannot be shipped, so every job still
+# installs); `validate` as a gate = 294s wall / 17.0 runner-min. Sharing wins
+# only when the shared prefix costs more than the longest consumer — with bun
+# the builds are 1-4s each, so it does not, on either metric.
+#
+# Keeping every job independent also preserves the property this change exists
+# for: one failing surface never skips another (first run: 9 pass / 1 fail from
+# a single run, instead of 1 fail + 10 skipped steps).
 jobs:
+  # ── Delivery-form gate (ordered, cheap) ───────────────────────────────────
+  # Steps here depend on each other's output and cannot be parallelized; the
+  # heavy package builds and every test surface live in their own jobs below.
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -65,6 +109,18 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18"
+
+      # Shared bun download cache (~/.bun/install/cache). Every job here runs
+      # `bun install`; without this each one re-downloads the whole tree. The
+      # cache holds only registry tarballs keyed by the lockfile, so a miss
+      # costs a re-download and never changes what gets resolved.
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
 
       - name: Install dependencies
         run: bun install
@@ -96,57 +152,271 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Build CLI
-        run: bun run cli:build
+      # Committed-bundle freshness (hooks contract D2): the ZCode plugin root
+      # IS the repo checkout and the plugin pipeline has no build step, so a
+      # bundle that drifted from its source must fail CI. Self-contained step:
+      # it rebuilds the engine dist the bundle inlines and only reads
+      # hooks/src + engine dist (build-zcode-hooks.ts has no other input), so it
+      # no longer waits for the consumer package builds that used to precede it
+      # in the single-job pipeline — they never fed this check.
+      - name: ZCode hooks bundle freshness
+        run: bun run engine:build && bun run hooks:build && git diff --exit-code -- hooks/
+
+      # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
+      # whose static graph reaches src/dashboard/server.ts ->
+      # src/dashboard/assets.generated.ts. That module is gitignored and emitted
+      # by scripts/build-web.ts, which the "Typecheck" step above runs
+      # (`--cwd packages/cli typecheck:src`) — keep this step after typecheck.
+      # packages/cli/tsconfig.json documents the same contract.
+      - name: CLI smoke check
+        run: bun run --cwd packages/cli check
+
+  # ── Independent surfaces (parallel jobs) ──────────────────────────────────
+
+  test-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The engine's own specs import `@mstar-harness/engine`, which resolves to
+      # packages/engine/dist — build the dist this job tests.
+      - name: Build engine (dist for the engine specs)
+        run: bun run engine:build
+
+      - name: Test engine
+        run: bun run --cwd packages/engine test
+
+  test-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The CLI suite carries the generated-manifest guard
+      # (`packages/cli/test/execution-package.node.test.mjs`): it re-reads
+      # hooks/execution-consumer.json plus every
+      # <consumer>/execution-consumer/<id>.json evidence document and, for all
+      # six consumers, asserts the recorded entrypoint exists, the generated
+      # files exist, and every generated/source tree digest and copied-instruction
+      # mirror matches the bytes on disk. A fresh checkout has none of those
+      # artifacts, so every consumer the guard digests must be built here —
+      # engine first (each consumer build inlines the engine dist), then the
+      # consumers. The CLI's own dist is built by the "Test CLI" package script.
+      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+        run: bun run engine:build
 
       - name: Build OpenCode
         run: bun run opencode:build
+
+      - name: Build dsh
+        run: bun run dsh:build
+
+      - name: Build omp
+        run: bun run omp:build
+
+      # The cli test script is `bun run --cwd ../engine build && bun run build &&
+      # bun test` — the engine dist and CLI build are performed by the package
+      # script itself (tests import @mstar-harness/engine dist) — so this job
+      # needs no separate CLI build step, exactly as before the split.
+      - name: Test CLI
+        run: bun run --cwd packages/cli test
+
+  test-opencode:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The opencode build inlines the engine dist (workspace devDependency) —
+      # build the engine first, as the single-job pipeline did.
+      - name: Build engine (dist for the opencode build)
+        run: bun run engine:build
+
+      # The execution-session specs spawn the checkout's real CLI entry
+      # (`bun run packages/cli/src/index.ts …`); loading it resolves the whole
+      # static import graph, which reaches src/dashboard/server.ts ->
+      # src/dashboard/assets.generated.ts — the gitignored module only the CLI
+      # build emits. Build the CLI here, keeping the single-job order
+      # (Build CLI → … → Test OpenCode) those specs relied on.
+      - name: Build CLI (generated dashboard module for the CLI-entry specs)
+        run: bun run cli:build
+
+      # Bundles the harness asset mirrors (harness-skills/agents/commands) the
+      # package publishes, then bundles src/mstar.ts into dist/mstar.js.
+      - name: Build OpenCode
+        run: bun run opencode:build
+
+      - name: Test OpenCode
+        run: bun run --cwd packages/opencode test
+
+  test-omp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The omp package build bundles the engine inline (devDependency) — build
+      # the engine dist it resolves first.
+      - name: Build engine (dist for the omp build)
+        run: bun run engine:build
+
+      # The omp package build regenerates the gitignored discovery mirrors
+      # (hooks/, tools/, skills/ under packages/omp) its convention-scan smoke
+      # test asserts on.
+      - name: Build omp
+        run: bun run omp:build
+
+      - name: Test omp
+        run: bun run --cwd packages/omp test
+
+  test-dsh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
 
       # dsh build resolves @mstar-harness/engine via packages/engine/dist —
       # must run after "Build engine". The dsh prepare script also builds the
       # engine when run inside the monorepo (bun workspace install), so a plain
       # `bun install` in a fresh checkout is self-sufficient.
+      - name: Build engine (dist for the dsh build)
+        run: bun run engine:build
+
+      # Runs bundle-assets first, which syncs the harness-skills /
+      # harness-commands mirrors this package's tests read from its own package
+      # root — so one `dsh:build` in a fresh checkout is enough, no sibling
+      # package build is required.
       - name: Build dsh
         run: bun run dsh:build
 
-      # The omp package build bundles the engine inline (devDependency) and
-      # regenerates the gitignored discovery mirrors (hooks/, tools/, skills/)
-      # its convention-scan smoke test asserts on.
-      - name: Build omp
-        run: bun run omp:build
+      # The install e2e specs spawn the same real CLI entry (`init|doctor
+      # --target dsh`). They skip when no `dsh` bin is on PATH, but when they do
+      # run (a `dsh` bin on the runner) they load packages/cli/src/index.ts and
+      # need the generated dashboard module — build the CLI, as the single-job
+      # pipeline did before "Test dsh".
+      - name: Build CLI (generated dashboard module for the CLI-entry specs)
+        run: bun run cli:build
 
-      # Committed-bundle freshness (hooks contract D2): the ZCode plugin root
-      # IS the repo checkout and the plugin pipeline has no build step, so a
-      # bundle that drifted from its source must fail CI. Self-contained step
-      # (rebuilds engine dist the bundle inlines; both builds are idempotent),
-      # placed after all package builds and before tests so drift fails fast
-      # — it cannot turn a green workflow red on a consistent tree.
-      - name: ZCode hooks bundle freshness
-        run: bun run engine:build && bun run hooks:build && git diff --exit-code -- hooks/
-
-      - name: CLI smoke check
-        run: bun run --cwd packages/cli check
-
-      - name: Test engine
-        run: bun run --cwd packages/engine test
-
-      # The cli test script runs the engine build as a pre-step (tests import
-      # @mstar-harness/engine dist) — use the package script, not raw bun test.
-      - name: Test CLI
-        run: bun run --cwd packages/cli test
-
-      - name: Test OpenCode
-        run: bun run --cwd packages/opencode test
-
-      - name: Test omp
-        run: bun run --cwd packages/omp test
-
-      # The dsh test imports @mstar-harness/engine dist (built above) and
-      # needs the harness-skills/harness-commands mirrors (synced by the
-      # earlier "Build OpenCode" / "Build dsh" steps — each package build
-      # runs bundle-assets first) — use the package script. The
-      # @deepseek-ai/dsh-* seam packages are peers resolved from the public
-      # npm registry (bun auto-installs peers) — no local dsh source tree
+      # The dsh test imports @mstar-harness/engine dist and the
+      # harness-skills/harness-commands mirrors built above — use the package
+      # script. The @deepseek-ai/dsh-* seam packages are peers resolved from the
+      # public npm registry (bun auto-installs peers) — no local dsh source tree
       # needed (the rc.7 link farm is gone). The install e2e specs skip
       # themselves when no `dsh` bin is on PATH.
       - name: Test dsh
@@ -158,6 +428,48 @@ jobs:
       - name: Typecheck dsh tests
         run: bun run --cwd packages/dsh typecheck:tests
 
+  lint-scripts-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # hooks/src specs and scripts/build-zcode-hooks.test.ts call
+      # buildZcodeHooks(), which bundles hooks/src/mstar-write-gate.ts with the
+      # engine inlined — the engine dist must exist for that resolution.
+      - name: Build engine (dist for the hooks/scripts specs)
+        run: bun run engine:build
+
+      # The ASCII lint below scans packages/cli/src recursively, so the
+      # single-job pipeline always linted the generated dashboard module (the
+      # CLI build ran before the lint). Build the CLI here so this job scans the
+      # exact same file set — dropping it would silently narrow the lint.
+      - name: Build CLI (generated dashboard module for the ASCII lint scan)
+        run: bun run cli:build
+
       - name: Test scripts
         run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
 
@@ -168,14 +480,57 @@ jobs:
 
       # spec §7.4: src code literals must stay pure ASCII — bun 1.2.17
       # misdecodes raw multi-byte UTF-8 in literals of the 366KB CLI bundle.
+      # Scans packages/{engine,cli}/src + hooks/src only (no build needed).
       - name: Lint ASCII literals (src code)
         run: bun run lint:ascii-literals
+
+  pack-consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # Both packs ship the package `files` list (dist + mirrors), so the built
+      # artifacts must exist before `npm pack`. Both builds inline the engine
+      # dist — build that first.
+      - name: Build engine (dist for the consumer builds)
+        run: bun run engine:build
+
+      - name: Build CLI
+        run: bun run cli:build
+
+      - name: Build OpenCode
+        run: bun run opencode:build
 
       - name: Pack CLI tarball
         run: bun run cli:pack
 
       - name: Pack OpenCode tarball
         run: bun run opencode:pack
+
       # The root package.json is the manifest git/hosted installs resolve
       # (`omp plugin install github:…`, `bun add github:…`): a `workspace:`
       # spec in a shipped dependency section breaks every hosted install at
