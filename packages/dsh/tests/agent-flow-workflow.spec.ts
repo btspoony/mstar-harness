@@ -15,7 +15,7 @@
  * narrow to `undefined`.
  */
 import { describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, statSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +39,7 @@ import {
   WORKFLOW_LEDGER_MAX_NAME_LENGTH,
   WORKFLOW_LEDGER_TRUNCATION_MARKER,
   WORKFLOW_LEDGER_WATERMARK_FILE,
+  writeAllSync,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowEventSource } from '../src/gates/agent-flow.ts'
 import { createHash } from 'node:crypto'
@@ -2707,6 +2708,76 @@ describe('agent-flow — durable authority read/write failures are refusals (F2)
       expect(indexRows(workflowDir)).toHaveLength(1)
 
       await rm(tmp, { recursive: true, force: true })
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(true)
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * Greptile G-1 / G-2 — the two durable-write primitives the ledger, the
+ * identity index, the compacted tail and the scan-bound cursor all depend on.
+ * A write that only partly lands, and a temp slot someone else replaced with a
+ * link, are the two ways a "durable" write can report success for bytes that
+ * are not there.
+ */
+describe('agent-flow — durable write hardening (short write, symlinked temp slot)', () => {
+  it('every byte of a short-written payload lands, in order, before success is claimed', () => {
+    const bytes = Buffer.from('{"kind":"workflow-run","runId":"run-1"}\n', 'utf8')
+    // A sink that only ever accepts a few bytes per call (an interrupted or
+    // capacity-limited write): the remainder is finished by the next call.
+    const landed: string[] = []
+    writeAllSync((chunk) => {
+      const take = Math.min(5, chunk.length)
+      landed.push(chunk.subarray(0, take).toString('utf8'))
+      return take
+    }, bytes)
+    expect(landed.join('')).toBe(bytes.toString('utf8'))
+  })
+
+  it('a write that accepts no bytes refuses — no progress is never reported as success', () => {
+    const bytes = Buffer.from('{"kind":"workflow-run"}\n', 'utf8')
+    const landed: string[] = []
+    expect(() =>
+      // The first call lands 4 bytes, the next one accepts nothing: no further
+      // progress is possible, so the write must refuse instead of returning.
+      writeAllSync((chunk) => {
+        if (landed.length === 1) return 0
+        landed.push(chunk.subarray(0, 4).toString('utf8'))
+        return 4
+      }, bytes),
+    ).toThrow(new RegExp(`accepted no bytes at offset 4 of ${bytes.length}`))
+    // Exactly the accepted prefix landed: nothing was duplicated, and the
+    // unwritable remainder was refused rather than silently dropped.
+    expect(landed.join('')).toBe(bytes.subarray(0, 4).toString('utf8'))
+  })
+
+  it('a symlink at the atomic-write temp slot is never followed, and the record refuses', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-tmp-symlink-')
+    const event = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
+    try {
+      // The temp slot links OUT of the workflow dir: a write that followed the
+      // link would rewrite that sentinel (and then rename the link itself onto
+      // the cursor file).
+      const sentinel = join(root, 'sentinel.json')
+      await writeFile(sentinel, 'sentinel\n')
+      const tmp = join(workflowDir, `${WORKFLOW_LEDGER_WATERMARK_FILE}.tmp`)
+      symlinkSync(sentinel, tmp)
+
+      expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(false)
+      // The link target kept its bytes and the link itself is still in place.
+      expect(readFileSync(sentinel, 'utf8')).toBe('sentinel\n')
+      expect(lstatSync(tmp).isSymbolicLink()).toBe(true)
+      // The row and its identity ARE durable — only the scan bound did not commit.
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+      expect(indexRows(workflowDir)).toHaveLength(1)
+
+      // Removing the link lets the retry commit the bound: the refusal adds no
+      // new failure mode to the crash-recovery path.
+      await rm(tmp, { force: true })
       expect(recordWorkflowEvent({ harnessDir, workflowDir, source: src(0, 'sess-a'), event })).toBe(true)
       expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
       expect(cursorEntry(workflowDir, 'sess-a')!.next).toBe(1)

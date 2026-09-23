@@ -48,6 +48,7 @@ import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   AUDIT_CATEGORY_DOC,
+  CLI_INVENTORY_REGISTRAR_MODULES,
   buildCliCommandInventory,
   buildEngineExportNames,
   checkBilingualContentParity,
@@ -358,9 +359,9 @@ function deriveScopedRegistrarPaths(repoRoot: string): Set<string> {
       if (subcmds.includes("verify")) paths.add("sdd evidence verify");
     }
   }
-  // Group registrars in their own modules (issue.ts / catalog.ts) — the same
-  // source list and parser the supplement uses.
-  for (const module of ["packages/cli/src/issue.ts", "packages/cli/src/catalog.ts"]) {
+  // Group registrars in their own modules — the same source list and parser
+  // the supplement uses (import the list, never restate it).
+  for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
     const moduleSrc = readFileSync(join(repoRoot, module), "utf8");
     for (const path of buildCliCommandInventory(moduleSrc).cliCommands) paths.add(path);
   }
@@ -462,17 +463,22 @@ const WORKFLOW_VERBS: Record<string, true> = {
 };
 export function registerPlanCommands() {}
 `;
-      const sddEvidence = readFileSync(
-        join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"),
-        "utf8",
-      );
-      const issueSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/issue.ts"), "utf8");
-      const catalogSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/catalog.ts"), "utf8");
+      const overrides = new Map<string, string>([["plan-coordination.ts", planCoord]]);
       mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
-      writeFileSync(join(dir, "packages/cli/src/plan-coordination.ts"), planCoord);
-      writeFileSync(join(dir, "packages/cli/src/sdd-evidence.ts"), sddEvidence);
-      writeFileSync(join(dir, "packages/cli/src/issue.ts"), issueSrc);
-      writeFileSync(join(dir, "packages/cli/src/catalog.ts"), catalogSrc);
+      // Every module the supplement reads, with plan-coordination.ts replaced
+      // by the synthetic verb tables under test.
+      for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
+        const name = module.slice(module.lastIndexOf("/") + 1);
+        writeFileSync(
+          join(dir, module),
+          overrides.get(name) ??
+            readFileSync(join(import.meta.dir, "..", module), "utf8"),
+        );
+      }
+      writeFileSync(
+        join(dir, "packages/cli/src/sdd-evidence.ts"),
+        readFileSync(join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"), "utf8"),
+      );
 
       const cliCommands = new Set<string>(["plan bind"]);
       const { failures } = supplementCliCommandInventory(cliCommands, dir);

@@ -469,6 +469,21 @@ export function buildCliCommandInventory(cliSrc: string): {
     varPaths.set(lookup[1]!, lookup[2]!);
     cliCommands.add(lookup[2]!);
   }
+  // Chained group bindings (pre-pass): `const X = <boundVar>.command("p")`
+  // binds X to the path of a command that hangs off an already-bound var —
+  // verbs chained on `X` register under `p` (execution-migrate.ts joins `store
+  // execution` to the group store-migrate.ts owns this way). A receiver whose
+  // own binding is unknown is left unbound: the chain pass then reports it as
+  // an unknown command var rather than inventing a path.
+  for (const chained of cliSrc.matchAll(
+    /const\s+(\w+)\s*=\s*(\w+)\s*\.\s*command\(\s*"([a-z-]+)"\s*\)/g,
+  )) {
+    const parent = varPaths.get(chained[2]!);
+    if (parent === undefined) continue;
+    const path = `${parent} ${chained[3]!}`;
+    varPaths.set(chained[1]!, path);
+    cliCommands.add(path);
+  }
   // Dynamic verb factories (pre-pass): a local function whose first parameter
   // is a string-literal union (`(verb: "close" | "waive", …) => …`) registers
   // one subcommand per literal through `.command(param)`. Bind the parameter
@@ -640,14 +655,29 @@ function validateCliCommandTokens(cliCommands: Set<string>, tokens: string[]): s
 }
 
 /**
+ * CLI modules whose top-level group registrars register commands outside
+ * `packages/cli/src/index.ts` (`index.ts` calls each one). Parsed with the same
+ * command-chain builder used for index.ts; the scoped verb tables in
+ * plan-coordination.ts are read separately below.
+ */
+export const CLI_INVENTORY_REGISTRAR_MODULES = [
+  "packages/cli/src/plan-coordination.ts",
+  "packages/cli/src/execution-session.ts",
+  "packages/cli/src/execution-workflow.ts",
+  "packages/cli/src/execution-migrate.ts",
+  "packages/cli/src/store-migrate.ts",
+  "packages/cli/src/issue.ts",
+  "packages/cli/src/catalog.ts",
+] as const;
+
+/**
  * Supplement the index.ts inventory with commands registered outside that
  * file: PLAN_VERBS / WORKFLOW_VERBS tables in plan-coordination.ts (SSOT
  * for scoped verbs), the `sdd evidence` subtree in sdd-evidence.ts
- * (parsed from registerSddEvidenceCommands `.command(...)` calls), and the
- * top-level group registrars that live in their own modules — issue.ts
- * (`mstar issue`) and catalog.ts (`mstar catalog`), each exposed by a
- * `register<Group>Commands(program)` entry point that index.ts calls and
- * parsed with the same command-chain builder used for index.ts.
+ * (parsed from registerSddEvidenceCommands `.command(...)` calls), and every
+ * registrar in `CLI_INVENTORY_REGISTRAR_MODULES` — each a group registrar that
+ * index.ts calls and that is parsed here with the same command-chain builder
+ * used for index.ts.
  */
 export function supplementCliCommandInventory(
   cliCommands: Set<string>,
@@ -680,7 +710,7 @@ export function supplementCliCommandInventory(
     }
   }
 
-  for (const module of ["packages/cli/src/issue.ts", "packages/cli/src/catalog.ts"]) {
+  for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
     let moduleSrc: string;
     try {
       moduleSrc = readFileSync(join(repoRoot, module), "utf8");
