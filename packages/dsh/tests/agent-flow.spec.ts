@@ -66,7 +66,7 @@ import {
   truncateLedgerField,
   WORKFLOW_LEDGER_TRUNCATION_MARKER,
 } from '../src/gates/agent-flow.ts'
-import type { AgentFlowCatalogJoin, AgentFlowPairing } from '../src/gates/agent-flow.ts'
+import type { AgentFlowCatalogJoin, AgentFlowEventSource, AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { SessionHint } from '../src/gates/workflow-selection.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
@@ -436,7 +436,7 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
         'const harnessDir = process.argv[2]',
         'const tag = process.argv[3]',
         'for (let i = 0; i < 10; i += 1) {',
-        "  recordWorkflowEvent({ harnessDir, event: { v: 1, ts: Date.now(), kind: 'workflow-run', runId: `${tag}-${i}`, name: 'concurrent-append' } })",
+        "  recordWorkflowEvent({ harnessDir, source: { sessionId: tag, streamId: tag, seq: i }, event: { v: 1, ts: Date.now(), kind: 'workflow-run', runId: `${tag}-${i}`, name: 'concurrent-append' } })",
         '}',
       ].join('\n'))
 
@@ -605,6 +605,9 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
 /** The workflow ledger event this block records through `recordWorkflowEvent`. */
 const RUN_START = { v: 1, ts: 1_700_000_000_000, kind: 'workflow-run', runId: 'run-1', name: 'audit' } as const
 
+/** One durable source position for `recordWorkflowEvent` (the record identity transport). */
+const src = (seq = 0, sessionId = 'sess-1'): AgentFlowEventSource => ({ sessionId, streamId: sessionId, seq })
+
 /**
  * A temp harness with TWO active lifecycles (`wf-a` / `wf-b`) — the
  * concurrent-active registry the D4 cutover routes through. `order` flips the
@@ -635,7 +638,7 @@ describe('agent-flow — session-bound write routing (two concurrent actives)', 
         recordDispatch({ harnessDir, exec: { agent: { id: 'sess-a' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-a', cwd, 'wf-a') })
         recordDispatch({ harnessDir, exec: { agent: { id: 'sess-b' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-b', cwd, 'wf-b') })
         recordSettle({ harnessDir, agent: 'sess-b', outcome: 'ok', hint: picked('sess-b', cwd, 'wf-b') })
-        recordWorkflowEvent({ harnessDir, event: RUN_START, hint: picked('sess-a', cwd, 'wf-a') })
+        recordWorkflowEvent({ harnessDir, source: src(0, 'sess-a'), event: RUN_START, hint: picked('sess-a', cwd, 'wf-a') })
         recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-a' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok', hint: picked('sess-a', cwd, 'wf-a') })
 
         const a = readAgentFlow(dirs['wf-a'])!
@@ -658,7 +661,7 @@ describe('agent-flow — session-bound write routing (two concurrent actives)', 
     try {
       recordDispatch({ harnessDir, exec: { agent: { id: 'sess-x' } }, prompt: VALID_PLANNED, violations: [], hard: false })
       recordSettle({ harnessDir, agent: 'sess-x', outcome: 'ok' })
-      recordWorkflowEvent({ harnessDir, event: RUN_START })
+      recordWorkflowEvent({ harnessDir, source: src(0, 'sess-x'), event: RUN_START })
       recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-x' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok' })
       // A hint that names an id which is NOT in the active registry is just
       // as unbound (a terminal/foreign pick is never revived).
@@ -671,7 +674,7 @@ describe('agent-flow — session-bound write routing (two concurrent actives)', 
       expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
       // The boolean-returning writer reports the skip (the ledger's cursor
       // discipline depends on it: no advance without an append).
-      expect(recordWorkflowEvent({ harnessDir, event: RUN_START })).toBe(false)
+      expect(recordWorkflowEvent({ harnessDir, source: src(0, 'sess-x'), event: RUN_START })).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -682,7 +685,7 @@ describe('agent-flow — session-bound write routing (two concurrent actives)', 
     try {
       // Pinned to wf-b while the session is UNBOUND (two actives, no pick).
       recordSettle({ harnessDir, workflowDir: dirs['wf-b'], agent: 'sess-x', outcome: 'ok' })
-      recordWorkflowEvent({ harnessDir, workflowDir: dirs['wf-b'], event: RUN_START })
+      recordWorkflowEvent({ harnessDir, workflowDir: dirs['wf-b'], source: src(0, 'sess-x'), event: RUN_START })
       // Pinned to wf-a while the session's pick says wf-b.
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-x', '/srv/workspace', 'wf-b') })
       recordSettle({ harnessDir, workflowDir: dirs['wf-a'], agent: 'sess-x', outcome: 'ok', hint: picked('sess-x', '/srv/workspace', 'wf-b') })
@@ -1135,6 +1138,18 @@ function pairedDispatch(harnessDir: string, pairing: AgentFlowPairing, callId: s
   recordDispatch({ harnessDir, exec: dispatchExec(callId, agent, prompt), prompt, violations: [], hard: false, pairing })
 }
 
+/** The raw `eventId` of every ledger line, in file order ('' when a line carries none). */
+function ledgerEventIds(workflowDir: string): string[] {
+  return readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => {
+      const parsed: unknown = JSON.parse(line)
+      if (typeof parsed === 'object' && parsed !== null && 'eventId' in parsed && typeof parsed.eventId === 'string') return parsed.eventId
+      return ''
+    })
+}
+
 describe('agent-flow settle — real completion pairing ', () => {
   it('registration logs the pairing trace once (verification gate)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-trace-')
@@ -1283,6 +1298,15 @@ describe('agent-flow settle — real completion pairing ', () => {
       expect(view.events[1]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev' })
       // Both calls were consumed (map pruning) — nothing stays paired.
       expect(pairing.dispatchByCallId.size).toBe(0)
+      // The record identity namespaces the call by its carrying session: the
+      // SAME `c-shared` call id yields four DISTINCT event ids, so the two
+      // real calls are never deduplicated into one.
+      expect(ledgerEventIds(workflowDir)).toEqual([
+        'wfc1:sess-A:c-shared:dispatch',
+        'wfc1:sess-B:c-shared:dispatch',
+        'wfc1:sess-A:c-shared:settle',
+        'wfc1:sess-B:c-shared:settle',
+      ])
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -1383,6 +1407,27 @@ describe('agent-flow settle — real completion pairing ', () => {
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a live row without a verified carrying session gets NO fabricated identity — never `wfc1::`', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-live-identity-missing-')
+    try {
+      // An exec-less/agent-less call carrying a callId: the row still records
+      // with its advisory semantics, but no identity is invented from an empty
+      // namespace — this is the exact shape that used to produce `wfc1::<id>`.
+      recordDispatch({ harnessDir, exec: { callId: 'c-nosession', name: 'subagent' }, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, outcome: 'ok', callId: 'c-nosession' })
+      // The SAME call id with a verified session DOES carry one.
+      recordDispatch({ harnessDir, exec: dispatchExec('c-withsession', 'sess-1', VALID_PLANNED), prompt: VALID_PLANNED, violations: [], hard: false })
+
+      const ids = ledgerEventIds(workflowDir)
+      expect(ids.filter((id) => id === '')).toHaveLength(2)
+      expect(ids).toContain('wfc1:sess-1:c-withsession:dispatch')
+      expect(ids.some((id) => id.startsWith('wfc1:'))).toBe(true)
+      expect(ids.some((id) => id.startsWith('wfc1::'))).toBe(false)
+    } finally {
       await rm(root, { recursive: true, force: true })
     }
   })

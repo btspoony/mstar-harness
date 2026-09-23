@@ -466,7 +466,7 @@ export function validatePlanProgress(value: unknown, what = "coordination.progre
 }
 
 /** Route-aware stored handoff validation (spec A5). Default remains strict integration. */
-export type RowValidationRoute = "integration" | "standalone-development";
+export type RowValidationRoute = "integration" | "standalone-development" | "standalone-report-only";
 
 /** Validate a stored `PlanHandoff`, including its state/field coherence. */
 export function validatePlanHandoff(
@@ -618,7 +618,7 @@ export function validatePlanHandoff(
     }
   }
   if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    if (route === "standalone-development" && value.state === "completed") {
+    if ((route === "standalone-development" || route === "standalone-report-only") && value.state === "completed") {
       if (value.completed_at === undefined) {
         violations.push(
           invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`),

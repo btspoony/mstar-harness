@@ -48,6 +48,7 @@ import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   AUDIT_CATEGORY_DOC,
+  CLI_INVENTORY_REGISTRAR_MODULES,
   buildCliCommandInventory,
   buildEngineExportNames,
   checkBilingualContentParity,
@@ -358,9 +359,9 @@ function deriveScopedRegistrarPaths(repoRoot: string): Set<string> {
       if (subcmds.includes("verify")) paths.add("sdd evidence verify");
     }
   }
-  // Group registrars in their own modules (issue.ts / catalog.ts) — the same
-  // source list and parser the supplement uses.
-  for (const module of ["packages/cli/src/issue.ts", "packages/cli/src/catalog.ts"]) {
+  // Group registrars in their own modules — the same source list and parser
+  // the supplement uses (import the list, never restate it).
+  for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
     const moduleSrc = readFileSync(join(repoRoot, module), "utf8");
     for (const path of buildCliCommandInventory(moduleSrc).cliCommands) paths.add(path);
   }
@@ -401,6 +402,17 @@ describe("supplementCliCommandInventory — scoped registrar paths (Task 3)", ()
     expect(merged.has("catalog")).toBe(true);
     expect(merged.has("catalog list")).toBe(true);
     expect(merged.has("catalog show")).toBe(true);
+    // Loop-bound registrars in the real CLI: the retired verb tables
+    // (plan-coordination.ts ISSUE_VERB_NAMES, index.ts
+    // RETIRED_BACKLOG_COMMANDS) and execution-workflow.ts's
+    // `workflowTransitions()` records — the active workflow verbs this PR
+    // added, which the citation guard must see.
+    expect(merged.has("plan residual-close")).toBe(true);
+    expect(base.has("status backlog-register")).toBe(true);
+    expect(merged.has("workflow phase")).toBe(true);
+    expect(merged.has("workflow lifecycle")).toBe(true);
+    expect(merged.has("workflow execution-policy")).toBe(true);
+    expect(merged.has("workflow integration-worktree")).toBe(true);
 
     const expectedScoped = deriveScopedRegistrarPaths(REPO_ROOT);
     expect(expectedScoped.size).toBeGreaterThanOrEqual(15);
@@ -462,17 +474,22 @@ const WORKFLOW_VERBS: Record<string, true> = {
 };
 export function registerPlanCommands() {}
 `;
-      const sddEvidence = readFileSync(
-        join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"),
-        "utf8",
-      );
-      const issueSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/issue.ts"), "utf8");
-      const catalogSrc = readFileSync(join(import.meta.dir, "..", "packages/cli/src/catalog.ts"), "utf8");
+      const overrides = new Map<string, string>([["plan-coordination.ts", planCoord]]);
       mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
-      writeFileSync(join(dir, "packages/cli/src/plan-coordination.ts"), planCoord);
-      writeFileSync(join(dir, "packages/cli/src/sdd-evidence.ts"), sddEvidence);
-      writeFileSync(join(dir, "packages/cli/src/issue.ts"), issueSrc);
-      writeFileSync(join(dir, "packages/cli/src/catalog.ts"), catalogSrc);
+      // Every module the supplement reads, with plan-coordination.ts replaced
+      // by the synthetic verb tables under test.
+      for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
+        const name = module.slice(module.lastIndexOf("/") + 1);
+        writeFileSync(
+          join(dir, module),
+          overrides.get(name) ??
+            readFileSync(join(import.meta.dir, "..", module), "utf8"),
+        );
+      }
+      writeFileSync(
+        join(dir, "packages/cli/src/sdd-evidence.ts"),
+        readFileSync(join(import.meta.dir, "..", "packages/cli/src/sdd-evidence.ts"), "utf8"),
+      );
 
       const cliCommands = new Set<string>(["plan bind"]);
       const { failures } = supplementCliCommandInventory(cliCommands, dir);
@@ -820,7 +837,7 @@ describe("buildCliCommandInventory — dynamic verb factories (string-literal un
     }
   });
 
-  test("an unresolvable parameter (loop-bound verb) contributes nothing and never fails", () => {
+  test("a loop over a table this module does not declare contributes nothing and never fails", () => {
     const { cliCommands, failures } = buildCliCommandInventory(
       [
         'const statusCommand = program.command("status");',
@@ -834,6 +851,73 @@ describe("buildCliCommandInventory — dynamic verb factories (string-literal un
     expect(failures).toEqual([]);
     expect(cliCommands.has("status")).toBe(true);
     expect([...cliCommands].some((c) => c.startsWith("status "))).toBe(false);
+  });
+});
+
+describe("buildCliCommandInventory — loop-bound verb sets (`Object.entries` table + record factory)", () => {
+  test("`Object.entries(<local Record>)` keys register under the loop's receiver", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      [
+        'const statusCommand = program.command("status");',
+        "const RETIRED_BACKLOG_COMMANDS: Record<string, string> = {",
+        '  "backlog-register": "plan issue-add",',
+        "  // backlog-legacy: not a verb row",
+        '  "backlog-close": "plan issue-close",',
+        "};",
+        "for (const [verb, replacement] of Object.entries(RETIRED_BACKLOG_COMMANDS)) {",
+        "  statusCommand",
+        "    .command(verb)",
+        "    .action(() => {});",
+        "}",
+      ].join("\n"),
+    );
+    expect(failures).toEqual([]);
+    for (const cmd of ["status backlog-register", "status backlog-close"]) {
+      expect(cliCommands.has(cmd)).toBe(true);
+    }
+    // The comment-stripped row and the table's VALUES are never verbs.
+    expect(cliCommands.has("status backlog-legacy")).toBe(false);
+    expect(cliCommands.has("status plan issue-add")).toBe(false);
+  });
+
+  test("a `{ verb }` loop over a local factory expands to that factory's verb literals", () => {
+    const { cliCommands, failures } = buildCliCommandInventory(
+      [
+        "const workflowCommand = new Command(\"workflow\");",
+        "function attachWorkflowGroup(target: Command): void {",
+        "  target.addCommand(workflowCommand);",
+        "}",
+        "function workflowTransitions(): ReadonlyArray<{",
+        "  verb: string;",
+        "  description: string;",
+        "}> {",
+        "  return [",
+        "    {",
+        '      verb: "phase",',
+        '      description: "Request the next lifecycle phase",',
+        "    },",
+        "    {",
+        '      verb: "integration-worktree",',
+        '      description: "Record the reviewed integration checkout",',
+        "    },",
+        "  ];",
+        "}",
+        "function registerExecutionWorkflowCommands(target: Command): void {",
+        "  const group = target.commands.find((command) => command.name() === \"workflow\");",
+        "  if (group === undefined) throw new Error(\"workflow must be registered first\");",
+        "  for (const { verb, description } of workflowTransitions()) {",
+        "    group",
+        "      .command(verb)",
+        "      .description(description)",
+        "      .action(async () => {});",
+        "  }",
+        "}",
+      ].join("\n"),
+    );
+    expect(failures).toEqual([]);
+    expect(cliCommands.has("workflow phase")).toBe(true);
+    expect(cliCommands.has("workflow integration-worktree")).toBe(true);
+    expect(cliCommands.has("workflow description")).toBe(false);
   });
 });
 

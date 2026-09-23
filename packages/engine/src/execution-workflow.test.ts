@@ -746,6 +746,33 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(after.registered).toBe(1);
   });
 
+  test("a completed report-only plan terminally unregisters after its completion evidence", async () => {
+    const fixture = await workflowFixture("close-report-only");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.delivery_kind = "verification/report-only";
+      state.completion_policy = "acceptance report";
+      delete state.branch;
+      state.delivery = { completion: { policy: "acceptance report", evidence: "acceptance.md" } };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const receipt = await workflowMutation(fixture, "op-close-report-only", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const [stored] = rows(
+      fixture.context,
+      `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status`,
+    );
+    expect(stored!.registered).toBe(0);
+    expect(stored!.status).toBe("completed");
+  });
+
   test("the terminal close removes routing and keeps history in ONE commit", async () => {
     const fixture = await workflowFixture("close-ok");
     setRowStatus(fixture.context, PLAN_ID, "Done");

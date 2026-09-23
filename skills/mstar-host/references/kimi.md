@@ -23,6 +23,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - **Upgrade / reload**: `/plugins install` the new package version, then `/plugins reload` (or `/new`); the managed copy under `$KIMI_CODE_HOME/plugins/managed/` is refreshed by that install, not by editing this checkout.
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
+## Coordination transport (no host-native seat)
+
+This host ships no native execution transport: skills, commands and agents mount as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the active route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`), or the pre-activation file route while the control root's execution authority is not active (`--session <absolute-json>` + a row revision). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).
+
+Restarting this host or opening a new session does **not** re-issue an identity: a launcher that mints a local identity mints a **new** one, and a copied id is never claimed. A stopped or unreachable coordinator is replaced only by the explicit recovery verb that owns the current authority (`mstar session recover` on the active route, or the guarded Prepare recovery on the file route) — never by restarting a process, re-running a command, or editing a document.
+
 ## Skill loading
 
 1. On session start: `pm` (via `sessionStart.skill`) → **Read next** loads `mstar-harness-core`, then `mstar-roles` → `project-manager.md` when PM is active.

@@ -20,19 +20,25 @@
  *
  * Both calls, in order:
  *
- * 1. Resolve the caller FROM the coordinator session envelope and require that
- *    exact envelope to be the workflow snapshot's bound coordinator: a plan
- *    session, another workflow's session or a replacement holder cannot touch
- *    this workflow's journal.
- * 2. Hold the canonical write lock **once**. The journal sits in the same
- *    canonical workflow directory as `snapshot.json`, so
- *    `withStatusWriteLock(snapshotPath)` IS the canonical snapshot → journal
- *    critical section (a nested acquisition on the same lockdir is the
- *    documented reentrancy bug, never a second lock).
- * 3. Inside the lock, reread the snapshot, then the journal, then the live
- *    settings, and admit against those reads; the journal is written last,
- *    through the engine's atomic `writeJson`, and it is the only document this
- *    module ever writes.
+ * 1. Resume the caller's own `ExecutionBinding` against the CURRENT DB
+ *    authority (`resumeExecutionSession`) — the reference is a lookup, not a
+ *    bearer credential: a foreign root, a stale epoch, a copy of another
+ *    session's reference or an inactive row refuses, and no pre-activation file
+ *    envelope is ever consulted as a fallback. The workflow's own authority then
+ *    has to name this session as its bound coordinator: a plan session, another
+ *    workflow's session or a replacement holder cannot touch this workflow's
+ *    journal.
+ * 2. Hold the §4.3 file lock ladder **once**: the maintenance exclusion, then
+ *    the canonical workflow status lock. The journal sits in the same canonical
+ *    workflow directory as `snapshot.json`, so `withStatusWriteLock(snapshotPath)`
+ *    IS the canonical snapshot → journal critical section (a nested acquisition
+ *    on the same lockdir is the documented reentrancy bug, never a second lock).
+ *    No SQL statement, host spawn or ledger append ever runs inside it.
+ * 3. Inside the lock, reread the journal, then the live settings, and admit
+ *    against those reads; the journal is written last, through the engine's
+ *    atomic `writeJson`, after `assertExecutionSessionCurrent` has re-checked the
+ *    bound store/session/epoch synchronously. The journal is the only document
+ *    this module ever writes, and reading an old one is not writing it.
  *
  * Capacity is the union **by plan id** of outstanding (non-refused) intents and
  * active engine plan-primary bindings, so a plan that is both pending and bound
@@ -42,7 +48,10 @@
  * — the row's own bound session, or an intent whose recorded plan, prepared
  * Assignment pin, launching coordinator, handing-off session and assigned
  * checkout all match. `returned` reactivates it, and a stale or foreign intent
- * is never silently reclaimed. Lowering the cap pauses further side-effecting
+ * is never silently reclaimed. An owner or epoch change keeps every unresolved
+ * intent occupied: the new binding never drops a reservation and launches again,
+ * and only recorded native transport evidence or explicit stopped-owner
+ * reconciliation discharges it. Lowering the cap pauses further side-effecting
  * transitions without editing, revoking or killing anything that exists.
  *
  * `uncertain` is terminal and stays occupied: a malformed response, a timeout
@@ -72,22 +81,32 @@
  * stay the only writers of engine ownership.
  */
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   assertBranchAlignment,
+  assertExecutionSessionCurrent,
   canonicalizeNearestExisting,
+  executionContextFor,
   isDistinctCheckout,
   probeCheckoutRoot,
+  readExecutionAuthority,
   readMainWorktree,
-  readSessionEnvelope,
-  readWorkflowSnapshot,
-  resolvePlanScope,
   resolveWorkflowDir,
+  resumeExecutionSession,
+  storeDbPath,
   withStatusWriteLock,
   writeJson,
 } from "@mstar-harness/engine";
-import type { CoordinationSession, PlanRow, ResolvedPlanScope, WorkflowSnapshot } from "@mstar-harness/engine";
+import type {
+  ExecutionBinding,
+  ExecutionIdentity,
+  ExecutionPlanView,
+  ExecutionRead,
+  ExecutionSessionRef,
+  ExecutionState,
+  ExecutionToken,
+} from "@mstar-harness/engine";
 import { readPhase2Settings, type Phase2Request } from "./phase2-orchestration";
 
 /* ------------------------------------------------------------------------- *
@@ -108,8 +127,43 @@ export type LaunchIntent = Readonly<{
   evidencePaths: readonly string[];
 }>;
 
-/** Plugin-owned journal document: `version:1`, identity, and intent entries only. */
+/**
+ * The journal's own owner block (§6): the store/epoch/native session that wrote
+ * the document. It is provenance, never authority — the current authority is
+ * always the DB binding the call resumed, and an owner change keeps every
+ * unresolved intent occupied instead of handing the journal over silently.
+ *
+ * **Deliberately not an admission input** (review finding S-1): the block is
+ * decoded for shape and rewritten from the CURRENT authority on every write
+ * (`ownerFromAuthority`), and nothing admits, occupies or discharges an intent by
+ * comparing it — occupancy is decided from the DB plan views plus the workflow's
+ * current coordinator (`intentReachedStop`), so a stale or foreign owner can
+ * neither widen the cap nor drop a reservation. It cannot be a takeover channel
+ * either: only a caller that resumed its own active binding AND is the workflow's
+ * current coordinator can write this journal at all, and a write records the
+ * owner it actually is. Treating the stored block as an admission fact would
+ * invent a second ownership truth — the exact fallback the execution contract
+ * forbids.
+ */
+type JournalOwner = { storeId: string; epoch: number; sessionId: string; workflowId: string };
+
+/** The exact version-1 document this v2 journal was adopted from, as retained provenance. */
+type LegacyJournal = { version: 1; file_sha256: string; coordinator: { session_id: string; session_file: string } };
+
+/** Plugin-owned journal document v2: the owner, an optional v1 adoption record, and intent entries. */
 type JournalDoc = {
+  version: 2;
+  workflow_id: string;
+  owner: JournalOwner;
+  legacy?: LegacyJournal;
+  intents: LaunchIntent[];
+};
+
+/** One admitted journal document: the v2 form, or the v1 form still awaiting adoption. */
+type JournalRead = { doc: JournalDoc } | { legacy: { doc: LegacyDocument; sha256: string } };
+
+/** The version-1 shape as read: validated before it is ever rewritten. */
+type LegacyDocument = {
   version: 1;
   workflow_id: string;
   coordinator: { session_id: string; session_file: string };
@@ -120,7 +174,17 @@ type LaunchState = LaunchIntent["state"];
 type LaunchObservation = Extract<Phase2Request, { operation: "record-launch" }>["observation"];
 type ReserveRequest = Extract<Phase2Request, { operation: "reserve-launch" }>;
 type RecordRequest = Extract<Phase2Request, { operation: "record-launch" }>;
-type Authority = Readonly<{ coordinatorSessionPath: string; cwd: string }>;
+
+/**
+ * §6 the launch authority: the caller's own cwd, the identity it acquired from
+ * the native session, and the `ExecutionBinding` that identity adopted. Model
+ * input never reaches this object — the host adapter builds it.
+ */
+export type ExecutionLaunchAuthority = Readonly<{
+  cwd: string;
+  identity: ExecutionIdentity;
+  binding: ExecutionBinding;
+}>;
 
 /** Result of both journal calls (spec §C): a persisted intent, or a refusal. */
 export type PlanLaunchResult =
@@ -132,7 +196,10 @@ type Refusal = { ok: false; code: string; message: string } | null;
 
 const JOURNAL_FILE = "omp-launches.json";
 const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
-const JOURNAL_VERSION = 1;
+/** The version this module writes (§6 `omp-launch-v2`). */
+const JOURNAL_VERSION = 2;
+/** The pre-activation generation it adopts, retained with the old bytes' digest. */
+const LEGACY_JOURNAL_VERSION = 1;
 
 /** Exact accepted engine phase label for "this coordinator is executing Phase 2". */
 const PHASE_2_EXECUTE = "phase-2-execute";
@@ -227,109 +294,206 @@ function validateRecordRequest(request: RecordRequest): Refusal {
   return null;
 }
 
-function validateAuthority(authority: Authority): Refusal {
-  if (!nonEmpty(authority?.coordinatorSessionPath) || !isAbsolute(authority.coordinatorSessionPath)) {
-    return refuse("launch.invalid-request", "authority requires an absolute coordinatorSessionPath");
-  }
+function validateAuthority(authority: ExecutionLaunchAuthority): Refusal {
   if (!nonEmpty(authority?.cwd) || !isAbsolute(authority.cwd)) {
     return refuse("launch.invalid-request", "authority requires an absolute cwd");
+  }
+  const identity = authority?.identity;
+  if (
+    identity === undefined ||
+    !nonEmpty(identity.sessionId) ||
+    !nonEmpty(identity.workflowId) ||
+    identity.role !== "coordinator" ||
+    identity.planId !== null
+  ) {
+    return refuse(
+      "launch.invalid-request",
+      "authority requires the host-acquired coordinator identity (a native session id, the workflow, role coordinator and no plan) \u2014 it is never taken from the request",
+    );
+  }
+  const binding = authority?.binding;
+  if (binding === undefined || binding.version !== 1 || !nonEmpty(binding.harnessRoot) || !isAbsolute(binding.harnessRoot)) {
+    return refuse(
+      "launch.invalid-request",
+      "authority requires an adopted ExecutionBinding carrying the canonical control root it was adopted from",
+    );
+  }
+  const session = binding.session;
+  // A copy-only reference never matches the independently acquired identity: the
+  // binding must describe exactly the session this call acquired, so a reference
+  // copied from another session, workflow, role or plan refuses here — before any
+  // store, snapshot or journal is touched.
+  if (
+    !nonEmpty(session?.storeId) ||
+    session.workflowId !== identity.workflowId ||
+    session.role !== identity.role ||
+    session.sessionId !== identity.sessionId ||
+    session.planId !== identity.planId ||
+    typeof session.epoch !== "number" ||
+    !Number.isSafeInteger(session.epoch) ||
+    session.epoch <= 0
+  ) {
+    return refuse(
+      "launch.invalid-request",
+      "the adopted binding does not describe the identity this call acquired; a foreign, copied or malformed reference is refused before any store or file is read",
+    );
   }
   return null;
 }
 
 /* ------------------------------------------------------------------------- *
- * Caller identity and workflow resolution
+ * Caller identity, workflow resolution and the current authority
  * ------------------------------------------------------------------------- */
 
 type ResolvedAuthority = {
-  session: CoordinationSession;
-  sessionPath: string;
+  workflowId: string;
   harnessRoot: string;
-  workflowDir: string;
   snapshotPath: string;
   journalPath: string;
 };
 
 /**
- * Resolve the caller from its own envelope: engine-validated session identity,
- * the lifecycle's canonical workflow directory, and the two canonical documents
- * this module reads under one lock.
+ * Pure path resolution for the call: the canonical control root of the adopted
+ * binding and the lifecycle's canonical workflow directory, which the status
+ * lock and the journal both live in. No store, envelope or snapshot is read
+ * here — the workflow directory is a path, never an authority.
  */
-function resolveAuthority(authority: Authority): { ok: true; value: ResolvedAuthority } | { ok: false; code: string; message: string } {
-  let session: CoordinationSession;
+function resolveAuthority(
+  authority: ExecutionLaunchAuthority,
+): { ok: true; value: ResolvedAuthority } | { ok: false; code: string; message: string } {
+  const harnessRoot = canonicalizeNearestExisting(authority.binding.harnessRoot);
+  let workflowDir: string;
   try {
-    session = readSessionEnvelope(authority.coordinatorSessionPath);
+    workflowDir = join(resolveWorkflowDir(authority.cwd, { harnessDir: harnessRoot }), authority.identity.workflowId);
   } catch (error) {
-    return refuse("launch.session-denied", `no readable coordination session envelope: ${messageOf(error)}`);
-  }
-  if (session.role !== "coordinator") {
     return refuse(
-      "launch.session-denied",
-      `session ${session.session_id} is a ${session.role}; only the lifecycle coordinator may launch additional plan primaries`,
+      "launch.harness-unresolvable",
+      `the control root ${harnessRoot} does not resolve a workflow dir from ${authority.cwd}: ${messageOf(error)}`,
     );
   }
-  const sessionPath = canonicalizeNearestExisting(authority.coordinatorSessionPath);
-  const harnessRoot = canonicalizeNearestExisting(session.harness_root);
-  const workflowDir = join(resolveWorkflowDir(authority.cwd, { harnessDir: harnessRoot }), session.workflow_id);
   return {
     ok: true,
     value: {
-      session,
-      sessionPath,
+      workflowId: authority.identity.workflowId,
       harnessRoot,
-      workflowDir,
       snapshotPath: join(workflowDir, WORKFLOW_SNAPSHOT_FILE),
       journalPath: join(workflowDir, JOURNAL_FILE),
     },
   };
 }
 
+/** The engine context of this acquired identity: the store address plus the trusted caller. */
+function executionContextOf(authority: ExecutionLaunchAuthority) {
+  return executionContextFor({ harnessDir: authority.binding.harnessRoot }, authority.identity);
+}
+
+/** The stable engine refusal code of a thrown error, or the caller's own default. */
+function engineCodeOf(error: unknown, fallback: string): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.includes(".") ? code : fallback;
+}
+
 /**
- * The caller must be exactly the workflow's bound coordinator, in the exact
- * accepted Phase-2 state. Anything else (another holder, a terminal lifecycle,
- * a drifted or absent phase projection) disables admission.
+ * Resume the adopted binding against the CURRENT store. The reference is a
+ * lookup, not a bearer credential: a foreign control root, a stale epoch, a
+ * revoked/suspended row or a caller that is not the reference refuses here, and
+ * no coordinator session envelope is ever consulted as a fallback.
  */
-function assertOwnCoordinator(resolved: ResolvedAuthority, snapshot: WorkflowSnapshot): Refusal {
-  const coordinator = snapshot.coordination?.coordinator;
-  if (coordinator === undefined || coordinator.session_id !== resolved.session.session_id || coordinator.session_file !== resolved.sessionPath) {
+async function resumeCurrentAuthority(authority: ExecutionLaunchAuthority): Promise<Refusal> {
+  try {
+    await resumeExecutionSession(executionContextOf(authority), authority.binding.session);
+  } catch (error) {
     return refuse(
-      "launch.session-denied",
-      `workflow ${resolved.session.workflow_id} is bound to coordinator ${coordinator?.session_id ?? "(none)"} at ${coordinator?.session_file ?? "(none)"}, not to this session ${resolved.session.session_id} at ${resolved.sessionPath}`,
-    );
-  }
-  if (snapshot.status !== "running" || snapshot.phase !== PHASE_2_EXECUTE) {
-    return refuse(
-      "launch.phase-inactive",
-      `workflow ${snapshot.id} is ${snapshot.status} at phase ${JSON.stringify(snapshot.phase ?? null)}; extra primaries require "${PHASE_2_EXECUTE}"`,
+      engineCodeOf(error, "launch.session-denied"),
+      `the adopted execution binding no longer authorizes this call: ${messageOf(error)}`,
     );
   }
   return null;
 }
 
-function readSnapshot(resolved: ResolvedAuthority): { ok: true; snapshot: WorkflowSnapshot } | { ok: false; code: string; message: string } {
+/**
+ * The workflow's DB authority, reduced to the facts this module admits against:
+ * the lifecycle's status/phase, its integration checkout, its plan views and the
+ * session that currently holds the coordinator seat.
+ */
+type ActiveWorkflow = Readonly<{
+  status: string;
+  phase: string | null | undefined;
+  integrationWorktreePath: string | undefined;
+  plans: readonly ExecutionPlanView[];
+  coordinator: ExecutionSessionRef | null;
+  workflowToken: ExecutionToken;
+}>;
+
+async function readActiveWorkflow(
+  resolved: ResolvedAuthority,
+): Promise<{ ok: true; workflow: ActiveWorkflow } | { ok: false; code: string; message: string }> {
+  let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
   try {
-    return { ok: true, snapshot: readWorkflowSnapshot(resolved.workflowDir).snapshot };
+    read = await readExecutionAuthority({ harnessDir: resolved.harnessRoot }, { workflowId: resolved.workflowId });
   } catch (error) {
-    return refuse("launch.snapshot-unreadable", `cannot read the workflow snapshot at ${resolved.snapshotPath}: ${messageOf(error)}`);
+    return refuse(
+      engineCodeOf(error, "launch.authority-unreadable"),
+      `the execution authority of ${resolved.harnessRoot} cannot serve workflow ${resolved.workflowId}: ${messageOf(error)}`,
+    );
   }
+  const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
+  if (workflow === undefined) {
+    return refuse(
+      "coordination.workflow-not-found",
+      `the execution authority read of workflow ${resolved.workflowId} returned no active lifecycle; nothing was admitted`,
+    );
+  }
+  return {
+    ok: true,
+    workflow: {
+      status: workflow.state.status,
+      phase: workflow.state.phase,
+      integrationWorktreePath: workflow.state.integration_worktree_path,
+      plans: workflow.plans,
+      coordinator: workflow.coordinator,
+      workflowToken: workflow.workflowToken,
+    },
+  };
+}
+
+/**
+ * The caller must be exactly the workflow's bound coordinator, in the exact
+ * accepted Phase-2 state. Anything else (another holder, a non-running
+ * lifecycle, a drifted or absent phase projection) disables admission.
+ */
+function assertOwnCoordinator(identity: ExecutionIdentity, workflow: ActiveWorkflow): Refusal {
+  const coordinator = workflow.coordinator;
+  if (coordinator === null || coordinator.sessionId !== identity.sessionId) {
+    return refuse(
+      "launch.session-denied",
+      `workflow ${identity.workflowId} is bound to coordinator session ${coordinator?.sessionId ?? "(none)"}, not to this session ${identity.sessionId}`,
+    );
+  }
+  if (workflow.status !== "running" || workflow.phase !== PHASE_2_EXECUTE) {
+    return refuse(
+      "launch.phase-inactive",
+      `workflow ${identity.workflowId} is ${workflow.status} at phase ${JSON.stringify(workflow.phase ?? null)}; extra primaries require "${PHASE_2_EXECUTE}"`,
+    );
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------------- *
  * Journal read (fail-closed reconstruction)
  * ------------------------------------------------------------------------- */
 
-function emptyJournal(session: CoordinationSession, sessionPath: string): JournalDoc {
-  return {
-    version: JOURNAL_VERSION,
-    workflow_id: session.workflow_id,
-    coordinator: { session_id: session.session_id, session_file: sessionPath },
-    intents: [],
-  };
+function emptyJournal(workflowId: string, owner: JournalOwner): JournalDoc {
+  return { version: JOURNAL_VERSION, workflow_id: workflowId, owner, intents: [] };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isLaunchIntent(value: unknown): value is LaunchIntent {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
+  if (!isPlainRecord(value)) return false;
+  const entry = value;
   return (
     nonEmpty(entry.id) &&
     nonEmpty(entry.workflowId) &&
@@ -348,98 +512,155 @@ function isLaunchIntent(value: unknown): value is LaunchIntent {
   );
 }
 
+function intentsOf(value: unknown): LaunchIntent[] | null {
+  return Array.isArray(value) && value.every(isLaunchIntent) ? value : null;
+}
+
+/** The owner block of a version-2 journal, or `null` when it is not one. */
+function ownerOf(value: unknown): JournalOwner | null {
+  if (!isPlainRecord(value)) return null;
+  const { storeId, epoch, sessionId, workflowId } = value;
+  if (!nonEmpty(storeId) || !nonEmpty(sessionId) || !nonEmpty(workflowId)) return null;
+  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0) return null;
+  return { storeId, epoch, sessionId, workflowId };
+}
+
+/** The retained version-1 provenance block, or `null` when it is malformed. */
+function legacyOf(value: unknown): LegacyJournal | null {
+  if (!isPlainRecord(value)) return null;
+  const coordinator = value.coordinator;
+  if (!nonEmpty(value.file_sha256) || !isPlainRecord(coordinator)) return null;
+  if (!nonEmpty(coordinator.session_id) || !nonEmpty(coordinator.session_file)) return null;
+  if (value.version !== LEGACY_JOURNAL_VERSION) return null;
+  return { version: LEGACY_JOURNAL_VERSION, file_sha256: value.file_sha256, coordinator: { session_id: coordinator.session_id, session_file: coordinator.session_file } };
+}
+
 /**
  * Read the journal, or refuse. A present-but-unparseable, foreign or malformed
  * journal is never silently reset — capacity decisions are made from these
  * entries, so an untrusted read must fail closed instead of widening the cap.
+ *
+ * A version-1 document is returned as the legacy form it is (with the digest of
+ * its exact bytes) and is adopted into version 2 only when a legitimate write
+ * happens: reading an old journal is not writing it, and its intents, states,
+ * targets, evidence paths and coordinator provenance survive adoption verbatim.
  */
 function readJournal(
   journalPath: string,
-  session: CoordinationSession,
-  sessionPath: string,
-): { ok: true; doc: JournalDoc } | { ok: false; code: string; message: string } {
-  if (!existsSync(journalPath)) return { ok: true, doc: emptyJournal(session, sessionPath) };
+  workflowId: string,
+  owner: JournalOwner,
+): { ok: true; read: JournalRead } | { ok: false; code: string; message: string } {
+  if (!existsSync(journalPath)) return { ok: true, read: { doc: emptyJournal(workflowId, owner) } };
+  let bytes: Buffer;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(journalPath, "utf8"));
+    bytes = readFileSync(journalPath);
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch (error) {
-    return refuse("launch.journal-corrupt", `transport journal ${journalPath} is not valid JSON: ${messageOf(error)}`);
+    return refuse("launch.journal-corrupt", `transport journal ${journalPath} is not readable JSON: ${messageOf(error)}`);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isPlainRecord(parsed)) {
     return refuse("launch.journal-corrupt", `transport journal ${journalPath} must be an object`);
   }
-  const doc = parsed as Record<string, unknown>;
-  if (doc.version !== JOURNAL_VERSION) {
-    return refuse("launch.journal-corrupt", `transport journal ${journalPath} must declare version ${JOURNAL_VERSION}`);
-  }
-  if (doc.workflow_id !== session.workflow_id) {
+  if (parsed.workflow_id !== workflowId) {
     return refuse(
       "launch.journal-corrupt",
-      `transport journal ${journalPath} belongs to workflow ${JSON.stringify(doc.workflow_id)}, not ${session.workflow_id}`,
+      `transport journal ${journalPath} belongs to workflow ${JSON.stringify(parsed.workflow_id)}, not ${workflowId}`,
     );
   }
-  const coordinator = doc.coordinator;
-  if (
-    typeof coordinator !== "object" ||
-    coordinator === null ||
-    (coordinator as Record<string, unknown>).session_id !== session.session_id ||
-    (coordinator as Record<string, unknown>).session_file !== sessionPath
-  ) {
-    return refuse(
-      "launch.journal-corrupt",
-      `transport journal ${journalPath} was opened by another coordinator session; explicit recovery is required, never a takeover`,
-    );
-  }
-  if (!Array.isArray(doc.intents) || !doc.intents.every(isLaunchIntent)) {
+  const intents = intentsOf(parsed.intents);
+  if (intents === null) {
     return refuse("launch.journal-corrupt", `transport journal ${journalPath} carries entries this plugin cannot trust`);
   }
-  return { ok: true, doc: { version: JOURNAL_VERSION, workflow_id: session.workflow_id, coordinator: { session_id: session.session_id, session_file: sessionPath }, intents: doc.intents } };
+  if (parsed.version === JOURNAL_VERSION) {
+    const journalOwner = ownerOf(parsed.owner);
+    if (journalOwner === null) {
+      return refuse("launch.journal-corrupt", `transport journal ${journalPath} declares no valid owner block`);
+    }
+    const legacy = parsed.legacy === undefined ? undefined : legacyOf(parsed.legacy);
+    if (parsed.legacy !== undefined && legacy === null) {
+      return refuse("launch.journal-corrupt", `transport journal ${journalPath} carries a malformed legacy adoption record`);
+    }
+    return { ok: true, read: { doc: { version: JOURNAL_VERSION, workflow_id: workflowId, owner: journalOwner, ...(legacy === null || legacy === undefined ? {} : { legacy }), intents } } };
+  }
+  if (parsed.version === LEGACY_JOURNAL_VERSION) {
+    const coordinator = parsed.coordinator;
+    if (!isPlainRecord(coordinator) || !nonEmpty(coordinator.session_id) || !nonEmpty(coordinator.session_file)) {
+      return refuse("launch.journal-corrupt", `transport journal ${journalPath} declares no recorded coordinator provenance`);
+    }
+    return {
+      ok: true,
+      read: {
+        legacy: {
+          doc: {
+            version: LEGACY_JOURNAL_VERSION,
+            workflow_id: workflowId,
+            coordinator: { session_id: coordinator.session_id, session_file: coordinator.session_file },
+            intents,
+          },
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+      },
+    };
+  }
+  return refuse(
+    "launch.journal-corrupt",
+    `transport journal ${journalPath} declares version ${JSON.stringify(parsed.version)}; this reader understands version ${JOURNAL_VERSION} and the legacy version ${LEGACY_JOURNAL_VERSION} it adopts`,
+  );
+}
+
+/**
+ * The document to write: an already-current journal as it stands, or a legacy
+ * one adopted under the current owner with its exact bytes' digest and its
+ * coordinator provenance retained.
+ */
+function adoptedJournal(read: JournalRead, owner: JournalOwner, workflowId: string): JournalDoc {
+  if ("doc" in read) return read.doc;
+  return {
+    version: JOURNAL_VERSION,
+    workflow_id: workflowId,
+    owner,
+    legacy: { version: LEGACY_JOURNAL_VERSION, file_sha256: read.legacy.sha256, coordinator: read.legacy.doc.coordinator },
+    intents: read.legacy.doc.intents,
+  };
 }
 
 /* ------------------------------------------------------------------------- *
  * Occupancy (union by plan id: outstanding intents ∪ active engine bindings)
  * ------------------------------------------------------------------------- */
 
-function planIdOf(row: PlanRow): string | null {
-  if (nonEmpty(row.id)) return row.id;
-  if (nonEmpty(row.plan_id)) return row.plan_id;
+function planIdOf(view: ExecutionPlanView): string | null {
+  if (nonEmpty(view.plan.id)) return view.plan.id;
+  if (nonEmpty(view.plan.plan_id)) return view.plan.plan_id;
   return null;
 }
 
-function findPlanRow(snapshot: WorkflowSnapshot, planId: string): PlanRow | null {
-  for (const row of snapshot.plans) if (planIdOf(row) === planId) return row;
+function findPlanView(workflow: ActiveWorkflow, planId: string): ExecutionPlanView | null {
+  for (const view of workflow.plans) if (planIdOf(view) === planId) return view;
   return null;
 }
 
-/** The row's coordination block, or null when absent/malformed. */
-function rowCoordinationOf(row: PlanRow): Record<string, unknown> | null {
-  const coordination = (row as Record<string, unknown>).coordination;
-  if (typeof coordination !== "object" || coordination === null || Array.isArray(coordination)) return null;
-  return coordination as Record<string, unknown>;
+/** The view's coordination block, or null when absent/malformed. */
+function rowCoordinationOf(view: ExecutionPlanView): Record<string, unknown> | null {
+  return isPlainRecord(view.coordination) ? view.coordination : null;
 }
 
-/** The row's persisted durable handoff record, or null when absent/non-durable. */
-function durableHandoffOf(row: PlanRow): Record<string, unknown> | null {
-  const handoff = rowCoordinationOf(row)?.handoff;
-  if (typeof handoff !== "object" || handoff === null) return null;
-  const record = handoff as Record<string, unknown>;
-  return typeof record.state === "string" && DURABLE_HANDOFF_STATES[record.state] === true ? record : null;
+/** The view's persisted durable handoff record, or null when absent/non-durable. */
+function durableHandoffOf(view: ExecutionPlanView): Record<string, unknown> | null {
+  const handoff = rowCoordinationOf(view)?.handoff;
+  if (!isPlainRecord(handoff)) return null;
+  return typeof handoff.state === "string" && DURABLE_HANDOFF_STATES[handoff.state] === true ? handoff : null;
 }
 
-/** The row's bound plan session, or null when absent/malformed. */
-function boundSessionOf(row: PlanRow): Record<string, unknown> | null {
-  const session = rowCoordinationOf(row)?.session;
-  if (typeof session !== "object" || session === null) return null;
-  return nonEmpty((session as Record<string, unknown>).session_id) ? (session as Record<string, unknown>) : null;
+/** The plan session the store currently binds this row to, or null when it binds none. */
+function boundSessionOf(view: ExecutionPlanView): ExecutionSessionRef | null {
+  return view.session;
 }
 
-/** Real `coordination.session` plus execution authority of the same session. */
-function hasActiveBinding(row: PlanRow): boolean {
-  const session = boundSessionOf(row);
-  if (session === null) return false;
-  const lease = (row as Record<string, unknown>).execution_lease;
-  if (typeof lease !== "object" || lease === null) return false;
-  return (lease as Record<string, unknown>).holder === session.session_id;
+/** Real bound plan session plus the execution lease held by that same session. */
+function hasActiveBinding(view: ExecutionPlanView): boolean {
+  const session = boundSessionOf(view);
+  return session !== null && view.executionLease !== null && view.executionLease.holder === session.sessionId;
 }
 
 /**
@@ -448,10 +669,10 @@ function hasActiveBinding(row: PlanRow): boolean {
  * row is bound to. An unbound or foreign handoff proves nothing and keeps the
  * row occupied.
  */
-function boundSessionReachedStop(row: PlanRow): boolean {
-  const handoff = durableHandoffOf(row);
-  const session = boundSessionOf(row);
-  return handoff !== null && session !== null && handoff.submitted_by === session.session_id;
+function boundSessionReachedStop(view: ExecutionPlanView): boolean {
+  const handoff = durableHandoffOf(view);
+  const session = boundSessionOf(view);
+  return handoff !== null && session !== null && handoff.submitted_by === session.sessionId;
 }
 
 /**
@@ -459,20 +680,21 @@ function boundSessionReachedStop(row: PlanRow): boolean {
  * reached its scoped stop. Identity is matched term by term — plan row,
  * prepared Assignment pin, the launching coordinator, the bound plan session
  * that handed off, and the launch's own assigned checkout. Any mismatch
- * (prepared-hash drift, another session, another attempt, another worktree) is
- * NOT a release: the intent keeps occupying its slot until a durable handoff
- * matches or an explicit observation discharges it.
+ * (prepared-hash drift, another session, another attempt, another worktree, a
+ * coordinator that has since been replaced) is NOT a release: the intent keeps
+ * occupying its slot until a durable handoff matches or an explicit observation
+ * discharges it.
  */
-function intentReachedStop(snapshot: WorkflowSnapshot, intent: LaunchIntent): boolean {
-  const row = findPlanRow(snapshot, intent.planId);
-  if (row === null) return false;
-  if (snapshot.coordination?.coordinator?.session_id !== intent.coordinatorSessionId) return false;
-  const prepared = preparedOf(row);
+function intentReachedStop(workflow: ActiveWorkflow, intent: LaunchIntent): boolean {
+  const view = findPlanView(workflow, intent.planId);
+  if (view === null) return false;
+  if (workflow.coordinator === null || workflow.coordinator.sessionId !== intent.coordinatorSessionId) return false;
+  const prepared = preparedOf(view);
   if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) return false;
-  const handoff = durableHandoffOf(row);
-  const session = boundSessionOf(row);
+  const handoff = durableHandoffOf(view);
+  const session = boundSessionOf(view);
   if (handoff === null || session === null) return false;
-  if (handoff.submitted_by !== session.session_id) return false;
+  if (handoff.submitted_by !== session.sessionId) return false;
   return handoff.worktree_path === intent.worktreePath;
 }
 
@@ -484,15 +706,15 @@ function intentReachedStop(snapshot: WorkflowSnapshot, intent: LaunchIntent): bo
  * recorded plan/prepared pin/coordinator/session-checkout identity matches that
  * handoff. A stale or foreign intent is never silently reclaimed.
  */
-function occupancyOf(snapshot: WorkflowSnapshot, intents: readonly LaunchIntent[]): Set<string> {
+function occupancyOf(workflow: ActiveWorkflow, intents: readonly LaunchIntent[]): Set<string> {
   const occupied = new Set<string>();
-  for (const row of snapshot.plans) {
-    const planId = planIdOf(row);
+  for (const view of workflow.plans) {
+    const planId = planIdOf(view);
     if (planId === null) continue;
-    if (hasActiveBinding(row) && !boundSessionReachedStop(row)) occupied.add(planId);
+    if (hasActiveBinding(view) && !boundSessionReachedStop(view)) occupied.add(planId);
   }
   for (const intent of intents) {
-    if (intent.state === "refused" || intentReachedStop(snapshot, intent)) continue;
+    if (intent.state === "refused" || intentReachedStop(workflow, intent)) continue;
     occupied.add(intent.planId);
   }
   return occupied;
@@ -502,26 +724,24 @@ function occupancyOf(snapshot: WorkflowSnapshot, intents: readonly LaunchIntent[
  * Independent-prepared-plan admission (spec §C reserve prerequisites)
  * ------------------------------------------------------------------------- */
 
-function preparedOf(row: PlanRow): Record<string, unknown> | null {
-  const prepared = rowCoordinationOf(row)?.prepared;
-  if (typeof prepared !== "object" || prepared === null) return null;
-  return prepared as Record<string, unknown>;
+function preparedOf(view: ExecutionPlanView): Record<string, unknown> | null {
+  const prepared = rowCoordinationOf(view)?.prepared;
+  return isPlainRecord(prepared) ? prepared : null;
 }
 
 /** The plan row must be an unstarted, unowned, unbound coordinator-prepared row. */
-function assertPlanAvailable(row: PlanRow, planId: string): Refusal {
-  const status = row.status;
+function assertPlanAvailable(view: ExecutionPlanView, planId: string): Refusal {
+  const status = view.plan.status;
   if (status !== "Todo" && status !== "Blocked") {
     return refuse("launch.plan-unavailable", `plan ${planId} is ${JSON.stringify(status ?? null)}; only a Todo/Blocked plan is launchable`);
   }
-  const coordination = rowCoordinationOf(row);
-  if (coordination?.session !== undefined) {
+  if (view.session !== null) {
     return refuse("launch.plan-unavailable", `plan ${planId} is already bound to a plan session`);
   }
-  if (coordination?.handoff !== undefined) {
+  if (rowCoordinationOf(view)?.handoff !== undefined) {
     return refuse("launch.plan-unavailable", `plan ${planId} carries a handoff record; a launched plan has not handed off yet`);
   }
-  if ((row as Record<string, unknown>).execution_lease !== undefined) {
+  if (view.executionLease !== null) {
     return refuse("launch.plan-unavailable", `plan ${planId} carries an execution lease`);
   }
   return null;
@@ -556,11 +776,39 @@ function assertPreparedHash(prepared: Record<string, unknown>, planId: string): 
 }
 
 /**
+ * The plan scope a launch admits against, taken entirely from the DB plan view:
+ * the row's own worktree/branch metadata (the same fields `planLeaseScope`
+ * requires of any bindable plan) plus the prepared Assignment pin. Nothing here
+ * reads the retired workflow snapshot — on an ACTIVE root that file is refused
+ * as a source outright, so a snapshot-reading resolver cannot serve this route.
+ */
+type LaunchScope = Readonly<{ assignmentPath: string; worktreePath: string; workingBranch: string }>;
+
+function launchScopeOf(
+  view: ExecutionPlanView,
+  prepared: Record<string, unknown>,
+  planId: string,
+): { ok: true; scope: LaunchScope } | { ok: false; code: string; message: string } {
+  const metadata = isPlainRecord(view.plan.metadata) ? view.plan.metadata : null;
+  const worktreePath = metadata?.worktree_path;
+  const workingBranch = metadata?.working_branch;
+  if (!nonEmpty(worktreePath) || !isAbsolute(worktreePath) || !nonEmpty(workingBranch)) {
+    return {
+      ok: false,
+      code: "launch.plan-unavailable",
+      message:
+        `plan ${planId} records no plan worktree/branch scope (metadata.worktree_path must be an absolute path and ` +
+        `metadata.working_branch a non-empty branch), so no launch can be admitted for it`,
+    };
+  }
+  return { ok: true, scope: { assignmentPath: prepared.assignment_path as string, worktreePath, workingBranch } };
+}
+/**
  * The assigned worktree must be an existing, canonical, distinct feature
- * checkout of the same repository, on the Assignment's Working branch — and
+ * checkout of the same repository, on the plan row's recorded branch — and
  * never the lifecycle's integration checkout (spec §C).
  */
-function assertLaunchWorktree(scope: ResolvedPlanScope, authority: Authority, snapshot: WorkflowSnapshot): Refusal {
+function assertLaunchWorktree(scope: LaunchScope, authority: ExecutionLaunchAuthority, workflow: ActiveWorkflow): Refusal {
   const worktreePath = scope.worktreePath;
   let isDirectory = false;
   try {
@@ -581,7 +829,7 @@ function assertLaunchWorktree(scope: ResolvedPlanScope, authority: Authority, sn
     );
   }
 
-  const integration = snapshot.integration_worktree_path;
+  const integration = workflow.integrationWorktreePath;
   if (integration !== undefined && canonicalizeNearestExisting(integration) === candidateRoot) {
     return refuse("launch.worktree-unavailable", `${worktreePath} is the lifecycle integration checkout, not a plan worktree`);
   }
@@ -669,167 +917,127 @@ function assertTransportCapability(request: ReserveRequest): Refusal {
 }
 
 /* ------------------------------------------------------------------------- *
+ * File-lock ladder (§4.3)
+ * ------------------------------------------------------------------------- */
+
+/** Bounded wait for the maintenance exclusion; the engine's own test override decides the test window. */
+function maintenanceLockWaitMs(): number {
+  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
+    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS ?? "", 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 30_000;
+}
+
+/**
+ * The §4.3 maintenance exclusion every cooperative file writer takes BEFORE the
+ * workflow lock. The key is computed from the engine's own `storeDbPath`, so it
+ * is byte-identical to the key the migration/retire/restore ladder takes and
+ * cannot drift from it. Holding it is not a claim about any host process: it
+ * only keeps this journal write out of an activation/restore window.
+ */
+function withMaintenanceExclusion<T>(harnessRoot: string, fn: () => Promise<T>): Promise<T> {
+  const key = join(dirname(storeDbPath({ harnessDir: harnessRoot })), ".execution-maintenance", "execution-migration");
+  mkdirSync(dirname(key), { recursive: true });
+  return withStatusWriteLock(key, fn, { timeoutMs: maintenanceLockWaitMs() });
+}
+
+/**
+ * §4.3 the final synchronous identity check immediately before the file commit:
+ * the bound store/session/epoch is re-read under the held locks, so an epoch
+ * change that landed while this call was admitting refuses instead of writing.
+ */
+function assertCurrentSessionSynchronously(authority: ExecutionLaunchAuthority): Refusal {
+  try {
+    assertExecutionSessionCurrent(executionContextOf(authority), authority.binding.session);
+  } catch (error) {
+    return refuse(
+      engineCodeOf(error, "launch.session-denied"),
+      `the execution binding stopped being current before the journal write: ${messageOf(error)}`,
+    );
+  }
+  return null;
+}
+
+/**
+ * The owner block this call would write (§6): its own store, epoch and native
+ * session. Named apart from the journal reader's `ownerOf(value)` — the two take
+ * different inputs, and a module-level name collision would silently hand the
+ * parsed-owner decode a value it cannot read.
+ */
+function ownerFromAuthority(authority: ExecutionLaunchAuthority): JournalOwner {
+  return {
+    storeId: authority.binding.session.storeId,
+    epoch: authority.binding.session.epoch,
+    sessionId: authority.identity.sessionId,
+    workflowId: authority.identity.workflowId,
+  };
+}
+
+/* ------------------------------------------------------------------------- *
  * reserve-launch
  * ------------------------------------------------------------------------- */
 
 export async function reservePlanLaunch(
   request: Extract<Phase2Request, { operation: "reserve-launch" }>,
-  authority: Readonly<{ coordinatorSessionPath: string; cwd: string }>,
+  authority: ExecutionLaunchAuthority,
 ): Promise<PlanLaunchResult> {
   const invalid = validateAuthority(authority) ?? validateReserveRequest(request);
   if (invalid !== null) return invalid;
 
   const resolved = resolveAuthority(authority);
   if (resolved.ok === false) return resolved;
-  const resolvedAuthority = resolved.value;
-  const { session, sessionPath, harnessRoot, workflowDir, snapshotPath, journalPath } = resolvedAuthority;
+  const { workflowId, harnessRoot, snapshotPath, journalPath } = resolved.value;
 
-  return withStatusWriteLock(snapshotPath, async () => {
-    // Canonical snapshot → journal: never the other order.
-    const read = readSnapshot(resolvedAuthority);
-    if (read.ok === false) return read;
-    const snapshot = read.snapshot;
+  // §4.3: the resume and the workflow read happen BEFORE any lock, so no host
+  // query or SQL statement is ever taken inside the file critical section.
+  const stale = await resumeCurrentAuthority(authority);
+  if (stale !== null) return stale;
+  const active = await readActiveWorkflow(resolved.value);
+  if (active.ok === false) return active;
+  const workflow = active.workflow;
 
-    const own = assertOwnCoordinator(resolvedAuthority, snapshot);
-    if (own !== null) return own;
+  const own = assertOwnCoordinator(authority.identity, workflow);
+  if (own !== null) return own;
 
-    const journal = readJournal(journalPath, session, sessionPath);
-    if (journal.ok === false) return journal;
-    const doc = journal.doc;
+  const owner = ownerFromAuthority(authority);
 
-    const planId = request.planId;
-    const row = findPlanRow(snapshot, planId);
-    if (row === null) return refuse("launch.plan-not-found", `workflow ${snapshot.id} has no plan row ${planId}`);
-    const prepared = preparedOf(row);
-    if (prepared === null || !nonEmpty(prepared.assignment_sha256)) {
-      return refuse("launch.plan-not-prepared", `plan ${planId} has no hash-pinned prepared Assignment`);
-    }
-    const preparedHash = prepared.assignment_sha256;
+  return withMaintenanceExclusion(harnessRoot, () =>
+    withStatusWriteLock(snapshotPath, async () => {
+      const journal = readJournal(journalPath, workflowId, owner);
+      if (journal.ok === false) return journal;
+      // Reading an old journal is not writing it: adoption happens here, as part
+      // of a legitimate write, and keeps every intent and its provenance.
+      const doc = adoptedJournal(journal.read, owner, workflowId);
 
-    // Duplicate identical request: the recorded intent is returned without
-    // another authorization, so it never consumes a second slot. Any other
-    // outstanding intent for this plan is a duplicate owner and refuses.
-    const live = doc.intents.filter((entry) => entry.planId === planId && entry.state !== "refused" && !intentReachedStop(snapshot, entry));
-    const identical = live.find((entry) => entry.preparedHash === preparedHash);
-    if (identical !== undefined) return { ok: true, intent: identical, applied: false };
-    if (live.length > 0) {
-      return refuse(
-        "launch.plan-occupied",
-        `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}); an uncertain or pre-bind intent needs a durable handoff or explicit human recovery`,
+      const planId = request.planId;
+      const view = findPlanView(workflow, planId);
+      if (view === null) return refuse("launch.plan-not-found", `workflow ${workflowId} has no plan row ${planId}`);
+      const prepared = preparedOf(view);
+      if (prepared === null || !nonEmpty(prepared.assignment_sha256)) {
+        return refuse("launch.plan-not-prepared", `plan ${planId} has no hash-pinned prepared Assignment`);
+      }
+      const preparedHash = prepared.assignment_sha256;
+
+      // Duplicate identical request: the recorded intent is returned only after
+      // the current authority was revalidated by the resume above, so a stale or
+      // foreign caller never receives a reservation it no longer holds. Any other
+      // outstanding intent for this plan is a duplicate owner and refuses.
+      const live = doc.intents.filter(
+        (entry) => entry.planId === planId && entry.state !== "refused" && !intentReachedStop(workflow, entry),
       );
-    }
+      const identical = live.find((entry) => entry.preparedHash === preparedHash);
+      if (identical !== undefined) return { ok: true, intent: identical, applied: false };
+      if (live.length > 0) {
+        return refuse(
+          "launch.plan-occupied",
+          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}); an uncertain or pre-bind intent needs a durable handoff or explicit human recovery`,
+        );
+      }
 
-    const available = assertPlanAvailable(row, planId);
-    if (available !== null) return available;
+      const available = assertPlanAvailable(view, planId);
+      if (available !== null) return available;
 
-    const settings = await readPhase2Settings(authority.cwd);
-    if (settings.ok === false) {
-      return refuse(
-        settings.reason === "invalid-settings" ? "launch.settings-invalid" : "launch.settings-read-failed",
-        settings.message,
-      );
-    }
-    if (!settings.value.phase2PlanInstances) {
-      return refuse("launch.settings-disabled", "phase2PlanInstances is off; extra plan primaries require the explicit opt-in");
-    }
-
-    const drift = assertPreparedHash(prepared, planId);
-    if (drift !== null) return drift;
-
-    let scope: ResolvedPlanScope;
-    try {
-      scope = await resolvePlanScope({ workflowId: session.workflow_id, planId, harnessDir: harnessRoot }, authority.cwd);
-    } catch (error) {
-      return refuse("launch.plan-unavailable", `plan ${planId} scope is not resolvable for a launch: ${messageOf(error)}`);
-    }
-
-    const worktree = assertLaunchWorktree(scope, authority, snapshot);
-    if (worktree !== null) return worktree;
-
-    const capability = assertTransportCapability(request);
-    if (capability !== null) return capability;
-
-    const occupancy = occupancyOf(snapshot, doc.intents);
-    if (occupancy.size + 1 > settings.value.maxPlanInstances) {
-      return refuse(
-        "launch.capacity-exceeded",
-        `${occupancy.size} plan primaries are already pending or active (${[...occupancy].join(", ") || "none"}); maxPlanInstances is ${settings.value.maxPlanInstances}`,
-      );
-    }
-
-    const intent: LaunchIntent = {
-      id: `phase2-launch:${planId}:${doc.intents.filter((entry) => entry.planId === planId).length + 1}`,
-      workflowId: session.workflow_id,
-      coordinatorSessionId: session.session_id,
-      planId,
-      preparedHash,
-      assignmentPath: scope.assignmentPath,
-      worktreePath: scope.worktreePath,
-      transport: request.transport,
-      state: "reserved",
-      evidencePaths: [],
-    };
-    writeJson<JournalDoc>(journalPath, { ...doc, intents: [...doc.intents, intent] });
-    return { ok: true, intent, applied: true };
-  });
-}
-
-/* ------------------------------------------------------------------------- *
- * record-launch
- * ------------------------------------------------------------------------- */
-
-export async function recordPlanLaunch(
-  request: Extract<Phase2Request, { operation: "record-launch" }>,
-  authority: Readonly<{ coordinatorSessionPath: string; cwd: string }>,
-): Promise<PlanLaunchResult> {
-  const invalid = validateAuthority(authority) ?? validateRecordRequest(request);
-  if (invalid !== null) return invalid;
-
-  const resolved = resolveAuthority(authority);
-  if (resolved.ok === false) return resolved;
-  const { session, sessionPath, harnessRoot, workflowDir, snapshotPath, journalPath } = resolved.value;
-  const resolvedAuthority = { session, sessionPath, harnessRoot, workflowDir, snapshotPath, journalPath };
-
-  return withStatusWriteLock(snapshotPath, async () => {
-    const read = readSnapshot(resolvedAuthority);
-    if (read.ok === false) return read;
-    const snapshot = read.snapshot;
-
-    const own = assertOwnCoordinator(resolvedAuthority, snapshot);
-    if (own !== null) return own;
-
-    const journal = readJournal(journalPath, session, sessionPath);
-    if (journal.ok === false) return journal;
-    const doc = journal.doc;
-
-    const intent = doc.intents.find((entry) => entry.id === request.intentId);
-    if (intent === undefined) {
-      return refuse("launch.intent-not-found", `no launch intent ${request.intentId} in ${journalPath}`);
-    }
-    if (intent.coordinatorSessionId !== session.session_id || intent.workflowId !== session.workflow_id) {
-      return refuse("launch.session-denied", `launch intent ${intent.id} belongs to another coordinator workflow`);
-    }
-    if (request.target !== undefined && intent.target !== undefined && request.target !== intent.target) {
-      return refuse(
-        "launch.transition-invalid",
-        `launch intent ${intent.id} is already bound to target ${intent.target}; a transition never re-points a recorded target`,
-      );
-    }
-
-    // Idempotent replay: the same observation for the state already on disk
-    // authorizes no side effect and writes nothing.
-    if (intent.state === request.observation) return { ok: true, intent, applied: false };
-
-    if (!FORWARD_OBSERVATIONS[request.observation].includes(intent.state)) {
-      return refuse(
-        "launch.transition-invalid",
-        `${request.observation} is not a legal transition from ${intent.state} for launch intent ${intent.id}${
-          intent.state === "uncertain" ? " — an uncertain submission is terminal and is never retried" : ""
-        }`,
-      );
-    }
-
-    if (SIDE_EFFECTING_OBSERVATIONS[request.observation] === true) {
       const settings = await readPhase2Settings(authority.cwd);
       if (settings.ok === false) {
         return refuse(
@@ -838,50 +1046,185 @@ export async function recordPlanLaunch(
         );
       }
       if (!settings.value.phase2PlanInstances) {
-        return refuse("launch.settings-disabled", `${request.observation} would start work while phase2PlanInstances is off`);
+        return refuse("launch.settings-disabled", "phase2PlanInstances is off; extra plan primaries require the explicit opt-in");
       }
 
-      const row = findPlanRow(snapshot, intent.planId);
-      if (row === null) return refuse("launch.plan-unavailable", `plan ${intent.planId} left the workflow snapshot`);
-      const prepared = preparedOf(row);
-      if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) {
-        return refuse(
-          "launch.prepared-hash-drift",
-          `plan ${intent.planId} is no longer prepared from the Assignment this launch was reserved for`,
-        );
-      }
-      const drift = assertPreparedHash(prepared, intent.planId);
+      const drift = assertPreparedHash(prepared, planId);
       if (drift !== null) return drift;
 
-      const availability = assertPlanAvailable(row, intent.planId);
-      if (availability !== null) {
-        return refuse("launch.plan-occupied", `plan ${intent.planId} is no longer free for this launch: ${availability.message}`);
-      }
+      // The scope comes from the DB plan view (§6): the row's own
+      // worktree/branch metadata plus the prepared pin validated above. The
+      // retired-snapshot resolver is NOT used — on an ACTIVE root the snapshot is
+      // refused as a source (`execution.consumer-not-ready`), so a
+      // snapshot-reading resolver cannot serve this route at all.
+      const scoped = launchScopeOf(view, prepared, planId);
+      if (scoped.ok === false) return scoped;
+      const scope = scoped.scope;
 
-      const occupancy = occupancyOf(snapshot, doc.intents);
-      if (occupancy.size > settings.value.maxPlanInstances) {
+      const worktree = assertLaunchWorktree(scope, authority, workflow);
+      if (worktree !== null) return worktree;
+
+      const capability = assertTransportCapability(request);
+      if (capability !== null) return capability;
+
+      const occupancy = occupancyOf(workflow, doc.intents);
+      if (occupancy.size + 1 > settings.value.maxPlanInstances) {
         return refuse(
           "launch.capacity-exceeded",
-          `${occupancy.size} plan primaries are pending or active (${[...occupancy].join(", ")}) against maxPlanInstances ${settings.value.maxPlanInstances}; the existing intents are left untouched`,
+          `${occupancy.size} plan primaries are already pending or active (${[...occupancy].join(", ") || "none"}); maxPlanInstances is ${settings.value.maxPlanInstances}`,
         );
       }
-    }
 
-    const evidencePaths = intent.evidencePaths.includes(request.evidencePath)
-      ? intent.evidencePaths
-      : [...intent.evidencePaths, request.evidencePath];
-    const next: LaunchIntent = {
-      ...intent,
-      state: request.observation,
-      ...(request.target !== undefined ? { target: request.target } : {}),
-      evidencePaths,
-    };
-    writeJson<JournalDoc>(journalPath, {
-      ...doc,
-      intents: doc.intents.map((entry) => (entry.id === intent.id ? next : entry)),
-    });
-    return { ok: true, intent: next, applied: true };
-  });
+      const intent: LaunchIntent = {
+        id: `phase2-launch:${planId}:${doc.intents.filter((entry) => entry.planId === planId).length + 1}`,
+        workflowId,
+        coordinatorSessionId: authority.identity.sessionId,
+        planId,
+        preparedHash,
+        assignmentPath: scope.assignmentPath,
+        worktreePath: scope.worktreePath,
+        transport: request.transport,
+        state: "reserved",
+        evidencePaths: [],
+      };
+      const committed = assertCurrentSessionSynchronously(authority);
+      if (committed !== null) return committed;
+      writeJson<JournalDoc>(journalPath, { ...doc, owner, intents: [...doc.intents, intent] });
+      return { ok: true, intent, applied: true };
+    }),
+  );
+}
+
+/* ------------------------------------------------------------------------- *
+ * record-launch
+ * ------------------------------------------------------------------------- */
+
+export async function recordPlanLaunch(
+  request: Extract<Phase2Request, { operation: "record-launch" }>,
+  authority: ExecutionLaunchAuthority,
+): Promise<PlanLaunchResult> {
+  const invalid = validateAuthority(authority) ?? validateRecordRequest(request);
+  if (invalid !== null) return invalid;
+
+  const resolved = resolveAuthority(authority);
+  if (resolved.ok === false) return resolved;
+  const { workflowId, harnessRoot, snapshotPath, journalPath } = resolved.value;
+
+  const stale = await resumeCurrentAuthority(authority);
+  if (stale !== null) return stale;
+  const active = await readActiveWorkflow(resolved.value);
+  if (active.ok === false) return active;
+  const workflow = active.workflow;
+
+  const own = assertOwnCoordinator(authority.identity, workflow);
+  if (own !== null) return own;
+
+  const owner = ownerFromAuthority(authority);
+
+  return withMaintenanceExclusion(harnessRoot, () =>
+    withStatusWriteLock(snapshotPath, async () => {
+      const journal = readJournal(journalPath, workflowId, owner);
+      if (journal.ok === false) return journal;
+      const doc = adoptedJournal(journal.read, owner, workflowId);
+
+      const intent = doc.intents.find((entry) => entry.id === request.intentId);
+      if (intent === undefined) {
+        return refuse("launch.intent-not-found", `no launch intent ${request.intentId} in ${journalPath}`);
+      }
+      if (intent.workflowId !== workflowId) {
+        return refuse("launch.session-denied", `launch intent ${intent.id} belongs to another workflow`);
+      }
+      if (request.target !== undefined && intent.target !== undefined && request.target !== intent.target) {
+        return refuse(
+          "launch.transition-invalid",
+          `launch intent ${intent.id} is already bound to target ${intent.target}; a transition never re-points a recorded target`,
+        );
+      }
+
+      // Idempotent replay: the same observation for the state already on disk
+      // authorizes no side effect and writes nothing.
+      if (intent.state === request.observation) return { ok: true, intent, applied: false };
+
+      if (!FORWARD_OBSERVATIONS[request.observation].includes(intent.state)) {
+        return refuse(
+          "launch.transition-invalid",
+          `${request.observation} is not a legal transition from ${intent.state} for launch intent ${intent.id}${
+            intent.state === "uncertain" ? " — an uncertain submission is terminal and is never retried" : ""
+          }`,
+        );
+      }
+
+      // A side-effecting observation authorizes a real process or prompt, so only
+      // the coordinator that reserved THIS intent may record it. The observations
+      // that merely report what the transport already did (`submitted`, `refused`,
+      // `uncertain`) may be recorded by any coordinator currently bound to this
+      // workflow: that is the recorded native transport evidence which discharges
+      // an intent left behind by a replaced owner, and it is why an owner or
+      // epoch change never has to drop a reservation.
+      if (SIDE_EFFECTING_OBSERVATIONS[request.observation] === true && intent.coordinatorSessionId !== authority.identity.sessionId) {
+        return refuse(
+          "launch.session-denied",
+          `launch intent ${intent.id} was reserved by coordinator session ${intent.coordinatorSessionId}; a ${request.observation} observation would start work, and only that reserving session may record it`,
+        );
+      }
+
+      if (SIDE_EFFECTING_OBSERVATIONS[request.observation] === true) {
+        const settings = await readPhase2Settings(authority.cwd);
+        if (settings.ok === false) {
+          return refuse(
+            settings.reason === "invalid-settings" ? "launch.settings-invalid" : "launch.settings-read-failed",
+            settings.message,
+          );
+        }
+        if (!settings.value.phase2PlanInstances) {
+          return refuse("launch.settings-disabled", `${request.observation} would start work while phase2PlanInstances is off`);
+        }
+
+        const view = findPlanView(workflow, intent.planId);
+        if (view === null) return refuse("launch.plan-unavailable", `plan ${intent.planId} left the workflow`);
+        const prepared = preparedOf(view);
+        if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) {
+          return refuse(
+            "launch.prepared-hash-drift",
+            `plan ${intent.planId} is no longer prepared from the Assignment this launch was reserved for`,
+          );
+        }
+        const drift = assertPreparedHash(prepared, intent.planId);
+        if (drift !== null) return drift;
+
+        const availability = assertPlanAvailable(view, intent.planId);
+        if (availability !== null) {
+          return refuse("launch.plan-occupied", `plan ${intent.planId} is no longer free for this launch: ${availability.message}`);
+        }
+
+        const occupancy = occupancyOf(workflow, doc.intents);
+        if (occupancy.size > settings.value.maxPlanInstances) {
+          return refuse(
+            "launch.capacity-exceeded",
+            `${occupancy.size} plan primaries are pending or active (${[...occupancy].join(", ")}) against maxPlanInstances ${settings.value.maxPlanInstances}; the existing intents are left untouched`,
+          );
+        }
+      }
+
+      const evidencePaths = intent.evidencePaths.includes(request.evidencePath)
+        ? intent.evidencePaths
+        : [...intent.evidencePaths, request.evidencePath];
+      const next: LaunchIntent = {
+        ...intent,
+        state: request.observation,
+        ...(request.target !== undefined ? { target: request.target } : {}),
+        evidencePaths,
+      };
+      const committed = assertCurrentSessionSynchronously(authority);
+      if (committed !== null) return committed;
+      writeJson<JournalDoc>(journalPath, {
+        ...doc,
+        owner,
+        intents: doc.intents.map((entry) => (entry.id === intent.id ? next : entry)),
+      });
+      return { ok: true, intent: next, applied: true };
+    }),
+  );
 }
 
 function messageOf(error: unknown): string {

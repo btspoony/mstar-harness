@@ -30,6 +30,16 @@
  * when it exists and cannot be read) — canonical and symlinked targets alike.
  * This host has no refusal channel, so every one of those verdicts is a
  * decision record + error log, never an OS/tool fence.
+ * Native execution association (S15): the tool hook's native `sessionID` is
+ * the authoritative session fact, and the scope (workflow / role / plan) can
+ * only come from an independently acquired `MSTAR_EXECUTION_IDENTITY` — never
+ * from tool arguments. A bound association makes this consumer consult the
+ * SHARED CLI (the writer) under that native identity and report its
+ * authoritative outcome; a missing native session or missing scope is an
+ * explicit operational exclusion. The shared CLI owns every mutation and every
+ * refusal: this plugin advertises `decision-only` for the write hook because
+ * `tool.execute.before` cannot stop a tool call, and nothing here claims a
+ * fence, a stopped writer, or a cached/boolean success.
  * Never throws raw exceptions in either mode — OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  * `Promise<void>` with no refusal channel, so hard mode is surfaced as the
@@ -66,16 +76,31 @@ import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
   composeDispatchGate,
+  decodeExecutionSessionRef,
+  executionContextFor,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
   readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
+  resumeExecutionSession,
+  serializeExecutionValue,
+  validateExecutionIdentity,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusV2Doc, StoreRuntimeInfo } from "@mstar-harness/engine";
+import type {
+  EnforcementFlag,
+  ExecutionContext,
+  ExecutionIdentity,
+  ExecutionSessionRef,
+  GateResult,
+  StatusV2Doc,
+  StoreContext,
+  StoreRuntimeInfo,
+} from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 type JsonPrimitive = string | number | boolean | null;
@@ -85,6 +110,376 @@ type FrontmatterAndBody = {
   body: string;
 };
 type MessagePart = { type: string; text?: string };
+
+/** The only native identity OpenCode exposes to a tool hook. */
+export type OpenCodeHookSession = Readonly<{ sessionID?: unknown }>;
+/**
+ * The active identity channel (§3.2): the value a launcher overwrites from
+ * native host facts. This consumer reproduces the producer form with the
+ * engine's own canonical serializer — there is no second codec here.
+ */
+export const EXECUTION_IDENTITY_ENV = "MSTAR_EXECUTION_IDENTITY";
+/** The legacy pre-activation channel: an active identity never comes from it. */
+export const LEGACY_SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
+
+/** The shared CLI entrypoint this consumer's writer transport invokes. */
+export const OPENCODE_EXECUTION_CLI = "mstar";
+
+/**
+ * The channel overrides one invocation must install — exactly the launcher's
+ * rule: the identity is overwritten from native facts, while BOTH legacy keys
+ * (`MSTAR_HOST_SESSION_ID`, `MSTAR_HARNESS_DIR`) are removed. Root selection
+ * stays explicit — the `--harness` flag where a verb accepts it, otherwise the
+ * child's own cwd — so an inherited root variable never decides the target.
+ */
+export function openCodeExecutionEnvOverrides(identity: ExecutionIdentity): Record<string, string | undefined> {
+  return {
+    [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(identity),
+    [LEGACY_SESSION_ID_ENV]: undefined,
+    MSTAR_HARNESS_DIR: undefined,
+  };
+}
+
+/** The scope an independently acquired ambient identity addresses, or null. */
+export function openCodeAmbientScope(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<ExecutionIdentity, "workflowId" | "role" | "planId"> | null {
+  const raw = env[EXECUTION_IDENTITY_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  return {
+    workflowId: record.workflowId as string,
+    role: record.role as ExecutionIdentity["role"],
+    planId: (record.planId ?? null) as string | null,
+  };
+}
+
+/** One OpenCode association verdict: a real bound identity, or exclusion. */
+export type OpenCodeAssociation =
+  | {
+      kind: "bound";
+      identity: ExecutionIdentity;
+      /** The reference this plugin holds for the native session, when any. */
+      sessionRef: string | null;
+      capability: "decision-only";
+    }
+  | { kind: "unavailable"; capability: "decision-only"; reason: string; operationallyExcluded: true };
+
+/**
+ * Associate the native hook session with an independently acquired scope. The
+ * native `sessionID` is the authoritative session fact and overwrites whatever
+ * the ambient identity carried; the scope (workflow/role/plan) can only come
+ * from that ambient channel, never from tool arguments. A missing native
+ * session, a missing scope, or a scope that fails the C1 rules is an explicit
+ * operational exclusion — never a success-shaped warning and never a guess.
+ */
+export function openCodeAssociation(
+  input: OpenCodeHookSession,
+  env: NodeJS.ProcessEnv = process.env,
+): OpenCodeAssociation {
+  const sessionId = input?.sessionID;
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `${LEGACY_SESSION_ID_ENV}/native session missing: OpenCode supplied no sessionID, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  const scope = openCodeAmbientScope(env);
+  if (scope === null) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `no independently acquired scope in ${EXECUTION_IDENTITY_ENV}, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  try {
+    const identity = openCodeExecutionIdentity(input, scope);
+    return { kind: "bound", identity, sessionRef: openCodeSessionRefs.get(sessionId) ?? null, capability: "decision-only" };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `native association refused: ${(error as Error).message}`,
+      operationallyExcluded: true,
+    };
+  }
+}
+
+/** The result of one shared-CLI invocation under the native identity. */
+export type OpenCodeCliResult = Readonly<{
+  status: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  envelope: Record<string, unknown> | null;
+  /** True when the bounded deadline expired — reported, never silently green. */
+  timedOut: boolean;
+}>;
+
+/**
+ * Invoke the shared CLI as this consumer's writer/reader transport, carrying
+ * the identity acquired from native facts in the overwritten channel. The CLI
+ * (not this hook) owns every mutation; a refusal keeps the CLI's own exit code
+ * and envelope, and nothing here is upgraded into a fence. The invocation is
+ * bounded: a hung CLI is reported as a timeout instead of stalling the hook.
+ */
+export function runOpenCodeExecutionCli(
+  argv: readonly string[],
+  identity: ExecutionIdentity,
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenCodeCliResult {
+  const source = options.env ?? process.env;
+  const env: NodeJS.ProcessEnv = { ...source };
+  const overrides = openCodeExecutionEnvOverrides(identity);
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  const command =
+    options.command ?? (typeof source[OPENCODE_EXECUTION_CLI_ENV] === "string" ? source[OPENCODE_EXECUTION_CLI_ENV] : OPENCODE_EXECUTION_CLI);
+  const child = spawnSync(command, [...argv], {
+    cwd: options.cwd,
+    env,
+    encoding: "utf8",
+    timeout: CLI_CONSULT_TIMEOUT_MS,
+  });
+  const stdout = typeof child.stdout === "string" ? child.stdout : "";
+  const stderr = typeof child.stderr === "string" ? child.stderr : "";
+  let envelope: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(stdout.trim());
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      envelope = parsed as Record<string, unknown>;
+    }
+  } catch {
+    envelope = null;
+  }
+  // Node and Bun spell the same child outcome differently; read both once
+  // through one named shape instead of casting per access.
+  const outcome = child as {
+    signal?: string | null;
+    signalCode?: string | null;
+    exitCode?: number | null;
+    error?: { code?: string };
+  };
+  return {
+    status: child.status ?? outcome.exitCode ?? null,
+    signal: outcome.signalCode ?? outcome.signal ?? null,
+    stdout,
+    stderr,
+    envelope,
+    timedOut: outcome.error?.code === "ETIMEDOUT",
+  };
+}
+
+/**
+ * The plugin's own native-session → session-reference association store. A
+ * launcher that bound this host session records the reference here; the gated
+ * write path then consults the shared CLI's session-authorized read, which
+ * revalidates caller, root, store, epoch and row. An absent reference degrades
+ * to a read that proves LESS and says so.
+ */
+const openCodeSessionRefs = new Map<string, string>();
+
+export function rememberOpenCodeSessionRef(sessionId: string, wire: string): void {
+  openCodeSessionRefs.set(sessionId, wire);
+}
+
+export function forgetOpenCodeSessionRef(sessionId: string): void {
+  openCodeSessionRefs.delete(sessionId);
+}
+
+/** The canonical reference wire this plugin recognises inside observed argv. */
+const SESSION_REF_WIRE_RE = /exec-session-v1:[A-Za-z0-9_-]+/g;
+
+/**
+ * Learn this native session's reference from its OWN CLI traffic: a `bash`
+ * invocation (or a dispatch prompt) that carries `--session-ref` /
+ * `--resume-ref` names a reference the session was already issued, so the next
+ * consultation can take the session-authorized read instead of the weaker
+ * authority/register read. Only a well-formed wire whose own session id IS this
+ * native session is remembered — a foreign or malformed value is not a
+ * reference this consumer holds.
+ */
+export function observeOpenCodeSessionRefs(nativeSessionId: unknown, text: unknown): void {
+  if (typeof nativeSessionId !== "string" || nativeSessionId.trim() === "") return;
+  if (typeof text !== "string" || text === "") return;
+  for (const wire of text.match(SESSION_REF_WIRE_RE) ?? []) {
+    try {
+      if (decodeExecutionSessionRef(wire).sessionId !== nativeSessionId) continue;
+    } catch {
+      continue;
+    }
+    openCodeSessionRefs.set(nativeSessionId, wire);
+  }
+}
+
+/** The CLI entrypoint this consumer invokes; a repo whose CLI is not on PATH sets it. */
+export const OPENCODE_EXECUTION_CLI_ENV = "MSTAR_EXECUTION_CLI";
+
+/** The bounded time one CLI consultation may take before it is reported as a timeout. */
+const CLI_CONSULT_TIMEOUT_MS = 15_000;
+
+/** What one consultation actually proved — the log must claim no more. */
+export type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "authority-read" | "register-read" };
+
+/**
+ * The real CLI invocation for one bound association. Preference order: the
+ * session-authorized read (revalidates the caller) when this plugin holds the
+ * session reference — `plan show --session-ref` for a plan-pm scope and the
+ * read-only resume (`plan bind --execution --resume-ref`) for a coordinator
+ * scope, which carries no plan for the show form to address; otherwise
+ * `plan show --workflow/--plan` (authority and row read, caller currency NOT
+ * verified); otherwise `status validate` with no flags, whose argument-less
+ * form reads the ACTIVE register.
+ */
+export function openCodeConsultPlan(
+  association: OpenCodeAssociation & { kind: "bound" },
+  root: string | null,
+): OpenCodeConsultPlan {
+  const { identity, sessionRef } = association;
+  const harnessFlags = root === null ? [] : ["--harness", root];
+  if (sessionRef !== null && identity.role === "plan-pm") {
+    return {
+      argv: ["plan", "show", "--session-ref", sessionRef, "--plan", String(identity.planId), "--json", ...harnessFlags],
+      proof: "session-authorized",
+    };
+  }
+  if (sessionRef !== null) {
+    // A coordinator reference: the only session-authorized READ that scope has
+    // is the read-only resume, which revalidates caller, root, store, epoch and
+    // the live row. It takes no other flag, so the root comes from the cwd.
+    return {
+      argv: ["plan", "bind", "--execution", "--resume-ref", sessionRef, "--json"],
+      proof: "session-authorized",
+    };
+  }
+  if (identity.role === "plan-pm") {
+    return {
+      argv: [
+        "plan",
+        "show",
+        "--workflow",
+        identity.workflowId,
+        "--plan",
+        String(identity.planId),
+        "--json",
+        ...harnessFlags,
+      ],
+      proof: "authority-read",
+    };
+  }
+  // A coordinator scope: the register read is the real argument-less verb.
+  return { argv: ["status", "validate"], proof: "register-read" };
+}
+
+/** Default harness layout names: their PARENT is the directory a CLI walks up from. */
+const HARNESS_LAYOUT_NAMES = new Set([".mstar", ".agents", ".plans", "plans"]);
+
+/**
+ * The cwd one consultation runs from. A CLI resolves the process harness root
+ * by walking UP from its cwd, so the parent of a layout-named harness dir is
+ * the workspace root that resolution expects; a custom-layout root is its own
+ * starting point.
+ */
+function openCodeConsultCwd(root: string | null): string | undefined {
+  if (root === null) return undefined;
+  return HARNESS_LAYOUT_NAMES.has(path.basename(root)) ? path.dirname(root) : root;
+}
+
+/**
+ * The gated-write consultation: with a bound native association this consumer
+ * really invokes the shared CLI (the writer) under the native identity and
+ * reports exactly what that call proved; with no association it states the
+ * explicit operational exclusion. It never claims the hook stopped anything,
+ * and a refusal keeps the CLI's own code — a missing or stale context is never
+ * reported as success.
+ */
+function consultSharedCliForGatedWrite(association: OpenCodeAssociation, targetPath: string): void {
+  if (association.kind === "unavailable") {
+    defaultStatusLogger(
+      "warn",
+      `native execution association unavailable — this consumer is operationally excluded for authorized writes (${association.reason}); the write is NOT stopped`,
+    );
+    return;
+  }
+  const root = resolveHarnessRootOf(path.dirname(targetPath)) ?? resolveHarnessDir(path.dirname(targetPath));
+  const plan = openCodeConsultPlan(association, root);
+  // The root reaches the CLI explicitly: `--harness` where the verb accepts it
+  // (see `openCodeConsultPlan`) and, for the argument-less register read, the
+  // child's own cwd — the workspace root that the CLI's upward probe expects.
+  // No environment variable decides the target.
+  const result = runOpenCodeExecutionCli(plan.argv, association.identity, { cwd: openCodeConsultCwd(root) });
+  const code = result.envelope?.code;
+  const proofNote =
+    plan.proof === "session-authorized"
+      ? "session-authorized read (caller, root, store, epoch and row revalidated)"
+      : plan.proof === "authority-read"
+        ? "authority/row read — this call does NOT consume the native identity, so caller currency is NOT verified"
+        : "register read — this call does NOT consume the native identity, so caller currency is NOT verified";
+  if (result.timedOut) {
+    defaultStatusLogger("warn", `shared CLI ${plan.argv[0]} timed out after ${CLI_CONSULT_TIMEOUT_MS}ms — ${proofNote}; the write is NOT stopped`);
+    return;
+  }
+  if (result.status === 0) {
+    // `status validate` prints no JSON envelope: a zero exit IS its verdict;
+    // `plan show --json` adds the row payload. Neither proves caller currency
+    // for the non-identity-consuming forms, which the note states.
+    defaultStatusLogger("info", `shared CLI ${plan.argv.join(" ")} ok — ${proofNote} (decision-only; not a fence)`);
+    return;
+  }
+  defaultStatusLogger(
+    "warn",
+    `shared CLI ${plan.argv.join(" ")} refused or failed (${String(code ?? result.signal ?? result.status ?? "no result")}) — ${proofNote}; the write is NOT stopped`,
+  );
+}
+
+/**
+ * Build the engine identity from OpenCode's native per-call session fact.
+ * The spawn target (`subagent`) and model-supplied arguments are deliberately
+ * absent from this path. Missing/unsafe native identity is a refusal, never a
+ * generated or cached substitute.
+ */
+export function openCodeExecutionIdentity(
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+): ExecutionIdentity {
+  const sessionId = input?.sessionID;
+  const identity = {
+    source: "host" as const,
+    sessionId: typeof sessionId === "string" ? sessionId : "",
+    ...scope,
+  };
+  validateExecutionIdentity(identity, scope);
+  return identity;
+}
+
+/**
+ * Decode and resume an OpenCode-bound reference using the native hook session.
+ * The engine re-reads authority, store identity, epoch and active row; this
+ * helper never treats a cached reference or boolean flag as admission.
+ */
+export async function resumeOpenCodeExecutionSession(
+  context: StoreContext,
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+  reference: string | ExecutionSessionRef,
+) {
+  const identity = openCodeExecutionIdentity(input, scope);
+  const executionContext: ExecutionContext = executionContextFor(context, identity);
+  const session = typeof reference === "string" ? decodeExecutionSessionRef(reference) : reference;
+  return resumeExecutionSession(executionContext, session);
+}
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1238,9 +1633,17 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const args = (output?.args ?? {}) as Record<string, unknown>;
       const prompt = args.prompt;
       const rawFilePath = args.filePath;
+      // Native-session reference association: this session's OWN CLI traffic
+      // (a `bash` invocation or a dispatch prompt carrying `--session-ref` /
+      // `--resume-ref`) names a reference it was already issued, so later
+      // gated-write consultations can take the session-authorized read that
+      // revalidates caller, root, store, epoch and row.
+      observeOpenCodeSessionRefs(input.sessionID, typeof args.command === "string" ? args.command : undefined);
+      observeOpenCodeSessionRefs(input.sessionID, typeof prompt === "string" ? prompt : undefined);
       const rawPath = args.path;
       const filePath =
         typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
+      const nativeAssociation = openCodeAssociation(input);
 
  // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
  // validation on subagent dispatch. OpenCode's `task` tool carries the
@@ -1296,6 +1699,9 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: consult the shared CLI under the
+        // native association (positive path) or state the explicit exclusion.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation, filePath);
       } else if (input.tool === "edit") {
  // Classify the target FIRST : the dir-resolvers loader is
  // cached, so the kind check is cheap — the synchronous file read +
@@ -1359,6 +1765,8 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: same positive CLI consultation path.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation, filePath);
       }
     },
 

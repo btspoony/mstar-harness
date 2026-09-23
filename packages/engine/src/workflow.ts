@@ -222,21 +222,110 @@ export function isStandaloneDevelopmentWorkflow(snapshot: WorkflowSnapshot): boo
   );
 }
 
-/** Classify row coordination validation: standalone development vs integration delivery. */
+/** True exactly for a single-row verification/report-only plan workflow (spec A1). */
+export function isStandaloneReportOnlyWorkflow(snapshot: WorkflowSnapshot): boolean {
+  return (
+    snapshot.type === "plan" &&
+    snapshot.delivery_kind === "verification/report-only" &&
+    Array.isArray(snapshot.plans) &&
+    snapshot.plans.length === 1
+  );
+}
+
+/** Classify row coordination validation: standalone delivery vs integration delivery. */
 export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
   }
   return "integration";
 }
 
 function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
   const violations: ValidationResult[] = [];
-  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id) return violations;
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
   const coordination = row.coordination;
-  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
+  // A Done standalone row that carries a coordination block must carry the
+  // handoff that block exists to record. The coordination block's own presence
+  // is the durable marker that this row entered the coordination lifecycle, and
+  // no authorized writer produces a coordinated row without a handoff: `accept`
+  // moves it to `accepted` and `complete` writes it `completed` in the SAME
+  // update as `status: "Done"` (`completeStandaloneRow` / `completeRow`,
+  // coordination.ts) — so a Done coordinated row whose handoff block is missing
+  // is only reachable by deleting it, and the deleted block is exactly the
+  // accepted/QC/QA record the completion was authorized against. The reverse
+  // boundary is deliberate: a Done standalone row with NO coordination block at
+  // all is a legitimate legacy shape — the v1 lift mints it verbatim
+  // (`buildStandaloneSnapshot`, migrate.ts:466-511) — and stays accepted.
+  if (!isPlainObject(coordination)) return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff \u2014 a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`,
+        ),
+      );
+    }
+    return violations;
+  }
   const handoff = coordination.handoff as Record<string, unknown>;
-  if (handoff.state !== "completed" || handoff.integration !== undefined) return violations;
+  const completed = handoff.state === "completed";
+  // The state is a POSITIVE requirement, never an early return: a Done
+  // standalone row IS the closed shape, so its stored handoff must be
+  // `completed` — the requirement the DB route's completed replay states
+  // outright (`requireHandoffState(handoff, ["completed"], ...)`,
+  // execution-coordination.ts). The early return this replaces evaluated every
+  // check below — integration contamination, the `integration_worktree_path` /
+  // `branch.integration` refusals and the no-lease requirement — only for a
+  // shape an adversary had already stored correctly, so flipping one word of
+  // stored state disabled all of them and a handoff rewritten back to
+  // `accepted` reached the terminal close. An in-progress standalone row (not
+  // Done) is not this validator's subject and stays untouched: `accepted` is
+  // the state `accept` writes.
+  if (row.status !== "Done" && !completed) return violations;
+  if (!completed) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} \u2014 a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`,
+      ),
+    );
+  }
+  if (handoff.integration !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone completed handoff must not carry integration for row ${String(row.id)}`,
+      ),
+    );
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    if (snapshot.integration_worktree_path !== undefined) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry integration_worktree_path",
+        ),
+      );
+    }
+    if (isNonEmptyString(snapshot.branch?.integration)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry branch.integration",
+        ),
+      );
+    }
+  }
   if (row.status !== "Done") {
     violations.push(
       violation(
@@ -264,18 +353,18 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
       ),
     );
   }
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        "standalone completed handoff requires nonblank branch.source and branch.target",
-      ),
-    );
-  } else {
-    if (handoff.source_branch !== source) {
+  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+    const source = snapshot.branch?.source;
+    const target = snapshot.branch?.target;
+    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "standalone completed handoff requires nonblank branch.source and branch.target",
+        ),
+      );
+    } else if (handoff.source_branch !== source) {
       violations.push(
         violation(
           "high",
@@ -287,6 +376,7 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
   }
   return violations;
 }
+
 
 /** Stable JSON for change detection (sorted keys, recursive). */
 export function stableJson(value: unknown): string {
@@ -1266,12 +1356,19 @@ export type RecordWorkflowDeliveryResult = {
  * - an empty patch or a malformed member: nothing is silently dropped;
  * - compound / PR identity / verified-merge record while any owned plan row
  *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` — contract §3: the delivery
- *   tail runs after every row is Done; write-time only, see below).
+ *   tail runs after every row is Done; write-time only, see below);
+ * - a `completion` fulfilment that would CHANGE once an owned plan row is
+ *   `Done` (`coordination.invalid-transition` — contract §1 the mirror rule:
+ *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
+ *   and the same stable code refuses the same state on the DB route's
+ *   `applyDeliveryEvidence`).
  *
  * Grandfathering: the row-Done gate is write-time only. Snapshots that
  * already carry delivery evidence while rows are not `Done` are never
  * retro-invalidated; idempotent re-records return without consulting row
- * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
+ * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged. The same
+ * grandfathering covers the completion freeze: an identical re-record is the
+ * idempotent return above, never a refusal.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1384,6 +1481,25 @@ export async function recordWorkflowDelivery(
           `refusing to record delivery evidence: ${detail.code}: ${detail.message}${detail.fix !== undefined ? ` (fix: ${detail.fix})` : ""}`,
         );
       }
+    }
+    // Post-Done immutability of the completion fulfilment (contract §1: for a
+    // `verification/report-only` kind "the fulfilment is recorded before the
+    // row is marked Done"). The tail gate above orders compound / PR / merge
+    // AFTER every owned row is Done; `completion` is its mirror — the ONE
+    // member recorded BEFORE — so once an owned row is Done the recorded
+    // fulfilment is FROZEN: it is the basis that row's `Done` was authorized
+    // against (§4d freezes the PR identity the same way), and re-pointing it
+    // afterwards would leave the `Done` fact standing on evidence it was never
+    // accepted with. An identical re-record never reaches this point (the
+    // idempotent return above), so a retried recording stays a no-op; the
+    // refusal carries the same stable code the DB route's `applyDeliveryEvidence`
+    // uses for the same state (`coordination.invalid-transition`).
+    if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `refusing to record delivery evidence: coordination.invalid-transition: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
+        { workflow_id: workflowId },
+      );
     }
     const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
     await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
