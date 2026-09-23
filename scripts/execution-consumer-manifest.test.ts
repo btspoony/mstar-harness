@@ -339,12 +339,20 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/omp/tools",
     ]);
 
-    // The public entry surface includes DSh's `./client` build output.
+    // The public entry surface includes DSh's `./client` build output — which is
+    // deliberately NOT in this closure: its bytes belong to its declared producer
+    // (`packages/dsh/scripts/build-client-bundle.ts`, inside the source closure
+    // below), so the manifest names it as an exclusion of the dist tree instead
+    // of pinning it. The rest of the dist closure stays byte-pinned.
     const dsh = manifest.consumers.find((consumer) => consumer.id === "dsh");
     expect(dsh?.generated.files.map((file) => file.path)).toEqual([
-      "packages/dsh/dist/client.js",
       "packages/dsh/dist/index.js",
       "packages/dsh/dist/invariant.js",
+    ]);
+    expect(dsh?.generated.trees[0]?.exclude).toEqual(["client.js", "execution-consumer.json"]);
+    expect(dsh?.sources.trees.map((tree) => tree.root)).toEqual([
+      "packages/dsh/scripts",
+      "packages/dsh/src",
     ]);
     // ...and engine's declaration output is inside the recorded dist tree.
     const engineDist = manifest.consumers
@@ -413,9 +421,18 @@ describe("execution-consumer-manifest — canonical collection", () => {
     mkdirSync(join(emptyTree, "packages/omp/tools"), { recursive: true });
     expectRefusal(() => collectExecutionConsumerManifest(emptyTree), "consumer.generated-empty");
 
+    // The DSh client bundle is deliberately OUTSIDE the manifest's byte-pinned
+    // closure (it is produced from declared inputs; see the layout note), so its
+    // absence is not a manifest drift — its provenance is proven by the
+    // producer's own re-derivation test. Every artifact inside the closure still
+    // refuses when it is missing.
     const missingClient = buildFixture();
     unlinkSync(join(missingClient, "packages/dsh/dist/client.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(missingClient), "consumer.path-missing");
+    verifyExecutionConsumerManifest(collectExecutionConsumerManifest(missingClient));
+
+    const missingDsh = buildFixture();
+    unlinkSync(join(missingDsh, "packages/dsh/dist/index.js"));
+    expectRefusal(() => collectExecutionConsumerManifest(missingDsh), "consumer.path-missing");
   });
 
   test("refuses a package whose engines floor is not the canonical runtime floor", () => {
@@ -442,10 +459,19 @@ describe("execution-consumer-manifest — verification refusals", () => {
       "consumer.digest-mismatch",
     );
 
+    // The DSh client bundle is NOT byte-pinned by this manifest: its bytes come
+    // from a declared producer with declared inputs, so a recorded digest would
+    // record the machine that built it. A change to it is therefore not a
+    // manifest drift — the producer's own re-derivation test owns that artifact.
     const clientDrift = buildFixture();
     const clientManifest = collectExecutionConsumerManifest(clientDrift);
     writeFileSync(join(clientDrift, "packages/dsh/dist/client.js"), "// stale client bundle\n");
-    expectRefusal(() => verifyExecutionConsumerManifest(clientManifest), "consumer.digest-mismatch");
+    verifyExecutionConsumerManifest(clientManifest);
+
+    const dshDrift = buildFixture();
+    const dshManifest = collectExecutionConsumerManifest(dshDrift);
+    writeFileSync(join(dshDrift, "packages/dsh/dist/index.js"), "// stale dsh bundle\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(dshManifest), "consumer.digest-mismatch");
 
     const mirrorDrift = buildFixture();
     const mirrorManifest = collectExecutionConsumerManifest(mirrorDrift);
@@ -954,7 +980,18 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
       expect(Object.keys(entry.runtime as object).sort()).toEqual(["declaration", "floor", "target"]);
       for (const set of [entry.sources, entry.generated] as Array<{ trees: Array<object>; files: Array<object> }>) {
         expect(Object.keys(set).sort()).toEqual(["files", "trees"]);
-        for (const tree of set.trees) expect(Object.keys(tree).sort()).toEqual(["files", "root", "sha256"]);
+        for (const tree of set.trees) {
+          const record = tree as Record<string, unknown>;
+          // `exclude` is optional: a tree records the basenames it did not digest
+          // (an artifact proved by its producer instead of by its bytes).
+          expect(Object.keys(record).sort()).toEqual(
+            Object.hasOwn(record, "exclude") ? ["exclude", "files", "root", "sha256"] : ["files", "root", "sha256"],
+          );
+          if (Object.hasOwn(record, "exclude")) {
+            expect(Array.isArray(record.exclude)).toBe(true);
+            for (const name of record.exclude as unknown[]) expect(typeof name).toBe("string");
+          }
+        }
         for (const file of set.files) expect(Object.keys(file).sort()).toEqual(["path", "sha256"]);
       }
       for (const copy of entry.copiedInstructions as Array<object>) {

@@ -24,10 +24,12 @@
  */
 
 import { build } from 'bun'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const ID = '@mstar-harness/dsh'
+/** This package's root: every declared input resolves against it, never cwd. */
+const PACKAGE_ROOT = resolve(import.meta.dir, '..')
 const ENTRY = 'src/client/index.ts'
 const OUT_DIR = 'dist'
 const OUT_FILE = 'client.js'
@@ -275,40 +277,87 @@ function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
   return { contents, loader: 'js' }
 }
 
-// Run only when executed directly (`bun run build-client`): the pure
-// transform / escape / assertion functions above are exported so unit tests
-// can import this module side-effect free. Tests must never trigger a build.
-// NOTE: this guard supports direct execution under bun only —
-// `import.meta.main` is undefined in non-bun runtimes, so running this script
-// directly there silently no-ops (no build, no error). If the build ever moves
-// to tsdown or another runtime with direct execution, add a loud failure guard
-// (throw) instead of relying on `import.meta.main`.
-if (import.meta.main) {
+/**
+ * The declared build modes of the client bundle. The mode is an INPUT of the
+ * build, never ambient env: the artifact must be a pure function of its
+ * declared inputs, so its bytes do not change with the machine that built it (a
+ * CI runner's `NODE_ENV`, a developer's shell) and a recorded or compared
+ * digest is real evidence rather than environment evidence.
+ */
+export type ClientBundleMode = 'production' | 'development' | 'test'
+const CLIENT_BUNDLE_MODES: readonly ClientBundleMode[] = ['production', 'development', 'test']
+
+/** The mode the SHIPPED artifact is built with (the package build passes it explicitly). */
+export const CLIENT_BUNDLE_MODE: ClientBundleMode = 'production'
+
+/**
+ * The `define` inputs one declared mode compiles with — a PURE function of the
+ * mode, with no environment read.
+ *
+ * zustand/immer-style deps read `process.env.NODE_ENV`; zustand v4 ALSO reads
+ * `import.meta.env.MODE` (its store `destroy` deprecation branch) — the web
+ * loader executes plugin bundles as a CLASSIC <script> (client-modules
+ * defaultLoadBundle, no `type="module"`), where a literal `import.meta` is a
+ * SyntaxError that kills the whole bundle at parse time (the panel never
+ * registers). Defining the full `import.meta.env` object erases every
+ * reference; the emitted code keeps a plain-object read.
+ */
+export function clientBundleDefine(mode: ClientBundleMode): Record<string, string> {
+  return {
+    'process.env.NODE_ENV': JSON.stringify(mode),
+    'import.meta.env': JSON.stringify({
+      MODE: mode,
+      DEV: mode !== 'production',
+      PROD: mode === 'production',
+    }),
+  }
+}
+
+/** Refuse an unknown mode loudly instead of guessing one. */
+function asClientBundleMode(raw: string, what: string): ClientBundleMode {
+  if (!(CLIENT_BUNDLE_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`${what}: unknown mode ${JSON.stringify(raw)} — one of ${CLIENT_BUNDLE_MODES.join(' | ')}`)
+  }
+  return raw as ClientBundleMode
+}
+
+/**
+ * Build the client bundle from the DECLARED source closure (this package's
+ * `ENTRY`) into `outdir` with the DECLARED mode, then run the bundle-contract
+ * assertions and write the flat `client.d.ts`. Explicit inputs only — the entry
+ * resolves against this package, `outdir` is the caller's, the inlined env
+ * values come from `clientBundleDefine(mode)`, and the build runs with the
+ * process cwd pinned to this package — so the same inputs always produce the
+ * same bytes and a caller can re-derive the artifact anywhere. (bun prints each
+ * module's id comment relative to the CWD, so an inherited cwd would otherwise
+ * leak into the artifact.)
+ */
+export async function buildClientBundle(options: {
+  outdir: string
+  mode: ClientBundleMode
+}): Promise<{ path: string; kind: string; bytes: number }> {
+  const outdir = isAbsolute(options.outdir) ? options.outdir : resolve(PACKAGE_ROOT, options.outdir)
+  const priorCwd = process.cwd()
+  process.chdir(PACKAGE_ROOT)
+  try {
+    return await buildInPackageRoot(outdir, options.mode)
+  } finally {
+    process.chdir(priorCwd)
+  }
+}
+
+/** One build with the process cwd already pinned to `PACKAGE_ROOT` (see the caller). */
+async function buildInPackageRoot(outdir: string, mode: ClientBundleMode): Promise<{ path: string; kind: string; bytes: number }> {
   const result = await build({
-    entrypoints: [ENTRY],
-    outdir: OUT_DIR,
+    entrypoints: [join(PACKAGE_ROOT, ENTRY)],
+    outdir,
     target: 'browser',
     format: 'cjs',
     external: [...CLIENT_EXTERNALS],
     // No plain `.css` loader: the only consumer was `@xyflow/react/dist/style.css`
     // (react-flow, removed — spec panel-zones §2). `*.module.css` is unaffected:
     // the css-modules plugin below wins for those paths.
-    // zustand/immer-style deps read process.env.NODE_ENV; honor the build env
-    // like the snapshot recipe (artifacts default to production). zustand v4
-    // ALSO reads `import.meta.env.MODE` (its store `destroy` deprecation
-    // branch) — the web loader executes plugin bundles as a CLASSIC <script>
-    // (client-modules defaultLoadBundle, no `type="module"`), where a literal
-    // `import.meta` is a SyntaxError that kills the whole bundle at parse time
-    // (the panel never registers). Defining the full `import.meta.env` object
-    // erases every reference; the emitted code keeps a plain-object read.
-    define: {
-      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
-      'import.meta.env': JSON.stringify({
-        MODE: process.env.NODE_ENV ?? 'production',
-        DEV: (process.env.NODE_ENV ?? 'production') !== 'production',
-        PROD: (process.env.NODE_ENV ?? 'production') === 'production',
-      }),
-    },
+    define: clientBundleDefine(mode),
     // Closure-factory handoff (spec §6.2): `module`/`exports` are declared
     // inside the factory body because bun's cjs emission assigns module.exports
     // itself; the factory returns that surface to the loader.
@@ -375,8 +424,43 @@ if (import.meta.main) {
   // Declarations for `exports["./client"].types` (spec §6.2): the tsc-emitted
   // client declarations live at dist/client/index.d.ts; ship a flat re-export so
   // the locked export path stays stable regardless of the internal layout.
-  const clientDts = join(OUT_DIR, 'client.d.ts')
-  writeFileSync(clientDts, `export * from './client/index.js'\n`)
+  writeFileSync(join(outdir, 'client.d.ts'), `export * from './client/index.js'\n`)
 
-  console.log(`build-client: ${ENTRY} -> ${result.outputs[0]!.path} (closure-factory CJS, ${result.outputs[0]!.kind})`)
+  return { path: result.outputs[0]!.path, kind: result.outputs[0]!.kind, bytes: Buffer.byteLength(bundleText) }
+}
+
+// Run only when executed directly (`bun run build-client`), with EXPLICIT
+// inputs: `--out <dir>` (default: this package's `dist`) and `--mode <mode>`
+// (default: the shipped mode). The pure transform / escape / assertion
+// functions above are exported so unit tests can import this module
+// side-effect free; tests must never trigger a build. `--out` is what lets a
+// guard RE-DERIVE the artifact from this declared producer instead of pinning
+// bytes.
+// NOTE: this guard supports direct execution under bun only —
+// `import.meta.main` is undefined in non-bun runtimes, so running this script
+// directly there silently no-ops (no build, no error). If the build ever moves
+// to tsdown or another runtime with direct execution, add a loud failure guard
+// (throw) instead of relying on `import.meta.main`.
+if (import.meta.main) {
+  const argv = process.argv.slice(2)
+  const flag = (name: string): string | undefined => {
+    const index = argv.indexOf(`--${name}`)
+    if (index === -1) return undefined
+    const value = argv[index + 1]
+    if (value === undefined || value.startsWith('--')) throw new Error(`build-client: --${name} requires a value`)
+    return value
+  }
+  try {
+    const out = flag('out')
+    const built = await buildClientBundle({
+      // A CLI `--out` is the caller's path (resolved against its cwd); the
+      // declared default is this package's own `dist`.
+      outdir: out === undefined ? join(PACKAGE_ROOT, OUT_DIR) : resolve(out),
+      mode: asClientBundleMode(flag('mode') ?? CLIENT_BUNDLE_MODE, 'build-client'),
+    })
+    console.log(`build-client: ${ENTRY} -> ${built.path} (closure-factory CJS, ${built.kind})`)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
 }

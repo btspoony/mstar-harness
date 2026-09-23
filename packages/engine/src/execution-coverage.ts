@@ -1232,7 +1232,20 @@ function expectArtifactSet(value: unknown, what: string): ArtifactSet {
     trees: expectArray(record.trees, `${what}.trees`).map((entry, index) => {
       const where = `${what}.trees[${index}]`;
       const tree = expectObject(entry, where);
-      expectExactKeys(tree, ["root", "files", "sha256"], where);
+      // `exclude` is the producer's own closure note: the basenames its digest
+      // skipped (an artifact whose bytes belong to its declared producer rather
+      // than to a recorded digest). It is validated as a list of safe basenames
+      // and adds nothing to what this receipt proves, so the required shape
+      // stays root/files/sha256.
+      expectKeys(tree, ["root", "files", "sha256"], ["exclude"], where);
+      if (tree.exclude !== undefined) {
+        expectArray(tree.exclude, `${where}.exclude`).forEach((name, position) => {
+          const basename = expectString(name, `${where}.exclude[${position}]`);
+          if (basename.includes("/") || basename.includes("\\") || basename === "." || basename === "..") {
+            refuse(`${where}.exclude[${position}] (${basename}) is not a basename; a tree exclusion names one entry, never a path.`);
+          }
+        });
+      }
       return {
         root: expectWitnessPath(tree.root, `${where}.root`),
         files: expectInteger(tree.files, `${where}.files`, 0),
