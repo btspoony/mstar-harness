@@ -6,6 +6,11 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Compatibility
+
+- Bump `@deepseek-ai/dsh-*` peers to `^0.1.7-rc.1`; rename `dsh-agent-presets` → `dsh-agent-preset`, `dsh-code-runtime` → `dsh-ptc-runtime`.
+- planMode bridge listens on serial `agent/created` (was `agent/session-start`).
+
 ## [3.11.2] - 2026-09-19
 
 ### Changed

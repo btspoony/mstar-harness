@@ -8,6 +8,10 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### dsh host
+
+- Upgrade `@deepseek-ai/dsh-*` peers to `^0.1.7-rc.1` (corridor since `dsh-v0.1.5-rc.2`: Session V4, Messages-only DeepSeek adapter, spill-policy `maxInlineTokens`, Remote `readBytes`, `dsh-agent-preset` / `dsh-ptc-runtime` renames, `agent/created`, plugin peer-compat checks). Rename peers `dsh-agent-presets` → `dsh-agent-preset`, `dsh-code-runtime` → `dsh-ptc-runtime`. Migrate planMode bridge from `agent/session-start` to serial `agent/created`.
+
 ## [3.11.2] - 2026-09-19
 
 ### Harness
