@@ -211,14 +211,24 @@ function gitStatusRows(rootRel) {
 }
 
 /**
+ * Tree sizes whose entry list is printed IN FULL on a digest mismatch. A
+ * mismatch whose differing entry is not among the first few is otherwise
+ * unlocatable from a CI log alone (`packages/dsh/src` has 61 entries, all of
+ * them git-tracked, and the drifted one was not in the first ten); larger trees
+ * keep the capped form so the failure message stays readable.
+ */
+const FULL_ENTRY_LIMIT = 200;
+
+/**
  * Assert one recorded tree digest against the tree on disk.
  *
  * A digest mismatch is only actionable if it NAMES the entries: this reports
  * the count, the aggregate expected/actual, the tree's own entries (path, kind,
- * sha256 — capped, with the total), and, when the tree is git-tracked, the
- * checkout status rows that identify content differing from the commit. Nothing
- * is relaxed by this: the same equality is asserted, the message just carries
- * the evidence a reader needs.
+ * sha256 — every entry for a tree up to `FULL_ENTRY_LIMIT`, the first ten plus
+ * the total above it), and, when the tree is git-tracked, the checkout status
+ * rows that identify content differing from the commit. Nothing is relaxed by
+ * this: the same equality is asserted, the message just carries the evidence a
+ * reader needs.
  */
 function assertTreeDigest(label, tree, exclude) {
   const abs = join(REPO, tree.root);
@@ -226,11 +236,14 @@ function assertTreeDigest(label, tree, exclude) {
   const entries = treeEntries(abs, exclude);
   const actual = digestEntries(entries);
   if (entries.length === tree.files && actual === tree.sha256) return;
-  const shown = entries
-    .slice(0, 10)
+  const shownEntries = entries.length <= FULL_ENTRY_LIMIT ? entries : entries.slice(0, 10);
+  const shown = shownEntries
     .map((entry) => `    ${entry.path} ${entry.kind} ${entry.sha256}${entry.linkTarget === null ? "" : ` -> ${entry.linkTarget}`}`)
     .join("\n");
-  const more = entries.length > 10 ? `\n    … ${entries.length - 10} more entr${entries.length - 10 === 1 ? "y" : "ies"}` : "";
+  const more =
+    entries.length > shownEntries.length
+      ? `\n    … ${entries.length - shownEntries.length} more entr${entries.length - shownEntries.length === 1 ? "y" : "ies"}`
+      : "";
   const status = gitStatusRows(toPosix(tree.root));
   const statusLines =
     status === null
