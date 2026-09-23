@@ -5,7 +5,13 @@ import {
   CONTRACT_REVISION, NATIVE_ENDPOINT, NATIVE_MODEL, PACK_SCHEMA, PILOT_SCHEMA,
   TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot,
 } from "../src/contracts.js";
-import { A05_QUESTION, buildA05Request } from "../src/review-advice.js";
+import { A05_QUESTION, buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
+
+function reorderObjectKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(reorderObjectKeys);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorderObjectKeys(item)]));
+}
 
 const hash = "a".repeat(64);
 function fixture() {
@@ -29,7 +35,7 @@ function fixture() {
     scope: { kind: "review", reviewId: "review-1", snapshotSha256: hash, diffSha256: hash }, mode: "shadow", transport: "native-typesafe",
     endpoint: NATIVE_ENDPOINT, model: NATIVE_MODEL, useCases: ["JEV-A05"], recipients: [{ id: "synthesis-main", phase: "synthesis" }],
     policyVersion: "policy-1", permission: { ref: "permission-1", purpose: "synthetic qualification", dataClass: "synthetic-only" },
-    isolation: { ref: "isolation-1" }, packManifest: [{ packId: "pack-1", packSha256: createHash("sha256").update(JSON.stringify(pack)).digest("hex") }],
+    isolation: { ref: "isolation-1" }, packManifest: [{ packId: "pack-1", packSha256: createHash("sha256").update(canonicalJsonBytes(pack)).digest("hex") }],
     rubricVersion: "rubric-1", builderVersion: "builder-1", implementationVersion: "judgment-0.0.0",
     limits: { timeoutMs: 10_000, maxRunElapsedMs: 10_000_000, maxCallsPerRun: 1, maxConcurrentRequests: 1, maxTasksPerPack: 4, maxPacksPerRun: 1, maxPairs: 4, maxPackBytes: 65_536, maxRequestBytes: 32_768, maxResponseBytes: 65_536, maxAttempts: 1 },
     tokenPolicy: { method: TOKEN_POLICY_METHOD, perAttemptReservation: TOKEN_RESERVATION_PER_ATTEMPT, maxRunReservedInputTokens: TOKEN_RESERVATION_PER_ATTEMPT },
@@ -55,12 +61,22 @@ describe("fixed A05 request builder", () => {
     expect(new TextDecoder().decode(first.bytes)).not.toContain("b".repeat(64));
     expect(first.questionMap["a05_task-1"]).toEqual({ taskId: "task-1", useCase: "JEV-A05", subjectIds: ["left", "right"], workUnit: { id: "unit-1", revision: 2 } });
   });
+  test("canonicalizes pack hashes and outbound bytes independent of object key insertion order", () => {
+    const { pack, pilot } = fixture();
+    const original = buildA05Request(pack, pilot);
+    const reorderedPack = reorderObjectKeys(pack) as typeof pack;
+    const reordered = buildA05Request(reorderedPack, pilot);
+    expect(reordered.packSha256).toBe(original.packSha256);
+    expect(reordered.requestSha256).toBe(original.requestSha256);
+    expect(reordered.bytes).toEqual(original.bytes);
+  });
+
   test("binds each batched question to its matching ordered pair", () => {
     const { pack, pilot } = fixture();
     const twoTaskPack = { ...pack, tasks: [pack.tasks[0], { ...pack.tasks[0], id: "task-2", workUnit: { id: "unit-2", revision: 1 } }] };
     const authorizedPilot = {
       ...pilot,
-      packManifest: [{ packId: twoTaskPack.packId, packSha256: createHash("sha256").update(JSON.stringify(twoTaskPack)).digest("hex") }],
+      packManifest: [{ packId: twoTaskPack.packId, packSha256: createHash("sha256").update(canonicalJsonBytes(twoTaskPack)).digest("hex") }],
     };
     const request = buildA05Request(twoTaskPack, authorizedPilot);
     expect(request.questions["a05_task-1"].instructions).toContain("pairs[0].left.claim");

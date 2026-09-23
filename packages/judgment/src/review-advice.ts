@@ -50,6 +50,27 @@ export type PreparedRequest = Readonly<{
 }>;
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+function canonicalJson(value: unknown): string {
+  if (value === undefined) throw new TypeError("Top-level undefined is not valid JSON");
+  if (value === null || typeof value !== "object") {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new TypeError("Value is not representable as JSON");
+    return encoded;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => item === undefined || typeof item === "function" || typeof item === "symbol" ? "null" : canonicalJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const entries = Object.keys(record).sort()
+    .filter((key) => record[key] !== undefined && typeof record[key] !== "function" && typeof record[key] !== "symbol")
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+  return `{${entries.join(",")}}`;
+}
+
+export function canonicalJsonBytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(canonicalJson(value));
+}
+
 
 export function buildA05Request(pack: ReviewDecisionPack, pilot: JudgmentPilot): PreparedRequest {
   if (pack.runId !== pilot.runId) throw new TypeError("Pack and pilot run IDs do not match");
@@ -65,7 +86,7 @@ export function buildA05Request(pack: ReviewDecisionPack, pilot: JudgmentPilot):
   }
   const manifest = pilot.packManifest.find((item) => item.packId === pack.packId);
   if (!manifest) throw new TypeError("Pack is not authorized by pilot manifest");
-  const packBytes = new TextEncoder().encode(JSON.stringify(pack));
+  const packBytes = canonicalJsonBytes(pack);
   if (sha256(packBytes) !== manifest.packSha256) throw new TypeError("Pack content does not match pilot manifest hash");
 
 
@@ -96,7 +117,7 @@ export function buildA05Request(pack: ReviewDecisionPack, pilot: JudgmentPilot):
   }
   const questions = Object.fromEntries(pack.tasks.map((task, index) => [`${A05_QUESTION_ID_PREFIX}${task.id}`, a05Question(index)])) as Record<string, CanonicalQuestion>;
   const payload = { model: NATIVE_MODEL, state: { pairs }, questions };
-  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const bytes = canonicalJsonBytes(payload);
   if (bytes.byteLength > pilot.limits.maxRequestBytes) throw new TypeError("Outbound request exceeds pilot byte limit");
   return Object.freeze({
     bytes,
