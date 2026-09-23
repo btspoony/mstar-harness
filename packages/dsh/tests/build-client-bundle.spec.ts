@@ -251,7 +251,14 @@ describe('buildClientBundle — the artifact is a pure function of DECLARED inpu
       expect(run.status, run.stderr ?? '').toBe(0)
       const rebuilt = readFileSync(join(outDir, 'client.js'))
       const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
-      expect(digest(rebuilt)).toBe(digest(shipped))
+      const shippedDigest = digest(shipped)
+      const rebuiltDigest = digest(rebuilt)
+      // The hashes are PRINTED, not just compared: a CI log then records the
+      // artifact this platform built AND the byte-exact re-derivation beside it,
+      // so a cross-platform divergence (bun's emission changing between
+      // platforms) is visible without reproducing the environment.
+      console.log(`[dsh-client] shipped=${shippedDigest} rebuilt=${rebuiltDigest}`)
+      expect(rebuiltDigest).toBe(shippedDigest)
     } finally {
       rmSync(outDir, { recursive: true, force: true })
     }
