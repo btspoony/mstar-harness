@@ -35,11 +35,16 @@ const ENGINE_STUB = `const unavailable = () => {
 };
 export const applyEnforcement = unavailable;
 export const composeDispatchGate = unavailable;
+export const decodeExecutionSessionRef = unavailable;
+export const executionContextFor = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
 export const parseAssignmentFields = unavailable;
 export const readJson = unavailable;
 export const resolveHarnessDir = unavailable;
 export const resolveRepoEnforcement = unavailable;
+export const resumeExecutionSession = unavailable;
+export const serializeExecutionValue = unavailable;
+export const validateExecutionIdentity = unavailable;
 export const validateProjectRegister = unavailable;
 export const validateStatus = unavailable;
 export const validateWorkflowSnapshot = unavailable;
