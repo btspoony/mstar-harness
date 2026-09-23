@@ -22,17 +22,18 @@ afterEach(() => {
 });
 
 describe("one-attempt TypeSafe transport", () => {
-  test("sends the exact prepared bytes to the fixed endpoint with bearer auth and returns bounded bytes and timing", async () => {
-    fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response(bytes('{"usage":{"input_tokens":4}}'), { status: 200 }));
+  test("surfaces a bounded synthetic response from one transport attempt (not vendor evidence)", async () => {
+    fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response(bytes('{"synthetic":true}'), { status: 200 }));
     const request = input();
     const result = await sendNativeRequest(request);
     const [url, init] = fetchSpy.mock.calls[0];
+    expect(fetchSpy.mock.calls).toHaveLength(1);
     expect(url).toBe(NATIVE_ENDPOINT);
     expect(init?.method).toBe("POST");
     expect(init?.redirect).toBe("manual");
     expect(init?.headers).toEqual({ Authorization: "Bearer runtime-secret", "Content-Type": "application/json" });
     expect(init?.body).toBe(request.requestBytes);
-    expect(result.responseBytes).toEqual(bytes('{"usage":{"input_tokens":4}}'));
+    expect(result.responseBytes).toEqual(bytes('{"synthetic":true}'));
     expect(result.status).toBe(200);
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
