@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, test } from "bun:test";
 import {
   CONTRACT_REVISION, NATIVE_ENDPOINT, NATIVE_MODEL, PACK_SCHEMA, PILOT_SCHEMA,
@@ -27,7 +29,7 @@ function fixture() {
     scope: { kind: "review", reviewId: "review-1", snapshotSha256: hash, diffSha256: hash }, mode: "shadow", transport: "native-typesafe",
     endpoint: NATIVE_ENDPOINT, model: NATIVE_MODEL, useCases: ["JEV-A05"], recipients: [{ id: "synthesis-main", phase: "synthesis" }],
     policyVersion: "policy-1", permission: { ref: "permission-1", purpose: "synthetic qualification", dataClass: "synthetic-only" },
-    isolation: { ref: "isolation-1" }, packManifest: [{ packId: "pack-1", packSha256: "c".repeat(64) }],
+    isolation: { ref: "isolation-1" }, packManifest: [{ packId: "pack-1", packSha256: createHash("sha256").update(JSON.stringify(pack)).digest("hex") }],
     rubricVersion: "rubric-1", builderVersion: "builder-1", implementationVersion: "judgment-0.0.0",
     limits: { timeoutMs: 10_000, maxRunElapsedMs: 10_000_000, maxCallsPerRun: 1, maxConcurrentRequests: 1, maxTasksPerPack: 4, maxPacksPerRun: 1, maxPairs: 4, maxPackBytes: 65_536, maxRequestBytes: 32_768, maxResponseBytes: 65_536, maxAttempts: 1 },
     tokenPolicy: { method: TOKEN_POLICY_METHOD, perAttemptReservation: TOKEN_RESERVATION_PER_ATTEMPT, maxRunReservedInputTokens: TOKEN_RESERVATION_PER_ATTEMPT },
@@ -56,7 +58,11 @@ describe("fixed A05 request builder", () => {
   test("binds each batched question to its matching ordered pair", () => {
     const { pack, pilot } = fixture();
     const twoTaskPack = { ...pack, tasks: [pack.tasks[0], { ...pack.tasks[0], id: "task-2", workUnit: { id: "unit-2", revision: 1 } }] };
-    const request = buildA05Request(twoTaskPack, pilot);
+    const authorizedPilot = {
+      ...pilot,
+      packManifest: [{ packId: twoTaskPack.packId, packSha256: createHash("sha256").update(JSON.stringify(twoTaskPack)).digest("hex") }],
+    };
+    const request = buildA05Request(twoTaskPack, authorizedPilot);
     expect(request.questions["a05_task-1"].instructions).toContain("pairs[0].left.claim");
     expect(request.questions["a05_task-2"].instructions).toContain("pairs[1].right.evidence");
     expect(request.questions["a05_task-2"].instructions).not.toContain("pairs[0]");
@@ -71,4 +77,16 @@ describe("fixed A05 request builder", () => {
     expect(() => buildA05Request({ ...pack, tasks: [{ ...pack.tasks[0], subjectIds: ["left", "absent"] }] }, pilot)).toThrow();
     expect(() => buildA05Request(pack, { ...pilot, limits: { ...pilot.limits, maxRequestBytes: 1 } })).toThrow("byte limit");
   });
+  test("refuses pack contents that differ from the manifest-bound canonical bytes", () => {
+    const { pack, pilot } = fixture();
+    const altered = {
+      ...pack,
+      state: {
+        ...pack.state,
+        evidence: pack.state.evidence.map((item) => ({ ...item, excerpt: "substituted evidence" })),
+      },
+    };
+    expect(() => buildA05Request(altered, pilot)).toThrow("manifest hash");
+  });
+
 });

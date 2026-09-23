@@ -65,6 +65,9 @@ export function buildA05Request(pack: ReviewDecisionPack, pilot: JudgmentPilot):
   }
   const manifest = pilot.packManifest.find((item) => item.packId === pack.packId);
   if (!manifest) throw new TypeError("Pack is not authorized by pilot manifest");
+  const packBytes = new TextEncoder().encode(JSON.stringify(pack));
+  if (sha256(packBytes) !== manifest.packSha256) throw new TypeError("Pack content does not match pilot manifest hash");
+
 
   const subjects = new Map(pack.state.subjects.map((subject) => [subject.id, subject]));
   const evidence = new Map(pack.state.evidence.map((item) => [item.id, item]));
