@@ -25,9 +25,10 @@
  *   bun scripts/execution-consumer-manifest.ts --repo . --write
  *   bun scripts/execution-consumer-manifest.ts --repo . --check
  * `--write` emits `packages/<id>/dist/execution-consumer.json` for
- * engine/CLI/DSh/OMP/OpenCode plus the ZCode plugin-root copy
- * `hooks/execution-consumer.json`; `--check` re-verifies every written
- * manifest against the bytes on disk without writing anything.
+ * engine/CLI/DSh/OMP/OpenCode (the copies each package ships for runtime
+ * discovery), plus the tracked aggregate `scripts/packaging-manifests/manifest.json`
+ * and one evidence document per consumer beside it; `--check` re-verifies every
+ * written manifest against the bytes on disk without writing anything.
  *
  * `manifest.repoRoot` is stored verbatim as the caller supplied it (`--repo .`
  * keeps the committed artifact portable); every other path is repo-relative.
@@ -1074,21 +1075,30 @@ export function serializeExecutionConsumerManifest(manifest: ExecutionConsumerMa
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
-/** Every path `--write` emits: one manifest per package `dist/` (engine, CLI,
- * DSh, OMP, OpenCode) plus the ZCode plugin-root copy. */
+/** Every path `--write` emits: the ONE tracked verification directory under the
+ * repo-root `scripts/` tree (process/verification content belongs there, not in
+ * a scattered `hooks/` file or per-package directories) plus the copies each
+ * package publishes inside its own `dist/` for runtime discovery. */
 export function executionConsumerManifestPaths(repoRoot: string): readonly string[] {
   const packageManifests = CONSUMER_LAYOUTS.filter(
     (layout) => layout.packageJson !== null,
   ).map((layout) => `${toPosix(layout.packageRoot)}/dist/${MANIFEST_BASENAME}`);
-  return [...packageManifests.sort(), `hooks/${MANIFEST_BASENAME}`].map((rel) => join(repoRoot, rel));
+  return [...packageManifests.sort(), `${PACKAGING_MANIFEST_DIR}/${AGGREGATE_MANIFEST_FILE}`].map((rel) =>
+    join(repoRoot, rel),
+  );
 }
 
-/** The directory a consumer publishes its evidence document in, relative to its
- * own package root. It is deliberately OUTSIDE every declared source and
- * generated closure: publishing evidence cannot invalidate a recorded tree
- * digest, so the manifest stays self-consistent across a write. */
-const EVIDENCE_DIRNAME = "execution-consumer";
-const EVIDENCE_SUFFIX = ".json";
+/** The single tracked directory every verification artifact of this producer
+ * lives in, relative to the repository root. `scripts/` holds process and
+ * verification content, so the aggregate manifest and the per-consumer evidence
+ * documents are named `<dir>/manifest.json` and `<dir>/<consumer>.json` — no
+ * per-package `execution-consumer/` directories and no directory name repeating
+ * the file name. It is deliberately OUTSIDE every declared source and generated
+ * closure (the recorded `scripts/` entries are individual files, not the
+ * directory): publishing evidence cannot invalidate a recorded tree digest, so
+ * the manifest stays self-consistent across a write. */
+const PACKAGING_MANIFEST_DIR = "scripts/packaging-manifests";
+const AGGREGATE_MANIFEST_FILE = "manifest.json";
 
 /** One per-consumer evidence document per consumer, in the canonical inventory
  * order. Derived from the aggregate so the handoff form cannot disagree with
@@ -1105,9 +1115,9 @@ export function executionConsumerEvidenceDocuments(
 }
 
 /** Every per-consumer evidence path `--write` publishes, paired with the
- * consumer each document declares — `${consumer}/execution-consumer/<id>.json`
- * under its own package root, in the manifest's canonical consumer order so an
- * evidence target and its document stay index-aligned. */
+ * consumer each document declares — `${PACKAGING_MANIFEST_DIR}/<id>.json`, in
+ * the manifest's canonical consumer order so an evidence target and its document
+ * stay index-aligned. */
 export function executionConsumerEvidencePaths(
   repoRoot: string,
 ): readonly Readonly<{ consumerId: string; path: string }>[] {
@@ -1115,7 +1125,7 @@ export function executionConsumerEvidencePaths(
     .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
     .map((layout) => ({
       consumerId: layout.id,
-      path: join(repoRoot, toPosix(layout.packageRoot), EVIDENCE_DIRNAME, `${layout.id}${EVIDENCE_SUFFIX}`),
+      path: join(repoRoot, PACKAGING_MANIFEST_DIR, `${layout.id}.json`),
     }));
 }
 
