@@ -43,11 +43,16 @@
  * ## Leaf trust is the OPEN, not a prior stat
  *
  * The retained leaf is opened with `O_NOFOLLOW` and the very same descriptor is
- * re-verified (`fstat`): it must still be a regular file with the device/inode
- * the retained bytes were read from. A leaf swapped for a symlink (or replaced)
- * between the read and the commit can therefore only refuse — it is never
- * followed, never truncated and never written through. Nothing is decided from
- * an earlier `lstat` that a later `open` could contradict.
+ * re-verified (`fstat`): it must still be a regular file, with the device/inode
+ * the retained bytes were read from AND holding exactly those bytes. The
+ * identity pair alone cannot see a replacement that kept the inode — a
+ * filesystem that reuses a freed inode (ext4) hands an unlink + create the same
+ * pair, and a truncate-and-rewrite through another descriptor never changes it —
+ * so the bytes this call already read are the authority for the commit. A leaf
+ * swapped for a symlink (or replaced) between the read and the commit can
+ * therefore only refuse — it is never followed, never truncated and never
+ * written through. Nothing is decided from an earlier `lstat` that a later
+ * `open` could contradict.
  *
  * ## Crash and replay semantics (S3)
  *
@@ -69,6 +74,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   rmSync,
   type Stats,
   writeFileSync,
@@ -407,12 +413,71 @@ function readRetainedLedger(path: string): RetainedLedger {
  * the store uses: it replaces the retained leaf between the read and the commit
  * so the same-descriptor identity comparison is exercised end to end instead of
  * only described. It never runs outside the test runner.
+ *
+ * Two shapes, because a replacement has two observable forms:
+ *
+ * - default — unlink + create, the shape a real replacement takes on a
+ *   filesystem that hands a NEW inode to the recreated path (APFS, most
+ *   local checkouts);
+ * - `MSTAR_LEDGER_REPLACE_MODE=in-place` — truncate + rewrite THROUGH AN OPEN
+ *   DESCRIPTOR, so the path keeps the very same device/inode with different
+ *   bytes. That is what an unlink + create looks like where a freed inode is
+ *   reused (ext4), and it is the shape a device/inode comparison alone cannot
+ *   tell apart from the retained read.
  */
 function replaceLeafSeam(path: string): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
   if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT !== path) return;
+  if (process.env.MSTAR_LEDGER_REPLACE_MODE === "in-place") {
+    const fd = openSync(path, "r+");
+    try {
+      ftruncateSync(fd, 0);
+      writeSync(fd, "replaced in place between the read and the commit\n");
+    } finally {
+      closeSync(fd);
+    }
+    return;
+  }
   rmSync(path, { force: true });
   writeFileSync(path, "replaced between the read and the commit\n");
+}
+
+/**
+ * The bytes one OPEN descriptor holds, read positionally from offset 0 — the
+ * append descriptor's own file offset is never part of this proof. A short read
+ * (the file shrank underneath us) yields what was readable, which then compares
+ * unequal and refuses.
+ */
+function readDescriptorBytes(fd: number, size: number): Buffer {
+  const bytes = Buffer.allocUnsafe(size);
+  let offset = 0;
+  while (offset < size) {
+    const read = readSync(fd, bytes, offset, size - offset, offset);
+    if (read <= 0) break;
+    offset += read;
+  }
+  return offset === size ? bytes : bytes.subarray(0, offset);
+}
+
+/**
+ * Is the OPEN descriptor still the leaf the retained bytes were read from?
+ *
+ * The device/inode pair is the identity half — it catches a replaced path that
+ * got a NEW inode. It cannot catch a replacement that kept the same one: a
+ * filesystem that reuses a freed inode (ext4) hands an unlink + create back the
+ * very same pair, and a truncate-and-rewrite through another descriptor never
+ * changes it at all. The bytes this call already read are therefore the
+ * authority: the descriptor must hold exactly those bytes, size included, so a
+ * leaf that no longer holds them is a replacement whatever its inode says.
+ *
+ * One positional pass over the retained leaf — the same bounded file this call
+ * already read in full to scan it.
+ */
+function isRetainedLeaf(fd: number, info: Stats, retained: RetainedLedger): boolean {
+  if (retained.kind !== "present") return true;
+  if (info.dev !== retained.dev || info.ino !== retained.ino) return false;
+  if (info.size !== retained.bytes.length) return false;
+  return readDescriptorBytes(fd, info.size).equals(retained.bytes);
 }
 
 /** Write the whole line, tolerating a short write; `offset < 0` means the append-at-EOF mode. */
@@ -462,12 +527,16 @@ function commitLedgerLine(input: {
     if (line === null) return;
     let fd: number;
     let created = false;
+    // `O_RDWR` (not `O_WRONLY`): the commit re-verifies the retained bytes
+    // through THIS descriptor, so it must be readable. The retained leaf was
+    // readable moments ago under the same lock (`readRetainedLedger`), so this
+    // asks for exactly the access the read already proved.
     try {
-      fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
+      fd = openWithoutFollowing(path, fsConstants.O_RDWR | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
       created = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND);
+      fd = openWithoutFollowing(path, fsConstants.O_RDWR | fsConstants.O_APPEND);
     }
     try {
       const info = fstatSync(fd);
@@ -477,11 +546,11 @@ function commitLedgerLine(input: {
           `${path} is not a regular file; nothing was written.`,
         );
       }
-      if (retained.kind === "present" && (info.dev !== retained.dev || info.ino !== retained.ino)) {
+      if (!isRetainedLeaf(fd, info, retained)) {
         throw new ExecutionLedgerError(
           "execution-ledgers.target-replaced",
-          `${path} is not the retained file this append read (the leaf was replaced between the read and the write); ` +
-            `nothing was written.`,
+          `${path} is not the retained file this append read (the leaf was replaced between the read and the write: its ` +
+            `device/inode or its bytes are no longer the retained ones); nothing was written.`,
         );
       }
       writeAll(fd, line, -1);
@@ -507,16 +576,11 @@ function commitLedgerLine(input: {
   }
   try {
     const info = fstatSync(fd);
-    if (
-      !info.isFile() ||
-      retained.kind !== "present" ||
-      info.dev !== retained.dev ||
-      info.ino !== retained.ino
-    ) {
+    if (!info.isFile() || retained.kind !== "present" || !isRetainedLeaf(fd, info, retained)) {
       throw new ExecutionLedgerError(
         "execution-ledgers.target-replaced",
-        `${path} is not the retained file this append read (the leaf was replaced between the read and the write); ` +
-          `nothing was written.`,
+        `${path} is not the retained file this append read (the leaf was replaced between the read and the write: its ` +
+          `device/inode or its bytes are no longer the retained ones); nothing was written.`,
       );
     }
     ftruncateSync(fd, truncateTo);
