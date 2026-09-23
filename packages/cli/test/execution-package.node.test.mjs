@@ -24,11 +24,11 @@
  *    runs via `node`. It is spawned as a subprocess with real PreToolUse
  *    envelopes against a populated database fixture and against a
  *    pre-activation harness fixture.
- * 4. THE GENERATED CONSUMER MANIFESTS — `scripts/packaging-manifests/manifest.json`
- *    plus the `<id>.json` evidence document beside it for every consumer. Every
- *    recorded digest is RE-DERIVED from the bytes on disk (declared files,
- *    source/generated trees, copied instruction trees), so a stale generated
- *    artifact, a stale copy or a hand-edited manifest fails here.
+ * 4. (removed) The generated consumer manifests are NOT re-derived here. Their
+ *    producer owns that check — `bun scripts/execution-consumer-manifest.ts
+ *    --check` re-verifies every recorded digest against the bytes on disk — and
+ *    CI runs it as its own step, so the rule has one implementation instead of a
+ *    second tree walk in a test that could disagree with it.
  *
  * WHAT THIS TEST IS NOT (labels, so no reader over-claims)
  *
@@ -42,8 +42,9 @@
  *   generation are never read or written.
  * - Only the NODE-target artifacts (CLI bundle, engine generation, committed
  *   ZCode hook) are executed. The OMP / DSh / OpenCode entrypoints are Bun or
- *   other-runtime targets: here they are covered by the generated-manifest
- *   parity assertions, and the populated fixture recipe reused from H2's OMP
+ *   other-runtime targets: here they are covered by the packaging-manifest
+ *   check CI runs against the producer's own `--check`, and the populated
+ *   fixture recipe reused from H2's OMP
  *   `phase2-launches` seed is executed against the built engine to show that a
  *   real OMP-shaped database fixture runs under Node — never that an OMP host
  *   ran.
@@ -91,8 +92,10 @@ const CLI_ROOT = resolve(TEST_DIR, "..");
 const REPO = resolve(CLI_ROOT, "..", "..");
 const CLI_ENTRY = join(CLI_ROOT, "dist", "mstar-harness.js");
 const HOOK_ENTRY = join(REPO, "hooks", "mstar-write-gate.mjs");
+// The aggregate packaging manifest: read here for the artifact-existence check
+// and for the consumer ids/floors; its byte parity is the producer's own
+// `--check`, which CI runs as its own step.
 const MANIFEST_PATH = join(REPO, "scripts", "packaging-manifests", "manifest.json");
-const MANIFEST_BASENAME = "execution-consumer.json";
 
 // The resolution above is load-bearing for EVERY manifest/artifact path in this
 // file: a wrong level would silently point outside the checkout. Fail loudly on
@@ -143,111 +146,8 @@ function writeJson(path, value) {
   writeText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function toPosix(value) {
   return value.split("\\").join("/");
-}
-
-/**
- * The manifest producer's canonical tree walk, re-implemented here from the
- * bytes: entries are `{path, kind, sha256, linkTarget}` in that key order, a
- * symlink recorded by its tree-relative canonical target plus the resolved
- * bytes, entries sorted by path, and the digest being the SHA-256 of the
- * serialized entry list. Reproducing it (rather than importing the producer)
- * is what makes the assertion an independent re-derivation.
- */
-function treeEntries(rootAbs, exclude) {
-  const entries = [];
-  const walk = (dirAbs, relDir) => {
-    const dirents = readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    );
-    for (const dirent of dirents) {
-      if (exclude.includes(dirent.name)) continue;
-      const abs = join(dirAbs, dirent.name);
-      const rel = relDir.length === 0 ? dirent.name : `${relDir}/${dirent.name}`;
-      if (dirent.isDirectory()) {
-        walk(abs, rel);
-        continue;
-      }
-      if (dirent.isSymbolicLink()) {
-        const resolved = realpathSync(abs);
-        const linkTarget = toPosix(relative(rootAbs, resolved));
-        assert.ok(!linkTarget.startsWith("../"), `${rel}: symlink escapes its own tree`);
-        entries.push({ path: rel, kind: "symlink", sha256: sha256File(resolved), linkTarget });
-        continue;
-      }
-      if (dirent.isFile()) {
-        entries.push({ path: rel, kind: "file", sha256: sha256File(abs), linkTarget: null });
-        continue;
-      }
-      assert.fail(`${rel}: unsupported filesystem entry`);
-    }
-  };
-  walk(rootAbs, "");
-  return entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-}
-
-function digestEntries(entries) {
-  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-}
-
-/**
- * The tracked-relative status rows of one tree: a source tree lives in git, so
- * "which file here is not what the checkout says" is answerable exactly — and
- * that is the question a digest mismatch raises. Generated trees are usually
- * untracked, where git has nothing to say and the entry list below carries the
- * evidence instead.
- */
-function gitStatusRows(rootRel) {
-  const run = spawnSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=all", "--", rootRel], {
-    encoding: "utf8",
-  });
-  if (run.status !== 0) return null;
-  return (run.stdout ?? "").split("\n").filter((line) => line.trim() !== "");
-}
-
-/**
- * Assert one recorded tree digest against the tree on disk.
- *
- * A digest mismatch is only actionable if it NAMES the entries: this reports
- * the count, the aggregate expected/actual, the tree's own entries (path, kind,
- * sha256 — capped, with the total), and, when the tree is git-tracked, the
- * checkout status rows that identify content differing from the commit. Nothing
- * is relaxed by this: the same equality is asserted, the message just carries
- * the evidence a reader needs.
- */
-function assertTreeDigest(label, tree, exclude) {
-  const abs = join(REPO, tree.root);
-  assert.ok(existsSync(abs), `${label}: declared tree root ${tree.root} is missing`);
-  const entries = treeEntries(abs, exclude);
-  const actual = digestEntries(entries);
-  if (entries.length === tree.files && actual === tree.sha256) return;
-  const shown = entries
-    .slice(0, 10)
-    .map((entry) => `    ${entry.path} ${entry.kind} ${entry.sha256}${entry.linkTarget === null ? "" : ` -> ${entry.linkTarget}`}`)
-    .join("\n");
-  const more = entries.length > 10 ? `\n    … ${entries.length - 10} more entr${entries.length - 10 === 1 ? "y" : "ies"}` : "";
-  const status = gitStatusRows(toPosix(tree.root));
-  const statusLines =
-    status === null
-      ? "    (not a git checkout — compare the entry list above with a local run)"
-      : status.length === 0
-        ? "    (clean against HEAD: the difference is not a tracked-file edit)"
-        : status
-            .slice(0, 10)
-            .map((line) => `    ${line}`)
-            .join("\n") + (status.length > 10 ? `\n    … ${status.length - 10} more status row(s)` : "");
-  assert.fail(
-    `${label}: ${tree.root} digest drifted\n` +
-      `  expected sha256 ${tree.sha256} with ${tree.files} entr${tree.files === 1 ? "y" : "ies"}\n` +
-      `  actual   sha256 ${actual} with ${entries.length} entr${entries.length === 1 ? "y" : "ies"}\n` +
-      `  entries (excluded basenames: ${exclude.length === 0 ? "(none)" : exclude.join(", ")}):\n${shown}${more}\n` +
-      `  git status --porcelain -- ${toPosix(tree.root)}:\n${statusLines}`,
-  );
 }
 
 /** `">=24.18.0"` against `process.versions.node`-style versions. */
@@ -459,131 +359,6 @@ test("built CLI, built engine generation and committed ZCode hook are present no
     satisfiesFloor(process.versions.node, nodeFloor),
     `this regression runs on Node ${process.versions.node}, below the declared floor ${nodeFloor}`,
   );
-});
-
-/* ------------------------------------------------------------------------ *
- * 2. Generated manifests agree with the bytes on disk
- * ------------------------------------------------------------------------ */
-
-test("generated consumer manifests agree with the bytes on disk (all six consumers)", () => {
-  const manifest = readManifest();
-  assert.equal(manifest.version, 1);
-  assert.equal(manifest.protocol, "consumer-v1");
-  assert.equal(manifest.repoRoot, ".");
-  assert.deepEqual(
-    manifest.consumers.map((consumer) => consumer.id).sort(),
-    ["cli", "dsh", "engine", "omp", "opencode", "zcode"],
-  );
-
-  const nodeFloors = new Set(
-    manifest.consumers
-      .filter((consumer) => consumer.runtime.declaration === "package-engines" && consumer.runtime.target === "node")
-      .map((consumer) => consumer.runtime.floor),
-  );
-  assert.equal(nodeFloors.size, 1, "the package-declared Node floors disagree");
-
-  for (const consumer of manifest.consumers) {
-    const label = `[${consumer.id}]`;
-    const packageRoot = consumer.packageRoot === "." ? REPO : join(REPO, consumer.packageRoot);
-    const entryAbs = join(REPO, consumer.entrypoint);
-    assert.ok(existsSync(entryAbs), `${label} entrypoint ${consumer.entrypoint} does not exist`);
-
-    // Every declared source and generated FILE is byte-identical to its record.
-    for (const file of [...consumer.sources.files, ...consumer.generated.files]) {
-      const abs = join(REPO, file.path);
-      assert.ok(existsSync(abs), `${label} declared file ${file.path} is missing`);
-      assert.equal(sha256File(abs), file.sha256, `${label} declared file ${file.path} drifted`);
-    }
-    // Every declared TREE is re-digested from the bytes. Generated trees carry
-    // the producer's own manifest-basename exclusion PLUS the exclusions the
-    // manifest RECORDS (an artifact whose bytes belong to a declared producer,
-    // e.g. the DSh client bundle, is outside the digested closure by name — the
-    // recorded list is what lets this verifier re-digest the same closure).
-    for (const tree of consumer.sources.trees) assertTreeDigest(`${label} source tree`, tree, []);
-    for (const tree of consumer.generated.trees) {
-      assertTreeDigest(`${label} generated tree`, tree, [MANIFEST_BASENAME, ...(tree.exclude ?? [])]);
-    }
-
-    // Copied instruction trees: a `copy` target must equal its source tree
-    // exactly, a `merge` target must contain every source entry byte-identically.
-    for (const copy of consumer.copiedInstructions) {
-      const sourceEntries = treeEntries(join(REPO, copy.sourceRoot), []);
-      assert.equal(sourceEntries.length, copy.files, `${label} copy ${copy.sourceRoot} file count drifted`);
-      assert.equal(digestEntries(sourceEntries), copy.sha256, `${label} copy source ${copy.sourceRoot} drifted`);
-      const targetEntries = treeEntries(join(REPO, copy.targetRoot), []);
-      if (copy.mode === "copy") {
-        assert.equal(
-          digestEntries(targetEntries),
-          copy.sha256,
-          `${label} copy target ${copy.targetRoot} no longer matches ${copy.sourceRoot}`,
-        );
-      } else {
-        assert.equal(copy.mode, "merge");
-        const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry]));
-        for (const entry of sourceEntries) {
-          const copied = targetByPath.get(entry.path);
-          assert.ok(copied, `${label} merged target ${copy.targetRoot} is missing ${entry.path}`);
-          assert.equal(copied.kind, entry.kind, `${label} merged ${copy.targetRoot}/${entry.path} kind drifted`);
-          assert.equal(copied.sha256, entry.sha256, `${label} merged ${copy.targetRoot}/${entry.path} bytes drifted`);
-          assert.equal(copied.linkTarget, entry.linkTarget, `${label} merged ${copy.targetRoot}/${entry.path} link drifted`);
-        }
-      }
-    }
-
-    // The entrypoint is declared by an actual package build/plugin surface —
-    // never accepted merely because the bytes happen to exist.
-    const tail = toPosix(relative(packageRoot, entryAbs));
-    const declarationDocs = [
-      join(packageRoot, "package.json"),
-      join(packageRoot, "plugin.json"),
-      join(REPO, ".omp-plugin", "plugin.json"),
-      join(REPO, "hooks", "hooks.json"),
-    ].filter((doc) => existsSync(doc));
-    assert.ok(
-      declarationDocs.some((doc) => readFileSync(doc, "utf8").includes(tail)),
-      `${label} entrypoint ${tail} is not declared by any package/plugin surface`,
-    );
-
-    // The recorded runtime floor is the one the package itself declares (and a
-    // repo-root consumer with no `engines` carries the canonical Node floor).
-    if (consumer.runtime.declaration === "package-engines") {
-      const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-      assert.equal(
-        packageJson.engines?.[consumer.runtime.target],
-        consumer.runtime.floor,
-        `${label} recorded floor disagrees with the package's own engines.${consumer.runtime.target}`,
-      );
-    } else {
-      assert.equal(consumer.runtime.declaration, "canonical-floor");
-      assert.equal(consumer.runtime.target, "node");
-      assert.ok(nodeFloors.has(consumer.runtime.floor), `${label} canonical floor is not the declared Node floor`);
-    }
-  }
-
-  // R17: the ZCode consumer's generated artifact IS the committed hook bundle,
-  // and its recorded build inputs cover the engine source the hook inlines.
-  const zcode = consumerById(manifest, "zcode");
-  assert.equal(zcode.capability, "writer");
-  assert.deepEqual(zcode.generated.files.map((file) => file.path), ["hooks/mstar-write-gate.mjs"]);
-  assert.equal(zcode.generated.files[0].sha256, sha256File(HOOK_ENTRY));
-  const zcodeSourceRoots = zcode.sources.trees.map((tree) => tree.root).sort();
-  assert.deepEqual(zcodeSourceRoots, ["hooks/src", "packages/engine/src"]);
-});
-
-test("per-consumer evidence documents mirror the aggregate manifest", () => {
-  const manifest = readManifest();
-  for (const consumer of manifest.consumers) {
-    // The ONE tracked verification directory: the aggregate and the evidence
-    // documents live together under `scripts/`, never in per-package
-    // `execution-consumer/` directories.
-    const evidencePath = join(REPO, "scripts", "packaging-manifests", `${consumer.id}.json`);
-    assert.ok(existsSync(evidencePath), `missing evidence document for ${consumer.id}`);
-    const raw = readFileSync(evidencePath, "utf8");
-    assert.equal(raw.endsWith("\n"), true, `${consumer.id} evidence document has no terminal LF`);
-    const document = JSON.parse(raw);
-    assert.equal(document.consumers.length, 1, `${consumer.id} evidence document must carry exactly one entry`);
-    assert.deepEqual(document.consumers[0], consumer, `${consumer.id} evidence document drifted from the aggregate`);
-  }
 });
 
 /* ------------------------------------------------------------------------ *

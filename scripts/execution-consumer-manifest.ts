@@ -994,7 +994,23 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
           recordedTree.sha256 !== recomputed.sha256 ||
           recordedTree.files !== recomputed.files
         ) {
-          refuse("consumer.digest-mismatch", `${id}.${kind} tree ${recomputed.root} is stale`);
+          // A tree digest mismatch is only actionable if it NAMES the entries.
+          // This producer is the single implementation of the walk, so the
+          // evidence lives here: the aggregate on both sides plus the tree's
+          // own entries (every entry for a small tree, the first ten above the
+          // cap) identify the drifted file from a CI log alone.
+          const rootAbs = resolveInsideRepo(repoAbs, spec.root, `tree root ${spec.root}`);
+          const entries = treeEntries(rootAbs, expectedExclude);
+          const cap = 200;
+          const shown = entries.length <= cap ? entries : entries.slice(0, 10);
+          const detail = shown.map((entry) => `    ${entry.path} ${entry.kind} ${entry.sha256}`).join("\n");
+          refuse(
+            "consumer.digest-mismatch",
+            `${id}.${kind} tree ${recomputed.root} is stale — ` +
+              `recorded ${recordedTree?.sha256 ?? "(absent)"} with ${recordedTree?.files ?? "?"} entries, ` +
+              `actual ${recomputed.sha256} with ${recomputed.files} entries\n${detail}` +
+              (shown.length < entries.length ? `\n    … ${entries.length - shown.length} more entries` : ""),
+          );
         }
       }
     };
