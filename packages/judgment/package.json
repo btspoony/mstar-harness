@@ -13,7 +13,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && bunx tsc"
+    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/index.js && bunx tsc"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
