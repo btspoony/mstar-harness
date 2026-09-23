@@ -463,9 +463,15 @@ const report = await (async () => {
       return String(error).slice(0, 240);
     }
   };
-  const parsedBind = parameters.parse({ operation: "bind", workflowId: "probe-iteration", coordinatorSessionPath: "/probe/session.json" });
+  const parsedBind = parameters.parse({ operation: "bind", workflowId: "probe-iteration" });
   const parsedCheckpoint = parameters.parse({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
-  const rejectsWrongTypeSessionPath = rejectionOf({ operation: "bind", workflowId: "probe-iteration", coordinatorSessionPath: 7 });
+  const parsedExportHistory = parameters.parse({ operation: "export-history", workflowId: "probe-iteration" });
+  const rejectsWrongTypeWorkflowId = rejectionOf({ operation: "bind", workflowId: 7 });
+  const rejectsExportHistoryExtraKey = rejectionOf({
+    operation: "export-history",
+    workflowId: "probe-iteration",
+    evidencePath: join(project, "evidence.txt"),
+  });
   const rejectsCreatedWithoutTarget = rejectionOf({
     operation: "record-launch",
     intentId: "probe-intent",
@@ -476,7 +482,6 @@ const report = await (async () => {
   const rejectsUnknownKey = rejectionOf({
     operation: "bind",
     workflowId: "probe-iteration",
-    coordinatorSessionPath: "/probe/session.json",
     extra: 1,
   });
 
@@ -503,12 +508,13 @@ const report = await (async () => {
     };
   };
 
-  // The inlined engine reads the real coordinator envelope before anything else,
-  // and an unbound session cannot checkpoint: both refusals are visible results.
-  const bindUnreadableEnvelope = await invoke("probe-bind", {
+  // The inlined engine runs inside the packed extension: an unbound session
+  // cannot checkpoint, and a bind for a workflow this control root does not hold
+  // refuses through the file route before anything is bound. Both are visible
+  // results rather than silent no-ops.
+  const bindMissingWorkflow = await invoke("probe-bind", {
     operation: "bind",
     workflowId: "probe-iteration",
-    coordinatorSessionPath: join(project, "absent-session.json"),
   });
   const checkpointUnbound = await invoke("probe-checkpoint", {
     operation: "checkpoint",
@@ -552,12 +558,14 @@ const report = await (async () => {
     schema: {
       parsedBind,
       parsedCheckpoint,
-      rejectsWrongTypeSessionPath,
+      parsedExportHistory,
+      rejectsWrongTypeWorkflowId,
+      rejectsExportHistoryExtraKey,
       rejectsCreatedWithoutTarget,
       rejectsUnknownOperation,
       rejectsUnknownKey,
     },
-    bindUnreadableEnvelope,
+    bindMissingWorkflow,
     checkpointUnbound,
     settings: {
       mode: settingsMode,
@@ -821,28 +829,28 @@ describe("@mstar-harness/omp packed artifact", () => {
       );
 
       // The model-facing tool contract is the host's own schema: exact round
-      // trips for two operations and a visible refusal per strictness rule.
-      expect(report.schema.parsedBind).toEqual({
-        operation: "bind",
-        workflowId: "probe-iteration",
-        coordinatorSessionPath: "/probe/session.json",
-      });
+      // trips for three operations and a visible refusal per strictness rule.
+      expect(report.schema.parsedBind).toEqual({ operation: "bind", workflowId: "probe-iteration" });
       expect(report.schema.parsedCheckpoint).toEqual({
         operation: "checkpoint",
         reason: "before-wait",
         decision: "wait",
         note: "probe",
       });
-      expect(report.schema.rejectsWrongTypeSessionPath).toContain("coordinatorSessionPath must be a string");
+      expect(report.schema.parsedExportHistory).toEqual({ operation: "export-history", workflowId: "probe-iteration" });
+      expect(report.schema.rejectsWrongTypeWorkflowId).toContain("workflowId must be a string");
+      // The §4.2 producer is read-only: it has no evidence-path or attestation
+      // parameter, so the strict schema refuses one instead of accepting it.
+      expect(report.schema.rejectsExportHistoryExtraKey).toBeTruthy();
       expect(report.schema.rejectsCreatedWithoutTarget).toContain("requires the returned opaque target");
       expect(report.schema.rejectsUnknownOperation).toContain("operation must be");
       expect(report.schema.rejectsUnknownKey).toBeTruthy();
 
-      // The inlined engine runs inside the packed extension: a real
-      // coordinator-envelope read refuses, and an unbound session cannot check
-      // point. Both are visible results rather than silent no-ops.
-      expect(report.bindUnreadableEnvelope).toMatchObject({ ok: false, isError: true, code: "phase2.envelope-unreadable" });
-      expect(report.bindUnreadableEnvelope.message.length).toBeGreaterThan(0);
+      // The inlined engine runs inside the packed extension: a bind for a
+      // workflow this control root does not hold refuses, and an unbound session
+      // cannot checkpoint. Both are visible results rather than silent no-ops.
+      expect(report.bindMissingWorkflow).toMatchObject({ ok: false, isError: true, code: "phase2.snapshot-unreadable" });
+      expect(report.bindMissingWorkflow.message.length).toBeGreaterThan(0);
       expect(report.checkpointUnbound).toMatchObject({ ok: false, isError: true, code: "phase2.not-bound" });
 
       // Native settings API exercised for real, across sessions: the writing

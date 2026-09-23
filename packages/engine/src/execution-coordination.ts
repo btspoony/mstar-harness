@@ -43,17 +43,17 @@ import {
   assertStandaloneSourceGitProof,
   assertViolationFree,
   catalogPinFactsOn,
+  captureGitProofWitness,
   gitObjectExists,
   gitRead,
   integrationProof,
   parseAssignmentFile,
-  pinGitRefWitness,
   planAreaRoots,
   proofRepository,
-  revalidateGitRefWitness,
+  revalidateGitProofWitness,
   selectCatalogPinOn,
   type AssignmentHeaders,
-  type GitRefWitness,
+  type GitProofWitness,
 } from "./coordination.js";
 import {
   IMPLEMENTED_OPERATIONS,
@@ -1858,10 +1858,11 @@ function applyCompletion(input: {
  * completion of either kind is iteration integration: nothing here merges, and
  * the workflow's own terminal close is a separate transition (W6).
  *
- * §4.1 the external Git read happens before SQLite ownership and the ref state
- * it was read from is PINNED there; the transaction re-reads those exact bytes
- * immediately before the commit, so a branch that moved in the window refuses
- * instead of committing a stale proof.
+ * §4.1/§7 the external Git read happens before SQLite ownership and the SEALED
+ * Git proof it produced is re-read from the filesystem immediately before the
+ * commit, so a worktree, index, object store or ref that moved in the window
+ * refuses instead of committing a stale proof. A refs-only witness cannot prove
+ * an unchanged index or worktree (R10).
  */
 
 /** Test-only hook to observe the preflight→commit gap of a DB completion. */
@@ -1885,7 +1886,7 @@ export async function completeExecutionPlan(
   const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
   const standalone = isStandaloneDevelopmentWorkflow(snapshot);
   let resultSha: string | null = null;
-  let gitWitness: GitRefWitness;
+  let gitWitness: GitProofWitness;
   if (standalone) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     assertAcceptedReviewDecision(named, planId, "complete");
@@ -1894,16 +1895,16 @@ export async function completeExecutionPlan(
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
     const worktree = planScopeOf(before.data, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
-    // The branch the proof just read: its tip and the checkout's HEAD are the
-    // only ref state the proof depends on that a concurrent writer can move.
-    gitWitness = pinGitRefWitness(worktree, ["HEAD", `refs/heads/${anchors.source}`]);
+    // §7 seal the whole proof: the checkout, `HEAD`, the delivery ref, the
+    // index, every tracked path and the object inventory the proof read.
+    gitWitness = captureGitProofWitness(worktree);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
     resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head);
-    gitWitness = pinGitRefWitness(anchors.worktreePath, ["HEAD", `refs/heads/${anchors.targetBranch}`]);
+    gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   }
   assertEvidenceDigests(named);
   await assertFindingsClosed(context, planId, prepared, "complete");
@@ -1928,9 +1929,10 @@ export async function completeExecutionPlan(
     }
     assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    // §4.1 the commit-window revalidation: the ref state the proof was read from
-    // must still be those bytes, so the proof commits with the row or not at all.
-    revalidateGitRefWitness(gitWitness, standalone ? gitProof : integrationDiverged);
+    // §7 the commit-window revalidation: every fact the sealed proof was read
+    // from must still be those bytes, so the proof commits with the row or not
+    // at all. It reads the filesystem only — no child process, no await.
+    revalidateGitProofWitness(gitWitness);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };

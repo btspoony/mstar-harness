@@ -27,6 +27,11 @@
  *   a synthesized snapshot.
  * - `mstar_worktree_check` kind=l2 stays a pure parameter check: no state, no
  *   route.
+ * - the phase2 observation (2b) adopts the DB coordinator binding when the
+ *   authority is ACTIVE — no envelope or snapshot is opened on that route — and
+ *   keeps the file route pre-activation, where it adopts the workflow's OWN
+ *   recorded coordinator instead of a caller-supplied path. A legacy binding
+ *   record on an ACTIVE root still refuses `execution.consumer-not-ready`.
  * - the model-handoff readiness contract (E1 binding / E2 checkpoint) refuses
  *   not-ready before opening the root register, the snapshot or the coordinator
  *   envelope — proven against the SAME fixture whose legacy artifacts would
@@ -46,12 +51,14 @@ import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { CustomTool, CustomToolAPI, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
+  bindExecutionSession,
   createExecutionWorkflow,
   initializeExecutionAuthority,
   initializeStore,
+  readExecutionAuthority,
   registerCatalogEntity,
 } from "@mstar-harness/engine";
-import type { ExecutionCaller, ExecutionContext } from "@mstar-harness/engine";
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput } from "../src/model-handoff-readiness";
 import { handoffSeams, default as modelHandoff } from "../src/extensions/model-handoff";
@@ -59,7 +66,9 @@ import {
   PHASE2_ADVISORY_CUSTOM_TYPE,
   PHASE2_CUSTOM_TYPE,
   PHASE2_NOTICE_CUSTOM_TYPE,
+  PHASE2_PHASE,
   default as phase2Orchestration,
+  derivePhase2State,
 } from "../src/extensions/phase2-orchestration";
 import mstarIterationGate from "../src/tools/mstar_iteration_gate/index";
 import mstarLeaseVerify from "../src/tools/mstar_lease_verify/index";
@@ -182,8 +191,10 @@ function plantLeftoverEvidence(fixture: Fixture, status: string = LEFTOVER_STATU
 }
 
 /** REAL ACTIVE execution authority: `initializeStore` + the empty-execution
- * initializer + one registered plan + one created workflow holding it. */
-async function seedActiveAuthority(fixture: Fixture): Promise<void> {
+ * initializer + one registered plan + one created workflow holding it, plus the
+ * coordinator session bound through the DB verb under the SAME native session id
+ * the phase2 observation uses (a host session observes only its own binding). */
+async function seedActiveAuthority(fixture: Fixture): Promise<ExecutionSessionRef> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
   const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
@@ -200,7 +211,7 @@ async function seedActiveAuthority(fixture: Fixture): Promise<void> {
   );
   const context: ExecutionContext = {
     harnessDir: fixture.harness,
-    caller: { sessionId: `host-${WORKFLOW_ID}`, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId: SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
     entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
@@ -209,15 +220,27 @@ async function seedActiveAuthority(fixture: Fixture): Promise<void> {
       id: WORKFLOW_ID,
       type: "plan",
       status: "running",
+      phase: PHASE2_PHASE,
       started_at: TS,
       updated_at: TS,
       plans: [{ id: PLAN_ID, title: `${PLAN_ID} title`, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
       delivery_kind: "development",
       branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
     } as never,
+    // Creation is a ROOT-scoped CAS: its receipt token is a root token, so the
+    // workflow-scoped bind reads the WORKFLOW token from the authority instead.
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
+  const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
+  const bound = await bindExecutionSession(context, {
+    workflowId: WORKFLOW_ID,
+    planId: null,
+    role: "coordinator",
+    expected: workflowToken,
+    operationId: `bind-${SESSION_ID}`,
+  });
+  return bound.data;
 }
 
 /** Unusable authority through the REAL engine channel: a directory where the
@@ -609,7 +632,7 @@ function plantPhase2Evidence(fixture: Fixture): string {
   return envelopePath;
 }
 
-/** The durable identity pointer `bind` writes, as the ledger replays it. */
+/** The pre-activation identity pointer the old `bind` wrote, as the ledger replays it: history only. */
 function phase2BindingEntry(fixture: Fixture, coordinatorSessionPath: string): SessionEntry {
   return {
     type: "custom",
@@ -622,6 +645,35 @@ function phase2BindingEntry(fixture: Fixture, coordinatorSessionPath: string): S
       coordinatorSessionPath,
       coordinatorSessionId: COORDINATOR_SESSION_ID,
       harnessRoot: fixture.harness,
+    },
+  } as unknown as SessionEntry;
+}
+
+/** The ACTIVE binding record the migrated `bind` writes: the session's own §3.1 `ExecutionBinding`. */
+function phase2ActiveBindingEntry(fixture: Fixture, ref: ExecutionSessionRef): SessionEntry {
+  return {
+    type: "custom",
+    customType: PHASE2_CUSTOM_TYPE,
+    data: {
+      version: 2,
+      kind: "bind",
+      workflowId: WORKFLOW_ID,
+      hostSessionId: SESSION_ID,
+      // A canonical PLAIN copy: the engine's canonical-value rule accepts only
+      // Object.prototype/null prototypes, and the extension re-serializes the
+      // binding it compares, so the record never carries the engine's own object.
+      executionBinding: {
+        version: 1,
+        harnessRoot: fixture.harness,
+        session: {
+          storeId: ref.storeId,
+          epoch: ref.epoch,
+          workflowId: ref.workflowId,
+          role: ref.role,
+          sessionId: ref.sessionId,
+          planId: ref.planId,
+        },
+      },
     },
   } as unknown as SessionEntry;
 }
@@ -654,6 +706,8 @@ interface ExtensionHost {
   callTool: (params: Record<string, unknown>) => Promise<ExtensionToolResult>;
   emit: (event: string) => Promise<void>;
   messages: ReadonlyArray<{ customType: string; content: string }>;
+  /** The session ledger this host appended to, as the extension's own replay reads it. */
+  entries: readonly SessionEntry[];
 }
 
 function extensionHost(options: {
@@ -691,6 +745,7 @@ function extensionHost(options: {
   } as unknown as ExtensionContext;
   return {
     messages,
+    entries,
     callTool: async (params) => {
       const tool = Object.values(tools)[0];
       if (tool === undefined) throw new Error("the extension registered no tool");
@@ -714,47 +769,64 @@ function textOfExtension(result: ExtensionToolResult): string {
   return result.content.map((part) => part.text).join("\n");
 }
 
-describe("execution-omp-read-phase2 — the phase2 observation extension refuses not-ready under an ACTIVE authority (S3)", () => {
-  test("bind refuses not-ready without opening the coordinator envelope", async () => {
+describe("execution-omp-read-phase2 — the phase2 observation runs on the DB authority when ACTIVE and on the file route pre-activation (S3/2b)", () => {
+  test("bind adopts the DB coordinator binding and never opens the retired envelope", async () => {
     const fixture = makeFixture("phase2-bind-active");
-    await seedActiveAuthority(fixture);
+    const coordinator = await seedActiveAuthority(fixture);
+    // Nothing is planted on disk: a route decision that ran after a file read
+    // would refuse `phase2.envelope-unreadable` / `phase2.snapshot-unreadable`
+    // here, so the success itself is the ordering proof.
     const host = extensionHost({ factory: phase2Orchestration, cwd: fixture.main, sessionId: SESSION_ID });
 
-    // The named envelope does not exist: a route decision that ran *after* the
-    // envelope read answered `phase2.envelope-unreadable` here. The ordering this
-    // case pins is therefore visible in the refusal itself.
-    const result = await host.callTool({
-      operation: "bind",
-      workflowId: WORKFLOW_ID,
-      coordinatorSessionPath: join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"),
-    });
+    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID });
 
-    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
-    expect(textOfExtension(result)).toContain("ACTIVE");
+    expect(extensionCodeOf(result)).toBe("bound");
+    expect(result.details.mstarPhase2).toMatchObject({ applied: true, workflowId: WORKFLOW_ID, storeId: coordinator.storeId, epoch: coordinator.epoch });
+    // The ledger holds the ACTIVE generation, and it is the binding the DB owns.
+    const state = derivePhase2State(host.entries, SESSION_ID);
+    expect(state.binding?.executionBinding.session).toEqual(coordinator);
+    expect(state.legacy).toBeNull();
   });
 
-  test("bind still refuses on the ENVELOPE's own active harness when the caller's checkout resolves none", async () => {
-    const fixture = makeFixture("phase2-bind-envelope");
+  test("bind refuses when the caller's checkout resolves no control harness", async () => {
+    const fixture = makeFixture("phase2-bind-elsewhere");
     await seedActiveAuthority(fixture);
-    const envelopePath = plantPhase2Evidence(fixture);
-    // A caller that sits outside any harness: its own checkout decides nothing,
-    // so the envelope's own control harness keeps the decision it always had.
+    plantPhase2Evidence(fixture);
+    // A caller outside any harness: there is no addressed root, so no authority
+    // can be selected and no evidence may be read on its behalf.
     const host = extensionHost({ factory: phase2Orchestration, cwd: scratchDir("phase2-bind-elsewhere"), sessionId: SESSION_ID });
 
-    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID, coordinatorSessionPath: envelopePath });
+    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID });
 
-    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+    expect(extensionCodeOf(result)).toBe("phase2.harness-not-found");
   });
 
-  test("checkpoint refuses not-ready through the ownership probe", async () => {
+  test("checkpoint records against the DB authority instead of reporting not-ready", async () => {
     const fixture = makeFixture("phase2-checkpoint-active");
-    await seedActiveAuthority(fixture);
-    const envelopePath = plantPhase2Evidence(fixture);
+    const coordinator = await seedActiveAuthority(fixture);
     const host = extensionHost({
       factory: phase2Orchestration,
       cwd: fixture.main,
       sessionId: SESSION_ID,
-      entries: [phase2BindingEntry(fixture, envelopePath)],
+      entries: [phase2ActiveBindingEntry(fixture, coordinator)],
+    });
+
+    const result = await host.callTool({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
+
+    expect(extensionCodeOf(result)).toBe("recorded");
+    expect(textOfExtension(result)).toContain("checkpoint recorded");
+  });
+
+  test("a LEGACY envelope binding on an ACTIVE root still refuses not-ready, and never reads the retired documents", async () => {
+    const fixture = makeFixture("phase2-checkpoint-legacy-record");
+    await seedActiveAuthority(fixture);
+    // Only the pre-activation record exists: it is history, so the §5 readiness
+    // check refuses it and the envelope is never opened.
+    const host = extensionHost({
+      factory: phase2Orchestration,
+      cwd: fixture.main,
+      sessionId: SESSION_ID,
+      entries: [phase2BindingEntry(fixture, join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"))],
     });
 
     const result = await host.callTool({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
@@ -763,33 +835,56 @@ describe("execution-omp-read-phase2 — the phase2 observation extension refuses
     expect(textOfExtension(result)).toContain("checkpoint was not recorded");
   });
 
-  test("the advisory sampler reports the retired route instead of sampling it", async () => {
-    const fixture = makeFixture("phase2-sampler-active");
-    await seedActiveAuthority(fixture);
+  test("a STALE active binding refuses through the engine's own code and stays silent", async () => {
+    const fixture = makeFixture("phase2-checkpoint-stale");
+    const coordinator = await seedActiveAuthority(fixture);
     const host = extensionHost({
       factory: phase2Orchestration,
       cwd: fixture.main,
       sessionId: SESSION_ID,
-      // The bound envelope is not even on disk: the observation route is retired
-      // before it could be opened.
-      entries: [phase2BindingEntry(fixture, join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"))],
+      // The same store, an epoch the authority does not record: a reference is a
+      // lookup, never a bearer credential.
+      entries: [phase2ActiveBindingEntry(fixture, { ...coordinator, epoch: coordinator.epoch + 1 })],
+    });
+
+    const result = await host.callTool({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
+
+    expect(["execution.session-unavailable", "store.stale-epoch"]).toContain(extensionCodeOf(result));
+    expect(textOfExtension(result)).toContain("checkpoint was not recorded");
+    expect(textOfExtension(result)).toContain("not-current");
+  });
+
+  test("the advisory sampler samples the DB authority and never reports the retired route", async () => {
+    const fixture = makeFixture("phase2-sampler-active");
+    const coordinator = await seedActiveAuthority(fixture);
+    const host = extensionHost({
+      factory: phase2Orchestration,
+      cwd: fixture.main,
+      sessionId: SESSION_ID,
+      entries: [phase2ActiveBindingEntry(fixture, coordinator)],
     });
 
     await host.emit("agent_end");
 
     const scoped = host.messages.filter((message) => message.customType === PHASE2_NOTICE_CUSTOM_TYPE);
-    expect(scoped.map((message) => message.content).join("\n")).toContain("execution.consumer-not-ready");
+    expect(scoped.map((message) => message.content).join("\n")).not.toContain("execution.consumer-not-ready");
+    // No running work, no latched baseline and nothing new to report: silence.
     expect(host.messages.filter((message) => message.customType === PHASE2_ADVISORY_CUSTOM_TYPE)).toEqual([]);
   });
 
-  test("a harness with NO store keeps the unchanged phase2 file binding", async () => {
+  test("a harness with NO store keeps the file route and adopts the workflow's OWN recorded coordinator", async () => {
     const fixture = makeFixture("phase2-bind-legacy");
     const envelopePath = plantPhase2Evidence(fixture);
     const host = extensionHost({ factory: phase2Orchestration, cwd: fixture.main, sessionId: SESSION_ID });
 
-    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID, coordinatorSessionPath: envelopePath });
+    // The caller supplies no path at all: the host resolves the recorded
+    // coordinator from the snapshot, and the record is the legacy generation.
+    const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID });
 
     expect(extensionCodeOf(result)).toBe("bound");
+    const state = derivePhase2State(host.entries, SESSION_ID);
+    expect(state.binding).toBeNull();
+    expect(state.legacy).toMatchObject({ coordinatorSessionId: COORDINATOR_SESSION_ID, coordinatorSessionPath: envelopePath });
   });
 });
 
