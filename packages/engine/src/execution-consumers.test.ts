@@ -175,14 +175,21 @@ async function activeGraph(label: string): Promise<StoreContext> {
   return context;
 }
 
-/** A store whose recorded migrations stop before `execution-authority`. */
+/**
+ * A store whose recorded migrations stop before `execution-authority`
+ * (migration 4): the execution schema was never applied to it, so its recorded
+ * rows must stay a CONTIGUOUS prefix (1..3). Deleting only migration 4 would
+ * leave the [1,2,3,5] hole a real corrupted store has, and the C1 contiguity
+ * check refuses that shape as `store.schema-drift` — this fixture is about a
+ * store that simply predates the execution tables, not about drift.
+ */
 async function preExecutionStore(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
   const db = new DatabaseSync(join(context.harnessDir, "store.db"));
   try {
-    db.exec("delete from schema_version where version = 4");
+    db.exec("delete from schema_version where version >= 4");
   } finally {
     db.close();
   }
