@@ -200,7 +200,7 @@
  * `recordSubagentLink` / `readAgentFlow` + constants + types) are re-exported
  * verbatim by the entry.
  */
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
@@ -1615,12 +1615,32 @@ function withLockDir<T>(
 }
 
 /**
- * Append bytes durably: one fd, one write, `fsync` before returning — plus,
- * when THIS call created the file, a fsynced parent directory so the new
- * directory entry survives a crash (the first `agent-flow.jsonl`,
- * `agent-flow-ids.jsonl` or history chunk of a workflow dir). Every accepted
- * ledger row and every identity-index entry goes through here, so a caller can
- * never report success for bytes that are still only in the page cache.
+ * Write every byte of `bytes` through `write`, which is handed the bytes still
+ * unwritten and returns how many it accepted. One `writeSync` is not a durable
+ * append: a short write (an interrupted call, a full disk, a quota) returns
+ * fewer bytes than it was given, so the caller must finish the remainder —
+ * otherwise the row commits truncated while `fsync` reports success. A `write`
+ * that accepts nothing refuses: no progress is possible, so success must never
+ * be reported for it.
+ */
+export function writeAllSync(write: (chunk: Buffer) => number, bytes: Buffer): void {
+  let offset = 0
+  while (offset < bytes.length) {
+    const written = write(bytes.subarray(offset))
+    if (written <= 0) throw new Error(`a durable write accepted no bytes at offset ${offset} of ${bytes.length}`)
+    offset += written
+  }
+}
+
+/**
+ * Append bytes durably: one fd, every byte written (`writeAllSync` — a short
+ * write is completed by the next call, or refuses when it cannot progress),
+ * `fsync` before returning — plus, when THIS call created the file, a fsynced
+ * parent directory so the new directory entry survives a crash (the first
+ * `agent-flow.jsonl`, `agent-flow-ids.jsonl` or history chunk of a workflow
+ * dir). Every accepted ledger row and every identity-index entry goes through
+ * here, so a caller can never report success for bytes that are still only in
+ * the page cache, nor for a row that was only partly appended.
  */
 function appendFileDurableSync(file: string, bytes: string): void {
   let created = false
@@ -1632,7 +1652,7 @@ function appendFileDurableSync(file: string, bytes: string): void {
   }
   const fd = openSync(file, 'a')
   try {
-    writeSync(fd, bytes)
+    writeAllSync((chunk) => writeSync(fd, chunk), Buffer.from(bytes, 'utf8'))
     fsyncSync(fd)
   } finally {
     closeSync(fd)
@@ -1641,16 +1661,31 @@ function appendFileDurableSync(file: string, bytes: string): void {
 }
 
 /**
- * Write one file durably: fsynced bytes in a temp sibling, atomic rename, then
- * a fsynced parent directory so the rename itself survives a crash. Used for
- * the compacted display tail and the cursor sidecar — the two atomic
- * replacements whose durability the recovery order depends on.
+ * Write one file durably: every byte written into a fsynced temp sibling,
+ * atomic rename, then a fsynced parent directory so the rename itself survives
+ * a crash. Used for the compacted display tail and the cursor sidecar — the two
+ * atomic replacements whose durability the recovery order depends on.
  */
 function writeFileDurableSync(file: string, content: string): void {
   const tmp = `${file}.tmp`
-  const fd = openSync(tmp, 'w')
+  // The temp slot is opened with `O_NOFOLLOW` (`fs.constants` is the repo's one
+  // source for open flags; a platform without it leaves the open plain): the
+  // only shape this writer ever creates there is a plain file, so a link at
+  // that slot is someone else's entry — following it would rewrite the link
+  // target and then rename the link onto the destination. A leftover plain temp
+  // (a crash before the rename) still opens and is truncated, so recovery is
+  // unchanged.
+  let fd: number
   try {
-    writeSync(fd, content)
+    fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${tmp} is a symbolic link; a durable write opens its temp file directly and never follows it`)
+    }
+    throw error
+  }
+  try {
+    writeAllSync((chunk) => writeSync(fd, chunk), Buffer.from(content, 'utf8'))
     fsyncSync(fd)
   } finally {
     closeSync(fd)
