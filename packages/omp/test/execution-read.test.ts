@@ -36,6 +36,11 @@
  *   not-ready before opening the root register, the snapshot or the coordinator
  *   envelope — proven against the SAME fixture whose legacy artifacts would
  *   otherwise decide (E1 would answer `already-bound`, E2 would open them).
+ * - the model-handoff START path asks the route before it classifies: on an
+ *   ACTIVE root it answers from the DB workflow/coordinator view (the handoff
+ *   arms from the adopted active binding) for the very workflow the retired
+ *   register names, and neither the register nor the leftover snapshot is
+ *   consulted for that decision.
  * - an unusable authority (corrupt `store.db`) refuses with the store's own
  *   code for every one of them instead of an empty success or a file fallback.
  * - a harness with NO store keeps the unchanged pre-activation file route.
@@ -45,7 +50,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
@@ -61,7 +66,7 @@ import {
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput } from "../src/model-handoff-readiness";
-import { handoffSeams, default as modelHandoff } from "../src/extensions/model-handoff";
+import { HANDOFF_CUSTOM_TYPE, handoffSeams, default as modelHandoff } from "../src/extensions/model-handoff";
 import {
   PHASE2_ADVISORY_CUSTOM_TYPE,
   PHASE2_CUSTOM_TYPE,
@@ -190,11 +195,21 @@ function plantLeftoverEvidence(fixture: Fixture, status: string = LEFTOVER_STATU
   writeFileSync(fixture.compassPath, COMPASS);
 }
 
-/** REAL ACTIVE execution authority: `initializeStore` + the empty-execution
+/**
+ * REAL ACTIVE execution authority: `initializeStore` + the empty-execution
  * initializer + one registered plan + one created workflow holding it, plus the
  * coordinator session bound through the DB verb under the SAME native session id
- * the phase2 observation uses (a host session observes only its own binding). */
-async function seedActiveAuthority(fixture: Fixture): Promise<ExecutionSessionRef> {
+ * the phase2 observation uses (a host session observes only its own binding).
+ *
+ * `lifecycleType` defaults to `"plan"` — the lifecycle every phase2 case in this
+ * file seeds. The model-handoff start case seeds the SAME authority as an
+ * `"iteration"`, the only lifecycle a model handoff can target, so that the start
+ * path is proved to answer from the DB rather than from the retired register.
+ */
+async function seedActiveAuthority(
+  fixture: Fixture,
+  lifecycleType: "plan" | "iteration" = "plan",
+): Promise<ExecutionSessionRef> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
   const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
@@ -214,11 +229,11 @@ async function seedActiveAuthority(fixture: Fixture): Promise<ExecutionSessionRe
     caller: { sessionId: SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
-    entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+    entry: { id: WORKFLOW_ID, type: lifecycleType, started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
     snapshot: {
       schema_version: 1,
       id: WORKFLOW_ID,
-      type: "plan",
+      type: lifecycleType,
       status: "running",
       phase: PHASE2_PHASE,
       started_at: TS,
@@ -715,8 +730,17 @@ function extensionHost(options: {
   cwd: string;
   sessionId: string;
   entries?: readonly SessionEntry[];
+  /**
+   * Opt-in working model facade for the model-handoff START path: `resolve`
+   * answers the configured role specs, and `setModel` records the switch in the
+   * native ledger the way the host's own model controls do — the arm requires a
+   * matching live model AND a matching `model_change` entry. Omitted (every
+   * other case), the double keeps its previous behavior exactly.
+   */
+  modelRoles?: Readonly<Record<string, string>>;
 }): ExtensionHost {
   const entries: SessionEntry[] = [...(options.entries ?? [])];
+  let live: Readonly<{ provider: string; id: string }> | undefined;
   const messages: Array<{ customType: string; content: string }> = [];
   const handlers: Record<string, (payload: unknown, ctx: ExtensionContext) => unknown> = {};
   const tools: Record<string, HostToolDefinition> = {};
@@ -734,12 +758,31 @@ function extensionHost(options: {
     appendEntry: (customType: string, data: unknown) => {
       entries.push({ type: "custom", customType, data } as unknown as SessionEntry);
     },
-    setModel: () => undefined,
+    setModel: (model: { provider: string; id: string }) => {
+      if (options.modelRoles === undefined) return undefined;
+      live = { provider: model.provider, id: model.id };
+      entries.push({
+        id: `model-change-${entries.length + 1}`,
+        type: "model_change",
+        model: `${model.provider}/${model.id}`,
+      } as unknown as SessionEntry);
+      return true;
+    },
   } as unknown as ExtensionAPI;
   options.factory(pi);
   const ctx = {
     cwd: options.cwd,
     sessionManager: { getSessionId: () => options.sessionId, getEntries: () => entries },
+    models:
+      options.modelRoles === undefined
+        ? undefined
+        : {
+            resolve: (spec: string) => {
+              const id = options.modelRoles?.[spec];
+              return id === undefined ? undefined : { provider: "probe", id };
+            },
+            current: () => live,
+          },
     getAsyncJobSnapshot: () => ({ running: [], recent: [], delivery: { queued: 0, delivering: false, pendingJobIds: [] } }),
     hasPendingMessages: () => false,
   } as unknown as ExtensionContext;
@@ -815,6 +858,38 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
 
     expect(extensionCodeOf(result)).toBe("recorded");
     expect(textOfExtension(result)).toContain("checkpoint recorded");
+  });
+
+  test("a v2 bind whose declared pairing the engine could never accept is never adopted", async () => {
+    const fixture = makeFixture("phase2-binding-pairing");
+    const coordinator = await seedActiveAuthority(fixture, "iteration");
+    const goodBinding = { version: 1, harnessRoot: realpathSync(fixture.harness), session: coordinator };
+    // The engine's cross-field rule (`execution-session.ts` `assertRefShape`): a
+    // coordinator carries a null plan id and a plan-pm a non-empty one. A record
+    // declaring either impossible pairing is history, not a binding — the
+    // restore guard admits it exactly as it admits any other malformed shape.
+    const impossiblePairings = [
+      { ...goodBinding, session: { ...coordinator, role: "coordinator", planId: PLAN_ID } },
+      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: null } },
+      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: "" } },
+    ];
+    for (const executionBinding of impossiblePairings) {
+      const host = extensionHost({
+        factory: phase2Orchestration,
+        cwd: fixture.main,
+        sessionId: SESSION_ID,
+        entries: [
+          {
+            type: "custom",
+            customType: PHASE2_CUSTOM_TYPE,
+            data: { version: 2, kind: "bind", workflowId: WORKFLOW_ID, hostSessionId: SESSION_ID, executionBinding },
+          } as unknown as SessionEntry,
+        ],
+      });
+      const state = derivePhase2State(host.entries, SESSION_ID);
+      expect(state.binding).toBeNull();
+      expect(state.legacy).toBeNull();
+    }
   });
 
   test("a LEGACY envelope binding on an ACTIVE root still refuses not-ready, and never reads the retired documents", async () => {
@@ -906,20 +981,58 @@ describe("execution-omp-read-handoff — the start path classifies only after th
     expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("attach");
   });
 
-  test("the start path refuses the ACTIVE authority for a workflow the retired register names", async () => {
+  test("the start path answers the ACTIVE authority for a workflow the retired register names", async () => {
     const fixture = makeFixture("handoff-start-active");
-    await seedActiveAuthority(fixture);
+    // The authority holds a real ITERATION lifecycle (a model handoff can only
+    // target an iteration) and it is the one bound to this native session id.
+    await seedActiveAuthority(fixture, "iteration");
+    // The retired witnesses stay exactly where the file route read them: the
+    // register NAMES this workflow (an authority-blind classifier answered
+    // `attach`), the snapshot at the derived path names a foreign plan and
+    // carries leases this authority does not hold, and the compass is there. A
+    // file-route answer could therefore only be a refusal — `already-bound` from
+    // the reservation, `invalid-root` from that snapshot, or
+    // `execution.consumer-not-ready` — never a successful arm.
     plantPhase2Evidence(fixture);
     mkdirSync(join(fixture.main, ".omp"), { recursive: true });
     writeFileSync(
       join(fixture.main, ".omp", "plugin-overrides.json"),
       JSON.stringify({ settings: { "@mstar-harness/omp": { modelHandoff: true, handoffTarget: "@default" } } }),
     );
-    const host = extensionHost({ factory: modelHandoff, cwd: fixture.main, sessionId: SESSION_ID });
+    const host = extensionHost({
+      factory: modelHandoff,
+      cwd: fixture.main,
+      sessionId: SESSION_ID,
+      modelRoles: { "@slow": "slow-model" },
+    });
+
+    // Order evidence, asserted before the start: the structural classifier asks
+    // the route FIRST, so on this ACTIVE root the retired register can never
+    // select a branch.
+    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("reserve");
+    const registerBefore = readFileSync(join(fixture.harness, "status.json"), "utf8");
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
 
     const result = await host.callTool({ operation: "start", workflowId: WORKFLOW_ID });
 
-    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
+    // The DB/route answered: the handoff armed from the ADOPTED active binding,
+    // which no file-route branch can produce — so the retired register and
+    // snapshot were not consulted for the decision, and they are left exactly as
+    // planted (never read for a verdict, never rewritten).
+    expect(extensionCodeOf(result)).toBe("armed");
+    expect(result.details.mstarModelHandoff).toMatchObject({ state: "pending", workflowId: WORKFLOW_ID });
+    const records = host.entries.filter((entry) => entry.type === "custom" && entry.customType === HANDOFF_CUSTOM_TYPE);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      data: {
+        state: "attempting",
+        action: "arm",
+        binding: { workflowId: WORKFLOW_ID, executionBinding: { harnessRoot: realpathSync(fixture.harness) } },
+      },
+    });
+    expect(records[1]).toMatchObject({ data: { state: "pending", binding: { workflowId: WORKFLOW_ID } } });
+    expect(readFileSync(join(fixture.harness, "status.json"), "utf8")).toBe(registerBefore);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
   });
 });
 

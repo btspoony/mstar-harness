@@ -104,23 +104,32 @@ function isNonEmpty(value: unknown): value is string {
 }
 
 /**
- * The digest of one exported history value: sha256 over the canonical bytes
- * `exportExecutionHostHistory` returns **excluding the single terminal LF**.
+ * The §4.2 `export.sha256` rule over one already-serialized export body: sha256
+ * of the canonical bytes with **exactly one** terminal LF removed.
  *
  * That is the repository's house rule for a ledger body's identity — the
  * append-only identity index defines a row as the sha256 of the "exact ledger
- * line bytes excluding the final LF" — and canonical contract §4.2 now states
- * it as the one rule for `export.sha256`: the serialized document's terminal LF
- * is framing, and the ENVELOPE's own LF is not part of this digest either. The
- * slice is exactly one byte (canonical serialization always emits exactly one
- * terminal LF), never a trim of arbitrary trailing whitespace, so a body that
- * legitimately ends in `\n` inside a string keeps its bytes.
+ * line bytes excluding the final LF" — and canonical contract §4.2 states it as
+ * the one rule for `export.sha256`: the serialized document's terminal LF is
+ * framing, and the ENVELOPE's own LF is not part of this digest either. The
+ * removal is **conditional and bounded**: at most the one framing LF is dropped,
+ * so a body that does not end in LF keeps every byte (a caller's serialization
+ * change can never silently lose content), and a body ending in more than one LF
+ * keeps all but the last (the rule is not a whitespace trim).
  *
  * Exported so a consumer's recomputation and this producer's digest use one rule.
  */
+export function historyExportBodyDigest(canonical: string): string {
+  const body = canonical.endsWith("\n") ? canonical.slice(0, -1) : canonical;
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+/**
+ * The §4.2 `export.sha256` of one history: the same rule applied to the exact
+ * bytes `exportExecutionHostHistory` returns.
+ */
 export function historyExportDigest(document: ExecutionHostHistory): string {
-  const canonical = exportExecutionHostHistory(document);
-  return createHash("sha256").update(canonical.slice(0, -1), "utf8").digest("hex");
+  return historyExportBodyDigest(exportExecutionHostHistory(document));
 }
 
 /**

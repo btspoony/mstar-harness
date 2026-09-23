@@ -24,6 +24,15 @@
  *   `extensions/model-handoff.ts` (`isHandoffRecord`). A record that violates
  *   that guard — a missing workflow, an unknown kind, an unknown action, a
  *   non-string operation id — produces no advisory view and is diagnosed.
+ * - The single exception to generation `1` is the **version-2 `bind`** the active
+ *   phase-2 producer writes: `{version: 2, kind: "bind", hostSessionId,
+ *   workflowId, executionBinding}`. Its `executionBinding` is admitted by a
+ *   **shape-only presence check** (`ExecutionHostHistoryExecutionBinding`) — the
+ *   reference is a lookup the record carries, never authority, so no store id,
+ *   epoch or session value is ever interpreted, resolved, compared or projected.
+ *   Generation `2` is admitted for `kind: "bind"` alone; every other hidden type
+ *   and every other phase-2 kind still decodes under `1` and nothing else, and a
+ *   version-2 payload of any other shape stays unverified.
  * - The other three names have **no producer anywhere** in this repository's
  *   source or history (their literals are normative upstream only), and no
  *   historical payload generation of any of the five is verifiable. Such a
@@ -81,8 +90,16 @@ export const EXECUTION_HOST_HISTORY_TYPES = [
 
 export type ExecutionHostHistoryType = (typeof EXECUTION_HOST_HISTORY_TYPES)[number];
 
-/** The only payload schema generation any producer writes today. */
+/** The legacy payload schema generation, verified for every producer shape. */
 const VERIFIED_GENERATION = 1;
+
+/**
+ * The one generation admitted beyond the legacy shape. The active phase-2
+ * producer writes `{version: 2, kind: "bind", …, executionBinding}`, so
+ * generation `2` is verified **for `kind: "bind"` only** — no other kind or
+ * hidden type is admitted at generation 2 by this constant's existence.
+ */
+const VERIFIED_BIND_GENERATION = 2;
 
 /**
  * Closed mirror of the phase-2 restore guard's own sets
@@ -120,13 +137,38 @@ const PROVENANCE_PATH_FIELDS = ["coordinatorSessionPath"] as const;
 export type ExecutionHostHistoryProvenance = Readonly<{ field: string; path: string }>;
 
 /**
+ * The adopted-session reference a verified v2 `bind` declares, admitted by shape
+ * alone. It is the record's own declaration — a lookup, never authority: the
+ * mirror never interprets, resolves, compares or projects any store, epoch or
+ * session value, and an epoch mismatch invalidates the reference the record
+ * carries, never the user's selection.
+ *
+ * The view names these fields and no others: no credential, no token, no path
+ * and no session-file reference is derived from, or added alongside, them.
+ */
+export type ExecutionHostHistoryExecutionBinding = Readonly<{
+  harnessRoot: string;
+  storeId: string;
+  epoch: number;
+  sessionId: string;
+  role: string;
+  planId: string | null;
+}>;
+
+/**
+ * The schema generations this mirror decodes: the legacy shape everywhere, plus
+ * the active producer's version-2 `bind`.
+ */
+export type ExecutionHostHistoryGeneration = typeof VERIFIED_GENERATION | typeof VERIFIED_BIND_GENERATION;
+
+/**
  * The decoded advisory view of one **verified** hidden entry. Everything here is
  * derived from the payload's own declared fields — never from ledger position,
  * timestamps or another entry — and it is advisory evidence, not authority.
  */
 export type ExecutionHostHistoryView = Readonly<{
   /** The verified schema generation this view was decoded under. */
-  generation: typeof VERIFIED_GENERATION;
+  generation: ExecutionHostHistoryGeneration;
   /** The payload's declared `kind` field, verbatim (phase-2 decision records). */
   declaredKind: string | null;
   /** The payload's declared `action` field, verbatim (the handoff `arm` / `handoff`). */
@@ -144,6 +186,13 @@ export type ExecutionHostHistoryView = Readonly<{
   cancelled: boolean;
   /** Old session paths, as provenance only. */
   provenance: readonly ExecutionHostHistoryProvenance[];
+  /**
+   * The adopted-session reference a **verified v2 `bind`** declares, by shape
+   * only; `null` for every other verified record (including the v1 `bind`, whose
+   * envelope carries no such reference). It is the one nullable field the v2
+   * generation adds to the view.
+   */
+  executionBinding: ExecutionHostHistoryExecutionBinding | null;
 }>;
 
 /**
@@ -265,12 +314,55 @@ type Note = (code: ExecutionHostHistoryDiagnosticCode, message: string) => void;
 type RecordRefusal = Readonly<{ refused: true; code: ExecutionHostHistoryDiagnosticCode; message: string }>;
 
 /** One payload that satisfied its producer's guard, with the identity it declares. */
-type VerifiedRecord = Readonly<{ refused: false; sessionId: string; workflowId: string }>;
+type VerifiedRecord = Readonly<{
+  refused: false;
+  sessionId: string;
+  workflowId: string;
+  /** The shape-only reference a verified v2 `bind` declares; `null` for every legacy record. */
+  executionBinding: ExecutionHostHistoryExecutionBinding | null;
+}>;
 
 /**
- * Mirror of the phase-2 restore guard (`isPhase2Record`): `version` is checked by
- * the caller; here are the required session/workflow fields and the
- * kind-specific ones.
+ * Shape-only admission of the `executionBinding` a v2 `bind` declares: an object
+ * with `version: 1`, a non-empty `harnessRoot`, and a `session` object whose
+ * `storeId` / `sessionId` / `workflowId` are non-empty strings, whose `role` is
+ * `coordinator | plan-pm`, whose `planId` is `null | string` **paired with that
+ * role** (a coordinator carries a null plan id and a plan-pm a non-empty one —
+ * the engine's own `assertRefShape` rule, so an admitted value is one the engine
+ * could accept) and whose `epoch` is a positive safe integer. Returns the
+ * declared shape, or `null` when any of those is violated.
+ *
+ * Nothing beyond that shape is examined: no store id, epoch or session value is
+ * interpreted, resolved, compared or projected — a well-formed reference that
+ * names another store, another session or a stale epoch is accepted here and
+ * stays a lookup the record carries.
+ */
+function readExecutionBindingShape(value: unknown): ExecutionHostHistoryExecutionBinding | null {
+  if (!isPlainObject(value) || value.version !== VERIFIED_GENERATION || !isNonEmptyString(value.harnessRoot)) return null;
+  const session = value.session;
+  if (!isPlainObject(session)) return null;
+  if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) {
+    return null;
+  }
+  if (session.role === "coordinator" && session.planId !== null) return null;
+  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return null;
+  if (session.role !== "coordinator" && session.role !== "plan-pm") return null;
+  if (typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return null;
+  return {
+    harnessRoot: value.harnessRoot,
+    storeId: session.storeId,
+    epoch: session.epoch,
+    sessionId: session.sessionId,
+    role: session.role,
+    planId: session.planId,
+  };
+}
+
+/**
+ * Mirror of the phase-2 restore guard (`isPhase2Record`): the required
+ * session/workflow fields and the kind-specific ones. `version` branches inside
+ * `kind: "bind"` — the active producer's v2 bind is admitted by shape, and every
+ * legacy version keeps the original generation-1 guard byte for byte.
  */
 function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | VerifiedRecord {
   const hostSessionId = payload.hostSessionId;
@@ -283,7 +375,19 @@ function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | Ve
     };
   }
   switch (payload.kind) {
-    case "bind":
+    case "bind": {
+      if (payload.version === VERIFIED_BIND_GENERATION) {
+        const executionBinding = readExecutionBindingShape(payload.executionBinding);
+        if (executionBinding === null) {
+          return {
+            refused: true,
+            code: "payload-record-invalid",
+            message:
+              "a mstar:phase2 version 2 bind record requires an executionBinding shape: version 1, a non-empty harnessRoot, and a session object with non-empty storeId, sessionId and workflowId, a coordinator|plan-pm role, a null-or-string planId and a positive safe-integer epoch",
+          };
+        }
+        return { refused: false, sessionId: hostSessionId, workflowId, executionBinding };
+      }
       if (
         !isNonEmptyString(payload.coordinatorSessionPath) ||
         !isNonEmptyString(payload.coordinatorSessionId) ||
@@ -295,7 +399,8 @@ function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | Ve
           message: "a mstar:phase2 bind record requires non-empty coordinatorSessionPath, coordinatorSessionId and harnessRoot",
         };
       }
-      return { refused: false, sessionId: hostSessionId, workflowId };
+      return { refused: false, sessionId: hostSessionId, workflowId, executionBinding: null };
+    }
     case "checkpoint":
       if (!(CHECKPOINT_REASONS as readonly unknown[]).includes(payload.reason)) {
         return {
@@ -325,17 +430,17 @@ function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | Ve
           message: `a mstar:phase2 checkpoint record requires observationKey to be null or a non-empty string, received ${describeValue(payload.observationKey)}`,
         };
       }
-      return { refused: false, sessionId: hostSessionId, workflowId };
+      return { refused: false, sessionId: hostSessionId, workflowId, executionBinding: null };
     case "reminder":
       return isNonEmptyString(payload.observationKey)
-        ? { refused: false, sessionId: hostSessionId, workflowId }
+        ? { refused: false, sessionId: hostSessionId, workflowId, executionBinding: null }
         : {
             refused: true,
             code: "payload-record-invalid",
             message: "a mstar:phase2 reminder record requires a non-empty observationKey",
           };
     case "user-turn":
-      return { refused: false, sessionId: hostSessionId, workflowId };
+      return { refused: false, sessionId: hostSessionId, workflowId, executionBinding: null };
     default:
       return {
         refused: true,
@@ -386,29 +491,41 @@ function checkHandoffRecord(payload: Record<string, unknown>): RecordRefusal | V
       };
     }
   }
-  return { refused: false, sessionId: binding.sessionId, workflowId: binding.workflowId };
+  return { refused: false, sessionId: binding.sessionId, workflowId: binding.workflowId, executionBinding: null };
 }
 
-function buildView(payload: Record<string, unknown>, workflowId: string): ExecutionHostHistoryView {
+/**
+ * The advisory view of one verified record. `check` carries the guard's own
+ * findings, so the view reports the binding shape and the generation the
+ * verified record actually declared instead of re-deriving either.
+ */
+function buildView(payload: Record<string, unknown>, check: VerifiedRecord): ExecutionHostHistoryView {
   const checkpointId = topLevelString(payload, "observationKey");
   const operationId = topLevelString(payload, "operationId");
   const declaredState = topLevelString(payload, "state");
   const provenance: ExecutionHostHistoryProvenance[] = [];
-  for (const field of PROVENANCE_PATH_FIELDS) {
-    const path = topLevelString(payload, field);
-    if (path !== null) provenance.push({ field, path });
+  // Only a legacy record names an envelope path; a v2 bind carries none, so its
+  // view has no provenance at all.
+  if (check.executionBinding === null) {
+    for (const field of PROVENANCE_PATH_FIELDS) {
+      const path = topLevelString(payload, field);
+      if (path !== null) provenance.push({ field, path });
+    }
   }
   return {
-    generation: VERIFIED_GENERATION,
+    // The verified v2 bind is the only record carrying a binding shape, and it is
+    // the only one whose view reports generation 2.
+    generation: check.executionBinding === null ? VERIFIED_GENERATION : VERIFIED_BIND_GENERATION,
     declaredKind: topLevelString(payload, "kind"),
     declaredAction: topLevelString(payload, "action"),
     declaredState,
-    workflowId,
+    workflowId: check.workflowId,
     checkpointId,
     operationId,
     dedupKey: operationId ?? checkpointId,
     cancelled: declaredState === "cancelled" || payload.cancelled === true,
     provenance,
+    executionBinding: check.executionBinding,
   };
 }
 
@@ -427,7 +544,10 @@ function decodeVerifiedRecord(
     );
     return null;
   }
-  if (payload.version !== VERIFIED_GENERATION) {
+  // Generation 2 is admitted for the v2 phase-2 bind alone; every other record
+  // keeps refusing any generation but its own verified one.
+  const v2Bind = type === "mstar:phase2" && payload.kind === "bind" && payload.version === VERIFIED_BIND_GENERATION;
+  if (payload.version !== VERIFIED_GENERATION && !v2Bind) {
     note(
       "payload-generation-unverified",
       `the payload declares version ${JSON.stringify(payload.version)}, and the verified schema for ${type} is version ${VERIFIED_GENERATION}; the payload is retained as raw evidence only`,
@@ -439,7 +559,7 @@ function decodeVerifiedRecord(
     note(check.code, check.message);
     return null;
   }
-  return { sessionId: check.sessionId, view: buildView(payload, check.workflowId) };
+  return { sessionId: check.sessionId, view: buildView(payload, check) };
 }
 
 function decodeEntry(
@@ -502,7 +622,8 @@ function decodeEntry(
  * Entries are classified by the exact `customType` literal, and only the five
  * frozen hidden types are reported; every payload is preserved in full and
  * every recognized entry keeps its native position. A record is decoded only
- * when its producer's own `version: 1` guard accepts it and its payload is
+ * when its producer's own schema guard accepts it — `version: 1` for everything,
+ * plus the v2 `bind` the active phase-2 producer writes — and its payload is
  * admissible to the canonical form; every other recognized entry is retained
  * as raw evidence and diagnosed. Nothing is renamed, rewritten, promoted or
  * inferred — an undecoded entry publishes no session identity.
@@ -528,8 +649,10 @@ export function readExecutionHostHistory(entries: readonly unknown[]): Execution
  * The exported document is byte-stable for equal histories and preserves order,
  * entry ids, payload digests and payloads exactly, so a consumer can replay it
  * without the native ledger and compare two exports byte-for-byte. It is
- * evidence, not authority: it contains no `ExecutionBinding`, no session
- * reference and no credential, and reading it back never binds a session.
+ * evidence, not authority: the only binding-shaped value it can carry is the
+ * declared `executionBinding` shape of a verified v2 `bind` (an id-only lookup,
+ * never resolved here), and it holds no credential and no session reference of
+ * its own — reading it back never binds a session.
  *
  * A history that holds a payload the canonical form cannot admit is **refused**
  * (`ExecutionHostHistoryExportRefusal`) rather than exported with that evidence

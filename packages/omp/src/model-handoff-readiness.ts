@@ -260,7 +260,14 @@ function bindingRefusal(code: HandoffRefusalCode, message: string): HandoffBindi
  */
 type ActiveWorkflowView = ExecutionState["workflows"][number];
 
-/** Structural guard for the §3.1 binding value a host supplies or a record persists. */
+/**
+ * Structural guard for the §3.1 binding value a host supplies or a record
+ * persists. Its rules are the engine's own reference shape
+ * (`execution-session.ts` `assertRefShape`), including the **cross-field** role
+ * pairing — a `coordinator` reference carries a null plan id and a `plan-pm`
+ * reference a non-empty one — so a value admitted here is one the engine could
+ * accept, never a shape it must refuse later.
+ */
 function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
   if (!isPlainObject(value) || value.version !== 1 || !isNonEmptyString(value.harnessRoot)) return false;
   const session = value.session;
@@ -268,8 +275,9 @@ function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) {
     return false;
   }
+  if (session.role === "coordinator" && session.planId !== null) return false;
+  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return false;
   if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
-  if (session.planId !== null && typeof session.planId !== "string") return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
 }
 
@@ -295,14 +303,18 @@ async function adoptActiveHandoffBinding(
 ): Promise<HandoffBindingResult> {
   const { controlRoot, harnessRoot } = roots;
   const workflowId = input.workflowId;
-  if (
-    !isExecutionBindingValue(adopted) ||
-    canonicalizeNearestExisting(adopted.harnessRoot) !== harnessRoot
-  ) {
+  if (!isExecutionBindingValue(adopted)) {
+    return bindingRefusal(
+      "not-coordinator",
+      "the adopted execution binding is not a §3.1 value the engine could accept (its harness root, session reference, " +
+        "role/plan pairing or epoch is unusable), so it never describes this coordinator",
+    );
+  }
+  if (canonicalizeNearestExisting(adopted.harnessRoot) !== harnessRoot) {
     return bindingRefusal(
       "invalid-root",
-      `the adopted execution binding must carry the canonical control harness root ${harnessRoot}; a foreign or ` +
-        "malformed root is refused before any store is read",
+      `the adopted execution binding must carry the canonical control harness root ${harnessRoot}; a foreign root is ` +
+        "refused before any store is read",
     );
   }
   const session = adopted.session;

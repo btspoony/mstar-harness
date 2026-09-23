@@ -71,6 +71,48 @@ const HANDOFF_PAYLOAD = {
 
 const PENDING_HANDOFF_PAYLOAD = { ...HANDOFF_PAYLOAD, state: "pending", action: "arm", operationId: "op-10" } as const;
 
+/**
+ * The active producer's v2 phase-2 binding payload: the envelope fields plus the
+ * `executionBinding` shape it declares. The shape is reported verbatim — never
+ * resolved against a store, a workflow or a session.
+ */
+const V2_BIND_PAYLOAD = {
+  version: 2,
+  kind: "bind",
+  hostSessionId: "sess-v2",
+  workflowId: "wf-2",
+  executionBinding: {
+    version: 1,
+    harnessRoot: "/harness",
+    session: {
+      storeId: "store-a",
+      sessionId: "sess-a",
+      workflowId: "wf-2",
+      role: "plan-pm",
+      planId: "plan-1",
+      epoch: 3,
+    },
+  },
+} as const;
+
+/** A v2 bind that names a foreign store, another session and a far-future epoch. */
+const FOREIGN_V2_BIND_PAYLOAD = {
+  ...V2_BIND_PAYLOAD,
+  hostSessionId: "sess-v2b",
+  executionBinding: {
+    version: 1,
+    harnessRoot: "/other/harness",
+    session: {
+      storeId: "store-elsewhere",
+      sessionId: "sess-other",
+      workflowId: "wf-9",
+      role: "coordinator",
+      planId: null,
+      epoch: 987654321,
+    },
+  },
+} as const;
+
 /* ------------------------------------------------------------- the inventory */
 
 test("the hidden inventory is exactly the five contract types, in contract order", () => {
@@ -199,9 +241,11 @@ test("a stale coordinator path is provenance only and never becomes a session id
 
 test("an unverified generation keeps raw evidence and is never decoded by guesswork", () => {
   const legacy = { sessionId: "sess-legacy", generation: 4, note: "old continuation record" };
+  // Generation 2 is verified for `kind: "bind"` alone, so a v2 payload of any
+  // other kind stays an unverified generation and is never decoded by guesswork.
   const future = {
     version: 2,
-    kind: "bind",
+    kind: "checkpoint",
     hostSessionId: "sess-future",
     workflowId: "wf-2",
     coordinatorSessionPath: "/p",
@@ -230,6 +274,119 @@ test("an unverified generation keeps raw evidence and is never decoded by guessw
   // The unverified generation is never named as one the reader decoded.
   expect(history.records[0]!.payload).toMatchObject({ sessionId: "sess-legacy", generation: 4 });
   expect(exportExecutionHostHistory(history)).toContain('"version":2');
+});
+
+/* --------------------------------------------- the v2 phase-2 bind generation --- */
+
+test("a v2 bind decodes under generation 2 with its declared binding shape and a digest", () => {
+  const history = readExecutionHostHistory([
+    customEntry("v1", "mstar:phase2", V2_BIND_PAYLOAD),
+    customEntry("v2", "mstar:phase2", FOREIGN_V2_BIND_PAYLOAD),
+  ]);
+  expect(history.diagnostics).toEqual([]);
+
+  const record = history.records[0]!;
+  expect(record.sessionId).toBe("sess-v2");
+  expect(record.payload).toEqual(V2_BIND_PAYLOAD);
+  expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+
+  const view = viewOf(history, 0);
+  expect(view.generation).toBe(2);
+  expect(view.declaredKind).toBe("bind");
+  expect(view.workflowId).toBe("wf-2");
+  expect(view.executionBinding).toEqual({
+    harnessRoot: "/harness",
+    storeId: "store-a",
+    epoch: 3,
+    sessionId: "sess-a",
+    role: "plan-pm",
+    planId: "plan-1",
+  });
+  // Exactly the declared shape: no credential, token, path or session-file field.
+  expect(Object.keys(view.executionBinding!).sort()).toEqual(["epoch", "harnessRoot", "planId", "role", "sessionId", "storeId"]);
+  // A v2 record names no envelope path, so its view carries no provenance.
+  expect(view.provenance).toEqual([]);
+
+  // The reference is a lookup, never authority: a foreign store, another session
+  // and a far-future epoch are reported verbatim, compared against nothing.
+  const foreign = viewOf(history, 1);
+  expect(history.records[1]!.sessionId).toBe("sess-v2b");
+  expect(foreign.generation).toBe(2);
+  expect(foreign.executionBinding).toEqual({
+    harnessRoot: "/other/harness",
+    storeId: "store-elsewhere",
+    epoch: 987654321,
+    sessionId: "sess-other",
+    role: "coordinator",
+    planId: null,
+  });
+});
+
+test("a v2 bind with a malformed executionBinding is refused and its payload kept in full", () => {
+  const good = V2_BIND_PAYLOAD.executionBinding;
+  const cases: readonly unknown[] = [
+    // No reference at all.
+    { version: 2, kind: "bind", hostSessionId: "sess-v2", workflowId: "wf-2" },
+    { ...V2_BIND_PAYLOAD, executionBinding: "none" },
+    { ...V2_BIND_PAYLOAD, executionBinding: null },
+    // A reference at the wrong generation, or with an unusable root.
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, version: 2 } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, harnessRoot: "" } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: "sess-a" } },
+    // Empty identity fields, an unknown role, a non-null plan id on a coordinator
+    // and a non-positive or fractional epoch.
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, storeId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, sessionId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, workflowId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "dev" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, planId: 3 } } },
+    // The engine's cross-field pairing (`assertRefShape`): a coordinator never
+    // carries a plan id, and a plan-pm always carries a non-empty one. A payload
+    // whose declared pairing the engine could never accept is not a verified
+    // binding — it is retained as history like every other malformed shape.
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "plan-1" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: null } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 0 } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: -3 } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 1.5 } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: "3" } } },
+  ];
+
+  for (const data of cases) {
+    const history = readOne("mstar:phase2", data);
+    const record = history.records[0]!;
+    expect(history.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["payload-record-invalid"]);
+    expect(record.view).toBeNull();
+    expect(record.sessionId).toBeNull();
+    // The refusal keeps the payload in full, digest included — nothing is dropped
+    // or rewritten, and no binding is invented from it.
+    expect(record.payload).toEqual(data);
+    expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(exportExecutionHostHistory(history)).toContain('"code":"payload-record-invalid"');
+  }
+});
+
+test("a v1 bind keeps decoding exactly as today, with no binding and generation 1", () => {
+  const history = readExecutionHostHistory([customEntry("w1", "mstar:phase2", BIND_PAYLOAD)]);
+  const record = history.records[0]!;
+
+  expect(history.diagnostics).toEqual([]);
+  expect(record.sessionId).toBe("sess-a");
+  expect(record.payload).toEqual(BIND_PAYLOAD);
+  expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+
+  const view = viewOf(history, 0);
+  expect(view.generation).toBe(1);
+  expect(view.declaredKind).toBe("bind");
+  expect(view.executionBinding).toBeNull();
+  // The legacy envelope's path is still retained as provenance, verbatim.
+  expect(view.provenance).toEqual([{ field: "coordinatorSessionPath", path: "/old/elsewhere/coord.json" }]);
+  // The v2 generation adds the one nullable field; nothing else appears beside it.
+  for (const forbidden of ["binding", "authority", "credential", "token"]) {
+    expect(Object.keys(view)).not.toContain(forbidden);
+  }
 });
 
 test("checkpoint identity, dedup, cancellation and one-shot handoff state are preserved", () => {
