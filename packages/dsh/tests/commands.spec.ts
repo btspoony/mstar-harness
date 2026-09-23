@@ -40,6 +40,15 @@ function packagedCommandsDir(): string | undefined {
 /** The six mstar slash commands (repo-root `commands/` mirror). */
 const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review', 'amazing-e2e-check'] as const
 
+/**
+ * The plugin's OWN execution-session command: registered in-process by
+ * `registerExecutionSessionCommand` (src/gates/execution-session.ts) with the
+ * native-identity handler, so it has no `commands/` corpus file and stays out
+ * of the mirror-driven loops below — but it IS on the registry the client
+ * lists, so the registered-set assertion accounts for it.
+ */
+const EXECUTION_SESSION_COMMAND = 'mstar-execution'
+
 /** The frontmatter `input` hint each command must advertise (the client-claim contract). */
 const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
   'iteration-start': '[direction] [pause]',
@@ -97,7 +106,7 @@ function commandBody(dir: string, name: string): string {
 }
 
 describe('bundled mstar commands (omp parity)', () => {
-  it('registers the six mstar commands on ctx.commands from the packaged mirror', async () => {
+  it('registers the six mirrored mstar commands plus the plugin command on ctx.commands', async () => {
     const dir = packagedCommandsDir()
     if (dir === undefined) {
       // bundle-assets has not run — nothing to register.
@@ -106,7 +115,7 @@ describe('bundled mstar commands (omp parity)', () => {
     }
     booted = await bootApp()
     const names = booted.ctx.commands.list(fakeAgent().agent).map((command) => command.name)
-    expect(names).toEqual([...MSTAR_COMMANDS].sort())
+    expect(names).toEqual([...MSTAR_COMMANDS, EXECUTION_SESSION_COMMAND].sort())
   })
 
   it('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
