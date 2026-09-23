@@ -3059,6 +3059,38 @@ async function failureOf(run: () => Promise<unknown>): Promise<Error> {
 }
 
 /**
+ * Activate an instrument through the REAL local store, and return it. Scoped
+ * coordination is served only by the store `createFsStore` created: an injected
+ * foreign store is wrapped by `guardedInjectedStore` and keeps no `root` claim,
+ * so `localStore` refuses it (`coordination.local-store-required`) before the
+ * instrument's ports are ever consulted. An instrument that must be reached
+ * through the coordination surface therefore installs its ports — and its
+ * claimed root, the consultation a window can trigger on — on that same
+ * instance, instead of standing in for it. The instrument receives the
+ * ORIGINAL ports as its `inner`, so its pass-through calls cannot recurse into
+ * itself.
+ */
+function instrumentLocalStore<T extends ArtifactStore & { root: string }>(
+  harness: string,
+  build: (inner: ArtifactStore & { root: string }) => T,
+): T {
+  const local = createFsStore(harness);
+  const originalPut = local.put;
+  const originalGet = local.get;
+  const inner: ArtifactStore & { root: string } = {
+    root: local.root,
+    put: (doc) => originalPut(doc),
+    get: <R>(ref: ArtifactRef) => originalGet<R>(ref),
+  };
+  const instrument = build(inner);
+  local.put = (doc) => instrument.put(doc);
+  local.get = <R>(ref: ArtifactRef) => instrument.get<R>(ref);
+  Object.defineProperty(local, "root", { configurable: true, get: () => instrument.root });
+  setArtifactStore(local);
+  return instrument;
+}
+
+/**
  * A store double standing in for a harness where a competing writer is active.
  *
  * A competing writer reaches the snapshot the moment the write lock is free, so
@@ -4154,13 +4186,10 @@ describe("Prepare workflow amendment", () => {
     await ensurePrepareCoordinator(fixture);
     const view = await prepareViewOf(fixture);
     const lockDir = join(dirname(fixture.snapshotPath), ".status-write.lockdir");
-    const store = new CompetingCommitStore(
-      createFsStore(fixture.harness),
-      fixture.snapshotPath,
-      lockDir,
-      "2099-01-01T00:00:00.000Z",
+    const store = instrumentLocalStore(
+      fixture.harness,
+      (inner) => new CompetingCommitStore(inner, fixture.snapshotPath, lockDir, "2099-01-01T00:00:00.000Z"),
     );
-    setArtifactStore(store);
 
     const amended = await amendWith(fixture, preparePatchOf(fixture), {
       snapshotVersion: view.view.snapshotVersion,
@@ -5152,8 +5181,7 @@ describe("prepare coordinator recovery", () => {
     // An IO failure between the exclusive envelope creation and the snapshot
     // commit is NOT a semantic refusal: the call reports failure, never a
     // success receipt, and reclaims exactly the envelope it created.
-    const failing = new FailOnceSnapshotStore(createFsStore(fixture.harness));
-    setArtifactStore(failing);
+    instrumentLocalStore(fixture.harness, (inner) => new FailOnceSnapshotStore(inner));
     await expect(recoverPrepareCoordinator(request)).rejects.toThrow(/injected store failure/);
     expect(existsSync(newEnvelope)).toBe(false);
     expect(protectedBytes(fixture)).toEqual(before);
@@ -5264,7 +5292,10 @@ describe("prepare coordinator recovery", () => {
     // since been replaced by an unrelated session file: `created` is only a
     // historical boolean, so cleanup must compare the CURRENT bytes before it
     // unlinks anything, and leave the replacement untouched.
-    setArtifactStore(new ReplaceEnvelopeOnFailureStore(createFsStore(fixture.harness), newEnvelope, alien));
+    instrumentLocalStore(
+      fixture.harness,
+      (inner) => new ReplaceEnvelopeOnFailureStore(inner, newEnvelope, alien),
+    );
     await expect(
       recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
     ).rejects.toThrow(/injected store failure/);
