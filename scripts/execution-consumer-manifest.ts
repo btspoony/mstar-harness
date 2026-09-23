@@ -1338,12 +1338,24 @@ export async function runExecutionConsumerManifestCli(
       return 0;
     }
 
+    // The tracked aggregate is the reference and must exist. The per-package
+    // `dist/` copies are WRITE outputs (gitignored, produced by `--write` when a
+    // package is packaged for runtime discovery), so a source checkout without
+    // them is normal: verify every copy that is present, and report the rest as
+    // absent-by-design instead of refusing.
+    const aggregatePath = join(repoAbs, PACKAGING_MANIFEST_DIR, AGGREGATE_MANIFEST_FILE);
+    if (!existsSync(aggregatePath)) {
+      refuse("consumer.manifest-missing", `manifest not written yet: ${aggregatePath}`);
+    }
+    const absentCopies = targets.filter((target) => target !== aggregatePath && !existsSync(target));
+    if (absentCopies.length > 0) {
+      console.log(
+        `execution-consumer-manifest: ${absentCopies.length} per-package dist copy(ies) absent (write outputs, not committed)`,
+      );
+    }
     let reference: string | null = null;
     let document: Record<string, unknown> | null = null;
-    for (const target of targets) {
-      if (!existsSync(target)) {
-        refuse("consumer.manifest-missing", `manifest not written yet: ${target}`);
-      }
+    for (const target of [aggregatePath, ...targets.filter((t) => t !== aggregatePath && existsSync(t))]) {
       const text = readManifestCopy(repoAbs, target);
       if (reference !== null && text !== reference) {
         refuse("consumer.manifest-drift", `manifest copies disagree: ${target}`);
