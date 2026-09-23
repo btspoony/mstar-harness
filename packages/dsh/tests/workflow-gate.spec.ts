@@ -61,7 +61,7 @@ import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
-import { registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
+import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import type { AgentFlowEventView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
@@ -746,6 +746,31 @@ function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
 }
 
 /**
+ * Drain the ledger consumer's queued stream tasks after a `session/event`
+ * append. The plugin installs the consumer WITH the awaited explicit-target
+ * resolver (`src/index.ts` `registerWorkflowLedger(ctx, resolver, …, resolveExecutionLedgerTarget)`),
+ * so the live route is ASYNCHRONOUS by design: a row's target lookup suspends
+ * the consumer and rows are queued per source stream
+ * (`workflow-ledger.ts:399-408` enqueue, `:1101-1112` the listener), and
+ * `awaitWorkflowLedgerIdle` (`:411-428`) is the branch's own test seam for
+ * exactly this drain — gated like the engine's test runner, refusing an
+ * ungated call. The synchronous pre-activation route (a direct
+ * `registerWorkflowLedger` without a resolver, case (12)) needs no drain: its
+ * rows are already recorded when the listener returns. Mirrors
+ * `agent-flow-workflow.spec.ts`'s `idle()` in the F2 resolver-route suite.
+ */
+async function drainLedger(): Promise<void> {
+  const prior = process.env.MSTAR_STORE_TEST_RUNNER
+  process.env.MSTAR_STORE_TEST_RUNNER = '1'
+  try {
+    await awaitWorkflowLedgerIdle()
+  } finally {
+    if (prior === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER
+    else process.env.MSTAR_STORE_TEST_RUNNER = prior
+  }
+}
+
+/**
  * One structural fake parent session for the e2e consumer tests — the
  * installed Session surface (`header.id` / `seq` / `eventAt`, no `.events`).
  */
@@ -822,6 +847,12 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-ask-e2e', app.root)
     sessions.register(parent)
+    // The session's DURABLE pick: the ledger's explicit-target resolver serves
+    // the legacy route only for a session that selected this lifecycle
+    // (`resolveExecutionLedgerTarget`, `workflow-selection.ts` — its single
+    // selection point; an unbound session gets no target, and the consumer
+    // never falls back to file-based inference).
+    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
 
     const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
     expect(first.kind).toBe('ask')
@@ -834,6 +865,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // the W-B2 run row lands AND the allow answer caches per-session (the
     // Task-2 Important handoff fold-in — no approval-outcome access needed).
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-ask-e2e', name: 'deploy-x' })
+    await drainLedger()
     events = ledgerEvents(app)
     expect(events.map((e) => e.kind)).toEqual(['workflow-run', 'workflow-verdict'])
     expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBe('allow')
@@ -937,6 +969,9 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-warn-e2e', app.root)
     sessions.register(parent)
+    // The session's durable pick (see (4)): the explicit-target resolver's
+    // single selection point.
+    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
@@ -948,6 +983,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-warn-e2e', name: 'deploy-x' })
     sessions.append(parent, 'tool-workflow/agent-start', { runId: 'run-warn-e2e', seq: 1, label: 'worker', childId: 'child-1' })
     sessions.append(parent, 'tool-workflow/run-end', { runId: 'run-warn-e2e', stopReason: 'completed' })
+    await drainLedger()
 
     const events = ledgerEvents(app)
     expect(events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run', 'workflow-verdict'])
@@ -999,6 +1035,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     try {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache)
       sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-throw-e2e', name: 'deploy-x' })
+      await drainLedger()
       const view = readAgentFlow(join(harnessDir, 'workflows/wf-1'))
       expect(view).not.toBeNull()
       // The ledger append succeeded despite the throwing cache hook.
@@ -1021,6 +1058,9 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-ctrl-e2e', app.root)
     sessions.register(parent)
+    // The session's durable pick (see (4)): the explicit-target resolver's
+    // single selection point.
+    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
     // `au\u0000dit` — the gate composes `metaName` through the shared
     // `normalizeWorkflowName` (ASCII control chars stripped); the run-start
     // observation keys the cache with the SAME normalized name. Pre-fix the
@@ -1042,6 +1082,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // consumer records `allow` under the NORMALIZED key — the same key the
     // gate used for the ask.
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-ctrl-e2e', name: rawName })
+    await drainLedger()
     expect(app.ctx.dshHostAdapter.workflowAskCache.get(normalized)).toBe('allow')
     // The RAW key is never recorded — congruence comes from the shared
     // normalization, not from storing both spellings.
@@ -1084,6 +1125,9 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-long-e2e', app.root)
     sessions.register(parent)
+    // The session's durable pick (see (4)): the explicit-target resolver's
+    // single selection point.
+    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
     const longName = `long-${'x'.repeat(1100)}` // > WORKFLOW_LEDGER_MAX_NAME_LENGTH (1024)
 
     // The gate path never caps ids: the full name IS the allowlist/ask
@@ -1096,6 +1140,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // Approval → run-start lands → the consumer records `allow` keyed on
     // the UNCAPPED runName (`row.runName` — never the capped row field).
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-long-e2e', name: longName })
+    await drainLedger()
     expect(app.ctx.dshHostAdapter.workflowAskCache.get(longName)).toBe('allow')
     // The ledger ROW's display name IS capped (1024 + '…') — the cap is
     // display-only, the cache identity stays the full name (pins the
@@ -1120,6 +1165,10 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-w1-e2e', ws)
     sessions.register(parent)
+    // The session's durable pick (see (4)): this workspace's harness is
+    // `.agents` (a recognized layout), so the resolver's own harness lookup
+    // needs no declaration — only the selection.
+    expect(updateWorkflowSessionBinding(join(ws, '.agents'), parent.header.id, ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
 
     // The P-b red line preempts P-c: the name is NEVER asked (advisory warn
     // verdict under ask mode, not an ask) — but the call RUNS, so the
@@ -1127,9 +1176,17 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const first = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
     expect(first).toEqual({ kind: 'allow' })
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-w1-e2e', name: 'deploy-x' })
+    await drainLedger()
 
     // W-1: never asked ⇒ never cached — the observation must NOT promote the
-    // run to allow (a P-b advisory run is not an approval resolution).
+    // run to allow (a P-b advisory run is not an approval resolution). The
+    // drain above is what makes this non-vacuous: the row really landed (it
+    // would otherwise be read before the queued task ran). This case's harness
+    // is the SESSION's workspace (`.agents` — `harnessDir: null` leaves the
+    // plugin resolving from the workspace), so its ledger is read there, not at
+    // the boot's own harness dir.
+    const sessionLedger = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))
+    expect(sessionLedger?.events.some((e) => e.kind === 'workflow-run')).toBe(true)
     expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
 
     // The workspace is recovered (the orphan plan is resolved — the snapshot
