@@ -195,13 +195,59 @@ function digestEntries(entries) {
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
-/** Assert one recorded tree digest against the tree on disk. */
+/**
+ * The tracked-relative status rows of one tree: a source tree lives in git, so
+ * "which file here is not what the checkout says" is answerable exactly — and
+ * that is the question a digest mismatch raises. Generated trees are usually
+ * untracked, where git has nothing to say and the entry list below carries the
+ * evidence instead.
+ */
+function gitStatusRows(rootRel) {
+  const run = spawnSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=all", "--", rootRel], {
+    encoding: "utf8",
+  });
+  if (run.status !== 0) return null;
+  return (run.stdout ?? "").split("\n").filter((line) => line.trim() !== "");
+}
+
+/**
+ * Assert one recorded tree digest against the tree on disk.
+ *
+ * A digest mismatch is only actionable if it NAMES the entries: this reports
+ * the count, the aggregate expected/actual, the tree's own entries (path, kind,
+ * sha256 — capped, with the total), and, when the tree is git-tracked, the
+ * checkout status rows that identify content differing from the commit. Nothing
+ * is relaxed by this: the same equality is asserted, the message just carries
+ * the evidence a reader needs.
+ */
 function assertTreeDigest(label, tree, exclude) {
   const abs = join(REPO, tree.root);
   assert.ok(existsSync(abs), `${label}: declared tree root ${tree.root} is missing`);
   const entries = treeEntries(abs, exclude);
-  assert.equal(entries.length, tree.files, `${label}: ${tree.root} file count drifted`);
-  assert.equal(digestEntries(entries), tree.sha256, `${label}: ${tree.root} digest drifted`);
+  const actual = digestEntries(entries);
+  if (entries.length === tree.files && actual === tree.sha256) return;
+  const shown = entries
+    .slice(0, 10)
+    .map((entry) => `    ${entry.path} ${entry.kind} ${entry.sha256}${entry.linkTarget === null ? "" : ` -> ${entry.linkTarget}`}`)
+    .join("\n");
+  const more = entries.length > 10 ? `\n    … ${entries.length - 10} more entr${entries.length - 10 === 1 ? "y" : "ies"}` : "";
+  const status = gitStatusRows(toPosix(tree.root));
+  const statusLines =
+    status === null
+      ? "    (not a git checkout — compare the entry list above with a local run)"
+      : status.length === 0
+        ? "    (clean against HEAD: the difference is not a tracked-file edit)"
+        : status
+            .slice(0, 10)
+            .map((line) => `    ${line}`)
+            .join("\n") + (status.length > 10 ? `\n    … ${status.length - 10} more status row(s)` : "");
+  assert.fail(
+    `${label}: ${tree.root} digest drifted\n` +
+      `  expected sha256 ${tree.sha256} with ${tree.files} entr${tree.files === 1 ? "y" : "ies"}\n` +
+      `  actual   sha256 ${actual} with ${entries.length} entr${entries.length === 1 ? "y" : "ies"}\n` +
+      `  entries (excluded basenames: ${exclude.length === 0 ? "(none)" : exclude.join(", ")}):\n${shown}${more}\n` +
+      `  git status --porcelain -- ${toPosix(tree.root)}:\n${statusLines}`,
+  );
 }
 
 /** `">=24.18.0"` against `process.versions.node`-style versions. */
