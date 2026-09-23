@@ -920,7 +920,11 @@ const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
  * exist (one shared member map), the structural validator decides their shape,
  * §4d keeps a recorded PR identity immutable and requires the recorded identity
  * to BE the registered delivery, and the delivery tail (§4c/§4d/§4f) is
- * recorded only once every owned row is `Done`.
+ * recorded only once every owned row is `Done`. The ONE member that runs the
+ * other way — the report-only `completion` fulfilment, recorded BEFORE the row
+ * is marked `Done` (contract §1) — is frozen once an owned row is Done, so a
+ * later re-point of that evidence is refused instead of silently becoming the
+ * basis of a `Done` it never authorized. An identical re-record stays a no-op.
  */
 function applyDeliveryEvidence(input: {
   header: Record<string, unknown>;
@@ -989,6 +993,33 @@ function applyDeliveryEvidence(input: {
           `${notDone.length === 1 ? "is" : "are"} not Done (contract \u00A73: row Done \u2192 compound disposition \u2192 PR identity \u2192 verified-merge record)`,
         { workflow_id: workflowId },
       );
+    }
+  }
+  // The mirror rule for the ONE member recorded BEFORE the row is Done
+  // (contract §1: a report-only row "completes from an accepted handoff plus a
+  // recorded fulfilment of that policy — the fulfilment is recorded before the
+  // row is marked `Done`"). Once an owned row is Done the recorded fulfilment
+  // is FROZEN: it is the basis that row's `Done` was authorized against, so a
+  // different evidence reference is a re-pointed completion, not an evidence
+  // update (\u00A74d freezes the PR identity the same way). The identical
+  // re-record stays a no-op instead of a refusal — the file route's
+  // `recordWorkflowDelivery` returns before its own gate for exactly this
+  // reason — so a retried recording is idempotent on BOTH transports, and the
+  // same stable code refuses the same state there.
+  if (members.includes("completion")) {
+    const done = rows.filter((row) => rowStatusOf(row) === "Done").map((row) => String(row.id));
+    if (done.length > 0) {
+      const incoming = isPlainObject(delivery.completion) ? delivery.completion : null;
+      const recorded = isPlainObject(stored.completion) ? stored.completion : null;
+      if (stableJson(recorded) !== stableJson(incoming)) {
+        throw invalidWorkflowTransition(
+          `workflow ${workflowId} cannot record the completion fulfilment: ${done.join(", ")} ` +
+            `${done.length === 1 ? "is" : "are"} Done, and the registered completion policy's fulfilment is recorded BEFORE ` +
+            `the row is marked Done (contract \u00A71) \u2014 the recorded evidence is the basis that row was completed on, so a ` +
+            `different reference is a re-pointed completion, never an evidence update`,
+          { workflow_id: workflowId },
+        );
+      }
     }
   }
   return { ...stored, ...delivery } as WorkflowDeliveryEvidence;
