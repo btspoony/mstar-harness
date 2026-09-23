@@ -1372,11 +1372,21 @@ function validateStandaloneCompletedCoherence(snapshot, row) {
   if (!standalone || row.id !== snapshot.plans[0]?.id)
     return violations;
   const coordination = row.coordination;
-  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff))
+  if (!isPlainObject(coordination))
     return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff — a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`));
+    }
+    return violations;
+  }
   const handoff = coordination.handoff;
-  if (handoff.state !== "completed")
+  const completed = handoff.state === "completed";
+  if (row.status !== "Done" && !completed)
     return violations;
+  if (!completed) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
+  }
   if (handoff.integration !== undefined) {
     violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
   }
