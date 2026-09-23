@@ -39,7 +39,7 @@ or a custom profile).
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **right-Sidebar page tab type** (`id:
   '@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
-  `order: 20`) labeled **"启明星工作流" / "Morning
+  `order: 20`) labeled **"晨星工作流" / "Morning
   Star Workflow"** rendering the latest `mstar-engine` catalog **anchor** row
   — the persisted source is the bare first-party `plugin` arm
   (`{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`, no

@@ -1,6 +1,6 @@
 # @mstar-harness/engine
 
-Morning Star (启明星) harness engine — deterministic library for harness checks (version, path, status, lease, validation), shared by the installer CLI and the OpenCode plugin.
+Morning Star harness engine — deterministic library for harness checks (version, path, status, lease, validation), shared by the installer CLI and the OpenCode plugin.
 
 ## Install
 

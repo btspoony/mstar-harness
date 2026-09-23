@@ -17,6 +17,7 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 - Remove a worktree and prune its metadata after merge only when it contains no unmerged or uncommitted work that must be retained.
 - Use `.tmp/` for disposable probes and logs; clean up your own scratch files when no longer needed. Keep resumable work until its task is complete.
 - Keep local plans, status, reports, and knowledge under the gitignored `.mstar/` harness root. Runtime path conventions belong in [mstar-conventions](skills/mstar-conventions/SKILL.md).
+- Run this repository's CLI from its own build, not from a global install: `bun run --cwd packages/cli build`, then invoke `packages/cli/dist/mstar-harness.js` (see `packages/cli/AGENTS.md` for the package commands). A globally installed `mstar`/`mstar-harness` is the released package for other projects; linking this checkout into the global install makes other projects run unreleased code, and invoking the global copy here runs a released CLI against unreleased engine behavior.
 - Tracked code and docs must not depend on local harness artifacts or disclose their provenance (real plan/iteration IDs, QC finding IDs, local merge SHAs, or acceptance labels). Describe the behavior; use synthetic IDs in fixtures and `{HARNESS_DIR}` or a `.mstarc` declaration for layout examples. This section documents the local layout and is the exception to that path-reference restriction.
 
 ## Where to edit
