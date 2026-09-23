@@ -58,7 +58,8 @@ function canonicalJson(value: unknown): string {
     return encoded;
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => item === undefined || typeof item === "function" || typeof item === "symbol" ? "null" : canonicalJson(item)).join(",")}]`;
+    const items = Array.from(value, (item) => item === undefined || typeof item === "function" || typeof item === "symbol" ? "null" : canonicalJson(item));
+    return `[${items.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
   const entries = Object.keys(record).sort()

@@ -45,6 +45,16 @@ function fixture() {
 }
 
 describe("fixed A05 request builder", () => {
+
+  test("canonicalizes sparse array slots as null so output remains valid JSON", () => {
+    const sparse = new Array(2);
+    sparse[1] = { z: 1, a: 2 };
+
+    const bytes = canonicalJsonBytes({ items: sparse });
+
+    expect(new TextDecoder().decode(bytes)).toBe('{"items":[null,{"a":2,"z":1}]}');
+    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual({ items: [null, { a: 2, z: 1 }] });
+  });
   test("emits deterministic canonical bytes with only the fixed question and authorized pair evidence", () => {
     const { pack, pilot } = fixture();
     const first = buildA05Request(pack, pilot);
