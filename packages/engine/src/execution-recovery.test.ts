@@ -936,12 +936,11 @@ describe("execution-restore", () => {
 
     // Live corruption that prevents a complete loss inventory: the point and
     // the live store are BOTH kept, and no destructive restore is attempted.
-    const liveBytes = readFileSync(world.dbPath);
-    const damaged = Buffer.from(liveBytes);
-    damaged.fill(0x5a, 0, Math.min(4096, damaged.length));
-    writeFileSync(world.dbPath, damaged);
-    rmSync(`${world.dbPath}-wal`, { force: true });
-    rmSync(`${world.dbPath}-shm`, { force: true });
+    // Remove a required authority table instead of relying on raw page damage:
+    // a valid SQLite file is still incomplete when its committed-operation
+    // inventory cannot be read.
+    rawRun(world.dbPath, "drop table execution_operations");
+    const damaged = readFileSync(world.dbPath);
     const pointBytes = sha256OfFile(point.backupPath);
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
