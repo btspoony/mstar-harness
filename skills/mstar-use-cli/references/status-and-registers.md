@@ -27,7 +27,7 @@ Enumeration reflects what exists: listing a kind prints its stored keys, one per
 
 ## Versioned replacement (pre-activation store face)
 
-A coordinated replacement is two commands, and the token from the first is the only thing the second accepts. This is the **pre-activation** writer for those documents: on a harness whose execution authority is active, the same documents are owned by the coordination verbs (`mstar plan …`, `mstar workflow …`, `mstar status workflow-close`), which take the scope's full execution token instead, and a bare store-face replacement refuses there.
+A coordinated replacement is two commands, and the token from the first is the only thing the second accepts. This is the **pre-activation** writer for those documents: on a harness whose execution authority is active, the same documents are owned by the coordination verbs (`mstar plan progress`, `mstar workflow amend-prepare`, `mstar status workflow-close`), which take the scope's full execution token instead, and a bare store-face replacement refuses there.
 
 ```sh
 # 1. read the bytes and their version
