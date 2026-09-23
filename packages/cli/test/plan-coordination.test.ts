@@ -2298,6 +2298,80 @@ describe("report-only completion", () => {
     expect(closeReportOnly(fixture).exitCode).toBe(0);
     expect(readJson(fixture.snapshotPath).status).toBe("completed");
   }, RECOVERY_TIMEOUT);
+
+  // QC seat 2 F-2: the recorded fulfilment is the BASIS of the row's `Done`
+  // (contract §1 records it before the row is marked Done), so the row's `Done`
+  // must not be left standing on evidence re-pointed afterwards. Real
+  // subprocesses; every assertion reads the authoritative bytes back.
+  test("the recorded completion fulfilment is frozen once the row is Done (post-Done re-record refused, F-2)", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+    const frozen = snapshotBytes(fixture);
+
+    // A different reference is a re-pointed completion, not an evidence update.
+    const refused = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY, "sdd/plan-a/forged.md");
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("coordination.invalid-transition");
+    expect(deliveryOf(fixture)).toEqual({ completion: { policy: REPORT_ONLY_POLICY, evidence: REPORT_ONLY_EVIDENCE } });
+    expect(snapshotBytes(fixture)).toBe(frozen);
+
+    // The exact retry stays the idempotent no-op it always was: the freeze
+    // refuses a re-point, never a re-send.
+    const retried = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY);
+    expect(retried.exitCode).toBe(0);
+    expect(retried.stdout).toContain("already carries");
+    expect(snapshotBytes(fixture)).toBe(frozen);
+
+    // The close still reads and accepts the fulfilment it never verified.
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(0);
+    expect(readJson(fixture.snapshotPath).status).toBe("completed");
+  }, RECOVERY_TIMEOUT);
+
+  // QC seat 2 F-1: the close authority must not be bypassable by rewriting the
+  // STORED handoff out of the completed shape. Only the stored state moves (one
+  // word), plus the integration record N1's contamination refusal exists for —
+  // the row stays Done, so the close's row-Done precondition is satisfied.
+  test("a stored handoff rewritten to accepted on a Done row refuses the close (F-1)", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+
+    const snapshot = readJson(fixture.snapshotPath);
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const coordination = plan.coordination as Record<string, unknown>;
+    const handoff = coordination.handoff as Record<string, unknown>;
+    handoff.state = "accepted";
+    delete handoff.completed_at;
+    handoff.integration = {
+      target_branch: INTEGRATION_BRANCH,
+      worktree_path: fixture.root,
+      base_sha: "a".repeat(40),
+      started_at: "2026-09-22T01:30:00Z",
+    };
+    snapshot.integration_worktree_path = fixture.root;
+    writeJson(fixture.snapshotPath, snapshot);
+    const rewritten = snapshotBytes(fixture);
+
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(1);
+    expect(closed.stderr).toContain("coordination.row.handoff-field");
+    // Zero writes: the workflow stays running, registered and byte-identical.
+    expect(readJson(fixture.snapshotPath).status).toBe("running");
+    expect(snapshotBytes(fixture)).toBe(rewritten);
+    expect((readJson(join(fixture.harness, "status.json")).workflows as unknown[]).length).toBe(1);
+
+    // The read-only gate reaches the same refusal through the SAME validator:
+    // the rewritten document is an invalid snapshot, not merely non-terminal.
+    const gate = phase6Gate(fixture);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stderr).toContain("PHASE6_INVALID_SNAPSHOT");
+  }, RECOVERY_TIMEOUT);
 });
 
 describe("legacy-delivery-source-repair", () => {

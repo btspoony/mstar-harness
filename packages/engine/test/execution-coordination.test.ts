@@ -2595,6 +2595,68 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     }
   });
 
+  test("a Done report-only row freezes the recorded completion fulfilment (post-Done re-record refused on the authority, F-2)", async () => {
+    const fixture = await lifecycleFixture("freeze-report-only", "report-only");
+    const handoffId = await acceptedAttempt(fixture, "report-only-freeze");
+    const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-freeze", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(done.data.plan.status).toBe("Done");
+
+    const revisionRowSql =
+      "select (select revision from execution_meta where id = 1) as root_revision, " +
+      "(select revision from store_meta where id = 1) as store_revision, " +
+      `(select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_revision, ` +
+      "(select count(*) as n from execution_operations) as operations";
+    // The workflow-level `delivery` transition, at the token the store serves now.
+    const record = async (operationId: string, evidence: string) => {
+      const token = (await readExecutionState(fixture.context)).data.workflows[0]!.workflowToken;
+      return mutateExecutionWorkflow(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId,
+        session: fixture.coordinator,
+        expected: token,
+        workflowId: WORKFLOW_ID,
+        operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence } } },
+      });
+    };
+
+    const headerBefore = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<
+      string,
+      unknown
+    >;
+    const revisionsBefore = rows(fixture.context, revisionRowSql)[0]!;
+
+    // The fulfilment the fixture recorded BEFORE the row was Done (the
+    // documented ordering) is the basis of that `Done`: a different reference is
+    // a re-pointed completion, refused with the file route's own stable code.
+    const refusal = await refusalOf(() => record("delivery-rewrite-freeze", "/etc/passwd"));
+    expect(refusal.code).toBe("coordination.invalid-transition");
+    expect(String(refusal.message)).toContain("re-pointed");
+    // The frame rolled back onto exactly the state it was refused on.
+    expect((await readExecutionState(fixture.context)).data.workflows[0]!.state).toEqual(headerBefore);
+    expect(rows(fixture.context, revisionRowSql)[0]).toEqual(revisionsBefore);
+
+    // An identical re-record is the retried recording — a no-op, never a refusal.
+    await record("delivery-same-freeze", "acceptance.md");
+    const same = await readExecutionState(fixture.context);
+    expect(same.data.workflows[0]!.state.delivery).toMatchObject({ completion: { evidence: "acceptance.md" } });
+
+    // A FIRST-TIME post-Done record is the same out-of-order write, refused the
+    // same way: the ordering is before Done, not merely "no re-pointing".
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as {
+        state_json: string;
+      };
+      const snapshot = JSON.parse(row.state_json) as Record<string, unknown>;
+      delete snapshot.delivery;
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
+    });
+    const noEvidence = await refusalOf(() => record("delivery-first-freeze", "acceptance.md"));
+    expect(noEvidence.code).toBe("coordination.invalid-transition");
+    expect(String(noEvidence.message)).toContain("recorded BEFORE");
+  }, 30000);
+
   test("report-only completion refuses a delivery route changed after its preflight", async () => {
     const fixture = await lifecycleFixture("complete-report-only-route", "report-only");
     const handoffId = await acceptedAttempt(fixture, "report-only-route");
