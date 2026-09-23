@@ -518,7 +518,7 @@ async function runScaffold(pathArg: string | undefined) {
       }
     }
   } else {
-    skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
+    skipped.push(".gitignore (canonical harness snippet) \u2014 custom harness layout manages its own ignore rules");
   }
 
  // Minimal {HARNESS_DIR}/AGENTS.md harness-layer rules (tracked result).

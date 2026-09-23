@@ -921,6 +921,18 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
+  // The workspace DECLARES its harness layout: this fixture's dir is
+  // `harness/`, which is not one of the engine's probe names (`.mstar` /
+  // `.agents` / `.plans` / `plans`), so engine-side resolution from this
+  // workspace finds it only through the highest-authority `.mstarc`
+  // declaration (`packages/engine/src/path.ts`: `.mstarc` `[config]
+  // harness_dir` → `.mstar/` → `.agents/` → …). Without it the plugin's own
+  // CONFIGURED harness dir and the engine's filesystem resolution disagree,
+  // and every engine-side lookup from this workspace answers null (e.g. the
+  // workflow-ledger target resolver in `workflow-selection.ts`, which only
+  // receives the session workspace). Same idiom as the engine's own fixtures
+  // (`packages/engine/src/gates.test.ts`: `[config]\nharness_dir=…`).
+  await writeFile(join(root, '.mstarc'), '[config]\nharness_dir=harness\n')
   // v3 write-path precondition:
   // the agent-flow writer / workflow-ledger consumer append only to an
   // ACTIVE workflow — tests that exercise the ledger opt in to the seeded

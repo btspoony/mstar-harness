@@ -492,6 +492,45 @@ export function buildCliCommandInventory(cliSrc: string): {
   for (const union of cliSrc.matchAll(/\(\s*(\w+)\s*:\s*((?:"[a-z-]+"\s*\|\s*)+"[a-z-]+")\s*[,)]/g)) {
     literalUnionVars.set(union[1]!, [...union[2]!.matchAll(/"([a-z-]+)"/g)].map((v) => v[1]!));
   }
+  // Loop-bound verb sets (pre-pass): the two shapes that iterate a literal verb
+  // set instead of taking a literal-union parameter. Both bind the loop's key
+  // into the SAME map, so the chain pass expands their `.command(<key>)` calls
+  // through the shape it already knows — no second path builder in this file.
+  //  - `for (const [verb, …] of Object.entries(TABLE))` over a module-local
+  //    `Record<string, …>` whose keys are the verbs: plan-coordination.ts
+  //    ISSUE_VERB_NAMES (retired verbs → `plan residual-add | residual-close`)
+  //    and index.ts RETIRED_BACKLOG_COMMANDS (`status backlog-register |
+  //    backlog-close`).
+  //  - `for (const { verb, … } of factory())` over a local helper that returns
+  //    its verb records: execution-workflow.ts `workflowTransitions()` (the
+  //    active `workflow phase | lifecycle | execution-policy |
+  //    integration-worktree`).
+  // A set that cannot be read leaves its key unbound and stays silent: these
+  // shapes were invisible before this pass, and a missed verb is still loud at
+  // the citation site (an unknown-command failure), never silently accepted.
+  const loopVerbSets: Array<readonly [string, string[]]> = [];
+  for (const loop of cliSrc.matchAll(
+    /for\s*\(\s*const\s*\[\s*(\w+)\s*,[^\]]*\]\s+of\s+Object\.entries\(\s*(\w+)\s*\)\s*\)/g,
+  )) {
+    const body = new RegExp(`const\\s+${loop[2]!}\\s*:\\s*Record<[^>]+>\\s*=\\s*\\{([^}]*)\\}`).exec(cliSrc)?.[1];
+    if (body === undefined) continue;
+    const keys = stripLineCommentsFromVerbTableBody(body);
+    loopVerbSets.push([loop[1]!, [...keys.matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:/g)].map((m) => m[1] ?? m[2]!)]);
+  }
+  for (const loop of cliSrc.matchAll(/for\s*\(\s*const\s*\{\s*(\w+)[^}]*\}\s+of\s+(\w+)\s*\(\s*\)\s*\)/g)) {
+    // The helper's text runs to the closing brace alone on its line: its
+    // signature may open a braced return type whose own last line starts with
+    // `}` too (`(): ReadonlyArray<{ … }> {`), so the column-0 `}` alone on the
+    // line is the end of the declaration.
+    const factory = new RegExp(`function\\s+${loop[2]!}\\s*\\([\\s\\S]*?^}[ \\t]*$`, "m").exec(cliSrc)?.[0];
+    if (factory === undefined) continue;
+    const verbs = [...factory.matchAll(new RegExp(`${loop[1]!}\\s*:\\s*"([a-z][a-z0-9-]*)"`, "g"))].map((m) => m[1]!);
+    loopVerbSets.push([loop[1]!, verbs]);
+  }
+  for (const [key, verbs] of loopVerbSets) {
+    if (verbs.length === 0) continue;
+    literalUnionVars.set(key, [...new Set([...(literalUnionVars.get(key) ?? []), ...verbs])]);
+  }
  // One pass keeps document order: `.command` advances the current chain
  // path (`const X = program.command("p")` or `X.command("sub")`), a
  // receiver-less `.command`/`.argument` hangs off that chain, and `.action`

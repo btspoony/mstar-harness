@@ -294,7 +294,7 @@ function foreignKeys(db: StoreDb, table: string): string[] {
 
 describe("execution-schema: append-only coverage migration", () => {
   describe("migration identity", () => {
-    test("keeps the applied v1–v3 checksums and appends execution coverage as version 5", () => {
+    test("keeps the applied v1\u2013v3 checksums and appends execution coverage as version 5", () => {
       for (const version of [1, 2, 3]) {
         expect(migrationChecksum(MIGRATIONS[version - 1])).toBe(FROZEN_V3_CHECKSUMS[version]);
       }
