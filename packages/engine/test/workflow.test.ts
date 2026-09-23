@@ -2258,14 +2258,26 @@ describe("standalone-completion-shape", () => {
     });
   }
 
+  /** One row of the standalone completed shape, with the caller's handoff (if any). */
+  function rewrittenRow(input: { handoff?: Record<string, unknown>; rowStatus?: string }): Record<string, unknown> {
+    const row = standaloneCompletedRow();
+    const coordination = row.coordination as Record<string, unknown>;
+    const { handoff: _replaced, ...rest } = coordination;
+    const status = input.rowStatus ?? "Done";
+    return {
+      ...row,
+      status,
+      done_at: status === "Done" ? "2026-09-15" : undefined,
+      coordination: input.handoff === undefined ? rest : { ...rest, handoff: input.handoff },
+    };
+  }
+
   /** The same snapshot carrying a handoff the caller rewrote, at its own row status. */
   function rewrittenSnapshot(input: {
-    handoff: Record<string, unknown>;
+    handoff?: Record<string, unknown>;
     rowStatus?: string;
     overrides?: Record<string, unknown>;
   }): Record<string, unknown> {
-    const row = standaloneCompletedRow();
-    const coordination = row.coordination as Record<string, unknown>;
     return standaloneSnapshot({
       delivery_kind: "verification/report-only",
       completion_policy: "acceptance report",
@@ -2273,14 +2285,7 @@ describe("standalone-completion-shape", () => {
       integration_worktree_path: undefined,
       integration_merge_lease: undefined,
       delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
-      plans: [
-        {
-          ...row,
-          status: input.rowStatus ?? "Done",
-          done_at: (input.rowStatus ?? "Done") === "Done" ? "2026-09-15" : undefined,
-          coordination: { ...coordination, handoff: input.handoff },
-        },
-      ],
+      plans: [rewrittenRow(input)],
       ...input.overrides,
     });
   }
@@ -2392,6 +2397,56 @@ describe("standalone-completion-shape", () => {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("refuses a Done row whose coordination block lost its handoff (F-1 variant)", () => {
+    // Deleting only the handoff leaves the coordination block's own marker
+    // (revision + the bound plan session) in place: the row is still visibly
+    // coordinated while the record its `Done` was authorized against is gone.
+    const snapshot = rewrittenSnapshot({});
+    const coordination = ((snapshot.plans as Array<Record<string, unknown>>)[0]!.coordination ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(coordination.handoff).toBeUndefined();
+    expect(Object.keys(coordination)).toContain("session");
+    expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+  });
+
+  test("closeWorkflow and the phase-6 gate refuse that handoff-less document without writing (F-1 variant)", async () => {
+    const closeId = "00000101-report-only-no-handoff";
+    const root = tmpRoot("workflow-no-handoff-close-");
+    try {
+      const dir = join(root, "workflows", closeId);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      writeFileSync(path, JSON.stringify(rewrittenSnapshot({ overrides: { id: closeId } }), null, 4) + "\n");
+      setArtifactStore(createFsStore(root));
+      const before = readFileSync(path, "utf8");
+      await expect(closeWorkflow(closeId, dir, { endedAt: "2026-09-16" })).rejects.toThrow(
+        /coordination\.row\.handoff-field/,
+      );
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(JSON.parse(before).status).toBe("running");
+      // The read-only gate runs the SAME validator as the close's write door.
+      const terminal = { ...(JSON.parse(before) as Record<string, unknown>), status: "completed", ended_at: "2026-09-16" };
+      const gate = evaluatePostMergeClose(terminal, { version: 2, updated_at: "2026-09-16", workflows: [] });
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toContain("PHASE6_INVALID_SNAPSHOT");
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a Done standalone row with no coordination block at all (the migrated v1 shape)", () => {
+    // The reverse boundary is deliberate and has its own producer: the v1 lift
+    // writes a completed standalone row verbatim with no coordination block
+    // anywhere (`buildStandaloneSnapshot`, packages/engine/src/migrate.ts). The
+    // handoff requirement above applies to a COORDINATED row only, so this
+    // legacy shape — and with it the normal all-Done close — stays accepted.
+    const snapshot = validSnapshot({ type: "plan", status: "running", ended_at: undefined, ...registeredDelivery });
+    expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, violations: [] });
   });
 
   test("refuses the same completed shape on the iteration route", () => {

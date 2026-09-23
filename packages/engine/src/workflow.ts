@@ -248,7 +248,31 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
   const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
   if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
   const coordination = row.coordination;
-  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
+  // A Done standalone row that carries a coordination block must carry the
+  // handoff that block exists to record. The coordination block's own presence
+  // is the durable marker that this row entered the coordination lifecycle, and
+  // no authorized writer produces a coordinated row without a handoff: `accept`
+  // moves it to `accepted` and `complete` writes it `completed` in the SAME
+  // update as `status: "Done"` (`completeStandaloneRow` / `completeRow`,
+  // coordination.ts) — so a Done coordinated row whose handoff block is missing
+  // is only reachable by deleting it, and the deleted block is exactly the
+  // accepted/QC/QA record the completion was authorized against. The reverse
+  // boundary is deliberate: a Done standalone row with NO coordination block at
+  // all is a legitimate legacy shape — the v1 lift mints it verbatim
+  // (`buildStandaloneSnapshot`, migrate.ts:466-511) — and stays accepted.
+  if (!isPlainObject(coordination)) return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff \u2014 a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`,
+        ),
+      );
+    }
+    return violations;
+  }
   const handoff = coordination.handoff as Record<string, unknown>;
   const completed = handoff.state === "completed";
   // The state is a POSITIVE requirement, never an early return: a Done
