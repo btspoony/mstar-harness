@@ -1492,10 +1492,77 @@ export function withWorkflowDirLock<T>(
   fn: () => T,
   opts: { timeoutMs?: number; pollMs?: number } = {},
 ): T {
-  const lockDir = join(workflowDir, WORKFLOW_LEDGER_LOCKDIR)
+  return withLockDir(join(workflowDir, WORKFLOW_LEDGER_LOCKDIR), fn, opts, 'workflow write lock')
+}
+
+/**
+ * The §4.3 outer MAINTENANCE exclusion, keyed exactly like the engine's
+ * `withExecutionMaintenanceLock` (`<control root>/.execution-maintenance/`
+ * through `withStatusWriteLock`, whose lockdir is `.status-write.lockdir`). The
+ * engine's control root is the directory holding `store.db`, i.e. the harness
+ * dir, so the plugin reproduces the key from the harness dir it already has —
+ * no engine import (contract §5 F2) and no new contract surface. It is
+ * acquired BEFORE the workflow lock (the engine's order: maintenance → root →
+ * workflow) and is never stolen by elapsed time.
+ */
+export const EXECUTION_MAINTENANCE_LOCKDIR = join('.execution-maintenance', '.status-write.lockdir')
+
+/**
+ * Run `fn` under the maintenance exclusion of one harness dir. A held or
+ * unreachable lockdir THROWS — the caller reports an advisory refusal, so a
+ * plugin write never slips into an activation/restore/migration window.
+ */
+export function withExecutionMaintenanceLock<T>(
+  harnessDir: string,
+  fn: () => T,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+): T {
+  // A caller on a per-turn host path may bound the wait (F3's status/binding
+  // writes pass 250/10) and report its own advisory refusal; the default stays
+  // the 30 s workflow-lock wait.
+  return withLockDir(
+    join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR),
+    fn,
+    { timeoutMs: opts.timeoutMs ?? maintenanceLockWaitMs(), ...(opts.pollMs === undefined ? {} : { pollMs: opts.pollMs }) },
+    'execution maintenance lock',
+    true,
+  )
+}
+
+/**
+ * The bounded maintenance wait — `workflowLockWaitMs` for the maintenance key,
+ * with the same test-runner-gated override the engine uses for its ledger lock
+ * (`MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS`, honored only under
+ * `MSTAR_STORE_TEST_RUNNER=1`), so a fixture can prove the window without a 30 s
+ * run while a shipped process cannot change the wait.
+ */
+function maintenanceLockWaitMs(): number {
+  if (process.env.MSTAR_STORE_TEST_RUNNER === '1') {
+    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_MAINTENANCE_LOCK_WAIT_MS ?? '', 10)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return WORKFLOW_LOCKER_TIMEOUT_MS
+}
+
+/**
+ * The one synchronous exclusive-lockdir primitive, spelled exactly like the
+ * engine's `withStatusWriteLock` (`.status-write.lockdir`, `holder.pid`, and a
+ * `(dev,ino)` guard so a replacement lock is never deleted). `ensureParent`
+ * creates the lockdir's parent first (the maintenance key lives in its own
+ * sub-directory) — the workflow lock deliberately does NOT create its parent,
+ * because a missing workflow dir is a caller error, not a lock to invent.
+ */
+function withLockDir<T>(
+  lockDir: string,
+  fn: () => T,
+  opts: { timeoutMs?: number; pollMs?: number },
+  label: string,
+  ensureParent = false,
+): T {
+  if (ensureParent) mkdirSync(dirname(lockDir), { recursive: true })
   if (heldWorkflowLocks.has(lockDir)) {
     throw new Error(
-      `${lockDir} is already held by this process — withWorkflowDirLock is not reentrant; a nested acquisition on the same workflow dir is a bug`,
+      `${lockDir} is already held by this process — the ${label} is not reentrant; a nested acquisition on the same key is a bug`,
     )
   }
   const timeoutMs = opts.timeoutMs ?? WORKFLOW_LOCKER_TIMEOUT_MS
@@ -1512,7 +1579,7 @@ export function withWorkflowDirLock<T>(
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       if (Date.now() >= deadline) {
         throw new Error(
-          `${lockDir} already exists — another writer holds the workflow write lock; Blocked (same-host exclusive lock; same pattern as the engine's withStatusWriteLock). ` +
+          `${lockDir} already exists — another writer holds the ${label}; Blocked (same-host exclusive lock; same pattern as the engine's withStatusWriteLock). ` +
             `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
         )
       }
@@ -1917,6 +1984,34 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
 }
 
 /**
+ * Terminate a torn tail before appending: a previous writer can die mid-line
+ * and leave a final fragment WITHOUT a newline. The fragment's own bytes are
+ * never modified — exactly one newline is added, so it becomes its own damaged
+ * line (which every reader already skips) instead of swallowing the next
+ * accepted record.
+ * @returns the file's size AFTER the repair (0 when the ledger does not exist).
+ */
+function terminateTornTailLocked(file: string): number {
+  let size: number
+  try {
+    size = statSync(file).size
+  } catch {
+    return 0
+  }
+  if (size === 0) return 0
+  const fd = openSync(file, 'r')
+  try {
+    const last = Buffer.allocUnsafe(1)
+    readSync(fd, last, 0, 1, size - 1)
+    if (last.toString('utf8') === '\n') return size
+  } finally {
+    closeSync(fd)
+  }
+  appendFileDurableSync(file, '\n')
+  return size + 1
+}
+
+/**
  * Append one ALREADY-SERIALIZED line to `<workflowDir>/agent-flow.jsonl` and
  * keep the DISPLAY file bounded — the caller holds the per-workflow lock.
  * The common path stays append-ONLY: the file is `stat`-gated, and only a
@@ -1933,9 +2028,14 @@ function compactionEvictable(line: string, index: IdentityIndex | undefined): bo
  */
 function appendLineLocked(workflowDir: string, line: string, index: IdentityIndex | undefined): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
+  // A torn final fragment has no line terminator; appending onto it would
+  // concatenate this record into the damaged line and make an ACCEPTED row
+  // unreadable. Terminate it first (its own bytes stay untouched — one newline
+  // only, so it becomes its own already-skipped damaged line).
+  const sizeBefore = terminateTornTailLocked(file)
   // Durable row BEFORE the identity-index entry is committed (recovery order).
   appendFileDurableSync(file, line)
-  if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
+  if (sizeBefore + Buffer.byteLength(line) <= AGENT_FLOW_SIZE_GATE_BYTES) return
   // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
   // newline produces one empty tail element that must not count as a line).
   const content = readFileSync(file, 'utf8')
@@ -1990,10 +2090,13 @@ function appendLineLocked(workflowDir: string, line: string, index: IdentityInde
  * @param identity - the row's stable identity transport, when the seam
  *   supplies one (never fabricated).
  */
-function appendEvent(workflowDir: string, event: AgentFlowEvent, identity?: AgentFlowRecordIdentity): void {
+function appendEvent(workflowDir: string, event: AgentFlowEvent, identity: AgentFlowRecordIdentity | undefined, harnessDir: string): void {
   const line = ledgerLineOf(event, identity)
-  // Non-reentrant lock: the shared-lock append primitive.
-  withWorkflowDirLock(workflowDir, () => {
+  // §4.3 order: the maintenance exclusion first, then the per-workflow lock.
+  // A held maintenance window refuses (advisory) instead of writing into a
+  // directory that an activation/restore is rewriting.
+  withExecutionMaintenanceLock(harnessDir, () =>
+    withWorkflowDirLock(workflowDir, () => {
     // No append or compaction may pass an unfinished compaction transaction.
     if (!resolveCompactionLocked(workflowDir)) return
     const read = loadIdentityIndex(workflowDir)
@@ -2005,8 +2108,9 @@ function appendEvent(workflowDir: string, event: AgentFlowEvent, identity?: Agen
       log('warn', `agent-flow live row refused — the accepted-identity index is unreadable (${read.reason}); the row is not appended and the display tail is not compacted`)
       return
     }
-    appendLineLocked(workflowDir, `${line}\n`, read.index)
-  })
+      appendLineLocked(workflowDir, `${line}\n`, read.index)
+    }),
+  )
 }
 
 /**
@@ -2081,7 +2185,7 @@ export function recordDispatch(input: {
       verdict: verdictOf(input.violations, input.hard),
       hard: input.hard,
     }
-    appendEvent(workflowDir, event, callIdentity('dispatch', agent, callId))
+    appendEvent(workflowDir, event, callIdentity('dispatch', agent, callId), input.harnessDir)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -2191,7 +2295,7 @@ export function recordSettle(input: {
       ...(childId !== undefined ? { childId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    appendEvent(workflowDir, event, callIdentity('settle', input.agent, input.callId))
+    appendEvent(workflowDir, event, callIdentity('settle', input.agent, input.callId), input.harnessDir)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -2265,7 +2369,13 @@ export function recordWorkflowEvent(input: {
     const digest = digestOfLedgerLine(line)
     const evictable = input.isEvictable ?? (() => false)
     let accepted = false
-    withWorkflowDirLock(workflowDir, () => {
+    // §4.3: the maintenance exclusion is taken BEFORE the workflow lock (the
+    // engine's order) and covers the whole record/index/cursor critical
+    // section, so a plugin write can never slip into an activation, restore or
+    // migration window — and a route flip during that window refuses instead of
+    // durably landing in the wrong workflow dir.
+    withExecutionMaintenanceLock(input.harnessDir, () =>
+      withWorkflowDirLock(workflowDir, () => {
       // No append or compaction may pass an unfinished compaction transaction.
       if (!resolveCompactionLocked(workflowDir)) return
       const indexRead = loadIdentityIndex(workflowDir)
@@ -2316,7 +2426,8 @@ export function recordWorkflowEvent(input: {
       }
       if (!advanceCursorLocked(workflowDir, cursorRead.cursors, input.source.sessionId, input.source.seq + 1, input.source.streamId, evictable)) return
       accepted = true
-    })
+      }),
+    )
     if (accepted) {
       try {
         invalidator?.(input.harnessDir)
@@ -2428,7 +2539,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
       verdict: input.verdict,
       ...(input.code !== undefined && input.code !== '' ? { code: input.code } : {}),
     }
-    appendEvent(workflowDir, event, callIdentity('workflow-verdict', agent, callId))
+    appendEvent(workflowDir, event, callIdentity('workflow-verdict', agent, callId), input.harnessDir)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -3430,7 +3541,7 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
       ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    appendEvent(ref.workflowDir, event, callIdentity('subagent-link', ref.agent, ref.callId))
+    appendEvent(ref.workflowDir, event, callIdentity('subagent-link', ref.agent, ref.callId), ref.harnessDir)
     try {
       invalidator?.(ref.harnessDir)
     } catch (error) {

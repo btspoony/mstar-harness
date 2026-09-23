@@ -394,6 +394,47 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
     expect(completeLines(readFileSync(shared.ledgerPath))).toHaveLength(2);
   });
 
+  test("a complete accepted record followed by its own unterminated prefix replays and heals without duplicating", async () => {
+    const target = note("note-heal", "already accepted");
+    const full = lineOf(target);
+    // A crash during a SECOND append of an already accepted record: the accepted
+    // line is complete and its own partial prefix follows it.
+    shared.seed({ ledger: `${full}${full.slice(0, 20)}` });
+
+    const replay = await appendWorkflowNote(shared.coordContext, shared.session, target);
+    expect(replay).toEqual({ id: "note-heal", replayed: true });
+    expect(completeLines(readFileSync(shared.ledgerPath))).toEqual([full.slice(0, -1)]);
+    const facts = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: shared.ledgerPath,
+      bytes: readFileSync(shared.ledgerPath),
+    });
+    expect(facts.acceptedIds).toEqual(["note-heal"]);
+    expect(facts.duplicateIds).toEqual([]);
+
+    // The heal left the ledger usable: a different record appends normally.
+    const next = await appendWorkflowNote(shared.coordContext, shared.session, note("note-next", "after the heal"));
+    expect(next).toEqual({ id: "note-next", replayed: false });
+    expect(completeLines(readFileSync(shared.ledgerPath))).toEqual([
+      full.slice(0, -1),
+      lineOf(note("note-next", "after the heal")).slice(0, -1),
+    ]);
+  });
+
+  test("a leaf replaced between the read and the commit refuses instead of truncating it", async () => {
+    // The reconcile path (this record's own unterminated prefix) is the one that
+    // truncates, so it is the branch the identity check must protect.
+    const target = note("note-1", "body");
+    shared.seed({ ledger: `${LEGACY_LINE}${lineOf(target).slice(0, 25)}` });
+    const replaced = "replaced between the read and the commit\n";
+    const refusal = await withEnv({ MSTAR_LEDGER_REPLACE_BEFORE_COMMIT: shared.ledgerPath }, () =>
+      refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, target)),
+    );
+    expect(refusal.code).toBe("execution-ledgers.target-replaced");
+    // The replacement was neither followed, truncated nor written through.
+    expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(replaced);
+  });
+
   test("an unterminated tail that is not this record's partial refuses without discarding bytes", async () => {
     const seedText = `${LEGACY_LINE}{"version":1,"id":"zz-other"`;
     shared.seed({ ledger: seedText });
@@ -511,6 +552,23 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
   });
 
+  test("a missing control root refuses with no directory side effect at all", async () => {
+    // No store, no root: the call must not create the lock key's parent either.
+    const missingRoot = join(ROOT, "missing-control-root");
+    const context: ExecutionContext = { harnessDir: missingRoot, caller: coordinatorCaller() };
+    const session: ExecutionSessionRef = {
+      storeId: "store-missing",
+      epoch: 1,
+      workflowId: WF,
+      role: "coordinator",
+      sessionId: COORDINATOR_ID,
+      planId: null,
+    };
+    const refusal = await refusalOf(() => appendWorkflowNote(context, session, note("note-1", "body")));
+    expect(refusal.code).toBe("execution-ledgers.target-untrusted");
+    expect(existsSync(missingRoot)).toBe(false);
+  });
+
   test("a symlinked workflow dir or ledger leaf refuses instead of writing through the link", async () => {
     const dirLink = await notesFixture("symlink-dir");
     const outside = join(dirLink.harnessDir, "outside");
@@ -571,7 +629,7 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(facts.path).toBe(path);
     expect(facts.format).toBe("mixed");
     expect(facts.bytes).toBe(bytes.length);
-    expect(facts.counts).toEqual({ historical: 1, accepted: 2 });
+    expect(facts.counts).toEqual({ historical: 1, accepted: 2, unrecognized: 0 });
     expect(facts.tail).toBeNull();
     expect(facts.duplicateIds).toEqual([]);
     expect(facts.acceptedIds).toEqual(["note-1", "note-2"]);
@@ -590,13 +648,46 @@ describe("execution-ledgers: normalized coverage facts", () => {
     expect(historical.sha256).toBe(sha256OfText(LEGACY_LINE.slice(0, -1)));
   });
 
-  test("reports an absent ledger, an unaccepted tail and duplicated ids instead of hiding them", () => {
+  test("distinguishes an absent, an empty and an unrecognized-only ledger", () => {
     const absent = normalizeWorkflowNotesCoverage({ workflowId: WF, path: "/fixture/notes.jsonl", bytes: null });
     expect(absent.format).toBe("absent");
     expect(absent.fileSha256).toBeNull();
-    expect(absent.counts).toEqual({ historical: 0, accepted: 0 });
+    expect(absent.counts).toEqual({ historical: 0, accepted: 0, unrecognized: 0 });
     expect(absent.acceptedIds).toEqual([]);
 
+    // A present, zero-byte ledger is a DIFFERENT fact: it has bytes (and a byte
+    // hash) but no retained line, so coverage never reads it as no file at all.
+    const empty = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: "/fixture/notes.jsonl",
+      bytes: Buffer.from("", "utf8"),
+    });
+    expect(empty.format).toBe("empty");
+    expect(empty.bytes).toBe(0);
+    expect(empty.fileSha256).toBe(sha256OfText(""));
+    expect(empty.counts).toEqual({ historical: 0, accepted: 0, unrecognized: 0 });
+    expect(empty.fileSha256).not.toBe(absent.fileSha256);
+
+    // Content the ledger cannot classify is named, not folded into "absent".
+    const foreignOnly = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: "/fixture/notes.jsonl",
+      bytes: Buffer.from("not json at all\n", "utf8"),
+    });
+    expect(foreignOnly.format).toBe("unrecognized");
+    expect(foreignOnly.counts).toEqual({ historical: 1, accepted: 0, unrecognized: 1 });
+    expect(foreignOnly.historical[0]!.format).toBe("unrecognized");
+
+    const mixedForeign = normalizeWorkflowNotesCoverage({
+      workflowId: WF,
+      path: "/fixture/notes.jsonl",
+      bytes: Buffer.from(`${LEGACY_LINE}not json at all\n`, "utf8"),
+    });
+    expect(mixedForeign.format).toBe("mixed");
+    expect(mixedForeign.counts).toEqual({ historical: 2, accepted: 0, unrecognized: 1 });
+  });
+
+  test("reports an unaccepted tail and duplicated ids instead of hiding them", () => {
     const line = lineOf(note("note-1", "one"));
     const tailText = '{"version":1,"id":"note-2"';
     const withTail = normalizeWorkflowNotesCoverage({

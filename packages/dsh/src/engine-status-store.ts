@@ -81,8 +81,9 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { withWorkflowDirLock } from './gates/agent-flow.ts'
+import { EXECUTION_MAINTENANCE_LOCKDIR, withExecutionMaintenanceLock, withWorkflowDirLock } from './gates/agent-flow.ts'
 
+import type { ExecutionBinding } from '@mstar-harness/engine'
 /** Envelope schema version carried by the snapshot file (`sv`). */
 export const ENGINE_STATUS_SNAPSHOT_VERSION = 1
 /** Per-entry record version carried by every stored entry (`rv`). */
@@ -108,6 +109,21 @@ export const ENGINE_STATUS_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
  * panel.
  */
 export const ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS = 250
+/**
+ * §4.3 outer-exclusion budget (ms): both write paths take the SAME
+ * `.execution-maintenance` key the engine's `withExecutionMaintenanceLock`
+ * takes (activation / migration / restore) BEFORE their directory lock, so a
+ * plugin write never slips into such a window with the ordering the engine
+ * documents (maintenance → directory). The wait is bounded by the same
+ * reasoning as {@link ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS}: an emission runs
+ * on the per-turn `agent/pre-step` path, so a held key must refuse quickly
+ * rather than stall the agent step (and the `/api` gateway in this process).
+ */
+export const ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS = 250
+/** Poll interval (ms) for the maintenance exclusion; the wait is a bounded sync loop. */
+export const ENGINE_STATUS_MAINTENANCE_POLL_MS = 10
+/** Stable reason reported when the maintenance exclusion could not be taken. */
+export const ENGINE_STATUS_MAINTENANCE_REASON = 'execution-maintenance-active'
 /** Snapshot file location relative to `{HARNESS_DIR}`. */
 export const ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH = 'snapshots/engine-status.json'
 
@@ -182,6 +198,7 @@ export interface EngineStatusSnapshotWriteInput {
   readonly maxBytes?: number
 }
 
+
 /**
  * One session's durable workflow-selection CONTROL record (D4): the active
  * workflow this session picked plus the durable no-backfill floor. It lives in
@@ -193,6 +210,7 @@ export interface WorkflowSessionBinding {
   readonly cwd: string
   /** The session's chosen ACTIVE workflow id; absent = no explicit pick yet. */
   readonly selectedWorkflowId?: string
+  readonly executionBinding?: ExecutionBinding | null
   /**
    * Durable exclusion floor: ledger rows at or below this sequence were
    * intentionally skipped while the session was unbound and must never be
@@ -201,11 +219,7 @@ export interface WorkflowSessionBinding {
   readonly excludedBeforeSeq: number
 }
 
-/**
- * Binding read outcome: the stored record (or its absence as `ok` WITHOUT a
- * `binding`), or why attribution is unavailable — absent and corrupt are
- * distinct answers, never a silent empty record.
- */
+/** One binding read outcome. */
 export type WorkflowSessionBindingRead =
   | { readonly kind: 'ok'; readonly binding?: WorkflowSessionBinding }
   | { readonly kind: 'unavailable'; readonly reason: string }
@@ -214,6 +228,8 @@ export type WorkflowSessionBindingRead =
 export interface WorkflowSessionBindingUpdate {
   /** The chosen active workflow id; omitted preserves the stored preference. */
   readonly selectedWorkflowId?: string
+  /** Adopt or clear the current execution authority witness. */
+  readonly executionBinding?: ExecutionBinding | null
   /** The exclusion floor to merge (by max) into the stored record. */
   readonly excludedBeforeSeq: number
   /** Global byte ceiling override (test seam; production uses the constant). */
@@ -259,6 +275,21 @@ function asEntry(value: unknown): EngineStatusSnapshotEntry | undefined {
   return { rv: value.rv as number, cwd, at, turn: value.turn, payload: value.payload }
 }
 
+/** Interpret one durable execution-authority witness. */
+function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined {
+  if (value === null || value === undefined) return value === null ? null : undefined
+  if (!isPlainObject(value) || value.version !== 1) return undefined
+  if (typeof value.harnessRoot !== 'string' || value.harnessRoot === '' || !isPlainObject(value.session)) return undefined
+  const session = value.session as Record<string, unknown>
+  if (typeof session.storeId !== 'string' || session.storeId === '' ||
+    typeof session.workflowId !== 'string' || session.workflowId === '' ||
+    typeof session.sessionId !== 'string' || session.sessionId === '' ||
+    (session.role !== 'coordinator' && session.role !== 'plan-pm') ||
+    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0 ||
+    (session.role === 'coordinator' ? session.planId !== null : typeof session.planId !== 'string' || session.planId === '')) return undefined
+  return value as ExecutionBinding
+}
+
 /** Interpret one unknown value as a stored binding record, or undefined. */
 function asBinding(value: unknown): WorkflowSessionBinding | undefined {
   if (!isPlainObject(value)) return undefined
@@ -266,14 +297,15 @@ function asBinding(value: unknown): WorkflowSessionBinding | undefined {
   if (cwd === undefined) return undefined
   const seq = value.excludedBeforeSeq
   if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return undefined
-  // An absent preference is fine (no pick yet); a present-but-unusable one
-  // ('' or a non-string) is a record shape this build refuses.
   const selectedRaw = value.selectedWorkflowId
   const selected = nonEmptyString(selectedRaw)
   if (selectedRaw !== undefined && selected === undefined) return undefined
+  const executionBinding = asExecutionBinding(value.executionBinding)
+  if (executionBinding === undefined && value.executionBinding !== undefined) return undefined
   return {
     cwd,
     ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+    ...(value.executionBinding === undefined ? {} : { executionBinding }),
     excludedBeforeSeq: seq,
   }
 }
@@ -549,7 +581,7 @@ export function writeEngineStatusSnapshot(
     // acquisition — otherwise the missing parent surfaces as ENOENT, not as
     // lock contention.
     mkdirSync(dir, { recursive: true })
-    return withWorkflowDirLock(dir, () => {
+    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
       const loaded = loadForWrite(harnessDir)
       // A store this build does not understand is not the writer's to replace:
       // refusing keeps every other session's snapshots (and the bytes the newer
@@ -609,7 +641,10 @@ export function writeEngineStatusSnapshot(
         evicted,
         ...(warn === undefined ? {} : { warn }),
       }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
+      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
+      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
+    })
   } catch (error) {
     // Remove ONLY this call's temp file: the lock may have failed before the
     // directory existed, and the name above is unique to this writer.
@@ -618,8 +653,22 @@ export function writeEngineStatusSnapshot(
     } catch {
       // best-effort cleanup only
     }
-    return { kind: 'degraded', reason: (error as Error)?.message ?? 'write-failed' }
+    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
   }
+}
+
+/**
+ * The stable reason of one refused store write. A refusal that names the
+ * maintenance lockdir is the §4.3 window (reported as
+ * {@link ENGINE_STATUS_MAINTENANCE_REASON} — both writers take that key, so an
+ * activation/restore window is the caller's expected state, not a mystery
+ * timeout); anything else keeps its own message.
+ */
+function pluginWriteFailureReason(harnessDir: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR))
+    ? ENGINE_STATUS_MAINTENANCE_REASON
+    : message === '' ? 'write-failed' : message
 }
 
 /**
@@ -791,7 +840,7 @@ export function updateWorkflowSessionBinding(
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
   try {
     mkdirSync(dir, { recursive: true })
-    return withWorkflowDirLock(dir, () => {
+    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
       const loaded = loadForWrite(harnessDir)
       if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
       const doc = loaded.doc
@@ -805,9 +854,18 @@ export function updateWorkflowSessionBinding(
         return { kind: 'degraded' as const, reason: 'cwd-mismatch' }
       }
       const selected = update.selectedWorkflowId ?? existing?.selectedWorkflowId
+      const executionBinding = update.executionBinding === undefined
+        ? existing?.executionBinding ?? null
+        : update.executionBinding
+      if (executionBinding !== null && asExecutionBinding(executionBinding) === undefined) {
+        return { kind: 'degraded' as const, reason: 'invalid-execution-binding' }
+      }
       doc.bindings[sessionId] = {
         cwd,
         ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
+        ...(update.executionBinding !== undefined || existing?.executionBinding !== undefined
+          ? { executionBinding }
+          : {}),
         // The floor only advances: an older observation never walks the
         // exclusion window back over rows already excluded.
         excludedBeforeSeq: Math.max(existing?.excludedBeforeSeq ?? 0, update.excludedBeforeSeq),
@@ -826,7 +884,10 @@ export function updateWorkflowSessionBinding(
       // is visible to the next read, never served from the pre-pick memo.
       bindingStoreMemos.delete(file)
       return { kind: 'written' as const }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS })
+    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
+      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
+      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
+    })
   } catch (error) {
     // Remove ONLY this call's temp file (writer-unique name, same rule as the
     // emission write).
@@ -835,6 +896,6 @@ export function updateWorkflowSessionBinding(
     } catch {
       // best-effort cleanup only
     }
-    return { kind: 'degraded', reason: (error as Error)?.message ?? 'write-failed' }
+    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
   }
 }

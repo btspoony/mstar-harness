@@ -409,12 +409,19 @@ const streamChains = new Map<string, Promise<void>>()
 const pendingStreamTasks = new Set<Promise<void>>()
 
 /**
- * The test seam for the asynchronous (resolver) route: resolves once every
- * queued per-stream task has settled, including tasks queued by earlier
- * ones. The synchronous pre-activation route needs no await — its rows are
- * already recorded when the registration/listener call returns.
+ * The TEST SEAM for the asynchronous (resolver) route: resolves once every
+ * queued per-stream task has settled, including tasks queued by earlier ones.
+ * Gated exactly like the engine's test-runner knobs (`MSTAR_STORE_TEST_RUNNER=1`)
+ * — it has no production consumer, so an ungated call is a refusal rather than a
+ * hidden behavioural knob. The synchronous pre-activation route needs no await:
+ * its rows are already recorded when the registration/listener call returns.
  */
 export async function awaitWorkflowLedgerIdle(): Promise<void> {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== '1') {
+    throw new Error(
+      'awaitWorkflowLedgerIdle is a test-runner-gated seam (set MSTAR_STORE_TEST_RUNNER=1); production consumers must not await it',
+    )
+  }
   while (pendingStreamTasks.size > 0) {
     await Promise.all([...pendingStreamTasks])
   }
@@ -620,6 +627,15 @@ export function registerWorkflowLedger(
   const depthWarned = new Set<string>()
   /** Sessions whose missing verified incarnation was already reported (ONE warn per apply). */
   const identityWarned = new Set<string>()
+  /**
+   * The last target epoch observed per session. A mid-session change is exactly
+   * the window this build cannot close locally: a target resolved BEFORE the
+   * change can still be committed, because revalidating the bound store/session
+   * while the maintenance exclusion is held needs §4.3's synchronous read helper
+   * (C1-owned, not part of §5 here). The change is therefore reported, never
+   * silently absorbed — and never claimed as closed.
+   */
+  const observedEpoch = new Map<string, number | null>()
 
   /** Report (once per session) that a row's identity could not be verified. */
   const noteUnverifiedIdentity = (sid: string): void => {
@@ -786,6 +802,10 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger target refused for session ${sid} — ${refusal} (no ledger write, no file-based fallback)`)
       return
     }
+    if (observedEpoch.has(sid) && observedEpoch.get(sid) !== target.epoch) {
+      log('warn', `workflow-ledger target epoch changed for session ${sid} (${String(observedEpoch.get(sid))} → ${String(target.epoch)}) — a target resolved before this change can be stale and is NOT revalidated in-window by this build (see the §4.3 revalidation residual)`)
+    }
+    observedEpoch.set(sid, target.epoch)
     recordRow(session, sid, harnessDir, row, target.workflowDir)
   }
 
