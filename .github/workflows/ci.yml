@@ -72,6 +72,22 @@ permissions:
 # Invariants kept: `standalone-smoke` still runs without `bun install`;
 # `drift-lint` still checks out with `fetch-depth: 0`; `paths:` triggers and
 # `permissions: contents: read` are untouched.
+#
+# Why there is no `needs:` edge (a DAG was evaluated): wall clock = the slowest
+# job, and the slowest job is the CLI suite (~243s of tests). Its own share of
+# the duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
+# 1s each), while a shared `prepare` job would add ITS whole duration — ~40s of
+# preamble+builds, plus artifact upload/download — in front of every test job.
+# Modelled from the first run's measured job durations: independent jobs = 250s
+# wall / 11.9 runner-min; prepare + artifact handoff = 324s wall / 18.2
+# runner-min (node_modules is 1.2GB and cannot be shipped, so every job still
+# installs); `validate` as a gate = 294s wall / 17.0 runner-min. Sharing wins
+# only when the shared prefix costs more than the longest consumer — with bun
+# the builds are 1-4s each, so it does not, on either metric.
+#
+# Keeping every job independent also preserves the property this change exists
+# for: one failing surface never skips another (first run: 9 pass / 1 fail from
+# a single run, instead of 1 fail + 10 skipped steps).
 jobs:
   # ── Delivery-form gate (ordered, cheap) ───────────────────────────────────
   # Steps here depend on each other's output and cannot be parallelized; the
@@ -223,10 +239,32 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # The CLI suite carries the generated-manifest guard
+      # (`packages/cli/test/execution-package.node.test.mjs`): it re-reads
+      # hooks/execution-consumer.json plus every
+      # <consumer>/execution-consumer/<id>.json evidence document and, for all
+      # six consumers, asserts the recorded entrypoint exists, the generated
+      # files exist, and every generated/source tree digest and copied-instruction
+      # mirror matches the bytes on disk. A fresh checkout has none of those
+      # artifacts, so every consumer the guard digests must be built here —
+      # engine first (each consumer build inlines the engine dist), then the
+      # consumers. The CLI's own dist is built by the "Test CLI" package script.
+      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+        run: bun run engine:build
+
+      - name: Build OpenCode
+        run: bun run opencode:build
+
+      - name: Build dsh
+        run: bun run dsh:build
+
+      - name: Build omp
+        run: bun run omp:build
+
       # The cli test script is `bun run --cwd ../engine build && bun run build &&
       # bun test` — the engine dist and CLI build are performed by the package
       # script itself (tests import @mstar-harness/engine dist) — so this job
-      # needs no separate build step, exactly as before the split.
+      # needs no separate CLI build step, exactly as before the split.
       - name: Test CLI
         run: bun run --cwd packages/cli test
 
