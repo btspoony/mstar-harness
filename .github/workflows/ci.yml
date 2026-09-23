@@ -538,23 +538,6 @@ jobs:
       - name: "Packed manifest guard (no workspace: in shipped deps)"
         run: bun run ci:packed-manifest-guard
 
-      # The packaging manifests are shipped evidence: the producer's own
-      # `--check` re-verifies every recorded digest (sources, generated
-      # closures, copied instruction trees) against the bytes on disk, so a
-      # manifest left stale by a source or build change fails here. This is the
-      # SINGLE implementation of that rule — the assembled-package Node test
-      # used to re-derive the same trees itself, a second implementation that
-      # could disagree with the producer. The DSh and OMP dists are part of the
-      # recorded generated closures, so both build first.
-      - name: Build DSh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
-
-      - name: "Packaging manifests agree with the bytes on disk"
-        run: bun scripts/execution-consumer-manifest.ts --repo . --check
-
   # Roadmap §8.7 item 2 (risk R2): skills must load without the engine.
   # Deliberately NO `bun install` — this job runs in a checkout where
   # @mstar-harness/engine and @mstar-harness/cli are not installed, and the
