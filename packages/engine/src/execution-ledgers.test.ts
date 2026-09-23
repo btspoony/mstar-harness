@@ -435,6 +435,36 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
     expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(replaced);
   });
 
+  test("a leaf rewritten IN PLACE (same device/inode, different bytes) refuses the same way", async () => {
+    // The shape an unlink + create takes where a freed inode is reused (ext4):
+    // the path keeps the device/inode the retained read saw, so an identity
+    // comparison alone cannot see the replacement — only the bytes can.
+    const target = note("note-1", "body");
+    shared.seed({ ledger: `${LEGACY_LINE}${lineOf(target).slice(0, 25)}` });
+    const replaced = "replaced in place between the read and the commit\n";
+    const refusal = await withEnv(
+      { MSTAR_LEDGER_REPLACE_BEFORE_COMMIT: shared.ledgerPath, MSTAR_LEDGER_REPLACE_MODE: "in-place" },
+      () => refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, target)),
+    );
+    expect(refusal.code).toBe("execution-ledgers.target-replaced");
+    // The replacement was neither followed, truncated nor written through.
+    expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(replaced);
+  });
+
+  test("the APPEND path (no tail to reconcile) refuses an in-place rewrite the same way", async () => {
+    // The other branch of the commit: the retained bytes are complete, so the
+    // commit appends at EOF instead of truncating — the byte check protects it
+    // identically.
+    const replaced = "replaced in place between the read and the commit\n";
+    shared.seed({ ledger: LEGACY_LINE });
+    const refusal = await withEnv(
+      { MSTAR_LEDGER_REPLACE_BEFORE_COMMIT: shared.ledgerPath, MSTAR_LEDGER_REPLACE_MODE: "in-place" },
+      () => refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body"))),
+    );
+    expect(refusal.code).toBe("execution-ledgers.target-replaced");
+    expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(replaced);
+  });
+
   test("an unterminated tail that is not this record's partial refuses without discarding bytes", async () => {
     const seedText = `${LEGACY_LINE}{"version":1,"id":"zz-other"`;
     shared.seed({ ledger: seedText });
