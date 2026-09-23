@@ -449,9 +449,14 @@ test("generated consumer manifests agree with the bytes on disk (all six consume
       assert.equal(sha256File(abs), file.sha256, `${label} declared file ${file.path} drifted`);
     }
     // Every declared TREE is re-digested from the bytes. Generated trees carry
-    // the producer's own manifest-basename exclusion.
+    // the producer's own manifest-basename exclusion PLUS the exclusions the
+    // manifest RECORDS (an artifact whose bytes belong to a declared producer,
+    // e.g. the DSh client bundle, is outside the digested closure by name — the
+    // recorded list is what lets this verifier re-digest the same closure).
     for (const tree of consumer.sources.trees) assertTreeDigest(`${label} source tree`, tree, []);
-    for (const tree of consumer.generated.trees) assertTreeDigest(`${label} generated tree`, tree, [MANIFEST_BASENAME]);
+    for (const tree of consumer.generated.trees) {
+      assertTreeDigest(`${label} generated tree`, tree, [MANIFEST_BASENAME, ...(tree.exclude ?? [])]);
+    }
 
     // Copied instruction trees: a `copy` target must equal its source tree
     // exactly, a `merge` target must contain every source entry byte-identically.

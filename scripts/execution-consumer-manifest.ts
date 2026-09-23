@@ -95,6 +95,11 @@ export interface DigestTree {
   readonly root: string;
   readonly files: number;
   readonly sha256: string;
+  /** Basenames skipped at any depth when this tree was digested, recorded so a
+   * verifier without the layout re-digests the SAME closure. Present only when
+   * the tree has exclusions (every manifest is otherwise byte-stable across
+   * this field's introduction). */
+  readonly exclude?: readonly string[];
 }
 
 /** The build-input or generated-output closure of one consumer. */
@@ -287,12 +292,18 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     entrypoint: "packages/dsh/dist/index.js",
     sourceTrees: [{ root: "packages/dsh/src" }, { root: "packages/dsh/scripts" }],
     sourceFiles: ["packages/dsh/package.json", "packages/dsh/tsconfig.json"],
-    generatedTrees: [{ root: "packages/dsh/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
-    generatedFiles: [
-      "packages/dsh/dist/client.js",
-      "packages/dsh/dist/index.js",
-      "packages/dsh/dist/invariant.js",
+    // `dist/client.js` is the one artifact this manifest does NOT pin: it is
+    // built from a declared producer + declared mode, so its bytes belong to
+    // its producer, not to a recorded digest (a digest recorded wherever the
+    // build happened to run records that machine). It is excluded from the
+    // generated tree digest and proved by RE-DERIVATION instead — the bundle is
+    // rebuilt from `scripts/build-client-bundle.ts` (inside this consumer's
+    // source closure) and must come out byte-identical
+    // (`packages/dsh/tests/build-client-bundle.spec.ts`).
+    generatedTrees: [
+      { root: "packages/dsh/dist", exclude: [...BUILD_OUTPUT_EXCLUSIONS, "client.js"] },
     ],
+    generatedFiles: ["packages/dsh/dist/index.js", "packages/dsh/dist/invariant.js"],
     copies: HARNESS_ASSET_COPIES.map((copy) => ({
       from: copy.from,
       to: `packages/dsh/${copy.to}`,
@@ -514,8 +525,18 @@ function digestTree(repoAbs: string, spec: DigestTreeSpec): DigestTree {
   if (!existsSync(abs) || !statSync(abs).isDirectory()) {
     refuse("consumer.path-missing", `missing or non-directory tree root ${spec.root}`);
   }
-  const entries = treeEntries(abs, spec.exclude ?? []);
-  return { root: toPosix(spec.root), files: entries.length, sha256: digestEntries(entries) };
+  const exclude = spec.exclude ?? [];
+  const entries = treeEntries(abs, exclude);
+  return {
+    root: toPosix(spec.root),
+    files: entries.length,
+    sha256: digestEntries(entries),
+    // The exclusions are RECORDED, not implicit: a verifier that re-digests the
+    // tree (the consumer-manifest guard has no layout) must skip exactly the
+    // basenames the digest skipped, so an artifact outside this closure is named
+    // here rather than silently absent from the count.
+    ...(exclude.length === 0 ? {} : { exclude: [...exclude].sort() }),
+  };
 }
 
 function hashCopiedTree(
@@ -909,17 +930,34 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
       specs: readonly DigestTreeSpec[],
     ): void => {
       const set = assertRecord(value, `${id}.${kind}`);
-      const recorded: { root: string; files: number; sha256: string }[] = assertArray(
+      const recorded: { root: string; files: number; sha256: string; exclude: readonly string[] }[] = assertArray(
         set.trees,
         `${id}.${kind}.trees`,
       ).map((raw) => {
         const tree = assertRecord(raw, `${id}.${kind}.trees[]`);
         const root = assertString(tree.root, `${id}.${kind}.trees[].root`);
         resolveInsideRepo(repoAbs, root, `${id}.${kind}.trees[${root}]`);
+        // A recorded exclusion list is validated as SAFE BASENAMES: it only ever
+        // names entries the digest skipped, never a path that could redirect the
+        // walk.
+        const exclude =
+          tree.exclude === undefined
+            ? []
+            : assertArray(tree.exclude, `${id}.${kind}.trees[${root}].exclude`).map((entry) => {
+                const name = assertString(entry, `${id}.${kind}.trees[${root}].exclude[]`);
+                if (name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
+                  refuse(
+                    "consumer.schema-invalid",
+                    `${id}.${kind}.trees[${root}].exclude[] ${JSON.stringify(name)} is not a basename`,
+                  );
+                }
+                return name;
+              });
         return {
           root,
           files: assertCount(tree.files, `${id}.${kind}.trees[${root}].files`),
           sha256: assertDigest(tree.sha256, `${id}.${kind}.trees[${root}].sha256`),
+          exclude,
         };
       });
       const sortedExpected = specs.map((spec) => toPosix(spec.root)).sort();
@@ -938,6 +976,17 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
         const recordedTree = recorded.find((tree) => tree.root === toPosix(spec.root));
         if (recomputed.files === 0 && kind === "generated") {
           refuse("consumer.generated-empty", `${id} has no build output under ${recomputed.root}`);
+        }
+        const expectedExclude = [...(spec.exclude ?? [])].sort();
+        if (
+          recordedTree !== undefined &&
+          (recordedTree.exclude.length !== expectedExclude.length ||
+            recordedTree.exclude.some((name, index) => name !== expectedExclude[index]))
+        ) {
+          refuse(
+            "consumer.schema-invalid",
+            `${id}.${kind} tree ${recomputed.root} records exclusions [${recordedTree.exclude.join(", ")}], but the layout digests [${expectedExclude.join(", ")}]`,
+          );
         }
         if (
           recordedTree === undefined ||
