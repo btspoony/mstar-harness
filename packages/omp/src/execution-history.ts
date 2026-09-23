@@ -348,13 +348,18 @@ function readExecutionBindingShape(value: unknown): ExecutionHostHistoryExecutio
   if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return null;
   if (session.role !== "coordinator" && session.role !== "plan-pm") return null;
   if (typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return null;
+  // The two role guards above admit exactly two pairings — a coordinator's
+  // `planId` is null and a plan-pm's is a non-empty string — so re-read the
+  // field through a local and narrow it: the property itself stays `unknown`
+  // on the session object, which no guard on the role can narrow.
+  const declaredPlanId = session.planId;
   return {
     harnessRoot: value.harnessRoot,
     storeId: session.storeId,
     epoch: session.epoch,
     sessionId: session.sessionId,
     role: session.role,
-    planId: session.planId,
+    planId: isNonEmptyString(declaredPlanId) ? declaredPlanId : null,
   };
 }
 
