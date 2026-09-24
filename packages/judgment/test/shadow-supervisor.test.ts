@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { runShadowCommand } from "../scripts/shadow.js";
 import { tmpdir } from "node:os";
@@ -12,6 +12,14 @@ import { assessShadowRun, buildDockerLaunchArgs, freezeBaseline, recordWorkUnitD
 const roots: string[] = [];
 const hash = "a".repeat(64);
 const fixturePath = new URL("./fixtures/reviewer-probe.mjs", import.meta.url).pathname;
+function makeWritable(path: string): void {
+  chmodSync(path, 0o700);
+  for (const entry of readdirSync(path)) {
+    const child = join(path, entry);
+    if (lstatSync(child).isDirectory()) makeWritable(child);
+    else chmodSync(child, 0o600);
+  }
+}
 function workspace(): string {
   const root = mkdtempSync(join(tmpdir(), "jev-supervisor-"));
   roots.push(root);
@@ -23,11 +31,14 @@ function inputs(root: string, workerSource?: string) {
   const childPath = join(root, "reviewer-probe.mjs");
   copyFileSync(fixturePath, childPath);
   if (workerSource !== undefined) writeFileSync(childPath, workerSource);
+  const sourceBytes = new TextEncoder().encode("literal source\nanother literal\n");
+  mkdirSync(join(root, "source", "src"));
+  writeFileSync(join(root, "source", "src", "example.ts"), sourceBytes);
   const pack = validatePack({
     schema: PACK_SCHEMA, contractRevision: CONTRACT_REVISION, runId: "run-1", packId: "pack-1", concernId: "concern-1", profile: "review",
     scope: { kind: "review", reviewId: "review-1", snapshotSha256: hash, diffSha256: hash, tier: "default" },
     recipient: { id: "synthesis-main", phase: "synthesis" },
-    sources: [{ id: "source-1", path: "src/example.ts", startLine: 1, endLine: 2, contentSha256: hash, observedInRunId: "run-1", basis: "seat-observation" }],
+    sources: [{ id: "source-1", path: "src/example.ts", startLine: 1, endLine: 2, contentSha256: createHash("sha256").update(sourceBytes).digest("hex"), observedInRunId: "run-1", basis: "seat-observation" }],
     state: { evidence: [{ id: "evidence-1", sourceId: "source-1", excerpt: "literal source" }, { id: "evidence-2", sourceId: "source-1", excerpt: "another literal" }], subjects: [{ id: "left", kind: "finding", text: "left", evidenceIds: ["evidence-1"] }, { id: "right", kind: "finding", text: "right", evidenceIds: ["evidence-2"] }] },
     tasks: [{ id: "task-1", useCase: "JEV-A05", subjectIds: ["left", "right"], workUnit: { id: "unit-1", revision: 1 } }], rubricVersion: "rubric-1", builderVersion: "builder-1",
   });
@@ -45,7 +56,7 @@ function inputs(root: string, workerSource?: string) {
 }
 const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.execPath, [child.executable, ...child.argv, runId], { env: { PATH: process.env.PATH ?? "", HOME: process.cwd() }, stdio: ["ignore", "pipe", "pipe"] });
 const containerOnlySkip = process.platform !== "linux";
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { for (const root of roots.splice(0)) { makeWritable(root); rmSync(root, { recursive: true, force: true }); } });
 
 describe("trusted shadow supervisor", () => {
   test("default container argv enforces a nonroot offline boundary and exact mount rights", () => {
@@ -192,5 +203,41 @@ describe("trusted shadow supervisor", () => {
     writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan, baseline: fixture.baseline }));
     expect(await runShadowCommand(["study", "--root", fixture.root], testLauncher)).toBe(0);
     expect(await runShadowCommand(["assess", "--root", fixture.root])).toBe(0);
+  });
+  test("does not assess a frozen inventory unit omitted from the pack as complete", () => {
+    const fixture = inputs(workspace());
+    const baseline = freezeBaseline({
+      runId: "run-1",
+      ...fixture.baseline,
+      inventory: [{ id: "unit-1" }, { id: "unit-2" }],
+    });
+    const assessment = assessShadowRun({
+      baseline,
+      receipts: [recordWorkUnitDisposition({
+        runId: "run-1", unitId: "unit-1", packId: "pack-1", packSha256: hash,
+        scopeSha256: hash, disposition: "completed",
+        originalConsumption: fixture.baseline.originalConsumption.consumedOutputs[0],
+      })],
+      childEvents: [],
+      evidenceClass: "synthetic-offline",
+      elapsedMs: 1,
+      packId: "pack-1",
+      packSha256: hash,
+      scopeSha256: hash,
+      requiredUnitIds: ["unit-1"],
+      originalConsumption: fixture.baseline.originalConsumption,
+      originalSeatOutputs: fixture.baseline.seatOutputs,
+    });
+    expect(assessment.metrics).toMatchObject({ workUnits: 2, incompleteUnits: 1 });
+    expect(assessment.failures).toContain("jev.receipt-accounting-incomplete");
+  });
+
+  test("bounded source view rejects an unmanifested file", async () => {
+    const fixture = inputs(workspace());
+    writeFileSync(join(fixture.root, "source", "extra.txt"), "not authorized");
+    await expect(runShadowSupervisor({
+      ...fixture, runRoot: fixture.root, runId: "run-1", evidenceClass: "component",
+      baseline: fixture.baseline,
+    }, undefined, testLauncher)).rejects.toThrow("jev.source-manifest-extra-file");
   });
 });

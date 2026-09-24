@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, mkdirSync, openSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { buildA05Request, canonicalJsonBytes } from "./review-advice.js";
@@ -75,6 +75,72 @@ function sha256File(path: string): string {
     while ((offset = readSync(fd, buffer, 0, buffer.byteLength, null)) > 0) hash.update(buffer.subarray(0, offset));
     return hash.digest("hex");
   } finally { closeSync(fd); }
+}
+
+function stageSourceView(sourceRoot: string, runRoot: string, runId: string, sources: ReviewDecisionPack["sources"]): string {
+  const root = realpathSync(sourceRoot);
+  const allowed = new Map<string, (typeof sources)[number]>();
+  for (const source of sources) {
+    if (!source.path || source.path.startsWith("/") || source.path.includes("\\") ||
+        source.path.split("/").some((part) => !part || part === "." || part === "..") || allowed.has(source.path)) {
+      throw new Error("jev.source-manifest-invalid");
+    }
+    allowed.set(source.path, source);
+  }
+  const actualFiles: string[] = [];
+  const actualDirectories = new Set<string>();
+  const visit = (directory: string, prefix = "") => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolute = resolve(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("jev.source-manifest-file-invalid");
+      if (entry.isDirectory()) {
+        actualDirectories.add(path);
+        visit(absolute, path);
+      } else if (entry.isFile()) actualFiles.push(path);
+      else throw new Error("jev.source-manifest-file-invalid");
+    }
+  };
+  visit(root);
+  const expectedDirectories = new Set<string>();
+  for (const path of allowed.keys()) {
+    const parts = path.split("/");
+    for (let index = 1; index < parts.length; index++) expectedDirectories.add(parts.slice(0, index).join("/"));
+  }
+  if (actualFiles.some((path) => !allowed.has(path)) || [...actualDirectories].some((path) => !expectedDirectories.has(path))) {
+    throw new Error("jev.source-manifest-extra-file");
+  }
+  if (actualFiles.length !== allowed.size || [...allowed.keys()].some((path) => !actualFiles.includes(path))) {
+    throw new Error("jev.source-manifest-missing-file");
+  }
+  const prepared = [];
+  let totalBytes = 0;
+  for (const [path, source] of allowed) {
+    const absolute = resolve(root, path);
+    const info = lstatSync(absolute);
+    if (!within(root, absolute) || !info.isFile() || info.size > MAX_ARTIFACT_BYTES || totalBytes + info.size > MAX_ARTIFACT_BYTES) {
+      throw new Error("jev.source-view-size-invalid");
+    }
+    const bytes = readFileSync(absolute);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (sha256 !== source.contentSha256) throw new Error("jev.source-hash-unauthorized");
+    totalBytes += bytes.byteLength;
+    prepared.push({ path, source, bytes, sha256 });
+  }
+  const view = resolve(runRoot, `.jev-source-view-${runId}`);
+  if (existsSync(view)) throw new Error("jev.source-view-already-staged");
+  mkdirSync(view, { mode: 0o700 });
+  const manifest = [];
+  for (const { path, source, bytes, sha256 } of prepared) {
+    const staged = resolve(view, path);
+    mkdirSync(dirname(staged), { recursive: true, mode: 0o700 });
+    writeFileSync(staged, bytes, { flag: "wx", mode: 0o400 });
+    manifest.push({ id: source.id, path, sha256, startLine: source.startLine, endLine: source.endLine, observedInRunId: source.observedInRunId, basis: source.basis, revision: source.revision ?? null });
+  }
+  atomicJson(resolve(runRoot, "source-manifest.json"), { schema: "mstar.shadow-source-manifest/v1", runId, totalBytes, files: manifest });
+  for (const directory of [...expectedDirectories].sort((a, b) => b.length - a.length)) chmodSync(resolve(view, directory), 0o500);
+  chmodSync(view, 0o500);
+  return view;
 }
 function atomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -187,6 +253,9 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
   if (pack.runId !== input.runId || pilot.runId !== input.runId || pack.runId !== pilot.runId || pilot.permission.dataClass !== "synthetic-only") throw new Error("jev.run-source-authority-invalid");
   if (!within(runRoot, realpathSync(input.child.executable))) throw new Error("jev.child-outside-approved-root");
   assertMountPlan(input.mountPlan, runRoot, input.child);
+  const sourceView = stageSourceView(input.mountPlan.syntheticSource, runRoot, input.runId, pack.sources);
+  const mountPlan = { ...input.mountPlan, syntheticSource: sourceView };
+  assertMountPlan(mountPlan, runRoot, input.child);
   if (input.child.maxElapsedMs > pilot.limits.timeoutMs || input.child.maxOutputBytes > pilot.limits.maxResponseBytes) throw new Error("jev.child-budget-exceeded");
   const evaluatorRoot = realpathSync(resolve(runRoot, "evaluator"));
   if (!input.mountPlan.evaluatorData.some((path) => realpathSync(path) === evaluatorRoot)) throw new Error("jev.evaluator-root-unapproved");
@@ -212,7 +281,7 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
   let elapsedMs = 0;
   let outputBytes = 0;
   let childResult: ApprovedChildResult | undefined;
-  const childPromise = runApprovedChild(input.child, input.runId, input.mountPlan, signal, launcher);
+  const childPromise = runApprovedChild(input.child, input.runId, mountPlan, signal, launcher);
   const requestPromise = mailbox.readNext(mailboxController.signal);
   try {
     const first = await Promise.race([
