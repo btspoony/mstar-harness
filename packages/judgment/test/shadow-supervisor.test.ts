@@ -44,6 +44,7 @@ function inputs(root: string, workerSource?: string) {
   return { root, pack, pilot, child, mountPlan, baseline: { inventory: [{ id: "unit-1" }], seatOutputs: [{ unitId: "unit-1", outputId: "output-1" }], originalConsumption: { consumedOutputs: [{ unitId: "unit-1", outputId: "output-1", consumed: true, consumedAt: 1 }] }, finalReport: { status: "complete" } } };
 }
 const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.execPath, [child.executable, ...child.argv, runId], { env: { PATH: process.env.PATH ?? "", HOME: process.cwd() }, stdio: ["ignore", "pipe", "pipe"] });
+const containerOnlySkip = process.platform !== "linux";
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("trusted shadow supervisor", () => {
@@ -59,7 +60,7 @@ describe("trusted shadow supervisor", () => {
     expect(args.some((arg) => arg.startsWith("--env=") && arg.includes("TYPESAFE"))).toBe(false);
   });
 
-  test("freezes baseline before real probe child and reports component-only measured events", async () => {
+  test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());
     const result = await runShadowSupervisor({ ...args, runRoot: args.root, runId: "run-1", evidenceClass: "component", baseline: args.baseline }, undefined, testLauncher);
     expect(result.failures).toEqual([]);
@@ -100,7 +101,7 @@ describe("trusted shadow supervisor", () => {
     expect(() => assessShadowRun({ baseline: freezeBaseline({ runId: "run-1", ...slow.baseline }), receipts: [], childEvents: [], evidenceClass: "named-host", elapsedMs: 1, packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: [], originalConsumption: slow.baseline.originalConsumption, originalSeatOutputs: slow.baseline.seatOutputs })).toThrow("jev.named-host-authorization-required");
     expect(() => recordWorkUnitDisposition({ runId: "run-1", unitId: "unit-1", packId: "pack-1", packSha256: hash, scopeSha256: hash, disposition: "completed", originalConsumption: null })).toThrow("jev.original-consumption-required");
   });
-  test("assessment refuses failed or mismatched study results and failure event streams", async () => {
+  test.skipIf(containerOnlySkip)("assessment refuses failed or mismatched study results and failure event streams (requires Linux container /mnt mounts and /proc)", async () => {
     const failed = inputs(workspace(), "process.exit(7);");
     writeFileSync(join(failed.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: failed.pack, pilot: failed.pilot, child: failed.child, mountPlan: failed.mountPlan, baseline: failed.baseline }));
     expect(await runShadowCommand(["study", "--root", failed.root], testLauncher)).toBe(1);
@@ -125,7 +126,7 @@ describe("trusted shadow supervisor", () => {
     expect(assessShadowRun({ baseline: validBaseline, receipts: [], childEvents: invalidEvents, evidenceClass: "component", elapsedMs: 1 }).failures).toContain("probe-lifecycle-invalid");
   });
 
-  test("finite study and assess commands consume child artifacts", async () => {
+  test.skipIf(containerOnlySkip)("finite study and assess commands consume child artifacts (requires Linux container /mnt mounts and /proc)", async () => {
     const fixture = inputs(workspace());
     writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan, baseline: fixture.baseline }));
     expect(await runShadowCommand(["study", "--root", fixture.root], testLauncher)).toBe(0);
