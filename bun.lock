@@ -143,6 +143,16 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/judgment": {
+      "name": "@mstar-harness/judgment",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@mstar-harness/engine": "workspace:*",
+        "@types/node": "^25.6.0",
+        "bun-types": "^1.2.17",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/omp": {
       "name": "@mstar-harness/omp",
       "version": "3.11.0",
@@ -430,6 +440,8 @@
     "@mstar-harness/dsh": ["@mstar-harness/dsh@workspace:packages/dsh"],
 
     "@mstar-harness/engine": ["@mstar-harness/engine@workspace:packages/engine"],
+
+    "@mstar-harness/judgment": ["@mstar-harness/judgment@workspace:packages/judgment"],
 
     "@mstar-harness/omp": ["@mstar-harness/omp@workspace:packages/omp"],
 
