@@ -17,6 +17,7 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
   resolveProcessHarnessDir,
@@ -25,10 +26,12 @@ import {
   type ClosureEvidence,
   type IssueFilter,
   type IssueLink,
+  type IssuePayloadName,
   type IssueReceipt,
   type IssueTriage,
   type MutationContext,
   type OccurrenceInput,
+  type PayloadFieldSchema,
   type StoreContext,
   type TerminalDisposition,
 } from "@mstar-harness/engine";
@@ -124,6 +127,72 @@ function asRecord(value: unknown, what: string): Record<string, unknown> {
     usage(`${what} must be a JSON object`);
   }
   return value as Record<string, unknown>;
+}
+
+export function validatePayload(typeName: IssuePayloadName, record: Record<string, unknown>): void {
+  const failures: string[] = [];
+  const visit = (
+    schema: Record<string, PayloadFieldSchema>,
+    value: Record<string, unknown>,
+    prefix = "",
+  ): void => {
+    for (const [key, field] of Object.entries(schema)) {
+      const path = prefix === "" ? key : `${prefix}.${key}`;
+      const present = Object.hasOwn(value, key) && value[key] !== undefined;
+      const fieldValue = value[key];
+      if (!present) {
+        if (field.required) {
+          failures.push(
+            field.type === "string" || field.type === "string | null"
+              ? `${path} must be a nonblank string`
+              : field.type === "string[]"
+                ? `${path} must be an array of strings`
+                : field.type === "object"
+                  ? `${path} must be a JSON object`
+                  : `${path} is required`,
+          );
+        }
+        continue;
+      }
+      if (fieldValue === null && field.nullable) continue;
+      if (field.type === "string" || field.type === "string | null") {
+        if (typeof fieldValue !== "string" || (field.required && fieldValue.trim() === "")) {
+          failures.push(`${path} must be a nonblank string`);
+          continue;
+        }
+        if (field.values && !field.values.includes(fieldValue)) {
+          failures.push(`invalid ${typeName === "IssueLink" && key === "kind" ? "provenance kind" : path} ${JSON.stringify(fieldValue)}`);
+        }
+      } else if (field.type === "string[]") {
+        if (!Array.isArray(fieldValue) || fieldValue.some((item) => typeof item !== "string")) {
+          failures.push(`${path} must be an array of strings`);
+        }
+      } else if (field.type === "object") {
+        if (fieldValue === null || typeof fieldValue !== "object" || Array.isArray(fieldValue)) {
+          failures.push(`${path} must be a JSON object`);
+        } else if (field.properties) {
+          visit(field.properties, fieldValue as Record<string, unknown>, path);
+        }
+      }
+    }
+  };
+  visit(ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>, record);
+  if (typeName === "IssueLink" && failures.length === 0) {
+    const relationForm = typeof record.relation === "string" && typeof record.issueId === "string";
+    const provenanceForm = typeof record.kind === "string" && typeof record.target === "string";
+    if (!relationForm && !provenanceForm) failures.push("link payload needs relation+issueId or kind+target");
+  }
+  if (failures.length) usage(`${typeName} payload invalid: ${failures.join("; ")}`);
+}
+
+export function payloadFileHelp(typeName: IssuePayloadName): string {
+  return `Absolute ${typeName} JSON path; fields: ${Object.keys(ISSUE_PAYLOAD_SCHEMAS[typeName]).join(", ")}. See mstar-harness schema ${typeName}`;
+}
+
+function readPayload(raw: string | undefined, typeName: IssuePayloadName): Record<string, unknown> {
+  const record = asRecord(readJsonFile(raw, "--file"), typeName);
+  validatePayload(typeName, record);
+  return record;
 }
 
 function requireString(record: Record<string, unknown>, key: string): string {
@@ -396,10 +465,10 @@ export function registerIssueCommands(program: Command): void {
     issue
       .command("add")
       .description("Capture a confirmed finding (unscoped; no plan required)")
-      .option("--file <path>", "Absolute CaptureInput JSON path"),
+      .option("--file <path>", payloadFileHelp("CaptureInput")),
   ).action(async (options: IssueCliOptions) =>
     runVerb("add", options, async (json) => {
-      const input = captureInputOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "CaptureInput"));
+      const input = captureInputOf(readPayload(typeof options.file === "string" ? options.file : undefined, "CaptureInput"));
       const receipt = await captureIssue(storeContext(options), input, captureMutationOf(options));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
@@ -446,11 +515,11 @@ export function registerIssueCommands(program: Command): void {
       .description("Append an occurrence to an existing issue")
       .argument("[id]", "Issue id")
       .option("--id <id>", "Issue id")
-      .option("--file <path>", "Absolute OccurrenceInput JSON path"),
+      .option("--file <path>", payloadFileHelp("OccurrenceInput")),
   ).action(async (id: string | undefined, options: IssueCliOptions) =>
     runVerb("occurrence", options, async (json) => {
       const input = occurrenceInputOf(
-        asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "OccurrenceInput"),
+        readPayload(typeof options.file === "string" ? options.file : undefined, "OccurrenceInput"),
       );
       const receipt = await appendOccurrence(storeContext(options), issueIdOf(options, id), input, captureMutationOf(options));
       printSuccess(receipt, receipt.storeRevision, json);
@@ -464,11 +533,11 @@ export function registerIssueCommands(program: Command): void {
         .description("Update triage fields without changing identity")
         .argument("[id]", "Issue id")
         .option("--id <id>", "Issue id")
-        .option("--file <path>", "Absolute IssueTriage JSON path"),
+        .option("--file <path>", payloadFileHelp("IssueTriage")),
     ),
   ).action(async (id: string | undefined, options: IssueCliOptions) =>
     runVerb("triage", options, async (json) => {
-      const patch = triageOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "IssueTriage"));
+      const patch = triageOf(readPayload(typeof options.file === "string" ? options.file : undefined, "IssueTriage"));
       const receipt = await triageIssue(storeContext(options), issueIdOf(options, id), patch, authorizedMutationOf(options, true));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
@@ -482,12 +551,12 @@ export function registerIssueCommands(program: Command): void {
           .description(description)
           .argument("[id]", "Issue id")
           .option("--id <id>", "Issue id")
-          .option("--file <path>", "Absolute ClosureEvidence JSON path"),
+          .option("--file <path>", payloadFileHelp("ClosureEvidence")),
       ),
     ).action(async (id: string | undefined, options: IssueCliOptions) =>
       runVerb(verb, options, async (json) => {
         const evidence = closureEvidenceOf(
-          asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "ClosureEvidence"),
+          readPayload(typeof options.file === "string" ? options.file : undefined, "ClosureEvidence"),
         );
         const receipt = await closeIssue(storeContext(options), issueIdOf(options, id), disposition, evidence, authorizedMutationOf(options, true));
         printSuccess(receipt, receipt.storeRevision, json);
@@ -508,14 +577,14 @@ export function registerIssueCommands(program: Command): void {
     authorizedFlags(
       issue
         .command("link")
-        .description("Add a relation or typed provenance link")
         .argument("[id]", "Issue id")
+        .description("Add a relation or typed provenance link")
         .option("--id <id>", "Issue id")
-        .option("--file <path>", "Absolute IssueLink JSON path"),
+        .option("--file <path>", payloadFileHelp("IssueLink")),
     ),
   ).action(async (id: string | undefined, options: IssueCliOptions) =>
     runVerb("link", options, async (json) => {
-      const link = linkOf(asRecord(readJsonFile(typeof options.file === "string" ? options.file : undefined, "--file"), "IssueLink"));
+      const link = linkOf(readPayload(typeof options.file === "string" ? options.file : undefined, "IssueLink"));
       const receipt = await linkIssue(storeContext(options), issueIdOf(options, id), link, authorizedMutationOf(options, true));
       printSuccess(receipt, receipt.storeRevision, json);
     }),
@@ -549,4 +618,22 @@ export function registerIssueCommands(program: Command): void {
     );
 
   for (const command of [issue, ...issue.commands]) command.exitOverride();
+  program
+    .command("schema")
+    .description("Print the runtime field schema for a JSON payload type")
+    .argument("<type>", "Payload type name")
+    .action((typeName: string) => {
+      if (!Object.hasOwn(ISSUE_PAYLOAD_SCHEMAS, typeName)) {
+        usage(`unknown payload type ${JSON.stringify(typeName)}; available: ${Object.keys(ISSUE_PAYLOAD_SCHEMAS).join(", ")}`);
+      }
+      const fields = ISSUE_PAYLOAD_SCHEMAS[typeName as IssuePayloadName] as Record<string, PayloadFieldSchema>;
+      console.log(
+        JSON.stringify(
+          { type: typeName, fields: Object.entries(fields).map(([name, field]) => ({ name, ...field })) },
+          null,
+          2,
+        ),
+      );
+    });
 }
+

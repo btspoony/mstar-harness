@@ -12,6 +12,7 @@ import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import {
   IssueError,
+  assertCaptureRequest,
   appendOccurrence,
   captureIssue,
   closeIssue,
@@ -214,6 +215,23 @@ process.stdout.write(JSON.stringify(receipt));
     });
     const page = await listIssues(context, {});
     expect(page.total).toBe(0);
+  });
+
+  test("capture request validates all malformed identity and required fields together", () => {
+    let failure: unknown;
+    try {
+      assertCaptureRequest({ title: "only supplied field" } as CaptureInput);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code: "issue.ambiguous-identity" });
+    const message = failure instanceof Error ? failure.message : "";
+    for (const field of [
+      "projectId", "impact", "acceptance", "kind", "severity", "sourceIdentity", "rootCauseKey", "acceptanceKey",
+      "occurrenceKey", "sourceKind", "location", "observedBehavior", "discoveredAt",
+    ]) {
+      expect(message).toContain(field);
+    }
   });
 
   test("reopening the DB retains captured data", async () => {

@@ -173,6 +173,57 @@ describe("mstar issue CLI bundle", () => {
     expect(readFileSync(BUNDLE, "utf8").startsWith("#!/usr/bin/env bun")).toBe(true);
   });
 
+  test("schema output and payload help describe the issue file contracts", () => {
+    const schema = runBundle("bun-shebang", ["schema", "CaptureInput"], process.cwd());
+    expect(schema.exitCode).toBe(0);
+    const parsed = JSON.parse(schema.stdout) as { type: string; fields: Array<{ name: string; required: boolean; type: string }> };
+    expect(parsed.type).toBe("CaptureInput");
+    expect(parsed.fields).toContainEqual({ name: "projectId", required: true, type: "string", description: "Project identifier" });
+
+    for (const [verb, typeName] of [
+      ["add", "CaptureInput"],
+      ["occurrence", "OccurrenceInput"],
+      ["triage", "IssueTriage"],
+      ["close", "ClosureEvidence"],
+      ["link", "IssueLink"],
+    ]) {
+      const help = runBundle("bun-shebang", ["issue", verb, "--help"], process.cwd());
+      const normalizedHelp = help.stdout.replace(/\s+/g, " ");
+      expect(normalizedHelp).toContain(typeName);
+      expect(normalizedHelp).toContain(`mstar-harness schema ${typeName}`);
+    }
+    for (const [verb, typeName] of [
+      ["progress", "PlanProgress"],
+      ["issue-close", "ClosureEvidence"],
+      ["handoff", "HandoffEvidence"],
+    ]) {
+      const help = runBundle("bun-shebang", ["plan", verb, "--help"], process.cwd());
+      const normalizedHelp = help.stdout.replace(/\s+/g, " ");
+      expect(normalizedHelp).toContain(typeName);
+      expect(normalizedHelp).toContain(`mstar-harness schema ${typeName}`);
+    }
+  });
+
+  test("capture reports every missing payload field in one refusal", async () => {
+    const { root } = await makeHarness();
+    const file = join(root, "incomplete.json");
+    writeJson(file, { title: "only supplied field" });
+    const result = runBundle(
+      "bun-shebang",
+      ["issue", "add", "--file", file, "--operation-id", "capture-incomplete", "--actor", "project-manager", "--json"],
+      root,
+    );
+    expect(result.exitCode).toBe(2);
+    const body = jsonOf(result);
+    expect(body).toMatchObject({ ok: false, code: "usage" });
+    for (const field of [
+      "projectId", "kind", "severity", "impact", "acceptance", "sourceIdentity", "rootCauseKey", "acceptanceKey",
+      "occurrenceKey", "sourceKind", "location", "observedBehavior", "evidence", "discoveredAt",
+    ]) {
+      expect(body.message).toContain(field);
+    }
+  });
+
   test("unscoped capture with no plan, both launchers", async () => {
     for (const launcher of ["bun-shebang", "node"] as const) {
       const { root, harness } = await makeHarness();

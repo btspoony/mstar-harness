@@ -639,6 +639,8 @@ export type {
   MutationContext,
   OccurrenceInput,
   TerminalDisposition,
+  IssuePayloadName,
+  PayloadFieldSchema,
 } from "./issue.js";
 export {
   IssueError,
@@ -649,6 +651,7 @@ export {
   linkIssue,
   listIssues,
   triageIssue,
+  ISSUE_PAYLOAD_SCHEMAS,
 } from "./issue.js";
 // Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,

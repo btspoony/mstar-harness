@@ -63,6 +63,101 @@ export type OccurrenceInput = {
   discoveredAt: string;
 };
 
+export type PayloadFieldSchema = {
+  required: boolean;
+  type: string;
+  description: string;
+  values?: readonly string[];
+  nullable?: boolean;
+  properties?: Record<string, PayloadFieldSchema>;
+};
+
+/** Runtime payload contract; CLI help and `mstar-harness schema` derive from this registry. */
+export const ISSUE_PAYLOAD_SCHEMAS = {
+  CaptureInput: {
+    projectId: { required: true, type: "string", description: "Project identifier" },
+    title: { required: true, type: "string", description: "Finding title" },
+    kind: { required: true, type: "string", description: "Issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+    severity: { required: true, type: "string", description: "Severity", values: ["critical", "high", "medium", "low", "info"] },
+    impact: { required: true, type: "string", description: "User or system impact" },
+    acceptance: { required: true, type: "string", description: "Acceptance condition" },
+    owner: { required: false, type: "string", description: "Optional owner" },
+    sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+    rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+    acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+    occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+    sourceKind: { required: true, type: "string", description: "Source category" },
+    location: { required: true, type: "string", description: "Source location" },
+    observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+    evidence: { required: true, type: "string[]", description: "Evidence strings" },
+    discoveredAt: { required: true, type: "string", description: "Observation timestamp" },
+  },
+  OccurrenceInput: {
+    sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+    rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+    acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+    occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+    sourceKind: { required: true, type: "string", description: "Source category" },
+    location: { required: true, type: "string", description: "Source location" },
+    observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+    evidence: { required: true, type: "string[]", description: "Evidence strings" },
+    discoveredAt: { required: true, type: "string", description: "Observation timestamp" },
+  },
+  IssueTriage: {
+    reason: { required: true, type: "string", description: "Reason for triage change" },
+    kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+    severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
+    impact: { required: false, type: "string", description: "Updated impact" },
+    acceptance: { required: false, type: "string", description: "Updated acceptance condition" },
+    owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true },
+  },
+  ClosureEvidence: {
+    reason: { required: true, type: "string", description: "Reason for closure" },
+    references: { required: true, type: "string[]", description: "Evidence references" },
+    scope: { required: false, type: "string", description: "Closure scope" },
+    canonicalIssueId: { required: false, type: "string", description: "Canonical issue for duplicate/superseded" },
+    alignmentRef: { required: false, type: "string", description: "Authority alignment reference (required for resolved/waived closure)" },
+  },
+  IssueLink: {
+    relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+    issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+    kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+    target: { required: false, type: "string", description: "Provenance target; required with kind" },
+  },
+  PlanProgress: {
+    status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+    summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+    evidence_paths: { required: true, type: "string[]", description: "Canonical absolute artifact paths for this plan" },
+    track_branches: { required: false, type: "string[]", description: "Reported L2 track branches" },
+  },
+  HandoffEvidence: {
+    source_sha: { required: true, type: "string", description: "Source commit SHA" },
+    review_base: { required: true, type: "string", description: "Review range base SHA" },
+    qc: {
+      required: true,
+      type: "object",
+      description: "QC decision, reports and consolidated report",
+      properties: {
+        decision: { required: true, type: "string", description: "QC decision", values: ["Approve", "Approve with residuals"] },
+        reports: { required: true, type: "string[]", description: "QC report paths" },
+        consolidated: { required: true, type: "string", description: "Consolidated QC report path" },
+      },
+    },
+    qa: {
+      required: true,
+      type: "object",
+      description: "QA gate, passing decision and report",
+      properties: {
+        gate: { required: true, type: "string", description: "QA gate", values: ["mandatory", "pm-acceptance"] },
+        decision: { required: true, type: "string", description: "QA decision", values: ["pass"] },
+        report: { required: true, type: "string", description: "QA report path" },
+      },
+    },
+  },
+} as const satisfies Record<string, Record<string, PayloadFieldSchema>>;
+
+export type IssuePayloadName = keyof typeof ISSUE_PAYLOAD_SCHEMAS;
+
 export type IssueReceipt = {
   issueId: string;
   occurrenceId?: number;
@@ -258,6 +353,41 @@ const PROVENANCE_KINDS: Record<"plan" | "iteration" | "pr" | "report", true> = {
   report: true,
 };
 
+function requireNonblank(label: string, value: string): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) throw new IssueError("issue.scope-refused", `${label} must be nonblank`);
+  return trimmed;
+}
+
+function requireSemanticKey(label: string, value: string): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed || /^unknown$/i.test(trimmed) || trimmed === "?") {
+    throw new IssueError(
+      "issue.ambiguous-identity",
+      `${label} is unknown or ambiguous; capture refuses a guessed dedup. Record a PM triage decision.`,
+    );
+  }
+  return trimmed;
+}
+
+function collectIssueRules(rules: readonly (() => void)[]): void {
+  const failures: IssueError[] = [];
+  for (const rule of rules) {
+    try {
+      rule();
+    } catch (error) {
+      if (error instanceof IssueError) failures.push(error);
+      else throw error;
+    }
+  }
+  if (failures.length > 0) {
+    const code = failures.some((error) => error.code === "issue.ambiguous-identity")
+      ? "issue.ambiguous-identity"
+      : "issue.scope-refused";
+    throw new IssueError(code, failures.map((error) => error.message.replace(/^\[[^\]]+\]\s*/, "")).join("; "));
+  }
+}
+
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -281,24 +411,6 @@ export function computeIdentityKey(
   return sha256(lengthDelimited([projectId, normalized, rootCauseKey, acceptanceKey]));
 }
 
-function requireNonblank(label: string, value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new IssueError("issue.scope-refused", `${label} must be nonblank`);
-  }
-  return trimmed;
-}
-
-function requireSemanticKey(label: string, value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed || /^unknown$/i.test(trimmed) || trimmed === "?") {
-    throw new IssueError(
-      "issue.ambiguous-identity",
-      `${label} is unknown or ambiguous; capture refuses a guessed dedup. Record a PM triage decision.`,
-    );
-  }
-  return trimmed;
-}
 
 
 function parseEvidence(json: string): string[] {
@@ -314,7 +426,6 @@ function parseEvidence(json: string): string[] {
 function requestHash(kind: string, payload: unknown): string {
   return sha256(`${kind}\n${JSON.stringify(payload)}`);
 }
-
 function readMeta(db: StoreDb): { authorityState: string; revision: number } {
   const row = db.prepare("select authority_state as authorityState, revision from store_meta where id = 1").get() as
     | { authorityState?: string; revision?: number }
@@ -414,6 +525,18 @@ type OccurrenceColumns = {
 };
 
 function occurrenceColumns(input: OccurrenceInput): OccurrenceColumns {
+  collectIssueRules([
+    () => requireNonblank("sourceIdentity", input.sourceIdentity),
+    () => requireSemanticKey("rootCauseKey", input.rootCauseKey),
+    () => requireSemanticKey("acceptanceKey", input.acceptanceKey),
+    () => requireNonblank("occurrenceKey", input.occurrenceKey),
+    () => requireNonblank("sourceKind", input.sourceKind),
+    () => requireNonblank("location", input.location),
+    () => requireNonblank("observedBehavior", input.observedBehavior),
+    () => {
+      if (typeof input.discoveredAt !== "string") throw new IssueError("issue.scope-refused", "discoveredAt must be nonblank");
+    },
+  ]);
   return {
     sourceIdentity: requireNonblank("sourceIdentity", input.sourceIdentity),
     rootCauseKey: requireSemanticKey("rootCauseKey", input.rootCauseKey),
@@ -568,14 +691,24 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
  * is refused by itself — never by, or after, a store-open failure.
  */
 export function assertCaptureRequest(input: CaptureInput): void {
-  if (!Object.hasOwn(KINDS, input.kind) || !Object.hasOwn(SEVERITIES, input.severity)) {
-    throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
-  }
-  requireNonblank("title", input.title);
-  requireNonblank("impact", input.impact);
-  requireNonblank("acceptance", input.acceptance);
-  requireNonblank("projectId", input.projectId);
-  occurrenceColumns(input);
+  const rules: Array<() => void> = [
+    () => requireNonblank("title", input.title),
+    () => requireNonblank("impact", input.impact),
+    () => requireNonblank("acceptance", input.acceptance),
+    () => requireNonblank("projectId", input.projectId),
+    () => {
+      if (!Object.hasOwn(KINDS, input.kind)) {
+        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
+      }
+    },
+    () => {
+      if (!Object.hasOwn(SEVERITIES, input.severity)) {
+        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
+      }
+    },
+    () => occurrenceColumns(input),
+  ];
+  collectIssueRules(rules);
 }
 
 /**
