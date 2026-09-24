@@ -60,5 +60,14 @@ export type {
   WorkUnitDispositionInput,
   WorkUnitReceipt,
 } from "./shadow-supervisor.js";
+export { allowedAuthorOutputs, authorSlotKeys, createOnlyAuthorSinkWrite, validateAuthorSinkRelativePath } from "./author-sink.js";
+export {
+  assertAuthorMountPlan,
+  buildAuthorDockerLaunchArgs,
+  provisionAuthorGateLayout,
+  runAuthorPreDispatchGate,
+  writeAuthorGateEvidence,
+} from "./author-gate.js";
+export type { AuthorGateInput, AuthorGateResult, AuthorMountPlan, DenyProbeRecord } from "./author-gate.js";
 export { classifyOutcome, clopperPearsonLower, summarizeQualification } from "./evaluation.js";
 export type { EvaluationOutcome, GoldLabel, OutcomeReason, QualificationRow, QualificationSummary } from "./evaluation.js";
