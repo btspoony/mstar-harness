@@ -61,8 +61,14 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
     const labels = quarantined ? ["same_cause", "different_cause"] : ["same_cause", "same_cause"];
     goldRows.push({ itemId, groupId, label: quarantined ? "unresolved" : "same_cause", ...(quarantined ? { eligible: false, quarantined: true } : {}) });
     for (const seat of ["A", "B"] as const) {
-      annotationRows[seat][Math.floor(index / 90)].push({
-        itemId, label: labels[seat === "A" ? 0 : 1], reducedPackSupport: { label: "sufficient", explanation: "Synthetic test support." },
+      const shardIndex = Math.floor(index / 90) + 1;
+      const reducedPackSupport = seat === "A" && shardIndex === 1
+        ? { status: "sufficient", explanation: "Synthetic test support." }
+        : seat === "A" && shardIndex === 2
+          ? { label: "sufficient", explanation: "Synthetic test support." }
+          : "sufficient";
+      annotationRows[seat][shardIndex - 1].push({
+        itemId, label: labels[seat === "A" ? 0 : 1], reducedPackSupport,
         sourceSha256, itemDigest, rationale: "Synthetic source-grounded comparison rationale.",
         anchors: [{ sourceRef: `file-${index}`, line: "1" }],
       });
@@ -249,18 +255,18 @@ describe("qualification integrity", () => {
     try { expect(await runEvaluationCommand(["check-corpus", "--root", root])).toBe(2); }
     finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("check-annotations accepts reduced-pack support objects and equivalent declared identities", async () => {
+  test("check-annotations accepts all reduced-pack support shapes and equivalent declared identities", async () => {
     const row = {
       itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"),
       label: "same_cause", rationale: "An evidence-grounded synthetic annotation.",
-      reducedPackSupport: { label: "sufficient", explanation: "Support is available." },
       anchors: [{ sourceRef: "opaque-source", lines: "1-2" }],
     };
     const cases = [
-      { seat: "A", shard: 1, annotation: row },
-      { seat: "A", shard: 3, annotation: { ...row, seat: "A", shard: "3" } },
-      { seat: "A", shard: 4, annotation: { ...row, seat: "A/4" } },
-      { seat: "B", shard: 3, annotation: { ...row, seat: "B", shard: 3 } },
+      { seat: "A", shard: 1, annotation: { ...row, reducedPackSupport: { status: "sufficient", explanation: "Status-shaped." } } },
+      { seat: "A", shard: 2, annotation: { ...row, reducedPackSupport: { label: "sufficient", explanation: "Label-shaped." } } },
+      { seat: "A", shard: 3, annotation: { ...row, reducedPackSupport: "sufficient", seat: "A", shard: "3" } },
+      { seat: "A", shard: 4, annotation: { ...row, reducedPackSupport: "unresolved", seat: "A/4" } },
+      { seat: "B", shard: 3, annotation: { ...row, reducedPackSupport: "insufficient", seat: "B", shard: 3 } },
     ];
     const roots = cases.map(({ seat, shard, annotation }) =>
       annotationRoot(`${JSON.stringify(annotation)}\n`, seat, shard));
@@ -274,6 +280,24 @@ describe("qualification integrity", () => {
         expect(report.identityMetadata.sessionId.status).toBe("undeclared");
       }
       expect(JSON.parse((await captureCommand(["check-annotations", "--root", roots[0]!, "--seat", "A", "--shard", "1"])).stdout).identityMetadata.seat.status).toBe("undeclared");
+    } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
+  });
+  test("check-annotations rejects unknown items and malformed reduced-pack support shapes", async () => {
+    const valid = { itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"), label: "same_cause", rationale: "Grounded.", reducedPackSupport: { label: "sufficient", explanation: "Supported." }, citations: ["opaque-source:1"] };
+    const invalidSupports = [
+      undefined,
+      { explanation: "Missing status." },
+      { status: "invalid_support", explanation: "Invalid status." },
+      { explanation: "Missing label." },
+      { label: "invalid_support", explanation: "Invalid label." },
+      "invalid_support",
+    ];
+    const roots = [
+      annotationRoot(`${JSON.stringify({ ...valid, itemId: "unknown" })}\n`),
+      ...invalidSupports.map((reducedPackSupport) => annotationRoot(`${JSON.stringify({ ...valid, reducedPackSupport })}\n`)),
+    ];
+    try {
+      for (const root of roots) expect(await runEvaluationCommand(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"])).toBe(2);
     } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
   });
   test("check-annotations rejects unknown, duplicate, and incomplete annotation rows", async () => {

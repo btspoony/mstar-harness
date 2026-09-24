@@ -55,7 +55,7 @@ type Manifest = { schema: string; contractRevision: string; files?: Array<{ path
 type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
 type Gold = Array<{ itemId: string; groupId: string; label: string; eligible?: boolean; quarantined?: boolean }>;
 type Annotation = {
-  itemId: string; groupId?: string; label: string; reducedPackSupport: { label: string; explanation?: string };
+  itemId: string; groupId?: string; label: string; reducedPackSupport: unknown;
   sourceSha256: string; itemDigest: string; seat?: string; shard?: string | number; sessionId?: string; model?: string; assistance?: unknown;
   rationale: string; anchors?: readonly unknown[]; citations?: readonly unknown[];
 };
@@ -74,9 +74,17 @@ function indexCorpusVariants(corpus: Corpus): Map<string, CorpusVariantRef> {
   return variants;
 }
 function supportStatus(value: unknown): string | undefined {
-  return typeof value === "object" && value !== null && "label" in value && typeof value.label === "string"
-    ? value.label
-    : undefined;
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const support = value as Record<string, unknown>;
+  const status = support.status;
+  const label = support.label;
+  if (status !== undefined && label !== undefined && status !== label) return undefined;
+  const normalized = status ?? label;
+  if (typeof normalized !== "string" ||
+      (support.explanation !== undefined &&
+        (typeof support.explanation !== "string" || !support.explanation.trim()))) return undefined;
+  return normalized;
 }
 function validateAnnotationRow(
   row: Annotation,
@@ -89,9 +97,7 @@ function validateAnnotationRow(
       !/^[a-f0-9]{64}$/.test(row.itemDigest) || !/^[a-f0-9]{64}$/.test(row.sourceSha256) ||
       typeof row.rationale !== "string" || !row.rationale.trim()) fail("Annotation integrity failure: missing core field");
   const reducedPackSupport = supportStatus(row.reducedPackSupport);
-  if (!["sufficient", "insufficient", "unresolved"].includes(reducedPackSupport ?? "") ||
-      ("explanation" in row.reducedPackSupport &&
-        (typeof row.reducedPackSupport.explanation !== "string" || !row.reducedPackSupport.explanation.trim()))) {
+  if (!["sufficient", "insufficient", "unresolved"].includes(reducedPackSupport ?? "")) {
     fail("Annotation reduced-pack support missing or invalid");
   }
   const evidence = row.anchors ?? row.citations;
