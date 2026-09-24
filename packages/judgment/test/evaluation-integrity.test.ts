@@ -34,37 +34,80 @@ function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string |
   return root;
 }
 
-function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string; missingDisposition?: boolean; invalidOrigin?: boolean } = {}): string {
-  const sourceSha256 = sha256("source");
-  const itemDigest = sha256("item");
-  const gold = `${JSON.stringify({ itemId: "item-1", groupId: "1/g1", label: "insufficient_evidence" })}\n`;
-  const assignments = { "1/g1": "holdout" };
+function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string; missingDisposition?: boolean; invalidOrigin?: boolean; missingQuarantine?: boolean; badEligibleDenominators?: boolean; unrecordedCollision?: boolean; emptyGold?: boolean } = {}): string {
+  const groups: Array<Record<string, unknown>> = [];
+  const assignments: Record<string, string> = {};
+  const goldRows: Array<Record<string, unknown>> = [];
+  const annotationRows = { A: [[], [], [], []] as Array<Array<Record<string, unknown>>>, B: [[], [], [], []] as Array<Array<Record<string, unknown>>> };
+  const adjudicationRows: Array<Record<string, unknown>> = [];
+  const quarantineReason = "The immutable source families reuse one lineage and causal cluster across development and holdout.";
+  const excludedSlots = new Set([189, 294]);
+  for (let index = 0; index < 360; index++) {
+    const groupId = `opaque-group-${index}`;
+    const itemId = `opaque-item-${index}`;
+    const cohort = index >= 180 && index < 240 ? "development" : "holdout";
+    const quarantined = excludedSlots.has(index);
+    const sourceSlot = `shard-${Math.floor(index / 90) + 1}/group-${String(index % 90 + 1).padStart(3, "0")}`;
+    const sourceSha256 = sha256(`source-${index}`);
+    const itemDigest = sha256(`item-${index}`);
+    assignments[groupId] = cohort;
+    groups.push({
+      id: groupId, split: cohort, sourceSlot,
+      lineageId: quarantined || (overrides.unrecordedCollision && index === 0) ? "opaque-library-lineage" : `lineage-${index}`,
+      causalClusterId: quarantined ? "opaque-library-cluster" : `cluster-${index}`,
+      eligible: !quarantined, quarantined, ...(quarantined ? { quarantineReason } : {}),
+      variants: [{ id: itemId, itemDigest, sourceSha256, primary: true }],
+    });
+    const labels = quarantined ? ["same_cause", "different_cause"] : ["same_cause", "same_cause"];
+    goldRows.push({ itemId, groupId, label: quarantined ? "unresolved" : "same_cause", ...(quarantined ? { eligible: false, quarantined: true } : {}) });
+    for (const seat of ["A", "B"] as const) {
+      annotationRows[seat][Math.floor(index / 90)].push({
+        itemId, label: labels[seat === "A" ? 0 : 1], reducedPackSupport: "sufficient",
+        sourceSha256, itemDigest, rationale: "Synthetic source-grounded comparison rationale.",
+        anchors: [{ sourceRef: `file-${index}`, line: "1" }],
+      });
+    }
+    if (quarantined) {
+      adjudicationRows.push({
+        itemId, groupId, labelA: labels[0], labelB: labels[1], sourceSha256, itemDigest,
+        disposition: overrides.missingDisposition && index === 189 ? undefined : "preserved_disagreement",
+        resolvedLabel: "unresolved", rationale: "The independent labels remain unresolved.",
+        sourceEvidence: [{ source: `file-${index}`, line: 1 }], eligible: false, quarantined: true,
+      });
+    }
+  }
+  const gold = overrides.emptyGold ? "" : goldRows.map((row) => JSON.stringify(row)).join("\n") + "\n";
   const split = JSON.stringify({
     schema: overrides.splitSchema ?? "mstar.qualification-split-manifest/v1",
     contractRevision: "phase3a-native-20260924",
     freezeId: overrides.freezeId ?? "freeze-1",
     frozenAt: overrides.frozenAt ?? "2026-09-24T00:00:00.000Z",
-    assignments,
-    assignmentSha256: sha256(JSON.stringify(assignments)),
-    goldSha256: sha256(gold),
-    goldCount: 1,
+    assignments, assignmentSha256: sha256(JSON.stringify(assignments)), goldSha256: sha256(gold), goldCount: goldRows.length,
+    ...(overrides.missingQuarantine ? {} : {
+      quarantine: {
+        excludedGroupIds: ["opaque-group-189", "opaque-group-294"],
+        collisions: [{
+          kind: "lineage-and-causal", groupIds: ["opaque-group-189", "opaque-group-294"],
+          sourceSlots: ["shard-3/group-010", "shard-4/group-025"],
+          rawLineageId: "lineage-library-reservation", rawCausalClusterId: "cluster-library-reservation",
+          lineageId: "opaque-library-lineage", causalClusterId: "opaque-library-cluster",
+          assignedCohorts: { "opaque-group-189": "development", "opaque-group-294": "holdout" }, reason: quarantineReason,
+        }],
+      },
+    }),
+    eligibleDenominators: {
+      developmentGroups: overrides.badEligibleDenominators ? 60 : 59,
+      holdoutGroups: 299, totalGroups: overrides.badEligibleDenominators ? 359 : 358,
+      developmentPrimaryCases: 59, holdoutPrimaryCases: 299, totalPrimaryCases: 358,
+    },
   });
-  const corpus = JSON.stringify({ groups: [
-    { id: "1/g1", split: "holdout", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "item-1", primary: true }] },
-  ] });
   const annotations: Record<string, string> = {};
-  for (const seat of ["A", "B"]) {
-    for (const shard of [1, 2, 3, 4]) {
-      annotations[`annotations/${seat}-${shard}.jsonl`] = shard === 1
-        ? `${JSON.stringify({ itemId: "item-1", groupId: "1/g1", label: seat === "A" ? "same_cause" : "insufficient_evidence", reducedPackSupport: "sufficient", sourceSha256, itemDigest })}\n`
-        : "";
-    }
+  for (const seat of ["A", "B"] as const) for (const shard of [1, 2, 3, 4]) {
+    annotations[`annotations/${seat}-${shard}.jsonl`] = annotationRows[seat][shard - 1].map((row) => JSON.stringify({
+      ...row,
+      ...(seat === "A" && shard === 1 ? { reducedPackSupport: { status: "sufficient", explanation: "Synthetic test support." } } : {}),
+    })).join("\n") + "\n";
   }
-  const adjudication = {
-    itemId: "item-1", groupId: "1/g1", labelA: "same_cause", labelB: "insufficient_evidence",
-    sourceSha256, itemDigest, ...(overrides.missingDisposition ? {} : { disposition: "resolved_insufficiency" }),
-    resolvedLabel: "insufficient_evidence", rationale: "synthetic test rationale", sourceEvidence: [{ source: "file-1", line: 1 }],
-  };
   const origins = [
     "Newly authored synthetic source families in this session; no real-source derivation or old fixture reuse.",
     "Newly authored synthetic source and review findings; no production source or explored fixtures used.",
@@ -76,14 +119,32 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
     JSON.stringify({ origin: overrides.invalidOrigin && index === 0 ? "Synthetic source derived from old fixtures." : origin }),
   ]));
   return fixtureRoot({
-    "split-manifest.json": split,
-    "gold/adjudicated.jsonl": gold,
-    "corpus.json": corpus,
-    "adjudication.jsonl": `${JSON.stringify(adjudication)}\n`,
-    "freeze.json": "{}",
-    ...annotations,
-    ...authors,
+    "split-manifest.json": split, "gold/adjudicated.jsonl": gold, "corpus.json": JSON.stringify({ groups }),
+    "adjudication.jsonl": adjudicationRows.map((row) => JSON.stringify(row)).join("\n") + "\n", "freeze.json": "{}",
+    ...annotations, ...authors,
   }, overrides.manifestSchema);
+}
+function annotationRoot(rowText: string): string {
+  const sourceSha256 = sha256("source");
+  const itemDigest = sha256("item");
+  return fixtureRoot({
+    "corpus.json": JSON.stringify({ groups: [{
+      id: "group-1", split: "development", lineageId: "lineage-1", causalClusterId: "cluster-1",
+      variants: [{ id: "item-1", itemDigest, sourceSha256, primary: true }],
+    }] }),
+    "annotations/A-1.jsonl": rowText,
+  });
+}
+
+async function captureCommand(args: string[]): Promise<{ code: number; stdout: string }> {
+  const output: string[] = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => { output.push(chunk.toString()); return true; }) as typeof process.stdout.write;
+  try {
+    return { code: await runEvaluationCommand(args), stdout: output.join("") };
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 }
 
 
@@ -147,6 +208,19 @@ describe("qualification integrity", () => {
       { id: "g1", split: "holdout", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "v1" }] },
     ], { g1: "development" })).toThrow("Freeze corpus/split cohort mismatch");
   });
+  test("reports declared cross-cohort clusters but refuses any collision member outside quarantine", () => {
+    const pair = [
+      { id: "q-dev", split: "development", lineageId: "shared-lineage", causalClusterId: "shared-causal", variants: [{ id: "a", primary: true }] },
+      { id: "q-holdout", split: "holdout", lineageId: "shared-lineage", causalClusterId: "shared-causal", variants: [{ id: "b", primary: true }] },
+    ];
+    const assignments = { "q-dev": "development", "q-holdout": "holdout" };
+    const reported = validateFreezeGroups(pair, assignments, new Set(["q-dev", "q-holdout"]));
+    expect(reported.map((collision) => collision.kind)).toEqual(["lineage", "causal"]);
+    expect(() => validateFreezeGroups([
+      ...pair,
+      { id: "unlisted", split: "holdout", lineageId: "shared-lineage", causalClusterId: "shared-causal", variants: [{ id: "c", primary: true }] },
+    ], { ...assignments, unlisted: "holdout" }, new Set(["q-dev", "q-holdout"]))).toThrow("Freeze lineage/causal cluster crosses cohorts");
+  });
   test("freeze requires one A and one B label per adjudicated item", () => {
     const gold = [{ itemId: "i1", groupId: "g1" }];
     expect(() => validateFreezeLabels(gold, [
@@ -156,6 +230,55 @@ describe("qualification integrity", () => {
       { itemId: "i1", groupId: "g1", label: "same_cause", seat: "A" },
       { itemId: "i1", groupId: "g1", label: "different_cause", seat: "A" },
     ])).toThrow("Freeze duplicate seat label");
+  });
+  test("reports quarantined cluster collisions separately from eligible denominators", async () => {
+    const root = frozenRoot();
+    try {
+      const result = await captureCommand(["check-corpus", "--root", root]);
+      expect(result.code).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.status).toBe("quarantined-collision");
+      expect(report.assignmentCounts).toEqual({ developmentGroups: 60, holdoutGroups: 300, totalGroups: 360 });
+      expect(report.eligibleDenominators).toEqual({
+        developmentGroups: 59, holdoutGroups: 299, totalGroups: 358,
+        developmentPrimaryCases: 59, holdoutPrimaryCases: 299, totalPrimaryCases: 358,
+      });
+      expect(report.quarantinedCollisions).toHaveLength(2);
+      expect(report.quarantinedCollisions.every((collision: { excludedFromEligibleDenominators: boolean }) => collision.excludedFromEligibleDenominators)).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("unrecorded collisions cannot hide behind a valid quarantine record", async () => {
+    const root = frozenRoot({ unrecordedCollision: true });
+    try { expect(await runEvaluationCommand(["check-corpus", "--root", root])).toBe(2); }
+    finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("check-annotations derives group identity and reports absent seat metadata as undeclared", async () => {
+    const row = {
+      itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"),
+      label: "same_cause", rationale: "An evidence-grounded synthetic annotation.",
+      reducedPackSupport: "sufficient", anchors: [{ sourceRef: "opaque-source", lines: "1-2" }],
+    };
+    const root = annotationRoot(`${JSON.stringify(row)}\n`);
+    try {
+      const result = await captureCommand(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"]);
+      expect(result.code).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.annotations).toBe(1);
+      expect(report.identityMetadata.seat.status).toBe("undeclared");
+      expect(report.identityMetadata.sessionId.status).toBe("undeclared");
+      expect(report.identityMetadata.model.status).toBe("undeclared");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("check-annotations rejects unknown, duplicate, and incomplete annotation rows", async () => {
+    const valid = { itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"), label: "same_cause", rationale: "Grounded.", reducedPackSupport: "sufficient", citations: ["opaque-source:1"] };
+    const roots = [
+      annotationRoot(`${JSON.stringify({ ...valid, itemId: "unknown" })}\n`),
+      annotationRoot(`${JSON.stringify(valid)}\n${JSON.stringify(valid)}\n`),
+      annotationRoot(`${JSON.stringify({ ...valid, label: undefined })}\n`),
+    ];
+    try {
+      for (const root of roots) expect(await runEvaluationCommand(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"])).toBe(2);
+    } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
   });
   test("check-freeze recomputes committed corpus and annotation hashes", async () => {
     const root = frozenRoot();
@@ -254,6 +377,17 @@ describe("qualification integrity", () => {
       rmSync(annotationRoot, { recursive: true, force: true });
     }
   });
+  test("check-freeze refuses missing quarantine records and unadjusted eligible denominators", async () => {
+    const missingQuarantine = frozenRoot({ missingQuarantine: true });
+    const wrongEligibleCounts = frozenRoot({ badEligibleDenominators: true });
+    try {
+      expect(await runEvaluationCommand(["check-freeze", "--root", missingQuarantine])).toBe(2);
+      expect(await runEvaluationCommand(["check-freeze", "--root", wrongEligibleCounts])).toBe(2);
+    } finally {
+      rmSync(missingQuarantine, { recursive: true, force: true });
+      rmSync(wrongEligibleCounts, { recursive: true, force: true });
+    }
+  });
   test("check-freeze recomputes the manifest digest committed by freeze.json", async () => {
     const root = frozenRoot();
     try {
@@ -264,26 +398,15 @@ describe("qualification integrity", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("rejects empty gold despite embedded split digests", async () => {
-    const gold = "";
-    const assignments = { "1/g1": "holdout" };
-    const split = JSON.stringify({
-      schema: "mstar.qualification-split-manifest/v1", contractRevision: "phase3a-native-20260924",
-      freezeId: "freeze-1", frozenAt: "2026-09-24T00:00:00Z", assignments,
-      assignmentSha256: sha256(JSON.stringify(assignments)), goldSha256: sha256(gold), goldCount: 0,
-    });
-    const root = fixtureRoot({ "split-manifest.json": split, "gold/adjudicated.jsonl": gold });
+    const root = frozenRoot({ emptyGold: true });
     try {
       expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("shard corpus checks still validate global lineage closure", async () => {
-    const corpus = JSON.stringify({ groups: [
-      { id: "1/g1", split: "development", lineageId: "lineage-shared", causalClusterId: "cluster-1", variants: [{ id: "v1", primary: true }] },
-      { id: "2/g2", split: "holdout", lineageId: "lineage-shared", causalClusterId: "cluster-2", variants: [{ id: "v1", primary: true }] },
-    ] });
-    const root = fixtureRoot({ "corpus.json": corpus });
+    const root = frozenRoot({ unrecordedCollision: true });
     try {
-      expect(await runEvaluationCommand(["check-corpus", "--root", root, "--shard", "1"])).toBe(2);
+      expect(await runEvaluationCommand(["check-corpus", "--root", root, "--shard", "3"])).toBe(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

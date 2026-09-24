@@ -6,7 +6,10 @@ import { runShadowSupervisor, type ShadowRunInput } from "../src/shadow-supervis
 import {
   validateFreezeGroups,
   validateFreezeLabels,
+  validateFreezeQuarantine,
   summarizeQualification,
+  type FreezeEligibleDenominators,
+  type FreezeQuarantine,
   type QualificationRow,
 } from "../src/evaluation.js";
 
@@ -49,9 +52,56 @@ function fileDigest(root: string, rel: string): string {
   return digest(readFileSync(canonical));
 }
 type Manifest = { schema: string; contractRevision: string; files?: Array<{ path: string; sha256: string }> };
-type Corpus = { groups: Array<{ id: string; split: string; lineageId: string; causalClusterId: string; variants: Array<{ id: string; primary?: boolean }> }> };
-type Gold = Array<{ itemId: string; groupId: string; label: string; reducedPackSupport?: string }>;
-type Annotation = { itemId: string; groupId: string; label: string; reducedPackSupport?: string; sourceSha256?: string; itemDigest?: string; seat: "A" | "B" };
+type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
+type Gold = Array<{ itemId: string; groupId: string; label: string; eligible?: boolean; quarantined?: boolean }>;
+type Annotation = {
+  itemId: string; groupId?: string; label: string; reducedPackSupport: string | { status: string; explanation: string };
+  sourceSha256: string; itemDigest: string; seat?: "A" | "B"; shard?: number; sessionId?: string; model?: string; assistance?: unknown;
+  rationale: string; anchors?: readonly unknown[]; citations?: readonly unknown[];
+};
+type CorpusVariantRef = { groupId: string; itemDigest?: string; sourceSha256?: string };
+type ValidatedAnnotation = Annotation & { groupId: string; seat: "A" | "B" };
+function indexCorpusVariants(corpus: Corpus): Map<string, CorpusVariantRef> {
+  if (!Array.isArray(corpus.groups)) fail("Freeze corpus groups missing");
+  const variants = new Map<string, CorpusVariantRef>();
+  for (const group of corpus.groups) {
+    if (!group.id || !Array.isArray(group.variants)) fail("Freeze corpus variant integrity failure");
+    for (const variant of group.variants) {
+      if (!variant.id || variants.has(variant.id)) fail("Freeze corpus variant integrity failure");
+      variants.set(variant.id, { groupId: group.id, itemDigest: variant.itemDigest, sourceSha256: variant.sourceSha256 });
+    }
+  }
+  return variants;
+}
+function supportStatus(value: Annotation["reducedPackSupport"]): string | undefined {
+  return typeof value === "string" ? value : value?.status;
+}
+function validateAnnotationRow(
+  row: Annotation,
+  variants: ReadonlyMap<string, CorpusVariantRef>,
+  seat: "A" | "B",
+  shardIndex: number,
+): ValidatedAnnotation {
+  if (!row || typeof row.itemId !== "string" || !row.itemId ||
+      !["same_cause", "different_cause", "insufficient_evidence"].includes(row.label) ||
+      !/^[a-f0-9]{64}$/.test(row.itemDigest) || !/^[a-f0-9]{64}$/.test(row.sourceSha256) ||
+      typeof row.rationale !== "string" || !row.rationale.trim()) fail("Annotation integrity failure: missing core field");
+  const reducedPackSupport = supportStatus(row.reducedPackSupport);
+  if (!["sufficient", "insufficient", "unresolved"].includes(reducedPackSupport ?? "") ||
+      (typeof row.reducedPackSupport === "object" && (typeof row.reducedPackSupport.explanation !== "string" || !row.reducedPackSupport.explanation.trim()))) {
+    fail("Annotation reduced-pack support missing or invalid");
+  }
+  const evidence = row.anchors ?? row.citations;
+  if (!Array.isArray(evidence) || evidence.length === 0) fail("Annotation evidence anchors missing");
+  const variant = variants.get(row.itemId);
+  if (!variant) fail(`Annotation itemId missing from corpus: ${row.itemId}`);
+  if (row.groupId !== undefined && row.groupId !== variant.groupId) fail(`Annotation group/corpus mismatch: ${row.itemId}`);
+  if ((variant.itemDigest && variant.itemDigest !== row.itemDigest) ||
+      (variant.sourceSha256 && variant.sourceSha256 !== row.sourceSha256)) fail(`Annotation digest/corpus mismatch: ${row.itemId}`);
+  if (row.seat !== undefined && row.seat !== seat) fail(`Annotation seat mismatch: ${row.itemId}`);
+  if (row.shard !== undefined && row.shard !== shardIndex) fail(`Annotation shard mismatch: ${row.itemId}`);
+  return { ...row, groupId: variant.groupId, seat };
+}
 function verifyFiles(root: string, manifest: Manifest): void {
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail("Manifest file commitments missing");
   const paths = new Set<string>();
@@ -98,21 +148,68 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
     verifyFiles(root, manifest);
     if (action === "check-corpus") {
       const corpus = readJson<Corpus>(root, "corpus.json");
-      const groups = shard ? corpus.groups.filter((g) => g.id.startsWith(`${shard}/`)) : corpus.groups;
-      if (!Array.isArray(corpus.groups) || groups.some((g) => !g.id || !g.lineageId || !g.causalClusterId || !Array.isArray(g.variants) || g.variants.length < 1 || g.variants.length > 2 || g.variants.filter((v) => v.primary).length !== 1)) fail("Corpus group integrity failure");
-      const lineage = new Map<string, string>(), causal = new Map<string, string>();
-      for (const group of corpus.groups) for (const [table, value] of [[lineage, group.lineageId], [causal, group.causalClusterId]] as const) { const old = table.get(value); if (old && old !== group.split) fail("Lineage/causal split leakage"); table.set(value, group.split); }
-      process.stdout.write(`${JSON.stringify({ action, status: "valid", scope: shard ? "shard" : "global", shard: shard ?? null, groups: groups.length, globalClosureChecked: true })}\n`); return 0;
+      const assignments = readJson<{ assignments: Record<string, unknown>; quarantine?: FreezeQuarantine; eligibleDenominators?: FreezeEligibleDenominators }>(root, "split-manifest.json");
+      const excluded = validateFreezeQuarantine(corpus.groups, assignments.assignments, assignments.quarantine, assignments.eligibleDenominators);
+      const collisions = validateFreezeGroups(corpus.groups, assignments.assignments, excluded);
+      const groups = shard
+        ? corpus.groups.filter((group) => group.sourceSlot?.startsWith(`shard-${shard}/`))
+        : corpus.groups;
+      if (shard && groups.length === 0) fail(`Corpus shard scope cannot be determined from corpus sourceSlot for shard ${shard}`);
+      const assignmentCounts = {
+        developmentGroups: Object.values(assignments.assignments).filter((cohort) => cohort === "development").length,
+        holdoutGroups: Object.values(assignments.assignments).filter((cohort) => cohort === "holdout").length,
+        totalGroups: Object.keys(assignments.assignments).length,
+      };
+      process.stdout.write(`${JSON.stringify({
+        action,
+        status: collisions.length ? "quarantined-collision" : "valid",
+        scope: shard ? "shard" : "global",
+        shard: shard ?? null,
+        groups: groups.length,
+        globalClosureChecked: true,
+        assignmentCounts,
+        eligibleDenominators: assignments.eligibleDenominators,
+        quarantinedCollisions: collisions.map((collision) => ({
+          ...collision,
+          excludedGroupIds: assignments.quarantine?.excludedGroupIds,
+          reason: assignments.quarantine?.collisions?.[0]?.reason,
+          excludedFromEligibleDenominators: true,
+          eligible: false,
+        })),
+      })}\n`);
+      return 0;
     }
     if (action === "check-annotations") {
-      const rows = readJsonLines<Gold[number]>(root, `annotations/${seat ?? "A"}-${shard ?? "1"}.jsonl`);
-      if (!Array.isArray(rows) || rows.some((r) => !r.itemId || !r.groupId || !["same_cause", "different_cause", "insufficient_evidence"].includes(r.label))) fail("Annotation integrity failure");
-      process.stdout.write(`${JSON.stringify({ action, status: "valid", annotations: rows.length })}\n`); return 0;
+      const selectedSeat = seat ?? "A";
+      if (selectedSeat !== "A" && selectedSeat !== "B") fail(`Invalid annotation seat: ${selectedSeat}`);
+      const selectedShard = Number(shard ?? "1");
+      const rows = readJsonLines<Annotation>(root, `annotations/${selectedSeat}-${selectedShard}.jsonl`);
+      if (rows.length === 0) fail("Annotation shard is empty");
+      const variants = indexCorpusVariants(readJson<Corpus>(root, "corpus.json"));
+      const seen = new Set<string>();
+      for (const row of rows) {
+        if (seen.has(row.itemId)) fail(`Annotation duplicate itemId: ${row.itemId}`);
+        seen.add(row.itemId);
+        validateAnnotationRow(row, variants, selectedSeat, selectedShard);
+      }
+      const metadata = Object.fromEntries((["seat", "shard", "sessionId", "model", "assistance"] as const).map((key) => {
+        const declared = rows.filter((row) => row[key] !== undefined).length;
+        return [key, {
+          status: declared === 0 ? "undeclared" : declared === rows.length ? "declared" : "mixed",
+          declared,
+          undeclared: rows.length - declared,
+        }];
+      }));
+      process.stdout.write(`${JSON.stringify({ action, status: "valid", seat: selectedSeat, shard: selectedShard, annotations: rows.length, identityMetadata: metadata })}\n`);
+      return 0;
     }
     if (action === "check-freeze") {
       const splitPath = "split-manifest.json";
       const goldPath = "gold/adjudicated.jsonl";
-      const split = readJson<{ schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string; goldSha256?: string; goldCount?: number }>(root, splitPath);
+      const split = readJson<{
+        schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string;
+        goldSha256?: string; goldCount?: number; quarantine?: FreezeQuarantine; eligibleDenominators?: FreezeEligibleDenominators;
+      }>(root, splitPath);
       assertRevision(split);
       if (split.schema !== "mstar.qualification-split-manifest/v1" ||
           typeof split.freezeId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(split.freezeId) ||
@@ -122,29 +219,34 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
           !/^[a-f0-9]{64}$/.test(split.assignmentSha256 ?? "") || digest(Buffer.from(JSON.stringify(split.assignments))) !== split.assignmentSha256) fail("Split freeze commitment invalid");
       const corpus = readJson<Corpus>(root, "corpus.json");
       if (!Array.isArray(corpus.groups)) fail("Freeze corpus groups missing");
-      validateFreezeGroups(corpus.groups, split.assignments as Record<string, unknown>);
-      const corpusVariantGroups = new Map<string, string>();
-      for (const group of corpus.groups) {
-        if (!Array.isArray(group.variants) || group.variants.some((variant) => !variant.id || corpusVariantGroups.has(variant.id))) fail("Freeze corpus variant integrity failure");
-        for (const variant of group.variants) corpusVariantGroups.set(variant.id, group.id);
-      }
+      const assignments = split.assignments as Record<string, unknown>;
+      const excludedGroupIds = validateFreezeQuarantine(corpus.groups, assignments, split.quarantine, split.eligibleDenominators);
+      validateFreezeGroups(corpus.groups, assignments, excludedGroupIds);
+      const corpusVariants = indexCorpusVariants(corpus);
+      const corpusGroups = new Map(corpus.groups.map((group) => [group.id, group]));
       const gold = readJsonLines<Gold[number]>(root, goldPath);
       const assignmentIds = new Set(Object.keys(split.assignments as Record<string, unknown>));
       const goldIds = new Set<string>();
       if (gold.length === 0 || split.goldCount !== gold.length || !/^[a-f0-9]{64}$/.test(split.goldSha256 ?? "") || fileDigest(root, goldPath) !== split.goldSha256) fail("Gold freeze commitment invalid");
       for (const row of gold) {
+        const quarantined = excludedGroupIds.has(row.groupId);
         if (!row.itemId || !row.groupId || goldIds.has(row.itemId) || !assignmentIds.has(row.groupId) ||
-            corpusVariantGroups.get(row.itemId) !== row.groupId ||
-            !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.label)) fail("Gold freeze commitment invalid");
+            corpusVariants.get(row.itemId)?.groupId !== row.groupId ||
+            !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.label) ||
+            (quarantined && (row.eligible !== false || row.quarantined !== true)) ||
+            (!quarantined && (row.eligible === false || row.quarantined === true))) fail("Gold freeze commitment invalid");
         goldIds.add(row.itemId);
       }
-      const annotations: Annotation[] = [];
+      const annotations: ValidatedAnnotation[] = [];
       for (const seat of ["A", "B"] as const) {
         for (let shardIndex = 1; shardIndex <= 4; shardIndex++) {
-          const annotationPath = `annotations/${seat}-${shardIndex}.jsonl`;
-          const rows = readJsonLines<Omit<Annotation, "seat">>(root, annotationPath);
-          if (rows.some((row) => !row.itemId || !row.groupId || !["same_cause", "different_cause", "insufficient_evidence"].includes(row.label))) fail("Freeze annotation integrity failure");
-          annotations.push(...rows.map((row) => ({ ...row, seat })));
+          const rows = readJsonLines<Annotation>(root, `annotations/${seat}-${shardIndex}.jsonl`);
+          const seen = new Set<string>();
+          for (const row of rows) {
+            if (seen.has(row.itemId)) fail(`Annotation duplicate itemId: ${row.itemId}`);
+            seen.add(row.itemId);
+            annotations.push(validateAnnotationRow(row, corpusVariants, seat, shardIndex));
+          }
         }
       }
       validateFreezeLabels(gold, annotations.filter((row) => goldIds.has(row.itemId)));
@@ -173,18 +275,17 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
         .map(({ path, sha256 }) => ({ path, sha256 }));
       if (!annotationCommitments || annotationCommitments.length !== 8 ||
           freeze.annotationSha256 !== digest(Buffer.from(JSON.stringify(annotationCommitments)))) fail("Freeze annotation digest mismatch");
-      const annotationsByItem = new Map<string, Map<"A" | "B", Omit<Annotation, "seat">>>();
+      const annotationsByItem = new Map<string, Map<"A" | "B", ValidatedAnnotation>>();
       for (const annotation of annotations) {
-        const seats = annotationsByItem.get(annotation.itemId) ?? new Map<"A" | "B", Omit<Annotation, "seat">>();
+        const seats = annotationsByItem.get(annotation.itemId) ?? new Map<"A" | "B", ValidatedAnnotation>();
         seats.set(annotation.seat, annotation);
         annotationsByItem.set(annotation.itemId, seats);
-        if (!["sufficient", "insufficient", "unresolved"].includes(annotation.reducedPackSupport ?? "")) fail("Freeze annotation sufficiency missing or invalid");
-        if (!/^[a-f0-9]{64}$/.test(annotation.sourceSha256 ?? "") ||
-            !/^[a-f0-9]{64}$/.test(annotation.itemDigest ?? "")) fail("Freeze annotation digest missing or invalid");
+        if (!/^[a-f0-9]{64}$/.test(annotation.sourceSha256) || !/^[a-f0-9]{64}$/.test(annotation.itemDigest)) fail("Freeze annotation digest missing or invalid");
       }
       const adjudicationRows = readJsonLines<{
         itemId: string; groupId: string; labelA: string; labelB: string; sourceSha256: string; itemDigest: string;
         disposition: string; resolvedLabel: string; rationale: string; sourceEvidence: unknown[];
+        eligible?: boolean; quarantined?: boolean;
       }>(root, "adjudication.jsonl");
       const adjudications = new Map<string, (typeof adjudicationRows)[number]>();
       for (const row of adjudicationRows) {
@@ -196,6 +297,10 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
         if (typeof row.disposition !== "string" || !row.disposition.trim()) fail("Freeze third-read disposition missing");
         if (!["resolved_gold", "resolved_insufficiency", "preserved_disagreement"].includes(row.disposition) ||
             !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.resolvedLabel)) fail("Freeze third-read disposition invalid");
+        const quarantined = excludedGroupIds.has(row.groupId);
+        if (quarantined ? row.eligible !== false || row.quarantined !== true : row.eligible === false || row.quarantined === true) {
+          fail("Freeze adjudication quarantine flags inconsistent");
+        }
         const seats = annotationsByItem.get(row.itemId);
         const annotationA = seats?.get("A"), annotationB = seats?.get("B");
         if (!annotationA || !annotationB || annotationA.groupId !== row.groupId || annotationB.groupId !== row.groupId ||
@@ -215,8 +320,8 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       for (const row of gold) {
         const seats = annotationsByItem.get(row.itemId)!;
         const annotationA = seats.get("A")!, annotationB = seats.get("B")!;
-        const needsAdjudication = annotationA.label !== annotationB.label ||
-          annotationA.reducedPackSupport !== "sufficient" || annotationB.reducedPackSupport !== "sufficient";
+        const needsAdjudication = excludedGroupIds.has(row.groupId) || annotationA.label !== annotationB.label ||
+          supportStatus(annotationA.reducedPackSupport) !== "sufficient" || supportStatus(annotationB.reducedPackSupport) !== "sufficient";
         if (needsAdjudication && !adjudications.has(row.itemId)) fail(`Freeze third-read disposition missing: ${row.itemId}`);
       }
       for (const shardIndex of [1, 2, 3, 4]) {
