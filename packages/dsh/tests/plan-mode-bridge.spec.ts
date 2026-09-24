@@ -406,7 +406,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
   })
 })
 
-describe('planMode bridge — apply wiring (agent/session-start + subagent/start decision point)', () => {
+describe('planMode bridge — apply wiring (agent/created + subagent/start decision point)', () => {
   it('session-start mirrors the ROOT; a child session-start is filtered (no set on the child)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-planmode-wiring-start-')
     try {
@@ -416,8 +416,8 @@ describe('planMode bridge — apply wiring (agent/session-start + subagent/start
       const prior = setPlanModeBridgeLogger(() => {})
       try {
         registerPlanModeBridge(ctx, new HarnessResolver(harnessDir))
-        ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })
-        ctx.events.emit('agent/session-start', { agent: childAgent(root), source: 'fresh' })
+        ctx.events.emit('agent/created', { agent: rootAgent(root), source: 'fresh' })
+        ctx.events.emit('agent/created', { agent: childAgent(root), source: 'fresh' })
 
         expect(planMode.active).toBe(true)
         expect(planMode.events).toEqual([{ active: true }])
@@ -445,7 +445,7 @@ describe('planMode bridge — apply wiring (agent/session-start + subagent/start
       try {
         registerPlanModeBridge(ctx, resolver)
         // Session-start in the Prepare window → committed ON.
-        ctx.events.emit('agent/session-start', { agent: rootFixture, source: 'fresh' })
+        ctx.events.emit('agent/created', { agent: rootFixture, source: 'fresh' })
         expect(planMode.events).toEqual([{ active: true }])
 
         // Decision point with the SAME Prepare state → idempotent no-op (no churn).
@@ -483,7 +483,7 @@ describe('planMode bridge — apply wiring (agent/session-start + subagent/start
           }
         }
         registerPlanModeBridge(ctx, new ThrowingResolver(harnessDir))
-        expect(() => ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })).not.toThrow()
+        expect(() => ctx.events.emit('agent/created', { agent: rootAgent(root), source: 'fresh' })).not.toThrow()
         const warn = captured.find((m) => m.startsWith('warn:') && m.includes('planMode bridge sync failed'))
         expect(warn).toBeDefined()
         expect(warn).toContain('planmode resolver boom')
@@ -508,7 +508,7 @@ describe('planMode bridge — apply wiring (agent/session-start + subagent/start
         expect(captured).toContain('debug: planMode service absent — plan-mode bridge disabled (composition without @deepseek-ai/dsh-plan-mode)')
 
         expect(() => {
-          ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })
+          ctx.events.emit('agent/created', { agent: rootAgent(root), source: 'fresh' })
           ctx.events.emit('subagent/start', { runId: 'run-1', provider: 'in-process', id: 'child-1', local: true })
         }).not.toThrow()
         expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)

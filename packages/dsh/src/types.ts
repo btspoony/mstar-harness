@@ -20,7 +20,24 @@
  * @module @mstar-harness/dsh
  */
 
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { EnforcementFlag } from '@mstar-harness/engine'
+
+/**
+ * rc.2 moved the shared `plugin` arm out of `MessageSourceMap`: the map is
+ * merge-extensible and each producer declares its own `kind` in its own
+ * module (dsh-agent's `model-selection` is the shipped precedent). This
+ * declares the arm the first-party rows below emit — the runtime shape is
+ * unchanged from the previously shared declaration.
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    plugin: {
+      kind: 'plugin'
+      plugin: string
+    } & ContextFormed
+  }
+}
 
 /**
  * The ONE unified engine-status catalog row's `source`: the first-party

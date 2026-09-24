@@ -12,7 +12,7 @@
  * operator's `/goal pause` can never be re-armed by the plugin. It seeds the
  * adversarial pre-state — an ACTIVE steering compass plus a PAUSED goal with
  * a drifted objective — then fires every edge the retired mirror listened on
- * (the root `agent/session-start`, the `subagent/start` parentSession root
+ * (the root `agent/created`, the `subagent/start` parentSession root
  * walk, and the same two edges again after a mid-session iteration flip) and
  * asserts the goal is untouched with an EMPTY service-call log.
  */
@@ -179,7 +179,7 @@ class RecordingGoalsService extends Service {
 /**
  * Drive the zero-write pin: an ACTIVE steering compass plus a root/child
  * agent registry over a recording goals service, then every edge the retired
- * mirror listened on — the root `agent/session-start`, the `subagent/start`
+ * mirror listened on — the root `agent/created`, the `subagent/start`
  * parentSession root walk, and (when `driftedIterationId` is given) the same
  * two edges again after the steering iteration flips mid-session.
  */
@@ -201,12 +201,12 @@ async function driveZeroWriteScenario(options: {
   const prior = setGoalBridgeLogger(() => {})
   try {
     registerGoalBridge(ctx, new HarnessResolver(harnessDir))
-    ctx.events.emit('agent/session-start', { agent: rootFixture, source: 'fresh' })
+    ctx.events.emit('agent/created', { agent: rootFixture, source: 'fresh' })
     ctx.events.emit('subagent/start', { runId: 'run-1', provider: 'in-process', id: 'child-pin', local: true })
     if (options.driftedIterationId !== undefined) {
       await rm(join(harnessDir, 'iterations', options.iterationId), { recursive: true, force: true })
       await seedCompass(harnessDir, options.driftedIterationId)
-      ctx.events.emit('agent/session-start', { agent: rootFixture, source: 'fresh' })
+      ctx.events.emit('agent/created', { agent: rootFixture, source: 'fresh' })
       ctx.events.emit('subagent/start', { runId: 'run-2', provider: 'in-process', id: 'child-pin', local: true })
     }
   } finally {
