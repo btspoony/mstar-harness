@@ -58,4 +58,17 @@ describe("shadow baseline and work receipts", () => {
     expect(cancelled.metrics.cancelledUnits).toBe(1);
     expect(cancelled.w5).toBe(false);
   });
+  test("preserves completed original baseline work on timeout and cancels the whole audit without Jev credit", () => {
+    const baseline = freezeBaseline(baselineInput());
+    const timeoutEvents = [...validEvents.slice(0, 4), { type: "error" as const, runId: "run-1", at: 5 }];
+    const timedOut = assessShadowRun({ baseline, receipts: [receipt("completed")], childEvents: timeoutEvents, evidenceClass: "component", elapsedMs: 5, failures: ["timeout"] });
+    expect(timedOut.metrics.completedUnits).toBe(1);
+    expect(timedOut.failures).toContain("timeout");
+    expect(timedOut.baselineFrozen).toBe(true);
+    const cancellations = ["unit-1", "unit-2", "unit-3"].map((id) => receipt("cancelled", id));
+    const cancelled = assessShadowRun({ baseline, receipts: cancellations, childEvents: [...validEvents.slice(0, 2), { type: "cancelled", runId: "run-1", at: 3 }], evidenceClass: "component", elapsedMs: 3 });
+    expect(cancelled.metrics.cancelledUnits).toBe(3);
+    expect(cancelled.metrics.completedUnits).toBe(0);
+    expect(cancelled.receipts.every((row) => row.jevWorkCredit === 0)).toBe(true);
+  });
 });
