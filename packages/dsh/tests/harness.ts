@@ -30,11 +30,33 @@ import {
   registerCatalogEntity,
 } from '@mstar-harness/engine'
 import type { CaptureInput } from '@mstar-harness/engine'
-import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import type { SubagentsServiceView, ContinuableStartSpecView } from '../src/gates/role-persona.ts'
 import * as plugin from '../src/index.ts'
+
+/**
+ * Local structural types for the fake jobs service. rc.2 removed the
+ * `@deepseek-ai/dsh-jobs` `JobSnapshot`/`JobDoneListener` type exports this
+ * harness was typed against; the plugin consumes the terminal snapshot
+ * structurally (`JobDoneSnapshot`, `src/gates/agent-flow.ts`) and keeps no
+ * upstream type import, so the fake declares the SAME contract locally. The
+ * fields beyond the plugin's structural read (`kind`, `label`, `reported`)
+ * are what the spec fixtures pass; the `status`/`startedAt`/`finishedAt`
+ * semantics are the contract the settle pairing verifies.
+ */
+type JobDoneListener = (snapshot: JobDoneSnapshot, owner: Agent | undefined) => void | PromiseLike<void>
+
+/** Terminal snapshot fixture shape driven through {@link FakeJobRegistry.fireDone}. */
+export interface FakeJobSnapshot extends JobDoneSnapshot {
+  /** The producer kind the job was registered with. */
+  kind: string
+  /** The producer-supplied one-line label. */
+  label: string
+  /** True once a completion reporter has committed the terminal notice. */
+  reported: boolean
+}
 
 /**
  * Bun (JavaScriptCore) compatibility shim for the REAL dsh seam packages.
@@ -91,9 +113,9 @@ export class FakeLoaderRegistry extends Service {
  * so the plugin's REAL `ctx.inject(['jobs'])` wiring registers against it —
  * the full Loader → apply → inject → onJobDone composition under test,
  * without the heavy real registry (dsh-jobs-local + dsh-agent + a live
- * registered agent). The upstream snapshot contract (terminal statuses,
- * startedAt/finishedAt) is verified in the spec fixtures against the
- * `@deepseek-ai/dsh-jobs` types.
+ * registered agent). The snapshot contract (terminal statuses,
+ * startedAt/finishedAt) is verified in the spec fixtures against
+ * {@link FakeJobSnapshot}.
  */
 export class FakeJobRegistry extends Service {
   private listener: JobDoneListener | undefined
@@ -110,7 +132,7 @@ export class FakeJobRegistry extends Service {
   }
 
   /** Test driver: fire a terminal snapshot through the registered listener. */
-  fireDone(snapshot: JobSnapshot, owner?: Agent): void {
+  fireDone(snapshot: FakeJobSnapshot, owner?: Agent): void {
     const listener = this.listener
     if (listener !== undefined) void listener(snapshot, owner)
   }

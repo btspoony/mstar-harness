@@ -124,6 +124,21 @@ function harvestChatBundle(): {
         setMode: () => {},
       }),
     },
+    // rc.2's chat bundle reads its durable settings scope through
+    // `ctx.configForms.get(<namespace>)` during `apply(ctx)`. This capture-only
+    // context accepts no host settings, so the scope reports `value: undefined`
+    // and everything downstream falls back to its own defaults.
+    configForms: {
+      get: (_namespace: string) => ({
+        subscribe: () => () => {},
+        getSnapshot: () => ({ value: undefined }),
+      }),
+    },
+    // rc.2's chat bundle also subscribes to provided services during
+    // `apply(ctx)` (`ctx.inject(["sidebarRightTabs"], …)`, its only `ctx.inject`
+    // call). A capture-only context provides no services, so the registration
+    // callback is never invoked.
+    inject: (_names: readonly string[], _register: (scope: unknown) => unknown) => {},
   }
 
   bundle.apply(ctx)
@@ -153,8 +168,11 @@ function renderTranscriptRow(source: unknown): string {
     data: { id: 'm-1', content: [{ type: 'text', text: MODEL_TEXT }], source },
   }
   // `match` + `start` are upstream's own projection steps; the match object
-  // carries the event the real engine hands it.
-  const match = { ...(messageDefinition.match(event) as object), event }
+  // carries the event the real engine hands it. rc.2's runtime also attaches
+  // each match's durable Location (`contextLocation`: the start/first-match
+  // location, else `{ kind: "unresolved" }`); this replay carries no turn or
+  // step context, so the match takes that fallback.
+  const match = { ...(messageDefinition.match(event) as object), event, location: { kind: 'unresolved' } }
   const data = messageDefinition.start({ current: new Map() }, match, { previous: () => undefined })
   return renderToStaticMarkup(createElement(renderer as never, { node: { data }, t } as never))
 }

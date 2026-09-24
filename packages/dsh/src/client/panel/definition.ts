@@ -34,6 +34,7 @@ export function mstarPanelDefinition(t: TranslateNS<'mstar-panel'>): SidebarRigh
     kind: MSTAR_PANEL_KIND,
     title,
     guide: [{
+      id: MSTAR_PANEL_ID,
       order: MSTAR_GUIDE_ORDER,
       title,
       description: () => t('guide.description' satisfies PanelKey),
