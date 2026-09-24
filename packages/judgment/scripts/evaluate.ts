@@ -218,14 +218,24 @@ export function loadPreviousDevelopmentState(
   root: string,
   expected: Pick<PreviousDevelopmentManifest, "plannedVariants" | "protocolSha256" | "splitSha256" | "goldSha256">,
 ): PreviousDevelopmentState {
-  const manifestPath = resolve(root, "runs/development/run-manifest.json");
-  const outcomesPath = resolve(root, "development-run.json");
+  const runsPath = resolve(root, "runs/development");
+  if (!existsSync(runsPath)) return { firstRun: true, previousManifest: null, previousOutcomes: [] };
+  if (!statSync(runsPath).isDirectory()) fail("Development prior-run state incomplete");
+  const entries = readdirSync(runsPath, { withFileTypes: true });
+  if (!entries.length) return { firstRun: true, previousManifest: null, previousOutcomes: [] };
+  if (entries.some((entry) => !entry.isDirectory())) fail("Development prior-run state incomplete");
+  const latestRun = entries.map((entry) => ({
+    name: entry.name,
+    modifiedAt: statSync(resolve(runsPath, entry.name)).mtimeMs,
+  })).sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name))[0]!.name;
+  const runPath = `runs/development/${latestRun}`;
+  const manifestPath = resolve(root, runPath, "run-manifest.json");
+  const outcomesPath = resolve(root, runPath, "development-run.json");
   const hasManifest = existsSync(manifestPath);
   const hasOutcomes = existsSync(outcomesPath);
-  if (hasManifest !== hasOutcomes) fail("Development prior-run state incomplete");
-  if (!hasManifest) return { firstRun: true, previousManifest: null, previousOutcomes: [] };
-  const previousManifest = readJson<PreviousDevelopmentManifest>(root, "runs/development/run-manifest.json");
-  const previousOutcomes = readJson<{ outcomes: Array<{ runId: string; requestSha256: string | null }> }>(root, "development-run.json").outcomes;
+  if (hasManifest !== hasOutcomes || !hasManifest) fail("Development prior-run state incomplete");
+  const previousManifest = readJson<PreviousDevelopmentManifest>(root, `${runPath}/run-manifest.json`);
+  const previousOutcomes = readJson<{ outcomes: Array<{ runId: string; requestSha256: string | null }> }>(root, `${runPath}/development-run.json`).outcomes;
   if (!Array.isArray(previousOutcomes) ||
       previousManifest.plannedVariants !== expected.plannedVariants ||
       previousManifest.protocolSha256 !== expected.protocolSha256 ||

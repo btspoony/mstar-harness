@@ -161,7 +161,7 @@ describe("qualification integrity", () => {
       "--workspace", "/mnt/source", "--json",
     ]);
   });
-  test("calibration admits an explicit first run but keeps prior freeze identity checks", () => {
+  test("calibration admits a first run, then discovers the newest per-run state and request hashes", () => {
     const firstRunRoot = fixtureRoot({});
     const expected = { plannedVariants: 2, protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold") };
     try {
@@ -173,15 +173,36 @@ describe("qualification integrity", () => {
       runId: "previous-run", plannedVariants: expected.plannedVariants, identity: { cliSha256: sha256("cli") },
       protocolSha256: expected.protocolSha256, splitSha256: expected.splitSha256, goldSha256: expected.goldSha256,
     };
+    const olderManifest = { ...priorManifest, runId: "older-run" };
+    const priorRequest = sha256("previous request");
     const priorRunRoot = fixtureRoot({
-      "runs/development/run-manifest.json": JSON.stringify(priorManifest),
-      "development-run.json": JSON.stringify({ outcomes: [] }),
+      "runs/development/older-run/run-manifest.json": JSON.stringify(olderManifest),
+      "runs/development/older-run/development-run.json": JSON.stringify({ outcomes: [{ runId: "old-request", requestSha256: sha256("old request") }] }),
+      "runs/development/previous-run/run-manifest.json": JSON.stringify(priorManifest),
+      "runs/development/previous-run/development-run.json": JSON.stringify({ outcomes: [{ runId: "spent-request", requestSha256: priorRequest }] }),
     });
     try {
-      expect(loadPreviousDevelopmentState(realpathSync(priorRunRoot), expected).firstRun).toBe(false);
-      expect(() => loadPreviousDevelopmentState(realpathSync(priorRunRoot), { ...expected, goldSha256: sha256("changed") }))
+      const root = realpathSync(priorRunRoot);
+      const state = loadPreviousDevelopmentState(root, expected);
+      expect(state.firstRun).toBe(false);
+      expect(state.previousManifest?.runId).toBe("previous-run");
+      expect(state.previousOutcomes).toEqual([{ runId: "spent-request", requestSha256: priorRequest }]);
+      expect(() => loadPreviousDevelopmentState(root, { ...expected, goldSha256: sha256("changed") }))
         .toThrow("Development freeze identity changed");
     } finally { rmSync(priorRunRoot, { recursive: true, force: true }); }
+  });
+  test("partial prior-run state fails closed", () => {
+    const root = fixtureRoot({
+      "runs/development/partial-run/run-manifest.json": JSON.stringify({
+        runId: "partial-run", plannedVariants: 2, identity: { cliSha256: sha256("cli") },
+        protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold"),
+      }),
+    });
+    try {
+      expect(() => loadPreviousDevelopmentState(realpathSync(root), {
+        plannedVariants: 2, protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold"),
+      })).toThrow("Development prior-run state incomplete");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("refuses duplicated primary opportunities and cross-group lineage leakage", () => {
     expect(() => summarizeQualification([base, { ...base, variantId: "v2", primary: true }])).toThrow("primary-duplicate");
