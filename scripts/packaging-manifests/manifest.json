@@ -24,7 +24,7 @@
           {
             "root": "packages/cli/src",
             "files": 36,
-            "sha256": "e2fcec19c2d7e2a58afc5d2f8d0c75a4bcd3c8a90387226a977d8c7baafaff2e"
+            "sha256": "144f3cb66ba04bcec6e9d82620476dbf79bb4a64ab685dd3b2d51faf605c99a3"
           }
         ],
         "files": [
@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "ecb93f2ee3761c0ccd028f0872b10016c0256f5ca021968b0d2358204d0ae2bc",
+            "sha256": "6cdd0be8c8c3b80b907f370b5b905c3d811a9016bb9f3ad2e9d57294c5850cdb",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "7dfbb6203ee3d9047887788b70d49a3998631b37ef0fe4966728b191320221ad"
+            "sha256": "0afbd5f551f411537967df5eea18074a964c501a52012f3a6ff886bc8908c5bb"
           }
         ]
       },
@@ -164,7 +164,7 @@
           {
             "root": "packages/engine/src",
             "files": 78,
-            "sha256": "5338f9880d7900b33a8774ce81f4cb102803c626c9d45789d0955a6ce454b49a"
+            "sha256": "b57cda58d898fac182dd25148315df3a5e23b0d8484e023a0c6367333c24587c"
           }
         ],
         "files": [
@@ -183,7 +183,7 @@
           {
             "root": "packages/engine/dist",
             "files": 80,
-            "sha256": "3e17ba8e2aeac0979e2d70467e135942d259a3c7e517c5951f720c695a230f12",
+            "sha256": "3384e9d6f6b1908e3f1664cbfb99fd7ba639d7e54f0fc634f4609db5dcc9260b",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -196,7 +196,7 @@
           },
           {
             "path": "packages/engine/dist/engine.js",
-            "sha256": "0753108ecd5a06935a5bf751ed0daa35e9c808675167addad52b54adefbd2204"
+            "sha256": "48a422299b9170baea25989387f99cf51d2d8cf863e692ded177113b3f9b8227"
           }
         ]
       },
@@ -246,7 +246,7 @@
           {
             "root": "packages/omp/dist",
             "files": 9,
-            "sha256": "4a07e34d97bc68e008647fbd2fd33d03d23d859ccc9a285758932cdf3cbf36cf",
+            "sha256": "c51d51723935ceeaeab567190ad67ef6785110497061723acde60054bcd89241",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -262,7 +262,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "1bc56ba14558d24397722e57f8dfb9f8cc85f8d27526e7a0865746cf9812e938",
+            "sha256": "a053ff6b062d1035d9e3e910f22d717e9e9926c5c9f52732984e4bb9df92aff8",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -270,7 +270,7 @@
           {
             "root": "packages/omp/tools",
             "files": 6,
-            "sha256": "11c10c636ded3f2ab1bd8ee174605ba4fb3b9a3d8e30d7ad91d9b470755be11d",
+            "sha256": "cce8ece41cbc4b2e18c521eb1a1e6ec0ba86860ea835b600aa571f31a3362c3a",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -287,31 +287,31 @@
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "719133ef3e718fcdf92ab5b8c020ded7695889fd188d38ea557333a509924bcc"
+            "sha256": "2a2386a8851725e654254b5ac25031c07fe588aa0543a243c9ea8d2c10dee101"
           },
           {
             "path": "packages/omp/dist/tools/mstar_dispatch_validate/index.js",
-            "sha256": "77e4c8755740241fea900dacabf6147e9076c443219f1c3741030c430202f331"
+            "sha256": "646d13dce3bff76784697ccce5f94639a436dfe7a7a7188a34d0e71ecf1b0488"
           },
           {
             "path": "packages/omp/dist/tools/mstar_iteration_gate/index.js",
-            "sha256": "5c3403be43834dcc41cb92e97b7ee91a2021633c20491907e9fd9b426b2e7774"
+            "sha256": "f0c942b78225405edf202b989c7eddc5324135a3e05b89644d788ac6202fbe1d"
           },
           {
             "path": "packages/omp/dist/tools/mstar_lease_verify/index.js",
-            "sha256": "b0b6b3583a25683f7cdd9f0e7f3176cdd59ce37fc08924d9d12cd74e96f50c57"
+            "sha256": "ca67ed4890fac20cef14aacadaa8c26b86ce7526aa8116aa728b20311b3df717"
           },
           {
             "path": "packages/omp/dist/tools/mstar_path_resolve/index.js",
-            "sha256": "d1b27eed0ec8f97b0551db55e5a8839af737f0da826fb1e33fa5f38b4e1818aa"
+            "sha256": "ec4f7bfb1dbb6a55c17fd767603f914245aea691e1653da32613d78e507bea1e"
           },
           {
             "path": "packages/omp/dist/tools/mstar_status_validate/index.js",
-            "sha256": "f2f182c419125463fd030523d292c537c45870552ff2c5abbfdb007b49f7db3f"
+            "sha256": "58764f839073c98817fe9d3353b5ccca4745392c0b9bf560a7ce2514ed2ece96"
           },
           {
             "path": "packages/omp/dist/tools/mstar_worktree_check/index.js",
-            "sha256": "798f9af8b6dd0eea1ca05486ddbd735f43d4583e743a0e6369802f9c11fe44a6"
+            "sha256": "695ca8b5c962f48ba9c1d39815611758a801a3cb75096d54eee52cdd13f192d1"
           },
           {
             "path": "packages/omp/plugin.json",
@@ -407,7 +407,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "ea937ac142dd8001671eb40bbc4f297d1d353632cb3f9adce1b279701194afea",
+            "sha256": "768ffa306285ec02a2917bb2578e17c659b6e550303519890773f7733f4a6e78",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -416,7 +416,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "fa50de5cc92124da6c02e97eca3bf1d919c3e3815d074df13a033c78b69bbb72"
+            "sha256": "1e6adcc92131eee2bc4430067cec6484ea541c65a70eda2c88679ee0d5263115"
           }
         ]
       },
@@ -472,7 +472,7 @@
           {
             "root": "packages/engine/src",
             "files": 78,
-            "sha256": "5338f9880d7900b33a8774ce81f4cb102803c626c9d45789d0955a6ce454b49a"
+            "sha256": "b57cda58d898fac182dd25148315df3a5e23b0d8484e023a0c6367333c24587c"
           }
         ],
         "files": [
