@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { runShadowSupervisor, assessShadowRun, type ApprovedChild, type EvidenceClass, type ShadowMountPlan, type FrozenBaseline, type WorkUnitReceipt, type ProbeEvent, type ProbeLauncher } from "../src/shadow-supervisor.js";
 import { validatePack, validatePilot, type ReviewDecisionPack, type JudgmentPilot } from "../src/contracts.js";
-import { canonicalJsonBytes } from "../src/review-advice.js";
+import { buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
 
 const ROOT_USAGE = "Usage: shadow.ts <probe|exercise|study|assess> --root <authorized-run-root>";
 type StudyManifest = Readonly<{
@@ -15,6 +16,7 @@ type StudyManifest = Readonly<{
   child: ApprovedChild;
   mountPlan: ShadowMountPlan;
   baseline: Readonly<{ inventory: unknown; seatOutputs: unknown; originalConsumption: unknown; finalReport: unknown }>;
+  controlledExercise?: Readonly<{ schema: "mstar.shadow-controlled-exercise/v1"; outcome: "same_cause" | "different_cause" | "insufficient_evidence" | "below-band" | "transport-failure" | "invalid-response" }>;
 }>;
 type StudyResult = Readonly<{
   schema: "mstar.shadow-study-result/v1";
@@ -69,8 +71,38 @@ export async function runShadowCommand(args = process.argv.slice(2), launcher?: 
       const pack: ReviewDecisionPack = validatePack(manifest.pack);
       const pilot: JudgmentPilot = validatePilot(manifest.pilot);
       if (manifest.evidenceClass === "named-host") return fail("named-host requires separate issue-owned authorization and host facts");
+      const controlled = manifest.controlledExercise;
+      if (controlled !== undefined && (command !== "exercise" || manifest.evidenceClass !== "synthetic-offline" ||
+          controlled.schema !== "mstar.shadow-controlled-exercise/v1" ||
+          !["same_cause", "different_cause", "insufficient_evidence", "below-band", "transport-failure", "invalid-response"].includes(controlled.outcome))) return fail("Invalid synthetic-offline controlled exercise");
       const supervisorInput = { runRoot: root, runId: manifest.runId, pack, pilot, evidenceClass: manifest.evidenceClass, child: manifest.child, mountPlan: manifest.mountPlan, baseline: manifest.baseline };
-      const result = launcher === undefined ? await runShadowSupervisor(supervisorInput) : await runShadowSupervisor(supervisorInput, undefined, launcher);
+      const result = controlled === undefined
+        ? launcher === undefined ? await runShadowSupervisor(supervisorInput) : await runShadowSupervisor(supervisorInput, undefined, launcher)
+        : await runShadowSupervisor({
+            ...supervisorInput,
+            credentialProvider: () => "synthetic-offline-marker",
+            sendRequest: async () => {
+              if (controlled.outcome === "transport-failure") return { responseBytes: new Uint8Array(), status: 503, elapsedMs: 1 };
+              if (controlled.outcome === "invalid-response") return { responseBytes: new TextEncoder().encode("{}"), status: 200, elapsedMs: 1 };
+              const choice = controlled.outcome === "below-band" ? "same_cause" : controlled.outcome;
+              const top = controlled.outcome === "below-band" ? 0.5 : 0.8;
+              const answers = Object.fromEntries(Object.keys(buildA05Request(pack, pilot).questionMap).map((id) => [id, {
+                type: "choice", choice,
+                probabilities: { same_cause: choice === "same_cause" ? top : 0.1, different_cause: choice === "different_cause" ? top : controlled.outcome === "below-band" ? 0.3 : 0.1, insufficient_evidence: choice === "insufficient_evidence" ? top : controlled.outcome === "below-band" ? 0.2 : 0.1 },
+                confidence: controlled.outcome === "below-band" ? 0.4 : 0.8,
+              }]));
+              return { responseBytes: new TextEncoder().encode(JSON.stringify({ model: pilot.model, answers, usage: { input_tokens: 0, output_tokens: 0 } })), status: 200, elapsedMs: 1 };
+            },
+          }, undefined, (_child, runId, plan) => spawn(process.execPath, [manifest.child.executable, runId], {
+            env: {
+              PATH: process.env.PATH ?? "",
+              HOME: plan.scratch,
+              JEV_REQUESTS_DIR: plan.requests,
+              JEV_PACK_BYTES: Buffer.from(canonicalJsonBytes(pack)).toString("base64"),
+              JEV_PILOT_DIGEST: createHash("sha256").update(canonicalJsonBytes(pilot)).digest("hex"),
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          }));
       process.stdout.write(`${JSON.stringify({ status: result.failures.length === 0 ? "recorded" : "unavailable", evidenceClass: result.evidenceClass, w5: result.w5, metrics: result.metrics })}\n`);
       return result.failures.length === 0 ? 0 : 1;
     }

@@ -222,7 +222,6 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
     if (first.kind === "request" && first.request !== null) {
       const request = first.request;
       mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "pending" });
-      events.push({ type: "request", at: performance.now(), runId: input.runId });
       const requestPack = Buffer.from(request.packBytes, "base64");
       if (request.pilotDigest !== digest(pilot) || !requestPack.equals(canonicalJsonBytes(pack))) {
         mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "invalid", code: "jev.foreign-request" });
@@ -264,7 +263,6 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
             mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "cancelled", code: "jev.review-cancelled" });
           } else {
             mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "recorded" });
-            events.push({ type: "complete", at: performance.now(), runId: input.runId });
           }
         } catch (error) {
           const failureCode = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" && /^[a-z0-9][a-z0-9.-]{0,95}$/.test(error.code) ? error.code : "jev.evaluation-failed";

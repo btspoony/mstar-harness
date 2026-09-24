@@ -59,6 +59,67 @@ describe("trusted shadow supervisor", () => {
     expect(args.some((arg) => arg.startsWith("--pid=") || arg.includes("docker.sock"))).toBe(false);
     expect(args.some((arg) => arg.startsWith("--env=") && arg.includes("TYPESAFE"))).toBe(false);
   });
+  test("unconfigured exercise fails closed before launching a worker when supervisor mounts are absent", async () => {
+    const fixture = inputs(workspace());
+    writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({
+      schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "synthetic-offline",
+      pack: fixture.pack, pilot: fixture.pilot, child: fixture.child,
+      mountPlan: { ...fixture.mountPlan, evaluatorData: [fixture.mountPlan.scratch] }, baseline: fixture.baseline,
+    }));
+    expect(await runShadowCommand(["exercise", "--root", fixture.root])).toBe(2);
+    expect(() => readFileSync(join(fixture.root, "baseline.json"))).toThrow();
+  });
+  test("controlled responses require an explicit synthetic-offline exercise and never grant host authority", async () => {
+    for (const [command, evidenceClass] of [["study", "synthetic-offline"], ["exercise", "component"], ["exercise", "named-host"]] as const) {
+      const fixture = inputs(workspace());
+      writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({
+        schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass,
+        pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan,
+        baseline: fixture.baseline, controlledExercise: { schema: "mstar.shadow-controlled-exercise/v1", outcome: "same_cause" },
+      }));
+      expect(await runShadowCommand([command, "--root", fixture.root])).toBe(2);
+      expect(() => readFileSync(join(fixture.root, "baseline.json"))).toThrow();
+    }
+  });
+
+  test("one controlled mailbox request yields one valid lifecycle; duplicate worker events remain invalid", async () => {
+    const worker = `
+      import { randomUUID } from "node:crypto";
+      import { writeFileSync, readFileSync } from "node:fs";
+      import { join } from "node:path";
+      const runId=process.argv.at(-1), id=randomUUID(), start=performance.now();
+      const emit=(type)=>console.log(JSON.stringify({type,runId,at:performance.now()-start}));
+      emit("start");emit("baseline-frozen");
+      writeFileSync(join(process.env.JEV_REQUESTS_DIR,id+".json"),JSON.stringify({schema:"mstar.judgment-request/v1",requestId:id,runId,packBytes:process.env.JEV_PACK_BYTES,pilotDigest:process.env.JEV_PILOT_DIGEST}));
+      emit("request");
+      // Integration worker polls the real file mailbox; fake timers cannot advance the supervisor process.
+      for(let i=0;i<200;i++){const {promise,resolve}=Promise.withResolvers();setTimeout(resolve,5);await promise;const s=JSON.parse(readFileSync(join(process.env.JEV_REQUESTS_DIR,"..","status.json"),"utf8"));if(s.requestId===id&&s.status==="recorded"){emit("complete");process.exit(0)}}
+      process.exit(3);
+    `;
+    const fixture = inputs(workspace(), worker);
+    writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({
+      schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "synthetic-offline",
+      pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan,
+      baseline: fixture.baseline, controlledExercise: { schema: "mstar.shadow-controlled-exercise/v1", outcome: "same_cause" },
+    }));
+    expect(await runShadowCommand(["exercise", "--root", fixture.root])).toBe(0);
+    const assessment = JSON.parse(readFileSync(join(fixture.root, "assessment.json"), "utf8"));
+    expect(assessment.evidenceClass).toBe("synthetic-offline");
+    expect(assessment.qualification).toBe("synthetic-offline");
+    expect(assessment.w5).toBe(false);
+    expect(assessment.receipts[0]).toMatchObject({ owner: "original", jevWorkCredit: 0 });
+    expect(assessment.failures).toEqual([]);
+    expect(assessment.childEvents.map((event: { type: string }) => event.type)).toEqual(["baseline-frozen", "start", "baseline-frozen", "request", "complete"]);
+    expect(assessShadowRun({
+      baseline: JSON.parse(readFileSync(join(fixture.root, "baseline.json"), "utf8")),
+      receipts: assessment.receipts, childEvents: [...assessment.childEvents, assessment.childEvents.at(-1)],
+      evidenceClass: "synthetic-offline", elapsedMs: assessment.metrics.elapsedMs, packId: fixture.pack.packId,
+      packSha256: createHash("sha256").update(canonicalJsonBytes(fixture.pack)).digest("hex"),
+      scopeSha256: createHash("sha256").update(canonicalJsonBytes(fixture.pack.scope)).digest("hex"),
+      requiredUnitIds: ["unit-1"], originalConsumption: fixture.baseline.originalConsumption,
+      originalSeatOutputs: fixture.baseline.seatOutputs,
+    }).failures).toContain("probe-lifecycle-invalid");
+  });
 
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());
