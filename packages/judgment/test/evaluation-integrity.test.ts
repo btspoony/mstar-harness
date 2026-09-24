@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { summarizeQualification, validateFreezeGroups, validateFreezeLabels, type QualificationRow } from "../src/evaluation.js";
-import { calibrationCliInvocation, runEvaluationCommand } from "../scripts/evaluate.js";
+import { calibrationCliInvocation, loadPreviousDevelopmentState, runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string | null = "mstar.qualification-manifest/v1"): string {
@@ -160,6 +160,28 @@ describe("qualification integrity", () => {
       "--file", "/mnt/source/.runtime/pack.json", "--pilot", "/mnt/source/.runtime/pilot.json",
       "--workspace", "/mnt/source", "--json",
     ]);
+  });
+  test("calibration admits an explicit first run but keeps prior freeze identity checks", () => {
+    const firstRunRoot = fixtureRoot({});
+    const expected = { plannedVariants: 2, protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold") };
+    try {
+      expect(loadPreviousDevelopmentState(realpathSync(firstRunRoot), expected)).toEqual({
+        firstRun: true, previousManifest: null, previousOutcomes: [],
+      });
+    } finally { rmSync(firstRunRoot, { recursive: true, force: true }); }
+    const priorManifest = {
+      runId: "previous-run", plannedVariants: expected.plannedVariants, identity: { cliSha256: sha256("cli") },
+      protocolSha256: expected.protocolSha256, splitSha256: expected.splitSha256, goldSha256: expected.goldSha256,
+    };
+    const priorRunRoot = fixtureRoot({
+      "runs/development/run-manifest.json": JSON.stringify(priorManifest),
+      "development-run.json": JSON.stringify({ outcomes: [] }),
+    });
+    try {
+      expect(loadPreviousDevelopmentState(realpathSync(priorRunRoot), expected).firstRun).toBe(false);
+      expect(() => loadPreviousDevelopmentState(realpathSync(priorRunRoot), { ...expected, goldSha256: sha256("changed") }))
+        .toThrow("Development freeze identity changed");
+    } finally { rmSync(priorRunRoot, { recursive: true, force: true }); }
   });
   test("refuses duplicated primary opportunities and cross-group lineage leakage", () => {
     expect(() => summarizeQualification([base, { ...base, variantId: "v2", primary: true }])).toThrow("primary-duplicate");

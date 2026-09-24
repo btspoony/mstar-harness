@@ -205,11 +205,35 @@ export function stageCalibrationSources(
   }
 }
 
-async function calibrateDevelopment(root: string, protocol: Record<string, unknown>, preflightOnly = false): Promise<{ status: string; attempted: number; succeeded: number; failed: number; runId?: string; checked?: number }> {
-  const previousManifest = readJson<{ runId: string; plannedVariants: number; identity: { cliSha256: string }; protocolSha256: string; splitSha256: string; goldSha256: string }>(root, "runs/development/run-manifest.json");
+type PreviousDevelopmentManifest = {
+  runId: string; plannedVariants: number; identity: { cliSha256: string };
+  protocolSha256: string; splitSha256: string; goldSha256: string;
+};
+type PreviousDevelopmentState = {
+  firstRun: boolean;
+  previousManifest: PreviousDevelopmentManifest | null;
+  previousOutcomes: Array<{ runId: string; requestSha256: string | null }>;
+};
+export function loadPreviousDevelopmentState(
+  root: string,
+  expected: Pick<PreviousDevelopmentManifest, "plannedVariants" | "protocolSha256" | "splitSha256" | "goldSha256">,
+): PreviousDevelopmentState {
+  const manifestPath = resolve(root, "runs/development/run-manifest.json");
+  const outcomesPath = resolve(root, "development-run.json");
+  const hasManifest = existsSync(manifestPath);
+  const hasOutcomes = existsSync(outcomesPath);
+  if (hasManifest !== hasOutcomes) fail("Development prior-run state incomplete");
+  if (!hasManifest) return { firstRun: true, previousManifest: null, previousOutcomes: [] };
+  const previousManifest = readJson<PreviousDevelopmentManifest>(root, "runs/development/run-manifest.json");
   const previousOutcomes = readJson<{ outcomes: Array<{ runId: string; requestSha256: string | null }> }>(root, "development-run.json").outcomes;
-  const spentIds = new Set(previousOutcomes.map((outcome) => outcome.runId));
-  const spentRequests = new Set(previousOutcomes.map((outcome) => outcome.requestSha256).filter((hash): hash is string => hash !== null));
+  if (!Array.isArray(previousOutcomes) ||
+      previousManifest.plannedVariants !== expected.plannedVariants ||
+      previousManifest.protocolSha256 !== expected.protocolSha256 ||
+      previousManifest.splitSha256 !== expected.splitSha256 ||
+      previousManifest.goldSha256 !== expected.goldSha256) fail("Development freeze identity changed");
+  return { firstRun: false, previousManifest, previousOutcomes };
+}
+async function calibrateDevelopment(root: string, protocol: Record<string, unknown>, preflightOnly = false): Promise<{ status: string; attempted: number; succeeded: number; failed: number; firstRun: boolean; runId?: string; checked?: number }> {
   const runIdentity = `q-${randomUUID()}`;
   const evidence = resolve(root, "runs/development", runIdentity);
   if (existsSync(evidence)) fail("Development run identity already exists; no replay");
@@ -252,6 +276,15 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   if (sources.size !== sourceSlots.size || groups.some((group) => group.variants.some((variant) => gold.get(variant.id)?.groupId !== group.id))) fail("Development source/gold join invalid");
   const planned = groups.flatMap((group) => group.variants.map((variant) => ({ group, variant, original: sources.get(group.sourceSlot)?.variants.find((entry) => entry.id === variant.sourceVariant) })));
   if (planned.length > budget.requestAllocation.developmentVariantCallsMax || planned.some((entry) => !entry.original)) fail("Development requests exceed reservation or lack frozen source");
+  const priorState = loadPreviousDevelopmentState(root, {
+    plannedVariants: planned.length,
+    protocolSha256: fileDigest(root, "protocol.json"),
+    splitSha256: fileDigest(root, "split-manifest.json"),
+    goldSha256: fileDigest(root, "gold/adjudicated.jsonl"),
+  });
+  const previousManifest = priorState.previousManifest;
+  const spentIds = new Set(priorState.previousOutcomes.map((outcome) => outcome.runId));
+  const spentRequests = new Set(priorState.previousOutcomes.map((outcome) => outcome.requestSha256).filter((hash): hash is string => hash !== null));
 
   const checkout = resolve(fileURLToPath(import.meta.url), "../../../..");
   const cliPath = resolve(checkout, "packages/cli/dist/mstar-harness.js");
@@ -286,13 +319,10 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
     maxCalls: budget.requestAllocation.developmentVariantCallsMax, maxAttemptsPerRequest: 1,
     tokenReservationPerAttempt: budget.tokenPolicy.perAttemptReservation,
     knownHoldoutLimitation: "missing-caller-or-branch: 6 eligible groups versus frozen floor 14; Q7 endpoint inconclusive",
+    firstRun: priorState.firstRun,
     previousRunId: previousManifest?.runId ?? null,
     previousBuildSha256: previousManifest?.identity.cliSha256 ?? null,
   };
-  if (previousManifest.plannedVariants !== planned.length ||
-      previousManifest.protocolSha256 !== manifest.protocolSha256 ||
-      previousManifest.splitSha256 !== manifest.splitSha256 ||
-      previousManifest.goldSha256 !== manifest.goldSha256) fail("Development freeze identity changed");
   if (!preflightOnly) writeFileSync(resolve(evidence, "run-manifest.json"), JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
   const observations = new Map<string, CalibrationObservation>();
   const outcomes: Array<Record<string, unknown>> = [];
@@ -465,7 +495,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     writeFileSync(resolve(itemRoot, "outcome.json"), JSON.stringify(outcomes.at(-1)), { flag: "wx", mode: 0o600 });
     if (failure === "jev.response-invalid" || failure?.includes("usage-exceeds") || failure?.includes("early-reveal")) break;
   }
-  if (preflightOnly) return { status: "marker-free", attempted: 0, succeeded: 0, failed: 0, checked };
+  if (preflightOnly) return { status: "marker-free", attempted: 0, succeeded: 0, failed: 0, firstRun: priorState.firstRun, checked };
   const primary = groups.map((group) => observations.get(group.variants.find((variant) => variant.primary)!.id) ??
     { groupId: group.id, gold: gold.get(group.variants.find((variant) => variant.primary)!.id)!.label as CalibrationObservation["gold"],
       choice: null, topProbability: null, confidence: null });
@@ -509,7 +539,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
   for (const [name, value] of [["development-run.json", runRecord], ["bands.json", bandRecord], ["development-assessment.json", assessment]] as const) {
     writeFileSync(resolve(evidence, name), JSON.stringify(value), { flag: "wx", mode: 0o600 });
   }
-  return { status: assessment.status, attempted, succeeded, failed, runId: runIdentity };
+  return { status: assessment.status, attempted, succeeded, failed, firstRun: priorState.firstRun, runId: runIdentity };
 }
 export async function runEvaluationCommand(argv = process.argv.slice(2)): Promise<number> {
   try {
