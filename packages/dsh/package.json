@@ -165,6 +165,7 @@
     "react-dom": "^18.3.1",
     "schemastery": "^3.18.0",
     "shiki": "^4.3.1",
+    "simple-icons": "16.31.0",
     "typescript": "^5.9.3",
     "use-sync-external-store": "1.2.0",
     "vitest": "^4.1.8",
