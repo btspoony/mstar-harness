@@ -65,10 +65,14 @@ export type OccurrenceInput = {
 
 export type PayloadFieldSchema = {
   required: boolean;
+  requiredWhen?: readonly string[];
   type: string;
   description: string;
   values?: readonly string[];
   nullable?: boolean;
+  nonblankWhenPresent?: boolean;
+  minItems?: number;
+  itemsNonblank?: boolean;
   properties?: Record<string, PayloadFieldSchema>;
 };
 
@@ -107,16 +111,32 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
     reason: { required: true, type: "string", description: "Reason for triage change" },
     kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
     severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
-    impact: { required: false, type: "string", description: "Updated impact" },
-    acceptance: { required: false, type: "string", description: "Updated acceptance condition" },
+    impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+    acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
     owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true },
   },
   ClosureEvidence: {
     reason: { required: true, type: "string", description: "Reason for closure" },
-    references: { required: true, type: "string[]", description: "Evidence references" },
-    scope: { required: false, type: "string", description: "Closure scope" },
-    canonicalIssueId: { required: false, type: "string", description: "Canonical issue for duplicate/superseded" },
-    alignmentRef: { required: false, type: "string", description: "Authority alignment reference (required for resolved/waived closure)" },
+    references: {
+      required: false,
+      requiredWhen: ["close"],
+      type: "string[]",
+      description: "Acceptance evidence references; required for resolved closure",
+      minItems: 1,
+    },
+    scope: { required: false, requiredWhen: ["waive"], type: "string", description: "Named closure scope; required for waived closure" },
+    canonicalIssueId: {
+      required: false,
+      requiredWhen: ["duplicate", "supersede"],
+      type: "string",
+      description: "Canonical issue for duplicate/superseded; required for those dispositions",
+    },
+    alignmentRef: {
+      required: false,
+      requiredWhen: ["close", "waive"],
+      type: "string",
+      description: "Authority alignment reference; required for resolved/waived closure",
+    },
   },
   IssueLink: {
     relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
@@ -127,11 +147,22 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   PlanProgress: {
     status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
     summary: { required: true, type: "string", description: "Current progress or blocker summary" },
-    evidence_paths: { required: true, type: "string[]", description: "Canonical absolute artifact paths for this plan" },
-    track_branches: { required: false, type: "string[]", description: "Reported L2 track branches" },
+    evidence_paths: {
+      required: true,
+      type: "string[]",
+      description: "Canonical absolute artifact paths for this plan",
+      itemsNonblank: true,
+    },
+    track_branches: {
+      required: false,
+      type: "string[]",
+      description: "Reported L2 track branches",
+      itemsNonblank: true,
+    },
   },
   HandoffEvidence: {
     source_sha: { required: true, type: "string", description: "Source commit SHA" },
+    review_head: { required: true, type: "string", description: "Review range head SHA" },
     review_base: { required: true, type: "string", description: "Review range base SHA" },
     qc: {
       required: true,
@@ -139,7 +170,13 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
       description: "QC decision, reports and consolidated report",
       properties: {
         decision: { required: true, type: "string", description: "QC decision", values: ["Approve", "Approve with residuals"] },
-        reports: { required: true, type: "string[]", description: "QC report paths" },
+        reports: {
+          required: true,
+          type: "string[]",
+          description: "QC report paths",
+          minItems: 1,
+          itemsNonblank: true,
+        },
         consolidated: { required: true, type: "string", description: "Consolidated QC report path" },
       },
     },
@@ -533,8 +570,11 @@ function occurrenceColumns(input: OccurrenceInput): OccurrenceColumns {
     () => requireNonblank("sourceKind", input.sourceKind),
     () => requireNonblank("location", input.location),
     () => requireNonblank("observedBehavior", input.observedBehavior),
+    () => requireNonblank("discoveredAt", input.discoveredAt),
     () => {
-      if (typeof input.discoveredAt !== "string") throw new IssueError("issue.scope-refused", "discoveredAt must be nonblank");
+      if (!Array.isArray(input.evidence) || input.evidence.some((item) => typeof item !== "string")) {
+        throw new IssueError("issue.scope-refused", "evidence must be an array of strings");
+      }
     },
   ]);
   return {
@@ -545,8 +585,8 @@ function occurrenceColumns(input: OccurrenceInput): OccurrenceColumns {
     sourceKind: requireNonblank("sourceKind", input.sourceKind),
     location: requireNonblank("location", input.location),
     observedBehavior: requireNonblank("observedBehavior", input.observedBehavior),
-    evidenceJson: JSON.stringify(input.evidence ?? []),
-    discoveredAt: input.discoveredAt.trim() ? input.discoveredAt.trim() : null,
+    evidenceJson: JSON.stringify(input.evidence),
+    discoveredAt: requireNonblank("discoveredAt", input.discoveredAt),
   };
 }
 

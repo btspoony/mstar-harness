@@ -129,7 +129,7 @@ function asRecord(value: unknown, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export function validatePayload(typeName: IssuePayloadName, record: Record<string, unknown>): void {
+export function validatePayload(typeName: IssuePayloadName, record: Record<string, unknown>, condition?: string): void {
   const failures: string[] = [];
   const visit = (
     schema: Record<string, PayloadFieldSchema>,
@@ -140,8 +140,9 @@ export function validatePayload(typeName: IssuePayloadName, record: Record<strin
       const path = prefix === "" ? key : `${prefix}.${key}`;
       const present = Object.hasOwn(value, key) && value[key] !== undefined;
       const fieldValue = value[key];
+      const required = field.required || (condition !== undefined && field.requiredWhen?.includes(condition) === true);
       if (!present) {
-        if (field.required) {
+        if (required) {
           failures.push(
             field.type === "string" || field.type === "string | null"
               ? `${path} must be a nonblank string`
@@ -156,7 +157,7 @@ export function validatePayload(typeName: IssuePayloadName, record: Record<strin
       }
       if (fieldValue === null && field.nullable) continue;
       if (field.type === "string" || field.type === "string | null") {
-        if (typeof fieldValue !== "string" || (field.required && fieldValue.trim() === "")) {
+        if (typeof fieldValue !== "string" || (required && fieldValue.trim() === "") || (field.nonblankWhenPresent && fieldValue.trim() === "")) {
           failures.push(`${path} must be a nonblank string`);
           continue;
         }
@@ -166,6 +167,13 @@ export function validatePayload(typeName: IssuePayloadName, record: Record<strin
       } else if (field.type === "string[]") {
         if (!Array.isArray(fieldValue) || fieldValue.some((item) => typeof item !== "string")) {
           failures.push(`${path} must be an array of strings`);
+        } else {
+          if (required && field.minItems !== undefined && fieldValue.length < field.minItems) {
+            failures.push(`${path} must contain at least ${field.minItems} item${field.minItems === 1 ? "" : "s"}`);
+          }
+          if (field.itemsNonblank && fieldValue.some((item) => typeof item === "string" && item.trim() === "")) {
+            failures.push(`${path} items must be nonblank strings`);
+          }
         }
       } else if (field.type === "object") {
         if (fieldValue === null || typeof fieldValue !== "object" || Array.isArray(fieldValue)) {
@@ -177,10 +185,29 @@ export function validatePayload(typeName: IssuePayloadName, record: Record<strin
     }
   };
   visit(ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>, record);
-  if (typeName === "IssueLink" && failures.length === 0) {
-    const relationForm = typeof record.relation === "string" && typeof record.issueId === "string";
-    const provenanceForm = typeof record.kind === "string" && typeof record.target === "string";
-    if (!relationForm && !provenanceForm) failures.push("link payload needs relation+issueId or kind+target");
+  if (typeName === "IssueLink") {
+    const pairProblems: string[] = [];
+    if (Object.hasOwn(record, "relation") && record.relation !== undefined && (!Object.hasOwn(record, "issueId") || record.issueId === undefined)) {
+      pairProblems.push("issueId is required with relation");
+    }
+    if (Object.hasOwn(record, "issueId") && record.issueId !== undefined && (!Object.hasOwn(record, "relation") || record.relation === undefined)) {
+      pairProblems.push("relation is required with issueId");
+    }
+    if (Object.hasOwn(record, "kind") && record.kind !== undefined && (!Object.hasOwn(record, "target") || record.target === undefined)) {
+      pairProblems.push("target is required with kind");
+    }
+    if (Object.hasOwn(record, "target") && record.target !== undefined && (!Object.hasOwn(record, "kind") || record.kind === undefined)) {
+      pairProblems.push("kind is required with target");
+    }
+    if (
+      (!Object.hasOwn(record, "relation") || record.relation === undefined) &&
+      (!Object.hasOwn(record, "issueId") || record.issueId === undefined) &&
+      (!Object.hasOwn(record, "kind") || record.kind === undefined) &&
+      (!Object.hasOwn(record, "target") || record.target === undefined)
+    ) {
+      pairProblems.push("link payload needs relation+issueId or kind+target");
+    }
+    failures.push(...pairProblems);
   }
   if (failures.length) usage(`${typeName} payload invalid: ${failures.join("; ")}`);
 }
@@ -189,9 +216,9 @@ export function payloadFileHelp(typeName: IssuePayloadName): string {
   return `Absolute ${typeName} JSON path; fields: ${Object.keys(ISSUE_PAYLOAD_SCHEMAS[typeName]).join(", ")}. See mstar-harness schema ${typeName}`;
 }
 
-function readPayload(raw: string | undefined, typeName: IssuePayloadName): Record<string, unknown> {
+function readPayload(raw: string | undefined, typeName: IssuePayloadName, condition?: string): Record<string, unknown> {
   const record = asRecord(readJsonFile(raw, "--file"), typeName);
-  validatePayload(typeName, record);
+  validatePayload(typeName, record, condition);
   return record;
 }
 
@@ -312,7 +339,7 @@ function occurrenceInputOf(record: Record<string, unknown>): OccurrenceInput {
 function closureEvidenceOf(record: Record<string, unknown>): ClosureEvidence {
   const evidence: ClosureEvidence = {
     reason: requireString(record, "reason"),
-    references: stringArray(record, "references"),
+    references: record.references === undefined ? [] : stringArray(record, "references"),
   };
   const scope = optionalString(record, "scope");
   if (scope !== undefined) evidence.scope = scope;
@@ -556,7 +583,7 @@ export function registerIssueCommands(program: Command): void {
     ).action(async (id: string | undefined, options: IssueCliOptions) =>
       runVerb(verb, options, async (json) => {
         const evidence = closureEvidenceOf(
-          readPayload(typeof options.file === "string" ? options.file : undefined, "ClosureEvidence"),
+          readPayload(typeof options.file === "string" ? options.file : undefined, "ClosureEvidence", verb),
         );
         const receipt = await closeIssue(storeContext(options), issueIdOf(options, id), disposition, evidence, authorizedMutationOf(options, true));
         printSuccess(receipt, receipt.storeRevision, json);
@@ -622,18 +649,23 @@ export function registerIssueCommands(program: Command): void {
     .command("schema")
     .description("Print the runtime field schema for a JSON payload type")
     .argument("<type>", "Payload type name")
+    .exitOverride()
     .action((typeName: string) => {
-      if (!Object.hasOwn(ISSUE_PAYLOAD_SCHEMAS, typeName)) {
-        usage(`unknown payload type ${JSON.stringify(typeName)}; available: ${Object.keys(ISSUE_PAYLOAD_SCHEMAS).join(", ")}`);
+      try {
+        if (!Object.hasOwn(ISSUE_PAYLOAD_SCHEMAS, typeName)) {
+          usage(`unknown payload type ${JSON.stringify(typeName)}; available: ${Object.keys(ISSUE_PAYLOAD_SCHEMAS).join(", ")}`);
+        }
+        const fields = ISSUE_PAYLOAD_SCHEMAS[typeName as IssuePayloadName] as Record<string, PayloadFieldSchema>;
+        console.log(
+          JSON.stringify(
+            { type: typeName, fields: Object.entries(fields).map(([name, field]) => ({ name, ...field })) },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        failIssue("schema", error, false);
       }
-      const fields = ISSUE_PAYLOAD_SCHEMAS[typeName as IssuePayloadName] as Record<string, PayloadFieldSchema>;
-      console.log(
-        JSON.stringify(
-          { type: typeName, fields: Object.entries(fields).map(([name, field]) => ({ name, ...field })) },
-          null,
-          2,
-        ),
-      );
     });
 }
 

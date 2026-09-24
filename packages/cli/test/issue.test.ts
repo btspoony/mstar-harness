@@ -179,6 +179,25 @@ describe("mstar issue CLI bundle", () => {
     const parsed = JSON.parse(schema.stdout) as { type: string; fields: Array<{ name: string; required: boolean; type: string }> };
     expect(parsed.type).toBe("CaptureInput");
     expect(parsed.fields).toContainEqual({ name: "projectId", required: true, type: "string", description: "Project identifier" });
+    const closureSchema = runBundle("bun-shebang", ["schema", "ClosureEvidence"], process.cwd());
+    expect(closureSchema.exitCode).toBe(0);
+    const closurePayload = JSON.parse(closureSchema.stdout) as {
+      fields: Array<{ name: string; required: boolean; requiredWhen?: string[] }>;
+    };
+    const closureFields = closurePayload.fields;
+    expect(closureFields.find((field) => field.name === "references")).toMatchObject({
+      required: false,
+      requiredWhen: ["close"],
+    });
+    expect(closureFields.find((field) => field.name === "canonicalIssueId")).toMatchObject({
+      required: false,
+      requiredWhen: ["duplicate", "supersede"],
+    });
+
+    const handoffSchema = runBundle("bun-shebang", ["schema", "HandoffEvidence"], process.cwd());
+    expect(handoffSchema.exitCode).toBe(0);
+    const handoff = JSON.parse(handoffSchema.stdout) as { fields: Array<{ name: string; required: boolean }> };
+    expect(handoff.fields).toContainEqual(expect.objectContaining({ name: "review_head", required: true }));
 
     for (const [verb, typeName] of [
       ["add", "CaptureInput"],
@@ -202,6 +221,50 @@ describe("mstar issue CLI bundle", () => {
       expect(normalizedHelp).toContain(typeName);
       expect(normalizedHelp).toContain(`mstar-harness schema ${typeName}`);
     }
+  });
+
+  test("closure payload validation follows disposition-specific engine requirements", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-issue-closure-conditions-"));
+    roots.push(root);
+    const file = join(root, "closure.json");
+    writeJson(file, {});
+
+    for (const [verb, required, unrelated] of [
+      ["close", ["references", "alignmentRef"], ["scope", "canonicalIssueId"]],
+      ["waive", ["scope", "alignmentRef"], ["references", "canonicalIssueId"]],
+      ["duplicate", ["canonicalIssueId"], ["references", "alignmentRef", "scope"]],
+      ["supersede", ["canonicalIssueId"], ["references", "alignmentRef", "scope"]],
+    ] as const) {
+      const result = runBundle("bun-shebang", ["issue", verb, "I-000001", "--file", file, "--json"], root);
+      expect(result.exitCode).toBe(2);
+      const body = jsonOf(result);
+      expect(body).toMatchObject({ ok: false, code: "usage" });
+      expect(String(body.message)).toContain("reason");
+      for (const field of required) expect(String(body.message)).toContain(field);
+      for (const field of unrelated) expect(String(body.message)).not.toContain(field);
+    }
+  });
+
+  test("unknown schema type is a usage refusal with available type names", () => {
+    const result = runBundle("bun-shebang", ["schema", "HandofffEvidence"], process.cwd());
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("unknown payload type");
+    expect(result.stderr).toContain("HandoffEvidence");
+    expect(result.stderr).not.toContain("Setup failed");
+  });
+
+  test("link validation reports invalid relation form and its missing pair field together", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-issue-link-pair-"));
+    roots.push(root);
+    const file = join(root, "link.json");
+    writeJson(file, { relation: "related", kind: "ticket" });
+    const result = runBundle("bun-shebang", ["issue", "link", "I-000001", "--file", file, "--json"], root);
+    expect(result.exitCode).toBe(2);
+    const body = jsonOf(result);
+    expect(body).toMatchObject({ ok: false, code: "usage" });
+    expect(String(body.message)).toContain("invalid provenance kind");
+    expect(String(body.message)).toContain("issueId");
+    expect(String(body.message)).toContain("target");
   });
 
   test("capture reports every missing payload field in one refusal", async () => {
@@ -397,8 +460,9 @@ describe("mstar issue CLI bundle", () => {
       harness,
       "--json",
     ], root);
-    expect(incomplete.exitCode).toBe(1);
-    expect(jsonOf(incomplete).code).toBe("issue.invalid-disposition");
+    expect(incomplete.exitCode).toBe(2);
+    expect(jsonOf(incomplete).code).toBe("usage");
+    expect(String(jsonOf(incomplete).message)).toContain("alignmentRef");
     const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
     expect(jsonOf(shown).data).toMatchObject({ disposition: "open", revision: created.revision });
     const ok = runBundle("node", closeArgs("close-pm", "project-manager", session), root);

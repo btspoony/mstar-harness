@@ -370,11 +370,12 @@ function readSchemaPayload(
   flag: string,
   verb: string,
   typeName: "PlanProgress" | "ClosureEvidence" | "HandoffEvidence",
+  condition?: string,
 ): unknown {
   const payload = readJsonPayload(raw, flag, verb);
   const record = asRecord(payload);
   if (!record) throw new SddScriptError(`${flag} must be a JSON object`, 2);
-  validatePayload(typeName, record);
+  validatePayload(typeName, record, condition);
   return payload;
 }
 
@@ -1330,7 +1331,15 @@ export function registerPlanCommands(program: Command): void {
             "--expect-issue",
             "issue-close",
           );
-          const evidence = readSchemaPayload(opts.file as string | undefined, "--file", "issue-close", "ClosureEvidence") as ClosureEvidence;
+          const closureCondition =
+            disposition === "resolved" ? "close" : disposition === "waived" ? "waive" : disposition === "duplicate" ? "duplicate" : "supersede";
+          const evidence = readSchemaPayload(
+            opts.file as string | undefined,
+            "--file",
+            "issue-close",
+            "ClosureEvidence",
+            closureCondition,
+          ) as ClosureEvidence;
           return { kind: "residual-close", issueId, disposition, evidence, expectedIssueRevision };
         }),
       ),

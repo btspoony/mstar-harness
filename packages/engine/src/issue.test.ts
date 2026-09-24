@@ -448,6 +448,11 @@ describe("failed capture leaves no partial finding", () => {
     const page = await listIssues(context, { disposition: "open" });
     expect(page.total).toBe(0);
   });
+  test("required occurrence fields reject missing evidence and blank timestamps", () => {
+    const absentEvidence = { ...baseInput(), evidence: undefined } as unknown as CaptureInput;
+    expect(() => assertCaptureRequest(absentEvidence)).toThrow("evidence must be an array of strings");
+    expect(() => assertCaptureRequest(baseInput({ discoveredAt: " " }))).toThrow("discoveredAt must be nonblank");
+  });
 });
 
 /* -------------------------------------------------------------------------
