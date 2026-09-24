@@ -82,6 +82,27 @@ describe("deterministic shadow candidate and synthesis pack adapter", () => {
     expect(canonicalJsonBytes(findings)).toEqual(originalFindings);
   });
 
+  test("preserves every baseline work unit as an ordered task", () => {
+    const findings = [
+      finding("left", "Left claim", [source("left-source", "src/a.ts", "left excerpt")], { relatedFindingIds: ["right"] }),
+      finding("right", "Right claim", [source("right-source", "src/b.ts", "right excerpt")]),
+    ];
+    const pair = buildCandidatePairs(findings, scope)[0];
+    const units: WorkUnit[] = [
+      { id: "baseline-unit-1", revision: 3 },
+      { id: "baseline-unit-2", revision: 7 },
+    ];
+
+    const pack = buildShadowPack([pair], units, scope);
+
+    expect(pack.tasks.map(({ workUnit }) => workUnit)).toEqual(units);
+    expect(pack.tasks.map(({ subjectIds }) => subjectIds)).toEqual([
+      ["finding_left", "finding_right"],
+      ["finding_left", "finding_right"],
+    ]);
+    expect(validatePack(pack)).toBe(pack);
+  });
+
   test("pack identity changes when scope or explicit source closure changes", () => {
     const findings = [
       finding("left", "Left claim", [source("left-source", "src/a.ts", "left excerpt")], { relatedFindingIds: ["right"] }),
@@ -115,6 +136,6 @@ describe("deterministic shadow candidate and synthesis pack adapter", () => {
       finding("left", "Left claim", [source("left-source", "src/a.ts", "left excerpt")], { relatedFindingIds: ["right"] }),
       finding("right", "Right claim", [source("right-source", "src/b.ts", "right excerpt")]),
     ], scope)[0];
-    expect(() => buildShadowPack([validPair], [], scope)).toThrow("exactly one candidate and baseline work unit");
+    expect(() => buildShadowPack([validPair], [], scope)).toThrow("at least one baseline work unit");
   });
 });

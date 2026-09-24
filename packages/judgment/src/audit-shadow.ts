@@ -21,6 +21,7 @@ export type ReviewScope = Readonly<{
   builderVersion: string;
 }>;
 
+/** Source authenticity (excerpt against source bytes/hash) is owned by the upstream evidence producer; this adapter only receives structured records. */
 export type FindingSource = Readonly<{
   id: string;
   path: string;
@@ -108,20 +109,24 @@ export function buildShadowPack(
   units: readonly WorkUnit[],
   scope: ReviewScope,
 ): ReviewDecisionPack {
-  if (pairs.length !== 1 || units.length !== 1) {
-    throw new TypeError("Input abstention: each synthesis pack must bind exactly one candidate and baseline work unit");
+  if (pairs.length !== 1 || units.length === 0) {
+    throw new TypeError("Input abstention: each synthesis pack must bind exactly one candidate and at least one baseline work unit");
   }
   const pair = pairs[0];
-  const unit = units[0];
+  const unitIds = new Set<string>();
+  for (const unit of units) {
+    if (!unit.id || !Number.isSafeInteger(unit.revision) || unit.revision < 0) {
+      throw new TypeError("Input abstention: baseline work unit is missing or invalid");
+    }
+    if (unitIds.has(unit.id)) throw new TypeError("Input abstention: baseline work unit IDs must be unique");
+    unitIds.add(unit.id);
+  }
   if (pair.findingIds[0] === pair.findingIds[1] ||
       pair.findings[0].id !== pair.findingIds[0] || pair.findings[1].id !== pair.findingIds[1]) {
     throw new TypeError("Input abstention: candidate pair identity is inconsistent");
   }
   if (sha256(canonical([pair.findings[0].sources, pair.findings[1].sources])) !== pair.sourceClosureSha256) {
     throw new TypeError("Input abstention: candidate source closure changed after pair generation");
-  }
-  if (!unit.id || !Number.isSafeInteger(unit.revision) || unit.revision < 0) {
-    throw new TypeError("Input abstention: baseline work unit is missing or invalid");
   }
 
   const sourceById = new Map<string, FindingSource>();
@@ -155,12 +160,12 @@ export function buildShadowPack(
     .sort((a, b) => a.id.localeCompare(b.id))
     .map(({ excerpt: _excerpt, ...source }) => source);
   const state = { evidence, subjects };
-  const task = {
+  const tasks = units.map((unit) => ({
     id: safeId("task_", { pairId: pair.id, workUnit: unit, scope }),
     useCase: "JEV-A05" as const,
     subjectIds: [`finding_${pair.findingIds[0]}`, `finding_${pair.findingIds[1]}`] as [string, string],
     workUnit: unit,
-  };
+  }));
   const packScope = {
     kind: "review" as const,
     reviewId: scope.reviewId,
@@ -179,7 +184,7 @@ export function buildShadowPack(
     recipient: { id: scope.recipientId, phase: "synthesis" as const },
     sources,
     state,
-    tasks: [task],
+    tasks,
     rubricVersion: scope.rubricVersion,
     builderVersion: scope.builderVersion,
     sourceClosureSha256: pair.sourceClosureSha256,
@@ -196,7 +201,7 @@ export function buildShadowPack(
     recipient: packCore.recipient,
     sources,
     state,
-    tasks: [task],
+    tasks,
     rubricVersion: scope.rubricVersion,
     builderVersion: scope.builderVersion,
   });
