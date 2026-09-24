@@ -94,6 +94,7 @@ export function normalizeTypeSafeResponse(bytes: Uint8Array, request: PreparedRe
   catch { return invalid("body is not valid JSON"); }
   if (!isRecord(parsed)) invalid("body must be an object");
   exactKeys(parsed, ["model", "answers"], ["usage"]);
+  if (parsed.model !== NATIVE_MODEL || parsed.model !== request.model) invalid("observed model does not match the fixed requested model");
   const responseAnswers = parsed.answers;
   if (!isRecord(responseAnswers)) invalid("answers must be an object");
   const expected = Object.keys(request.questionMap);
