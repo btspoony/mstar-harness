@@ -34,7 +34,7 @@ export type ScoreQuestion = Readonly<{
 }>;
 export type CanonicalQuestion = ChoiceQuestion | NoulQuestion | ScoreQuestion;
 export type PreparedRequest = Readonly<{
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
   requestSha256: string;
   model: typeof NATIVE_MODEL;
   questions: Readonly<Record<string, CanonicalQuestion>>;
@@ -68,7 +68,7 @@ function canonicalJson(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
-export function canonicalJsonBytes(value: unknown): Uint8Array {
+export function canonicalJsonBytes(value: unknown): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(canonicalJson(value));
 }
 

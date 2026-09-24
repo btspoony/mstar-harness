@@ -1,7 +1,8 @@
 import { NATIVE_ENDPOINT } from "./contracts.js";
 
 export type NativeTransportInput = Readonly<{
-  requestBytes: Uint8Array;
+  /** ArrayBuffer-backed so Fetch can use this byte view directly, without copying. */
+  requestBytes: Uint8Array<ArrayBuffer>;
   credential: string;
   signal?: AbortSignal;
   /** Absolute deadline measured with performance.now(). */
@@ -43,7 +44,7 @@ export async function sendNativeRequest(input: NativeTransportInput): Promise<Na
         Authorization: `Bearer ${input.credential}`,
         "Content-Type": "application/json",
       },
-      body: new Uint8Array(input.requestBytes),
+      body: input.requestBytes,
       redirect: "manual",
       signal: controller.signal,
     }), aborted]);
