@@ -134,7 +134,8 @@ export function buildDockerLaunchArgs(child: ApprovedChild, runId: string, plan:
 }
 
 function dockerProbeLauncher(child: ApprovedChild, runId: string, plan: ShadowMountPlan): ChildProcessWithoutNullStreams {
-  return spawn(child.runtimePath, buildDockerLaunchArgs(child, runId, plan), { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  // The supervisor consumes only stdout/stderr; stdin is intentionally ignored at spawn.
+  return spawn(child.runtimePath, buildDockerLaunchArgs(child, runId, plan), { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }) as unknown as ChildProcessWithoutNullStreams;
 }
 function runApprovedChild(child: ApprovedChild, runId: string, plan: ShadowMountPlan, signal: AbortSignal, launcher: ProbeLauncher): Promise<ApprovedChildResult> {
   if (signal.aborted) return Promise.resolve({ events: [], elapsedMs: 0, exitCode: null, outputBytes: 0 });

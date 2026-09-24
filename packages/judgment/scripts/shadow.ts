@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { runShadowSupervisor, assessShadowRun, type ApprovedChild, type EvidenceClass, type ShadowMountPlan, type FrozenBaseline, type WorkUnitReceipt, type ProbeEvent, type ProbeLauncher } from "../src/shadow-supervisor.js";
@@ -92,4 +93,4 @@ export async function runShadowCommand(args = process.argv.slice(2), launcher?: 
   }
 }
 
-if (import.meta.main) process.exitCode = await runShadowCommand();
+if (import.meta.main && process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await runShadowCommand();

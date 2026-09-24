@@ -4,16 +4,20 @@
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/judgment/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/judgment/src/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./shadow": {
+      "types": "./dist/judgment/scripts/shadow.d.ts",
+      "default": "./dist/shadow.js"
     }
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/index.js && bunx tsc"
+    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/index.js && bun build scripts/shadow.ts --target node --outfile dist/shadow.js && bunx tsc"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
