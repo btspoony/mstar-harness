@@ -107,9 +107,9 @@ export type JudgmentPilot = Readonly<{
   calibrationId: string;
 }>;
 
-const fail = (path: string, reason: string): never => {
+function fail(path: string, reason: string): never {
   throw new TypeError(`Invalid judgment contract at ${path}: ${reason}`);
-};
+}
 
 function record(value: unknown, path: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -226,13 +226,13 @@ export function validatePack(value: unknown): ReviewDecisionPack {
     const id = string(subject.id, `${path}.id`);
     uniqueId(id, subjectIds, `${path}.id`);
     if (subject.kind !== "finding") fail(`${path}.kind`, "A05 requires finding subjects");
-    string(subject.text, `${path}.text`);
+    const text = string(subject.text, `${path}.text`);
     const refs = array(subject.evidenceIds, `${path}.evidenceIds`, 1).map((ref, j) => {
       const evidenceId = string(ref, `${path}.evidenceIds[${j}]`);
       if (!evidenceIds.has(evidenceId)) fail(`${path}.evidenceIds[${j}]`, "dangling evidence ID");
       return evidenceId;
     });
-    return { id };
+    return { id, kind: "finding" as const, text, evidenceIds: refs };
   });
   if (subjects.length !== 2) fail("pack.state.subjects", "A05 requires exactly two ordered subjects");
 
@@ -298,12 +298,20 @@ export function validatePilot(value: unknown): JudgmentPilot {
     return row;
   });
   if (new Set(manifest.map((row) => row.packId)).size !== manifest.length) fail("pilot.packManifest", "duplicate pack ID");
-
-  const limitKeys = ["timeoutMs", "maxRunElapsedMs", "maxCallsPerRun", "maxConcurrentRequests", "maxTasksPerPack", "maxPacksPerRun", "maxPairs", "maxPackBytes", "maxRequestBytes", "maxResponseBytes", "maxAttempts"] as const;
-  const limits = record(p.limits, "pilot.limits") as Record<(typeof limitKeys)[number], number>;
-  exactKeys(limits, limitKeys, "pilot.limits");
-  for (const key of limitKeys) integer(limits[key], `pilot.limits.${key}`);
-  if (limits.maxCallsPerRun > 1_000 || limits.maxPacksPerRun > 1_000 || limits.maxConcurrentRequests !== 1 || limits.maxTasksPerPack > 4 || limits.maxPairs > 4 || limits.timeoutMs > 10_000 || limits.maxRunElapsedMs > 10_000_000 || limits.maxPackBytes > 65_536 || limits.maxRequestBytes > 32_768 || limits.maxResponseBytes > 65_536 || limits.maxAttempts !== 1) {
+  const limits = record(p.limits, "pilot.limits");
+  exactKeys(limits, ["timeoutMs", "maxRunElapsedMs", "maxCallsPerRun", "maxConcurrentRequests", "maxTasksPerPack", "maxPacksPerRun", "maxPairs", "maxPackBytes", "maxRequestBytes", "maxResponseBytes", "maxAttempts"], "pilot.limits");
+  const timeoutMs = integer(limits.timeoutMs, "pilot.limits.timeoutMs");
+  const maxRunElapsedMs = integer(limits.maxRunElapsedMs, "pilot.limits.maxRunElapsedMs");
+  const maxCallsPerRun = integer(limits.maxCallsPerRun, "pilot.limits.maxCallsPerRun");
+  const maxConcurrentRequests = integer(limits.maxConcurrentRequests, "pilot.limits.maxConcurrentRequests");
+  const maxTasksPerPack = integer(limits.maxTasksPerPack, "pilot.limits.maxTasksPerPack");
+  const maxPacksPerRun = integer(limits.maxPacksPerRun, "pilot.limits.maxPacksPerRun");
+  const maxPairs = integer(limits.maxPairs, "pilot.limits.maxPairs");
+  const maxPackBytes = integer(limits.maxPackBytes, "pilot.limits.maxPackBytes");
+  const maxRequestBytes = integer(limits.maxRequestBytes, "pilot.limits.maxRequestBytes");
+  const maxResponseBytes = integer(limits.maxResponseBytes, "pilot.limits.maxResponseBytes");
+  const maxAttempts = integer(limits.maxAttempts, "pilot.limits.maxAttempts");
+  if (maxCallsPerRun > 1_000 || maxPacksPerRun > 1_000 || maxConcurrentRequests !== 1 || maxTasksPerPack > 4 || maxPairs > 4 || timeoutMs > 10_000 || maxRunElapsedMs > 10_000_000 || maxPackBytes > 65_536 || maxRequestBytes > 32_768 || maxResponseBytes > 65_536 || maxAttempts !== 1) {
     fail("pilot.limits", "exceeds the frozen finite native policy");
   }
 

@@ -94,18 +94,18 @@ export function normalizeTypeSafeResponse(bytes: Uint8Array, request: PreparedRe
   if (!isRecord(parsed)) invalid("body must be an object");
   exactKeys(parsed, ["model", "answers"], ["usage"]);
   if (parsed.model !== NATIVE_MODEL || parsed.model !== request.model) invalid("observed model does not match the fixed requested model");
-  const answerMap = parsed.answers;
-  if (!isRecord(answerMap)) invalid("answers must be an object");
+  const responseAnswers = parsed.answers;
+  if (!isRecord(responseAnswers)) invalid("answers must be an object");
   const expected = Object.keys(request.questionMap);
-  const received = Object.keys(answerMap);
-  if (received.length !== expected.length || expected.some((id) => !(id in answerMap))) {
+  const received = Object.keys(responseAnswers);
+  if (received.length !== expected.length || expected.some((id) => !(id in responseAnswers))) {
     invalid("answers do not match the complete expected question set");
   }
   const answers: Record<string, CanonicalAnswer> = {};
   for (const id of expected) {
     const question = request.questions[id];
     if (!question) invalid(`request has no schema for ${id}`);
-    answers[id] = validateAnswer(answerMap[id], question, `answers.${id}`);
+    answers[id] = validateAnswer(responseAnswers[id], question, `answers.${id}`);
   }
   return Object.freeze({
     model: NATIVE_MODEL,

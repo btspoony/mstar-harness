@@ -45,22 +45,26 @@ export function assertSupervisorMountInfo(mountInfo: string): void {
   if (found.size !== Object.keys(expected).length) throw new Error("jev.channel-mount-unconfined");
 }
 
+export function assertSupervisorMountPaths(requestPath: string, statusFilePath: string): Readonly<{ requestDirectory: string; statusPath: string }> {
+  const requestDirectory = realpathSync(requestPath);
+  const statusPath = realpathSync(statusFilePath);
+  if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile() || requestDirectory === statusPath) {
+    throw new Error("jev.channel-mount-invalid");
+  }
+  return { requestDirectory, statusPath };
+}
+
 function assertSupervisorMounts(): Readonly<{ requestDirectory: string; statusPath: string }> {
   if (process.env.JEV_COMPONENT_WORKER !== "1" ||
       process.env.JEV_REQUESTS_DIR !== "/mnt/requests" ||
       process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-supervisor-unattested");
   assertSupervisorMountInfo(readFileSync("/proc/self/mountinfo", "utf8"));
-  const requestDirectory = realpathSync("/mnt/requests");
-  const statusPath = realpathSync("/mnt/status.json");
-  if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile() ||
-      requestDirectory === statusPath) {
-    throw new Error("jev.channel-mount-invalid");
-  }
-  try { accessSync(requestDirectory, constants.W_OK); }
+  const mounts = assertSupervisorMountPaths("/mnt/requests", "/mnt/status.json");
+  try { accessSync(mounts.requestDirectory, constants.W_OK); }
   catch { throw new Error("jev.channel-mount-unconfined"); }
   const uid = readFileSync("/proc/self/status", "utf8").match(/^Uid:\s+(\d+)\s+(\d+)/m);
   if (!uid || uid[1] === "0" || uid[2] === "0") throw new Error("jev.channel-process-unconfined");
-  return { requestDirectory, statusPath };
+  return mounts;
 }
 
 /** Test-only local mailbox injection. Production callers must use connectEvaluatorChannel. */
@@ -77,14 +81,22 @@ export async function connectEvaluatorChannelForTest(invocation: JudgmentInvocat
   return createChannel(assertSafeDirectory(requests, mailboxRoot), resolve(mailboxRoot, "status.json"), signal);
 }
 
+async function connectAtSupervisorMounts(mounts: Readonly<{ requestDirectory: string; statusPath: string }>, signal: AbortSignal): Promise<EvaluatorChannel> {
+  return attestEvaluatorChannel(await createChannel(mounts.requestDirectory, mounts.statusPath, signal));
+}
+
+/** Test-only injection for exercising the production connection with approved sibling mounts. */
+export async function connectEvaluatorChannelWithSupervisorMountsForTest(requestPath: string, statusFilePath: string, signal: AbortSignal): Promise<EvaluatorChannel> {
+  return connectAtSupervisorMounts(assertSupervisorMountPaths(requestPath, statusFilePath), signal);
+}
+
 /** Connects only to a supervisor-launched worker with externally enforced mounts. */
 export async function connectEvaluatorChannel(invocation: JudgmentInvocation, signal: AbortSignal): Promise<EvaluatorChannel> {
   if (signal.aborted || invocation === null || typeof invocation !== "object" || !isAbsolute(invocation.cwd) || !isAbsolute(invocation.workspace)) throw new Error("jev.channel-invocation-invalid");
   const root = realpathSync(invocation.cwd);
   const workspace = realpathSync(invocation.workspace);
   if (!within(workspace, root)) throw new Error("jev.channel-workspace-boundary");
-  const mounts = assertSupervisorMounts();
-  return attestEvaluatorChannel(await createChannel(mounts.requestDirectory, mounts.statusPath, signal));
+  return connectAtSupervisorMounts(assertSupervisorMounts(), signal);
 }
 
 async function createChannel(requestDirectory: string, statusPath: string, signal: AbortSignal): Promise<EvaluatorChannel> {

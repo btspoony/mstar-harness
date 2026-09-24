@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSupervisorMountInfo, connectEvaluatorChannel, connectEvaluatorChannelForTest, createEvaluatorMailbox } from "../src/evaluator-channel.js";
+import { assertSupervisorMountInfo, connectEvaluatorChannel, connectEvaluatorChannelForTest, connectEvaluatorChannelWithSupervisorMountsForTest, createEvaluatorMailbox } from "../src/evaluator-channel.js";
 import { isAttestedEvaluatorChannel } from "../src/evaluator-channel-trust.js";
 import { runReviewAdvice } from "../src/runtime.js";
 
@@ -116,6 +116,22 @@ describe("bounded evaluator mailbox", () => {
       if (workerMarker === undefined) delete process.env.JEV_COMPONENT_WORKER;
       else process.env.JEV_COMPONENT_WORKER = workerMarker;
     }
+  });
+
+  test("production channel connects with the supervisor launcher's sibling request and status mounts", async () => {
+    const root = makeRoot();
+    const requestDirectory = join(root, "requests");
+    mkdirSync(requestDirectory);
+    const statusPath = join(root, "status.json");
+    writeFileSync(statusPath, "{}");
+    const channel = await connectEvaluatorChannelWithSupervisorMountsForTest(requestDirectory, statusPath, new AbortController().signal);
+    expect(isAttestedEvaluatorChannel(channel)).toBe(true);
+    const mailbox = createEvaluatorMailbox({ runId: "run-1", requestDirectory, statusPath });
+    const pending = channel.submit({ packBytes: new TextEncoder().encode('{"runId":"run-1"}'), pilotDigest: "a".repeat(64) }, new AbortController().signal);
+    const request = await mailbox.readNext(new AbortController().signal);
+    expect(request?.runId).toBe("run-1");
+    mailbox.publishStatus({ runId: "run-1", requestId: request!.requestId, status: "recorded" });
+    expect(await pending).toEqual({ status: "recorded" });
   });
 
   test("readNext finds a fresh request behind more than 64 stale entries", async () => {

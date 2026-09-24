@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { NATIVE_ENDPOINT } from "../src/contracts.js";
 import { sendNativeRequest, type NativeTransportInput } from "../src/typesafe.js";
 
-const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
+const bytes = (value: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(value);
 const input = (overrides: Partial<NativeTransportInput> = {}) => ({
   requestBytes: bytes('{"prepared":true}'),
   credential: "runtime-secret",
