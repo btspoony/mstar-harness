@@ -60,3 +60,5 @@ export type {
   WorkUnitDispositionInput,
   WorkUnitReceipt,
 } from "./shadow-supervisor.js";
+export { classifyOutcome, clopperPearsonLower, summarizeQualification } from "./evaluation.js";
+export type { EvaluationOutcome, GoldLabel, OutcomeReason, QualificationRow, QualificationSummary } from "./evaluation.js";
