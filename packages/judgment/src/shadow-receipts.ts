@@ -128,7 +128,7 @@ export function assessShadowRun(input: FrozenShadowEvidence): ShadowRunAssessmen
   if (!validId(input.packId) || !/^[a-f0-9]{64}$/.test(input.packSha256) || !/^[a-f0-9]{64}$/.test(input.scopeSha256)) throw new Error("jev.receipt-identity-invalid");
   if (!Array.isArray(input.requiredUnitIds) || input.requiredUnitIds.length > 256 || input.requiredUnitIds.some((id) => !validId(id)) || new Set(input.requiredUnitIds).size !== input.requiredUnitIds.length) throw new Error("jev.required-units-invalid");
   if (digest(input.originalConsumption) !== baseline.originalConsumptionSha256 || digest(input.originalSeatOutputs) !== baseline.seatOutputsSha256) throw new Error("jev.original-consumption-baseline-mismatch");
-  const consumptionByUnit = new Map<string, Readonly<{ unitId: string; outputId: string; consumed: true }>>();
+  const consumptionByUnit = new Map<string, Readonly<{ unitId: string; outputId: string; consumed: true; consumedAt: number }>>();
   for (const unitId of input.requiredUnitIds) {
     const consumed = consumedOutputFor(input.originalConsumption, unitId);
     const outputExists = Array.isArray(input.originalSeatOutputs) && input.originalSeatOutputs.some((output) =>
