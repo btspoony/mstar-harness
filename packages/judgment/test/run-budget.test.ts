@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -89,6 +89,19 @@ describe("durable per-run reservations", () => {
     expect(results.filter((result) => result.output === "reserved")).toHaveLength(1);
     expect(results.filter((result) => result.output !== "reserved")).toHaveLength(1);
     expect(readdirSync(join(runDirectory, "reservations")).filter((name) => /^[a-f0-9]{64}\.json$/.test(name))).toHaveLength(1);
+  });
+
+  test("simultaneous contenders serialize reclamation of a stale lock generation", async () => {
+    const runDirectory = createRunDirectory();
+    const reservationDirectory = join(runDirectory, "reservations");
+    mkdirSync(reservationDirectory);
+    writeFileSync(join(reservationDirectory, ".reservation.lock"), "99999999:deadbeef-0000\n");
+    const results = await Promise.all([
+      spawnReservation(input(runDirectory, "a")),
+      spawnReservation(input(runDirectory, "b")),
+    ]);
+    expect(results.filter((result) => result.output === "reserved")).toHaveLength(1);
+    expect(readdirSync(reservationDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name))).toHaveLength(1);
   });
 
   test("a reservation left by a crashed process remains spent and cannot be retried", async () => {

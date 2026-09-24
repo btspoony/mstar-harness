@@ -17,6 +17,7 @@ import {
   type ReviewDecisionPack,
 } from "../src/contracts.js";
 import { buildA05Request, canonicalJsonBytes, type PreparedRequest } from "../src/review-advice.js";
+import { attestEvaluatorChannel } from "../src/evaluator-channel-trust.js";
 import {
   evaluateNative,
   resolveJudgmentConfig,
@@ -195,7 +196,7 @@ describe("inert judgment runtime", () => {
       readStdin: async () => { inputReads += 1; throw new Error("off must not read stdin"); },
     };
 
-    const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     expect(result).toEqual({ schema: "mstar.judgment-cli/v1", contractRevision: CONTRACT_REVISION, status: "disabled", advice: null });
     expect(inputReads).toBe(0);
     expect(submits).toBe(0);
@@ -226,6 +227,48 @@ describe("inert judgment runtime", () => {
     expect(result).toMatchObject({ status: "unavailable", code: "jev.channel-unavailable", advice: null });
     expect(reads).toBe(0);
   });
+  test("refuses structurally callable but unattested channels before collecting inputs", async () => {
+    const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    let reads = 0;
+    const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, {
+      submit: async () => channelResponse("recorded"),
+      cancel: async () => {},
+    }, { readFile: async () => { reads += 1; throw new Error("unattested channel must be rejected first"); } });
+    expect(result).toMatchObject({ status: "unavailable", code: "jev.channel-unavailable" });
+    expect(reads).toBe(0);
+  });
+
+  test("refuses TTY stdin and bounds stdin collection by the pilot deadline", async () => {
+    vi.useFakeTimers();
+    const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    const prepared = fixture();
+    let stdinReads = 0;
+    const channel: EvaluatorChannel = { submit: async () => channelResponse("recorded"), cancel: async () => {} };
+    const ttyResult = await runReviewAdvice({ ...invocation(workspace), input: { kind: "stdin" } }, new AbortController().signal, attestEvaluatorChannel(channel), {
+      readFile: async () => canonicalJsonBytes(prepared.pilot),
+      isStdinTTY: () => true,
+      readStdin: async () => { stdinReads += 1; throw new Error("TTY stdin must be rejected before reading"); },
+    });
+    expect(ttyResult).toMatchObject({ status: "invalid", code: "jev.stdin-tty" });
+    expect(stdinReads).toBe(0);
+
+    const shortPilot = { ...prepared.pilot, limits: { ...prepared.pilot.limits, timeoutMs: 10 } };
+    const { promise: stdinStarted, resolve: markStdinStarted } = Promise.withResolvers<void>();
+    const pending = runReviewAdvice({ ...invocation(workspace), input: { kind: "stdin" } }, new AbortController().signal, attestEvaluatorChannel(channel), {
+      readFile: async () => canonicalJsonBytes(shortPilot),
+      readStdin: async (_maxBytes, signal) => {
+        stdinReads += 1;
+        markStdinStarted();
+        return new Promise<Uint8Array>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stdin deadline")), { once: true }));
+      },
+    });
+    await stdinStarted;
+    vi.advanceTimersByTime(10);
+    await expect(pending).resolves.toMatchObject({ status: "unavailable", code: "jev.deadline" });
+    expect(stdinReads).toBe(1);
+    vi.useRealTimers();
+  });
+
 
   test("rejects pack paths outside the workspace before collecting them", async () => {
     const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
@@ -239,7 +282,7 @@ describe("inert judgment runtime", () => {
     const result = await runReviewAdvice({
       ...invocation(workspace),
       input: { kind: "file", path: "../private.json" },
-    }, new AbortController().signal, channel, {
+    }, new AbortController().signal, attestEvaluatorChannel(channel), {
       readFile: async () => { reads += 1; return pilotBytes; },
     });
 
@@ -262,7 +305,7 @@ describe("inert judgment runtime", () => {
       cancel: async () => {},
     };
 
-    const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     expect(result).toEqual({ schema: "mstar.judgment-cli/v1", contractRevision: CONTRACT_REVISION, status: "recorded", advice: null });
     expect(submission?.packBytes).toEqual(packBytes);
     expect(submission?.pilotDigest).toBe(createHash("sha256").update(pilotBytes).digest("hex"));
@@ -298,7 +341,7 @@ describe("inert judgment runtime", () => {
       cancel: async () => {},
     };
 
-    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     await readingPilot;
     vi.advanceTimersByTime(100);
     const result = await pending;
@@ -343,7 +386,7 @@ describe("inert judgment runtime", () => {
       cancel: async () => {},
     };
 
-    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     await readingPilot;
     vi.advanceTimersByTime(100);
     const result = await pending;
@@ -387,7 +430,7 @@ describe("inert judgment runtime", () => {
     const pending = runReviewAdvice({
       ...invocation(workspace),
       input: { kind: "stdin" },
-    }, new AbortController().signal, channel, effects);
+    }, new AbortController().signal, attestEvaluatorChannel(channel), effects);
     await readingStdin;
     vi.advanceTimersByTime(100);
     const result = await pending;
@@ -422,7 +465,7 @@ describe("inert judgment runtime", () => {
       cancel: async () => { cancels += 1; },
     };
 
-    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     await submitted;
     vi.advanceTimersByTime(100);
     const result = await pending;
@@ -441,7 +484,7 @@ describe("inert judgment runtime", () => {
       submit: async () => { throw new Error("optional service failure"); },
       cancel: async () => {},
     };
-    const optional = await runReviewAdvice(invocation(workspace), new AbortController().signal, failureChannel, effects);
+    const optional = await runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(failureChannel), effects);
     expect(optional).toMatchObject({ status: "unavailable", code: "jev.channel-failed" });
 
     const abortController = new AbortController();
@@ -455,7 +498,7 @@ describe("inert judgment runtime", () => {
       },
       cancel: async () => {},
     };
-    const pending = runReviewAdvice(invocation(workspace), abortController.signal, cancellationChannel, effects);
+    const pending = runReviewAdvice(invocation(workspace), abortController.signal, attestEvaluatorChannel(cancellationChannel), effects);
     await submitted;
     abortController.abort();
     const cancelled = await pending;

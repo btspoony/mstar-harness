@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { runShadowSupervisor, assessShadowRun, type ApprovedChild, type EvidenceClass, type ShadowMountPlan, type FrozenBaseline, type WorkUnitReceipt, type ProbeEvent, type ProbeLauncher } from "../src/shadow-supervisor.js";
 import { validatePack, validatePilot, type ReviewDecisionPack, type JudgmentPilot } from "../src/contracts.js";
+import { canonicalJsonBytes } from "../src/review-advice.js";
 
 const ROOT_USAGE = "Usage: shadow.ts <probe|exercise|study|assess> --root <authorized-run-root>";
 type StudyManifest = Readonly<{
@@ -75,8 +78,11 @@ export async function runShadowCommand(args = process.argv.slice(2), launcher?: 
     if (command === "assess") {
       const baseline = baselineFrom(root);
       const manifest = readManifest(root);
+      const pack = validatePack(manifest.pack);
       const studyResult = readStudyResult(root, manifest, baseline);
-      const result = assessShadowRun({ baseline, receipts: receiptsFrom(root), childEvents: eventsFrom(root), evidenceClass: manifest.evidenceClass, elapsedMs: studyResult.elapsedMs, childOutputBytes: studyResult.childOutputBytes });
+      const packSha256 = createHash("sha256").update(canonicalJsonBytes(pack)).digest("hex");
+      const scopeSha256 = createHash("sha256").update(canonicalJsonBytes(pack.scope)).digest("hex");
+      const result = assessShadowRun({ baseline, receipts: receiptsFrom(root), childEvents: eventsFrom(root), evidenceClass: manifest.evidenceClass, elapsedMs: studyResult.elapsedMs, childOutputBytes: studyResult.childOutputBytes, packId: pack.packId, packSha256, scopeSha256, requiredUnitIds: pack.tasks.map((task) => task.workUnit.id), originalConsumption: manifest.baseline.originalConsumption, originalSeatOutputs: manifest.baseline.seatOutputs });
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return result.failures.length === 0 ? 0 : 1;
     }
@@ -87,4 +93,4 @@ export async function runShadowCommand(args = process.argv.slice(2), launcher?: 
   }
 }
 
-if (import.meta.main) process.exitCode = await runShadowCommand();
+if (import.meta.main && process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await runShadowCommand();

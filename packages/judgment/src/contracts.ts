@@ -148,6 +148,9 @@ function digest(value: unknown, path: string): string {
 
 function array(value: unknown, path: string, minimum = 0): unknown[] {
   if (!Array.isArray(value) || value.length < minimum) return fail(path, `expected array with at least ${minimum} item(s)`);
+  for (let i = 0; i < value.length; i++) {
+    if (!Object.hasOwn(value, i)) fail(`${path}[${i}]`, "arrays must not contain holes");
+  }
   return value;
 }
 
@@ -216,19 +219,20 @@ export function validatePack(value: unknown): ReviewDecisionPack {
     return entry;
   });
   const subjectIds = new Set<string>();
-  const subjects = array(state.subjects, "pack.state.subjects", 2).map((item, i) => {
+  const subjects: { id: string }[] = array(state.subjects, "pack.state.subjects", 2).map((item, i) => {
     const path = `pack.state.subjects[${i}]`;
     const subject = record(item, path);
     exactKeys(subject, ["id", "kind", "text", "evidenceIds"], path);
-    uniqueId(string(subject.id, `${path}.id`), subjectIds, `${path}.id`);
+    const id = string(subject.id, `${path}.id`);
+    uniqueId(id, subjectIds, `${path}.id`);
     if (subject.kind !== "finding") fail(`${path}.kind`, "A05 requires finding subjects");
     string(subject.text, `${path}.text`);
     const refs = array(subject.evidenceIds, `${path}.evidenceIds`, 1).map((ref, j) => {
-      const id = string(ref, `${path}.evidenceIds[${j}]`);
-      if (!evidenceIds.has(id)) fail(`${path}.evidenceIds[${j}]`, "dangling evidence ID");
-      return id;
+      const evidenceId = string(ref, `${path}.evidenceIds[${j}]`);
+      if (!evidenceIds.has(evidenceId)) fail(`${path}.evidenceIds[${j}]`, "dangling evidence ID");
+      return evidenceId;
     });
-    return { ...subject, evidenceIds: refs };
+    return { id };
   });
   if (subjects.length !== 2) fail("pack.state.subjects", "A05 requires exactly two ordered subjects");
 
@@ -295,8 +299,8 @@ export function validatePilot(value: unknown): JudgmentPilot {
   });
   if (new Set(manifest.map((row) => row.packId)).size !== manifest.length) fail("pilot.packManifest", "duplicate pack ID");
 
-  const limits = record(p.limits, "pilot.limits");
-  const limitKeys = ["timeoutMs", "maxRunElapsedMs", "maxCallsPerRun", "maxConcurrentRequests", "maxTasksPerPack", "maxPacksPerRun", "maxPairs", "maxPackBytes", "maxRequestBytes", "maxResponseBytes", "maxAttempts"];
+  const limitKeys = ["timeoutMs", "maxRunElapsedMs", "maxCallsPerRun", "maxConcurrentRequests", "maxTasksPerPack", "maxPacksPerRun", "maxPairs", "maxPackBytes", "maxRequestBytes", "maxResponseBytes", "maxAttempts"] as const;
+  const limits = record(p.limits, "pilot.limits") as Record<(typeof limitKeys)[number], number>;
   exactKeys(limits, limitKeys, "pilot.limits");
   for (const key of limitKeys) integer(limits[key], `pilot.limits.${key}`);
   if (limits.maxCallsPerRun > 1_000 || limits.maxPacksPerRun > 1_000 || limits.maxConcurrentRequests !== 1 || limits.maxTasksPerPack > 4 || limits.maxPairs > 4 || limits.timeoutMs > 10_000 || limits.maxRunElapsedMs > 10_000_000 || limits.maxPackBytes > 65_536 || limits.maxRequestBytes > 32_768 || limits.maxResponseBytes > 65_536 || limits.maxAttempts !== 1) {

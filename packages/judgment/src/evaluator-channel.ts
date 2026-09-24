@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { attestEvaluatorChannel } from "./evaluator-channel-trust.js";
 import type { EvaluatorChannel, EvaluatorChannelResponse, JudgmentInvocation } from "./runtime.js";
 
 const MAX_REQUEST_BYTES = 1_048_576;
@@ -21,50 +22,59 @@ function assertSafeDirectory(path: string, root: string): string {
   if (!within(root, canonical) || !statSync(canonical).isDirectory()) throw new Error("jev.channel-path-invalid");
   return canonical;
 }
-function atomicWrite(path: string, bytes: Uint8Array): void {
-  const temp = `${path}.${randomUUID()}.tmp`;
-  const fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-  try { writeFileSync(fd, bytes); fsyncSync(fd); } catch (error) { rmSync(temp, { force: true }); throw error; }
-  finally { closeSync(fd); }
-  renameSync(temp, path);
-  const directory = openSync(dirname(path), constants.O_RDONLY);
-  try { fsyncSync(directory); } finally { closeSync(directory); }
-}
-function writeStatus(path: string, status: PublicStatus): void {
-  const bytes = new TextEncoder().encode(JSON.stringify(status));
-  if (bytes.byteLength > MAX_STATUS_BYTES) throw new Error("jev.status-too-large");
-  atomicWrite(path, bytes);
-}
-function parseRunId(bytes: Uint8Array): string | undefined {
-  try {
-    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { runId?: unknown };
-    return validId(value?.runId) ? value.runId : undefined;
-  } catch { return undefined; }
+
+function mountedReadOnly(path: string, expected: "ro" | "rw"): boolean {
+  const mountInfo = readFileSync("/proc/self/mountinfo", "utf8");
+  const escapedPath = path.replaceAll("\\", "\\134").replaceAll(" ", "\\040").replaceAll("\t", "\\011").replaceAll("\n", "\\012");
+  const entries = mountInfo.split("\n").filter(Boolean);
+  const matching = entries.filter((line) => {
+    const fields = line.split(" - ", 1)[0]!.split(" ");
+    return fields[4] === escapedPath && fields[5]!.split(",").includes(expected);
+  });
+  return matching.length === 1;
 }
 
-/** Creates the unprivileged mailbox client. It carries no evaluator capability or artifact path. */
+function assertSupervisorMounts(): Readonly<{ requestDirectory: string; statusPath: string }> {
+  if (process.env.JEV_COMPONENT_WORKER !== "1" ||
+      process.env.JEV_REQUESTS_DIR !== "/mnt/requests" ||
+      process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-supervisor-unattested");
+  if (!mountedReadOnly("/mnt/requests", "rw") || !mountedReadOnly("/mnt/status.json", "ro")) throw new Error("jev.channel-mount-unconfined");
+  const requestDirectory = realpathSync("/mnt/requests");
+  const statusPath = realpathSync("/mnt/status.json");
+  if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile() ||
+      requestDirectory === statusPath || !within(requestDirectory, statusPath) && !within(statusPath, requestDirectory)) {
+    throw new Error("jev.channel-mount-invalid");
+  }
+  const uid = readFileSync("/proc/self/status", "utf8").match(/^Uid:\s+(\d+)\s+(\d+)/m);
+  if (!uid || uid[1] === "0" || uid[2] === "0") throw new Error("jev.channel-process-unconfined");
+  return { requestDirectory, statusPath };
+}
+
+/** Test-only local mailbox injection. Production callers must use connectEvaluatorChannel. */
+export async function connectEvaluatorChannelForTest(invocation: JudgmentInvocation, signal: AbortSignal): Promise<EvaluatorChannel> {
+  if (signal.aborted || invocation === null || typeof invocation !== "object" || !isAbsolute(invocation.cwd) || !isAbsolute(invocation.workspace)) throw new Error("jev.channel-invocation-invalid");
+  const root = realpathSync(invocation.cwd);
+  const workspace = realpathSync(invocation.workspace);
+  if (!within(workspace, root)) throw new Error("jev.channel-workspace-boundary");
+  const mailbox = resolve(root, CHANNEL_NAME);
+  if (!existsSync(mailbox)) mkdirSync(mailbox, { mode: 0o700 });
+  const mailboxRoot = assertSafeDirectory(mailbox, root);
+  const requests = resolve(mailboxRoot, "requests");
+  if (!existsSync(requests)) mkdirSync(requests, { mode: 0o700 });
+  return createChannel(assertSafeDirectory(requests, mailboxRoot), resolve(mailboxRoot, "status.json"), signal);
+}
+
+/** Connects only to a supervisor-launched worker with externally enforced mounts. */
 export async function connectEvaluatorChannel(invocation: JudgmentInvocation, signal: AbortSignal): Promise<EvaluatorChannel> {
   if (signal.aborted || invocation === null || typeof invocation !== "object" || !isAbsolute(invocation.cwd) || !isAbsolute(invocation.workspace)) throw new Error("jev.channel-invocation-invalid");
   const root = realpathSync(invocation.cwd);
   const workspace = realpathSync(invocation.workspace);
   if (!within(workspace, root)) throw new Error("jev.channel-workspace-boundary");
-  let requestDirectory: string;
-  let statusPath: string;
-  if (process.env.JEV_REQUESTS_DIR !== undefined || process.env.JEV_STATUS_PATH !== undefined) {
-    if (process.env.JEV_REQUESTS_DIR !== "/mnt/requests" || process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-path-invalid");
-    requestDirectory = realpathSync("/mnt/requests");
-    statusPath = realpathSync("/mnt/status.json");
-    if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile()) throw new Error("jev.channel-path-invalid");
-  } else {
-    const mailbox = resolve(root, CHANNEL_NAME);
-    if (!existsSync(mailbox)) mkdirSync(mailbox, { mode: 0o700 });
-    const mailboxRoot = assertSafeDirectory(mailbox, root);
-    const requests = resolve(mailboxRoot, "requests");
-    if (!existsSync(requests)) mkdirSync(requests, { mode: 0o700 });
-    requestDirectory = assertSafeDirectory(requests, mailboxRoot);
-    statusPath = resolve(mailboxRoot, "status.json");
-    if (existsSync(statusPath) && (!within(mailboxRoot, realpathSync(statusPath)) || !statSync(statusPath).isFile())) throw new Error("jev.channel-path-invalid");
-  }
+  const mounts = assertSupervisorMounts();
+  return attestEvaluatorChannel(await createChannel(mounts.requestDirectory, mounts.statusPath, signal));
+}
+
+async function createChannel(requestDirectory: string, statusPath: string, signal: AbortSignal): Promise<EvaluatorChannel> {
   let closed = false;
   let activeRequest: string | undefined;
   let activeRunId: string | undefined;
@@ -113,6 +123,27 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
     },
   });
 }
+function atomicWrite(path: string, bytes: Uint8Array): void {
+  const temp = `${path}.${randomUUID()}.tmp`;
+  const fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  try { writeFileSync(fd, bytes); fsyncSync(fd); } catch (error) { rmSync(temp, { force: true }); throw error; }
+  finally { closeSync(fd); }
+  renameSync(temp, path);
+  const directory = openSync(dirname(path), constants.O_RDONLY);
+  try { fsyncSync(directory); } finally { closeSync(directory); }
+}
+function writeStatus(path: string, status: PublicStatus): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(status));
+  if (bytes.byteLength > MAX_STATUS_BYTES) throw new Error("jev.status-too-large");
+  atomicWrite(path, bytes);
+}
+function parseRunId(bytes: Uint8Array): string | undefined {
+  try {
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { runId?: unknown };
+    return validId(value?.runId) ? value.runId : undefined;
+  } catch { return undefined; }
+}
+
 
 /** Trusted-supervisor-only file mailbox adapter; never returns evaluator data or capabilities to the client. */
 export function createEvaluatorMailbox(options: PublicChannelOptions): Readonly<{
@@ -131,7 +162,7 @@ export function createEvaluatorMailbox(options: PublicChannelOptions): Readonly<
   return Object.freeze({
     readNext: async (signal) => {
       while (!signal.aborted) {
-        const names = (await readdir(requestDirectory)).filter((name) => /^[0-9a-f-]{36}\.json$/.test(name)).sort().slice(0, 64);
+        const names = (await readdir(requestDirectory)).filter((name) => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
         for (const name of names) {
           const path = resolve(requestDirectory, name);
           const info = statSync(path);
