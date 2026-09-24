@@ -262,7 +262,8 @@ export function provisionAuthorGateLayout(input: {
 }
 
 export async function runAuthorPreDispatchGate(input: AuthorGateInput, launcher: AuthorProbeLauncher = dockerAuthorLauncher): Promise<AuthorGateResult> {
-  if (!isAbsolute(input.gateRoot) || !validId(input.sessionId) || input.evidenceClass === "named-host") throw new Error("jev.author-gate-authority-invalid");
+  const evidenceClass = input.evidenceClass as EvidenceClass;
+  if (!isAbsolute(input.gateRoot) || !validId(input.sessionId) || evidenceClass === "named-host") throw new Error("jev.author-gate-authority-invalid");
   const gateRoot = realpathSync(input.gateRoot);
   assertAuthorMountPlan(input.mountPlan, gateRoot, input.child);
   const transcriptPath = resolve(gateRoot, "supervisor", "access-transcript.jsonl");

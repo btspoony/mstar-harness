@@ -341,7 +341,8 @@ export async function runAnnotationSeatPreDispatchGate(
   input: AnnotationSeatGateInput,
   launcher: AnnotationSeatProbeLauncher = dockerAnnotationSeatLauncher,
 ): Promise<AnnotationSeatGateResult> {
-  if (!isAbsolute(input.gateRoot) || !validId(input.sessionId) || !validSeat(input.seat) || input.evidenceClass === "named-host") throw new Error("jev.annotation-seat-gate-authority-invalid");
+  const evidenceClass = input.evidenceClass as EvidenceClass;
+  if (!isAbsolute(input.gateRoot) || !validId(input.sessionId) || !validSeat(input.seat) || evidenceClass === "named-host") throw new Error("jev.annotation-seat-gate-authority-invalid");
   const gateRoot = realpathSync(input.gateRoot);
   assertAnnotationSeatMountPlan(input.mountPlan, gateRoot, input.child);
   const transcriptPath = resolve(gateRoot, "supervisor", "access-transcript.jsonl");

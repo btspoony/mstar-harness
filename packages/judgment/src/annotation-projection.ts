@@ -204,10 +204,11 @@ function projectGroup(group: AuthorGroup, usedIds: Set<string>): { projected: Pr
   const opaqueCausalClusterId = opaqueId128(usedIds);
   const fileMap: Record<string, string> = {};
   const projectedFiles: Record<string, Readonly<{ text: string; sha256: string }>> = {};
-  for (const authorPath of Object.keys(group.sourceFiles).sort()) {
+  const sourceFiles = group.sourceFiles!;
+  for (const authorPath of Object.keys(sourceFiles).sort()) {
     const opaquePath = opaqueId128(usedIds);
     fileMap[authorPath] = opaquePath;
-    const file = group.sourceFiles[authorPath];
+    const file = sourceFiles[authorPath];
     const text = screenSlotLeaks(file.text ?? file.content ?? "");
     if (!text || !file.sha256) throw new Error("jev.annotation-source-file-invalid");
     projectedFiles[opaquePath] = Object.freeze({ text, sha256: file.sha256 });
