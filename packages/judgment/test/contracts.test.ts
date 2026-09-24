@@ -108,6 +108,13 @@ describe("versioned judgment contracts", () => {
     expect(() => validatePack(wrongCase)).toThrow("only JEV-A05");
   });
 
+  test("rejects sparse pack arrays", () => {
+    const sparseSubjects = makePack();
+    sparseSubjects.state.subjects = new Array(2);
+    sparseSubjects.tasks[0].subjectIds = new Array(2);
+    expect(() => validatePack(sparseSubjects)).toThrow("arrays must not contain holes");
+  });
+
   test("rejects malformed and duplicate/dangling pack bindings", () => {
     const duplicate = makePack();
     duplicate.sources.push({ ...duplicate.sources[0] });
