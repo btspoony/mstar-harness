@@ -344,14 +344,14 @@ describe("qualification integrity", () => {
       expect(await runEvaluationCommand(["check-protocol", "--root", root])).toBe(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("rejects contradictory reservation prose even when it contains the required disclaimer", async () => {
+  test("accepts frozen provider-context prose but rejects missing method and contradictory claims", async () => {
     const budget = {
       contractRevision: "phase3a-native-20260924",
       tokenPolicy: {
         method: "provider-context-reservation/v1",
         perAttemptReservation: 65_536,
         maxRunReservedInputTokens: 65_536_000,
-        providerContextPolicy: "local tokenizer estimate enabled; no local tokenizer/preflight context-fit claim",
+        providerContextPolicy: "64k total context and 32k state plus longest question per documented jev-1.13.0 accepted request; provider enforces context, no local tokenizer/preflight context-fit claim",
       },
       requestAllocation: {
         developmentVariantCallsMax: 120, holdoutVariantCallsMax: 600, temporalVariantCallsMax: 48,
@@ -364,14 +364,17 @@ describe("qualification integrity", () => {
       maxRunOptionalElapsedMs: 10_000_000, maxPackBytes: 65_536,
       maxOutboundRequestBytes: 32_768, maxResponseBytes: 65_536,
     };
-    const root = fixtureRoot({
-      "protocol.json": JSON.stringify({ schema: "mstar.qualification-protocol/v1", contractRevision: "phase3a-native-20260924", mode: "shadow", transport: "native-typesafe" }),
-      "budget.json": JSON.stringify(budget),
-      "permission.json": JSON.stringify({ contractRevision: "phase3a-native-20260924", status: "synthetic-only-policy-declaration; not a self-authorizing pilot" }),
-    });
+    const protocol = JSON.stringify({ schema: "mstar.qualification-protocol/v1", contractRevision: "phase3a-native-20260924", mode: "shadow", transport: "native-typesafe" });
+    const permission = JSON.stringify({ contractRevision: "phase3a-native-20260924", status: "synthetic-only-policy-declaration; not a self-authorizing pilot" });
+    const makeRoot = (value: typeof budget) => fixtureRoot({ "protocol.json": protocol, "budget.json": JSON.stringify(value), "permission.json": permission });
+    const valid = makeRoot(budget);
+    const missingMethod = makeRoot({ ...budget, tokenPolicy: { ...budget.tokenPolicy, method: "" } });
+    const contradictory = makeRoot({ ...budget, tokenPolicy: { ...budget.tokenPolicy, providerContextPolicy: `${budget.tokenPolicy.providerContextPolicy}; local tokenizer estimate enabled` } });
     try {
-      expect(await runEvaluationCommand(["check-protocol", "--root", root])).toBe(2);
-    } finally { rmSync(root, { recursive: true, force: true }); }
+      expect(await runEvaluationCommand(["check-protocol", "--root", valid])).toBe(0);
+      expect(await runEvaluationCommand(["check-protocol", "--root", missingMethod])).toBe(2);
+      expect(await runEvaluationCommand(["check-protocol", "--root", contradictory])).toBe(2);
+    } finally { for (const root of [valid, missingMethod, contradictory]) rmSync(root, { recursive: true, force: true }); }
   });
   test("requires manifest schema and well-formed frozen split identity", async () => {
     const valid = frozenRoot();

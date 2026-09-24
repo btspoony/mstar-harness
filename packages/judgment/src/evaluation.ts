@@ -23,6 +23,60 @@ export type QualificationRow = Readonly<{
   outputTokens?: number | null;
   costUsd?: number | null;
 }>;
+export type CalibrationBand = Readonly<{ id: string; same: readonly [number, number]; different: readonly [number, number]; insufficient: readonly [number, number] }>;
+export type CalibrationObservation = Readonly<{
+  groupId: string;
+  gold: GoldLabel;
+  choice: A05Label | null;
+  topProbability: number | null;
+  confidence: number | null;
+}>;
+/** Provider-visible pair IDs must be opaque, never cohort/run/shard labels. */
+export function developmentPairId(variantId: string): string {
+  if (!/^[a-f0-9]{32}$/.test(variantId)) throw new TypeError("qualification.variant-identity-invalid");
+  return `pair-${variantId}`;
+}
+
+/** The frozen development-only rule; no unobserved response can count toward an accepted decision. */
+export function selectDevelopmentBand(
+  observations: readonly CalibrationObservation[],
+  candidates: readonly CalibrationBand[],
+  minimumCorrectSame = 15,
+): Readonly<{ band: CalibrationBand | null; candidates: readonly Readonly<{ id: string; acceptedCorrectSame: number; dangerousFalsePositives: number; acceptedDecisions: number; admissible: boolean }>[] }> {
+  const groups = new Set<string>();
+  for (const row of observations) {
+    if (groups.has(row.groupId) || !row.groupId || !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.gold) ||
+        row.choice !== null && !["same_cause", "different_cause", "insufficient_evidence"].includes(row.choice) ||
+        row.choice !== null && (row.topProbability === null || row.confidence === null ||
+          !Number.isFinite(row.topProbability) || !Number.isFinite(row.confidence) ||
+          row.topProbability < 0 || row.topProbability > 1 || row.confidence < 0 || row.confidence > 1)) {
+      throw new TypeError("qualification.calibration-observation-invalid");
+    }
+    groups.add(row.groupId);
+  }
+  let selected: CalibrationBand | null = null;
+  let maximum = -1;
+  const results = candidates.map((candidate) => {
+    let acceptedCorrectSame = 0, dangerousFalsePositives = 0, acceptedDecisions = 0;
+    for (const row of observations) {
+      if (row.choice === null || row.topProbability === null || row.confidence === null || row.gold === "unresolved") continue;
+      const thresholds = row.choice === "same_cause" ? candidate.same : row.choice === "different_cause" ? candidate.different : candidate.insufficient;
+      if (row.topProbability < thresholds[0] || row.confidence < thresholds[1]) continue;
+      if (row.choice === "same_cause") {
+        if (row.gold === "same_cause") acceptedCorrectSame++;
+        else dangerousFalsePositives++;
+      }
+      if (row.choice !== "insufficient_evidence") acceptedDecisions++;
+    }
+    const admissible = dangerousFalsePositives === 0 && acceptedCorrectSame >= minimumCorrectSame;
+    if (admissible && acceptedDecisions >= maximum) {
+      maximum = acceptedDecisions;
+      selected = candidate; // Frozen candidates are ordered b0..b4; a tie takes the stricter band.
+    }
+    return { id: candidate.id, acceptedCorrectSame, dangerousFalsePositives, acceptedDecisions, admissible };
+  });
+  return { band: selected, candidates: results };
+}
 
 export type FreezeCorpusGroup = Readonly<{
   id: string;

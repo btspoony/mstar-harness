@@ -1,13 +1,21 @@
-import { createHash } from "node:crypto";
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
-import { MAX_RUN_RESERVED_INPUT_TOKENS, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT } from "../src/contracts.js";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { MAX_RUN_RESERVED_INPUT_TOKENS, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot, type A05Label, type JudgmentPilot, type ReviewDecisionPack } from "../src/contracts.js";
+import { buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
+import { sendNativeRequest } from "../src/typesafe.js";
 import { runShadowSupervisor, type ShadowRunInput } from "../src/shadow-supervisor.js";
 import {
   validateFreezeGroups,
   validateFreezeLabels,
   validateFreezeQuarantine,
   summarizeQualification,
+  selectDevelopmentBand,
+  developmentPairId,
+  type CalibrationBand,
+  type CalibrationObservation,
   type FreezeEligibleDenominators,
   type FreezeQuarantine,
   type QualificationRow,
@@ -52,7 +60,7 @@ function fileDigest(root: string, rel: string): string {
   return digest(readFileSync(canonical));
 }
 type Manifest = { schema: string; contractRevision: string; files?: Array<{ path: string; sha256: string }> };
-type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
+type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; sourceVariant?: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
 type Gold = Array<{ itemId: string; groupId: string; label: string; eligible?: boolean; quarantined?: boolean }>;
 type Annotation = {
   itemId: string; groupId?: string; label: string; reducedPackSupport: unknown;
@@ -129,6 +137,342 @@ function verifyFiles(root: string, manifest: Manifest): void {
   }
 }
 function assertRevision(value: { contractRevision?: string }): void { if (value.contractRevision !== REVISION) fail("Frozen revision mismatch"); }
+function providerContextDeclaration(value: unknown): { totalContext: number; stateContext: number; model: string; localTokenizerEstimate: false; localPreflightContextFitClaim: false } {
+  if (typeof value !== "string") fail("Frozen provider-context declaration must be a string");
+  const match = /^(\d+)k total context and (\d+)k state plus longest question per documented (jev-[\d.]+) accepted request; provider enforces context, no local tokenizer\/preflight context-fit claim$/.exec(value);
+  if (!match) fail("Frozen provider-context declaration is missing or contradictory");
+  const declaration = {
+    totalContext: Number(match[1]) * 1_024,
+    stateContext: Number(match[2]) * 1_024,
+    model: match[3]!,
+    localTokenizerEstimate: false as const,
+    localPreflightContextFitClaim: false as const,
+  };
+  if (declaration.totalContext !== 65_536 || declaration.stateContext !== 32_768 || declaration.model !== "jev-1.13.0") {
+    fail("Frozen provider-context capacity or model mismatch");
+  }
+  return declaration;
+}
+type DevelopmentVariant = { id: string; sourceVariant: string; primary: boolean; itemDigest: string; sourceSha256: string };
+type DevelopmentGroup = { id: string; sourceSlot: string; lineageId: string; causalClusterId: string; variants: DevelopmentVariant[] };
+type SyntheticCitation = { sourceRef: string; startLine: number; endLine: number; excerpt: string };
+type SyntheticSide = { id: string; claim: string; citations?: Array<SyntheticCitation | { path: string; startLine: number; endLine: number; excerpt: string }>; evidence?: Array<{ file: string; startLine: number; endLine: number; excerpt: string }> };
+type SyntheticFile = { sha256: string; text?: string; content?: string };
+type SyntheticGroup = { id: string; sourceFiles?: Record<string, SyntheticFile>; files?: Record<string, SyntheticFile>; variants: Array<{ id: string; left: SyntheticSide; right: SyntheticSide }> };
+
+function developmentCitations(side: SyntheticSide, files: Record<string, SyntheticFile>): SyntheticCitation[] | null {
+  if (side.citations && side.evidence) return null;
+  const raw = side.citations ?? side.evidence;
+  const items = raw?.map((item) => ({
+    sourceRef: "sourceRef" in item ? item.sourceRef : "file" in item ? item.file : item.path,
+    startLine: item.startLine, endLine: item.endLine, excerpt: item.excerpt,
+  }));
+  if (!Array.isArray(items) || !items.length ||
+      items.some((item) => !files[item.sourceRef] || !Number.isInteger(item.startLine) ||
+        !Number.isInteger(item.endLine) || item.startLine < 1 || item.endLine < item.startLine ||
+        typeof item.excerpt !== "string" || !item.excerpt ||
+        !(files[item.sourceRef]!.text ?? files[item.sourceRef]!.content)?.includes(item.excerpt))) return null;
+  return items;
+}
+
+async function calibrateDevelopment(root: string, protocol: Record<string, unknown>): Promise<{ status: string; attempted: number; succeeded: number; failed: number }> {
+  // Existing outcomes are spent even when the CLI never reached the evaluator.
+  const evidence = resolve(root, "runs/development");
+  if (existsSync(resolve(root, "development-run.json"))) fail("Development run already sealed; no replay");
+  const previousManifestPath = resolve(evidence, "run-manifest.json");
+  const previousManifest = existsSync(previousManifestPath)
+    ? readJson<{ runId: string; plannedVariants: number; identity: { cliSha256: string }; protocolSha256: string; splitSha256: string; goldSha256: string }>(root, "runs/development/run-manifest.json")
+    : null;
+  if (await runEvaluationCommand(["check-protocol", "--root", root]) !== 0 ||
+      await runEvaluationCommand(["check-freeze", "--root", root]) !== 0) fail("Development admission checks failed");
+  const permission = readJson<Record<string, unknown>>(root, "permission.json");
+  const budget = readJson<Record<string, any>>(root, "budget.json");
+  const freeze = readJson<Record<string, unknown>>(root, "freeze.json");
+  if (permission.status !== "synthetic-only-policy-declaration; not a self-authorizing pilot" ||
+      permission.dataClass !== "newly authored synthetic source claims and bounded literal evidence excerpts only" ||
+      permission.endpoint !== protocol.providerEndpoint || permission.model !== protocol.requestedModel ||
+      permission.mode !== "shadow" || permission.transport !== "native-typesafe" ||
+      !permission.authorizedBy || !permission.permissionRef || !permission.isolation) fail("Synthetic run permission cannot be bound");
+  const split = readJson<{ freezeId: string; assignments: Record<string, string>; quarantine: FreezeQuarantine }>(root, "split-manifest.json");
+  const corpus = readJson<Corpus>(root, "corpus.json");
+  const excluded = new Set(split.quarantine.excludedGroupIds);
+  const development = corpus.groups.filter((group) => split.assignments[group.id] === "development");
+  if (development.length !== 60 || development.filter((group) => !excluded.has(group.id)).length !== 59) fail("Development denominator is not frozen");
+  const groups: DevelopmentGroup[] = development.filter((group) => !excluded.has(group.id)).map((group) => {
+    if (!group.sourceSlot || !group.variants.every((variant) => variant.sourceVariant && variant.itemDigest && variant.sourceSha256 && typeof variant.primary === "boolean")) fail("Development projection lacks frozen variant identity");
+    return { id: group.id, sourceSlot: group.sourceSlot, lineageId: group.lineageId,
+      causalClusterId: group.causalClusterId, variants: group.variants as DevelopmentVariant[] };
+  });
+  const variantIds = new Set(groups.flatMap((group) => group.variants.map((variant) => variant.id)));
+  const gold = new Map<string, { groupId: string; label: string }>();
+  // Filter by opaque development item ID before parsing gold; no holdout label enters the tuner view.
+  for (const line of readFileSync(resolve(root, "gold/adjudicated.jsonl"), "utf8").split(/\r?\n/)) {
+    const item = /^{"itemId":"([^"]+)"/.exec(line)?.[1];
+    if (item && variantIds.has(item)) gold.set(item, JSON.parse(line));
+  }
+  if (gold.size !== variantIds.size) fail("Development gold projection incomplete");
+  const sourceSlots = new Set(groups.map((group) => group.sourceSlot));
+  const sources = new Map<string, SyntheticGroup>();
+  for (let shard = 1; shard <= 4; shard++) {
+    for (const line of readFileSync(resolve(root, `sources/shard-${shard}.jsonl`), "utf8").split(/\r?\n/)) {
+      const slot = /^{"id":"([^"]+)"/.exec(line)?.[1];
+      if (slot && sourceSlots.has(slot)) sources.set(slot, JSON.parse(line));
+    }
+  }
+  if (sources.size !== sourceSlots.size || groups.some((group) => group.variants.some((variant) => gold.get(variant.id)?.groupId !== group.id))) fail("Development source/gold join invalid");
+  const planned = groups.flatMap((group) => group.variants.map((variant) => ({ group, variant, original: sources.get(group.sourceSlot)?.variants.find((entry) => entry.id === variant.sourceVariant) })));
+  if (planned.length > budget.requestAllocation.developmentVariantCallsMax || planned.some((entry) => !entry.original)) fail("Development requests exceed reservation or lack frozen source");
+
+  const checkout = resolve(fileURLToPath(import.meta.url), "../../../..");
+  const cliPath = resolve(checkout, "packages/cli/dist/mstar-harness.js");
+  const packagePath = resolve(checkout, "packages/cli/package.json");
+  if (!existsSync(cliPath) || !statSync(cliPath).isFile()) fail("Packaged native CLI is absent; build packages/cli first");
+  const cliSha256 = digest(readFileSync(cliPath));
+  const packageVersion = JSON.parse(readFileSync(packagePath, "utf8")).version as string;
+  const cliVersion = execFileSync(process.execPath, [cliPath, "--version"], { encoding: "utf8" }).trim();
+  if (typeof process.env.TYPESAFE_API_KEY !== "string" || !process.env.TYPESAFE_API_KEY) fail("jev.credential-unavailable");
+  const dockerPath = execFileSync("which", ["docker"], { encoding: "utf8" }).trim();
+  const baseImageTag = "jev-shadow-reviewer:iter-20260924-jev-3a";
+  const baseImage = execFileSync(dockerPath, ["image", "inspect", baseImageTag, "--format", "{{.Id}}"], { encoding: "utf8" }).trim();
+  if (!/^sha256:[a-f0-9]{64}$/.test(baseImage)) fail("Pinned sandbox base image unavailable");
+  const imageDigest = execFileSync(dockerPath, ["build", "--pull=false", "--network=none", "-q", "-"], {
+    input: `FROM ${baseImageTag}\nENTRYPOINT []\n`, encoding: "utf8",
+  }).trim();
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+      execFileSync(dockerPath, ["image", "inspect", baseImageTag, "--format", "{{.Id}}"], { encoding: "utf8" }).trim() !== baseImage) {
+    fail("Approved CLI sandbox image changed during build");
+  }
+
+  const candidates = (protocol.calibration as { candidates: CalibrationBand[]; selection: string }).candidates;
+  if (!Array.isArray(candidates) || candidates.length !== 5 || candidates.some((candidate, index) => candidate.id !== `b${index}`)) fail("Frozen calibration candidates invalid");
+  mkdirSync(evidence, { recursive: true, mode: 0o700 });
+  const runIdentity = `development-${randomUUID()}`;
+  const identity = { cliPath, cliVersion, packageVersion, cliSha256, builderSha256: cliSha256, imageDigest, model: protocol.requestedModel, revision: REVISION };
+  const manifest = {
+    schema: "mstar.qualification-development-manifest/v1", runId: runIdentity, identity,
+    protocolSha256: fileDigest(root, "protocol.json"), permissionSha256: fileDigest(root, "permission.json"),
+    budgetSha256: fileDigest(root, "budget.json"), freezeSha256: fileDigest(root, "freeze.json"),
+    splitSha256: freeze.splitSha256, goldSha256: freeze.goldSha256,
+    cohort: "development", assignedGroups: 60, eligibleGroups: 59, plannedVariants: planned.length,
+    maxCalls: budget.requestAllocation.developmentVariantCallsMax, maxAttemptsPerRequest: 1,
+    tokenReservationPerAttempt: budget.tokenPolicy.perAttemptReservation,
+    knownHoldoutLimitation: "missing-caller-or-branch: 6 eligible groups versus frozen floor 14; Q7 endpoint inconclusive",
+    previousRunId: previousManifest?.runId ?? null,
+    previousBuildSha256: previousManifest?.identity.cliSha256 ?? null,
+  };
+  if (previousManifest) {
+    if (previousManifest.plannedVariants !== planned.length ||
+        previousManifest.protocolSha256 !== manifest.protocolSha256 ||
+        previousManifest.splitSha256 !== manifest.splitSha256 ||
+        previousManifest.goldSha256 !== manifest.goldSha256 ||
+        existsSync(resolve(evidence, "continuation-manifest.json"))) fail("Development continuation identity invalid");
+    writeFileSync(resolve(evidence, "continuation-manifest.json"), JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
+  } else writeFileSync(previousManifestPath, JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
+  const observations = new Map<string, CalibrationObservation>();
+  const outcomes: Array<Record<string, unknown>> = [];
+  let attempted = 0, succeeded = 0, failed = 0, cliSubmissions = 0, shadowFailures = 0;
+  const worker = `import { spawnSync } from "node:child_process";
+const runId=process.argv[2], start=Date.now();
+const event=type=>process.stdout.write(JSON.stringify({type,runId,at:Date.now()-start})+"\\n");
+process.chdir("/mnt/source");
+event("start"); event("baseline-frozen"); event("request");
+const child=spawnSync("/usr/local/bin/node",["/mnt/source/mstar-harness.js","judgment","review-advice","--file","pack.json","--pilot","pilot.json","--workspace","/mnt/source","--json"],{encoding:"utf8",timeout:9500,maxBuffer:8192,env:process.env});
+let status; try { status=JSON.parse(child.stdout).status; } catch {}
+event(status==="recorded"?"complete":"error");
+process.exit(status==="recorded"&&child.status===0?0:1);
+`;
+  for (let index = 0; index < planned.length; index++) {
+    const { group, variant, original } = planned[index]!;
+    const runId = `dev-${String(index + 1).padStart(3, "0")}`;
+    const itemRoot = resolve(evidence, runId);
+    const oldOutcomePath = resolve(itemRoot, "outcome.json");
+    if (existsSync(oldOutcomePath)) {
+      const old = readJson<Record<string, unknown>>(root, `runs/development/${runId}/outcome.json`);
+      if (old.groupId !== group.id || old.variantId !== variant.id || old.status !== "unavailable" ||
+          old.cliSha256 !== previousManifest?.identity.cliSha256 || old.transportAttempted === true) fail("Spent development outcome cannot be replayed or relabeled");
+      cliSubmissions++;
+      shadowFailures++;
+      observations.set(variant.id, { groupId: group.id, gold: gold.get(variant.id)!.label as CalibrationObservation["gold"],
+        choice: null, topProbability: null, confidence: null });
+      outcomes.push(old);
+      continue;
+    }
+    const sourceDir = resolve(itemRoot, "source");
+    const outputDir = resolve(itemRoot, "ordinary-output");
+    const requestDir = resolve(itemRoot, "requests");
+    const scratchDir = resolve(itemRoot, "scratch");
+    const evaluatorDir = resolve(itemRoot, "evaluator");
+    const statusPath = resolve(itemRoot, "status.json");
+    for (const dir of [sourceDir, outputDir, requestDir, scratchDir, evaluatorDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const source = sources.get(group.sourceSlot)!;
+    const files = source.sourceFiles ?? source.files;
+    if (!files || source.sourceFiles && source.files) fail("Development source file inventory ambiguous");
+    const leftCitations = original && developmentCitations(original.left, files);
+    const rightCitations = original && developmentCitations(original.right, files);
+    if (!leftCitations || !rightCitations) {
+      const unissued = { groupId: group.id, variantId: variant.id, primary: variant.primary, runId,
+        status: "unissued", reason: "insufficient-input", requestSha256: null, responseSha256: null };
+      observations.set(variant.id, { groupId: group.id, gold: gold.get(variant.id)!.label as CalibrationObservation["gold"],
+        choice: null, topProbability: null, confidence: null });
+      outcomes.push(unissued);
+      writeFileSync(oldOutcomePath, JSON.stringify(unissued), { flag: "wx", mode: 0o600 });
+      continue;
+    }
+    const pair = original!;
+    const citations = [...leftCitations, ...rightCitations];
+    const packSources = [...new Set(citations.map((citation) => citation.sourceRef))].map((path, i) => ({
+      id: `s${i}`, path, startLine: 1, endLine: (files[path]!.text ?? files[path]!.content)!.split("\n").length,
+      contentSha256: files[path]!.sha256, observedInRunId: runId, basis: "snapshot" as const,
+    }));
+    const sourceIdByPath = new Map(packSources.map((entry) => [entry.path, entry.id]));
+    const evidenceItems = citations.map((citation, i) => ({ id: `e${i}`, sourceId: sourceIdByPath.get(citation.sourceRef)!, excerpt: citation.excerpt }));
+    const leftIds = leftCitations.map((_, i) => `e${i}`);
+    const rightIds = rightCitations.map((_, i) => `e${leftIds.length + i}`);
+    const scope = { kind: "review" as const, reviewId: runId, snapshotSha256: variant.sourceSha256!, diffSha256: variant.itemDigest! };
+    const rubricVersion = (protocol.rubric as { questionCanonicalJsonSha256: string }).questionCanonicalJsonSha256;
+    const taskId = developmentPairId(variant.id);
+    const pack: ReviewDecisionPack = validatePack({
+      schema: "mstar.review-advice-pack/v1", contractRevision: REVISION, runId, packId: `pack-${runId}`,
+      concernId: group.id, profile: "review", scope: { ...scope, tier: "default" }, recipient: { id: "synthesis", phase: "synthesis" },
+      sources: packSources, state: { evidence: evidenceItems, subjects: [
+        { id: pair.left.id, kind: "finding", text: pair.left.claim, evidenceIds: leftIds },
+        { id: pair.right.id, kind: "finding", text: pair.right.claim, evidenceIds: rightIds },
+      ] }, tasks: [{ id: taskId, useCase: "JEV-A05", subjectIds: [pair.left.id, pair.right.id], workUnit: { id: `unit-${runId}`, revision: 0 } }],
+      rubricVersion, builderVersion: cliSha256,
+    });
+    const packSha256 = digest(canonicalJsonBytes(pack));
+    const pilot: JudgmentPilot = validatePilot({
+      schema: "mstar.judgment-pilot/v1", contractRevision: REVISION, pilotId: `pilot-${runId}`, runId, profile: "review", scope,
+      mode: "shadow", transport: "native-typesafe", endpoint: protocol.providerEndpoint, model: protocol.requestedModel,
+      useCases: ["JEV-A05"], recipients: [{ id: "synthesis", phase: "synthesis" }],
+      policyVersion: (protocol.identities as { policy: { id: string } }).policy.id,
+      permission: { ref: "permission.json", purpose: permission.purpose, dataClass: "synthetic-only" },
+      isolation: { ref: "run-manifest.json#docker-mount-plan" }, packManifest: [{ packId: pack.packId, packSha256 }],
+      rubricVersion, builderVersion: cliSha256, implementationVersion: `${packageVersion}:${cliSha256}`,
+      limits: { timeoutMs: budget.timeoutMsPerOperation, maxRunElapsedMs: budget.maxRunOptionalElapsedMs,
+        maxCallsPerRun: 1, maxConcurrentRequests: 1, maxTasksPerPack: 1, maxPacksPerRun: 1, maxPairs: 1,
+        maxPackBytes: budget.maxPackBytes, maxRequestBytes: budget.maxOutboundRequestBytes,
+        maxResponseBytes: budget.maxResponseBytes, maxAttempts: 1 },
+      tokenPolicy: { method: TOKEN_POLICY_METHOD, perAttemptReservation: TOKEN_RESERVATION_PER_ATTEMPT,
+        maxRunReservedInputTokens: TOKEN_RESERVATION_PER_ATTEMPT },
+      sourcePolicy: { minimization: "bounded synthetic pair claims and cited excerpts only", retention: String(permission.retention) },
+      protocolVersion: REVISION, splitId: split.freezeId, calibrationId: runIdentity,
+    });
+    const prepared = buildA05Request(pack, pilot);
+    if (prepared.bytes.byteLength > budget.maxOutboundRequestBytes) fail("Development request exceeds frozen byte limit");
+    const mountedCliPath = resolve(sourceDir, "mstar-harness.js");
+    copyFileSync(cliPath, mountedCliPath);
+    if (digest(readFileSync(mountedCliPath)) !== cliSha256) fail("Packaged CLI changed before sandbox invocation");
+    writeFileSync(resolve(sourceDir, "worker.mjs"), worker, { mode: 0o600 });
+    writeFileSync(resolve(sourceDir, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n", { mode: 0o600 });
+    writeFileSync(resolve(sourceDir, "pack.json"), canonicalJsonBytes(pack), { mode: 0o600 });
+    writeFileSync(resolve(sourceDir, "pilot.json"), canonicalJsonBytes(pilot), { mode: 0o600 });
+    writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId, status: "idle" }), { mode: 0o600 });
+    writeFileSync(resolve(evaluatorDir, "request.json"), prepared.bytes, { mode: 0o600 });
+    const mountPlan = { syntheticSource: sourceDir, ordinaryOutput: outputDir, requests: requestDir, publicStatus: statusPath,
+      scratch: scratchDir, evaluatorData: [evaluatorDir], evaluatorCredentialEnv: [],
+      readOnlyRoot: true, nonRoot: true, dropCapabilities: true, hostPid: false, dockerSocket: false } as const;
+    const child = { id: `child-${runId}`, executable: resolve(sourceDir, "worker.mjs"),
+      sha256: digest(Buffer.from(worker)), runtimePath: dockerPath, runtimeSha256: digest(readFileSync(dockerPath)),
+      imageDigest, containerExecutable: "/usr/local/bin/node", uid: process.getuid!(), gid: process.getgid!(),
+      argv: ["/mnt/source/worker.mjs"], maxElapsedMs: budget.timeoutMsPerOperation, maxOutputBytes: budget.maxResponseBytes };
+    let transportAttempted = false;
+    const input: ShadowRunInput = { runRoot: itemRoot, runId, pack, pilot, evidenceClass: "synthetic-offline",
+      child, mountPlan, baseline: { inventory: [{ unitId: `unit-${runId}`, synthetic: true }],
+        seatOutputs: [], originalConsumption: { consumedOutputs: [] }, finalReport: { status: "original-work-unconsumed" } },
+      sendRequest: async (request) => {
+        transportAttempted = true;
+        const response = await sendNativeRequest(request);
+        writeFileSync(resolve(evaluatorDir, "response.bin"), response.responseBytes, { flag: "wx", mode: 0o600 });
+        return response;
+      } };
+    cliSubmissions++;
+    let failure: string | null = null, responseSha256: string | null = null;
+    try {
+      const assessment = await runShadowSupervisor(input);
+      if (assessment.failures.length) failure = assessment.failures.join(",");
+    } catch (error) { failure = error instanceof Error ? error.message.replace(/[^a-zA-Z0-9.-]/g, "-").slice(0, 96) : "jev.supervisor-failed"; }
+    if (transportAttempted) attempted++;
+    const responsePath = resolve(evaluatorDir, "response.bin");
+    if (existsSync(responsePath)) responseSha256 = digest(readFileSync(responsePath));
+    const resultDirectory = resolve(evaluatorDir, "results");
+    const resultFiles = existsSync(resultDirectory) ? readdirSync(resultDirectory) : [];
+    let answer: { type: "choice"; choice: A05Label; probabilities: Record<string, number>; confidence: number } | null = null;
+    let usage: { inputTokens: number; outputTokens: number } | null = null;
+    const recordedPath = resolve(evaluatorDir, "evidence", runId, "reservations", `recorded-${prepared.requestSha256}.json`);
+    const providerRecorded = resultFiles.length === 1 && !!responseSha256 && existsSync(recordedPath);
+    if (providerRecorded) {
+      const result = JSON.parse(readFileSync(resolve(resultDirectory, resultFiles[0]!), "utf8"));
+      const normalized = result.response;
+      usage = normalized?.usage ?? null;
+      const questionId = `a05_${taskId}`;
+      answer = result.requestSha256 === prepared.requestSha256 && result.model === protocol.requestedModel &&
+        normalized?.model === protocol.requestedModel ? normalized.answers?.[questionId] ?? null : null;
+      if (!answer || answer.type !== "choice") fail("Recorded provider answer has invalid sealed identity");
+      succeeded++;
+    } else if (resultFiles.length > 1) failure = "jev.duplicate-result";
+    else if (!failure) failure = "jev.result-unavailable";
+    if (!providerRecorded && transportAttempted) failed++;
+    if (failure) shadowFailures++;
+    observations.set(variant.id, { groupId: group.id, gold: gold.get(variant.id)!.label as CalibrationObservation["gold"],
+      choice: answer?.choice ?? null,
+      topProbability: answer ? answer.probabilities[answer.choice]! : null,
+      confidence: answer?.confidence ?? null });
+    outcomes.push({ groupId: group.id, variantId: variant.id, primary: variant.primary, runId,
+      cliInvocation: ["/usr/local/bin/node", "/mnt/source/mstar-harness.js", "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json", "--workspace", "/mnt/source", "--json"],
+      cliVersion, cliSha256, requestSha256: prepared.requestSha256, responseSha256, transportAttempted,
+      usage, costUsd: null, // The frozen pricing declaration covers input only, not the complete bill.
+      providerStatus: providerRecorded ? "recorded" : transportAttempted ? "failed" : "unissued",
+      status: failure ? providerRecorded ? "recorded-shadow-invalid" : "unavailable" : "recorded",
+      shadowFailure: failure, resultPath: resultFiles.length === 1 ? resolve(resultDirectory, resultFiles[0]!) : null });
+    writeFileSync(resolve(itemRoot, "outcome.json"), JSON.stringify(outcomes.at(-1)), { flag: "wx", mode: 0o600 });
+    if (failure === "jev.response-invalid" || failure?.includes("usage-exceeds") || failure?.includes("early-reveal")) break;
+  }
+  const primary = groups.map((group) => observations.get(group.variants.find((variant) => variant.primary)!.id) ??
+    { groupId: group.id, gold: gold.get(group.variants.find((variant) => variant.primary)!.id)!.label as CalibrationObservation["gold"],
+      choice: null, topProbability: null, confidence: null });
+  const selected = selectDevelopmentBand(primary, candidates);
+  const recordedUsage = outcomes.reduce<{ input: number; output: number }>((tokens, outcome) => {
+    const usage = outcome.usage as { inputTokens: number; outputTokens: number } | null | undefined;
+    if (outcome.providerStatus === "recorded" && usage) {
+      tokens.input += usage.inputTokens;
+      tokens.output += usage.outputTokens;
+    }
+    return tokens;
+  }, { input: 0, output: 0 });
+  const counts = { providerAvailable: succeeded, providerUnavailable: failed,
+    preProviderUnavailable: cliSubmissions - attempted, cliSubmissions, providerAttempts: attempted,
+    unissued: planned.length - cliSubmissions, shadowLifecycleInvalid: shadowFailures,
+    knownInputTokens: recordedUsage.input, knownOutputTokens: recordedUsage.output,
+    estimatedInputUsd: recordedUsage.input * budget.pricingEstimate.usdPerMillionInputTokens / 1_000_000,
+    actualCostUsd: null,
+    modelAbstain: 0, policyAbstain: 0, acceptedSame: 0, acceptedDifferent: 0 };
+  for (const row of observations.values()) {
+    if (!row.choice) continue;
+    if (row.choice === "insufficient_evidence") { counts.modelAbstain++; continue; }
+    const threshold = row.choice === "same_cause" ? selected.band?.same : selected.band?.different;
+    if (!threshold || row.topProbability! < threshold[0] || row.confidence! < threshold[1]) counts.policyAbstain++;
+    else if (row.choice === "same_cause") counts.acceptedSame++;
+    else counts.acceptedDifferent++;
+  }
+  const bandRecord = { schema: "mstar.qualification-bands/v1", runId: runIdentity,
+    status: selected.band ? "selected" : "unqualified", selectedBand: selected.band,
+    dimensions: { same: selected.band?.same ?? null, different: selected.band?.different ?? null,
+      insufficient: selected.band?.insufficient ?? null }, candidates: selected.candidates,
+    qualification: selected.band && attempted === planned.length && failed === 0 && shadowFailures === 0 ? "development-only" : "unqualified",
+    policy: selected.band && attempted === planned.length && failed === 0 && shadowFailures === 0 ? "frozen-band-shadow-only" : "all-abstain-no-completed-units-no-visible-advice" };
+  const runRecord = { schema: "mstar.qualification-development-run/v1", manifest,
+    attempted, succeeded, failed, cliSubmissions, preProviderCliFailures: cliSubmissions - attempted,
+    shadowLifecycleFailures: shadowFailures, counts, outcomes };
+  const assessment = { schema: "mstar.qualification-development-assessment/v1", status: bandRecord.qualification,
+    reason: selected.band ? failed || attempted !== planned.length || shadowFailures ? "incomplete-or-invalid-shadow-run" : null : "no-admissible-development-band",
+    selectedBand: selected.band?.id ?? null, counts, knownLimitation: manifest.knownHoldoutLimitation,
+    w5: false, holdoutUsed: false };
+  for (const [name, value] of [["development-run.json", runRecord], ["bands.json", bandRecord], ["development-assessment.json", assessment]] as const) {
+    writeFileSync(resolve(root, name), JSON.stringify(value), { flag: "wx", mode: 0o600 });
+  }
+  return { status: assessment.status, attempted, succeeded, failed };
+}
 export async function runEvaluationCommand(argv = process.argv.slice(2)): Promise<number> {
   try {
     const { action, root, shard, seat } = args(argv);
@@ -142,11 +486,9 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       assertRevision(permission as { contractRevision?: string });
       if (permission.status !== "synthetic-only-policy-declaration; not a self-authorizing pilot") fail("Permission declaration mismatch");
       const tokenPolicy = budget.tokenPolicy as Record<string, unknown> | null;
-      const providerContextPolicy = tokenPolicy?.providerContextPolicy as Record<string, unknown> | null;
+      const providerContextPolicy = providerContextDeclaration(tokenPolicy?.providerContextPolicy);
       if (!tokenPolicy || typeof tokenPolicy !== "object" || tokenPolicy.method !== TOKEN_POLICY_METHOD ||
           tokenPolicy.perAttemptReservation !== TOKEN_RESERVATION_PER_ATTEMPT || tokenPolicy.maxRunReservedInputTokens !== MAX_RUN_RESERVED_INPUT_TOKENS ||
-          !providerContextPolicy || typeof providerContextPolicy !== "object" || Array.isArray(providerContextPolicy) ||
-          Object.keys(providerContextPolicy).length !== 2 ||
           providerContextPolicy.localTokenizerEstimate !== false || providerContextPolicy.localPreflightContextFitClaim !== false) fail("Frozen provider-context reservation mismatch");
       const allocation = budget.requestAllocation as Record<string, unknown> | null;
       if (!allocation || allocation.developmentVariantCallsMax !== 120 || allocation.holdoutVariantCallsMax !== 600 ||
@@ -353,7 +695,12 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       process.stdout.write(`${JSON.stringify({ action, status: "valid", freezeId: split.freezeId, splitSha256: fileDigest(root, splitPath), goldSha256: split.goldSha256 })}\n`);
       return 0;
     }
-    if (action === "calibrate" || action === "holdout") {
+    if (action === "calibrate") {
+      const result = await calibrateDevelopment(root, protocol);
+      process.stdout.write(`${JSON.stringify({ action, ...result, w5: false })}\n`);
+      return result.status === "development-only" ? 0 : 1;
+    }
+    if (action === "holdout") {
       const job = readJson<ShadowRunInput>(root, `${action}-run.json`);
       if (job.evidenceClass !== "synthetic-offline" || job.pilot.contractRevision !== REVISION) fail("Live evaluator requires a synthetic-only frozen runtime input");
       const result = await runShadowSupervisor(job);
