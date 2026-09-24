@@ -2094,7 +2094,6 @@ function parseFlowArray(raw, filePath) {
   }
   return items;
 }
-
 class IssueError extends Error {
   code;
   constructor(code, message) {
