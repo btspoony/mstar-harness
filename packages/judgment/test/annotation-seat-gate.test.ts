@@ -54,9 +54,9 @@ describe("annotation seat pre-dispatch gate", () => {
 
   test("provisioned mount plan excludes qualification and annotation-view roots", () => {
     const root = workspace();
-    const { qualification, annotationView } = qualificationRoot(root);
     const gateRoot = join(root, "gate");
     mkdirSync(gateRoot, { recursive: true });
+    const { qualification, annotationView } = qualificationRoot(gateRoot);
     const mountPlan = provisionAnnotationSeatGateLayout({
       gateRoot,
       qualificationRoot: qualification,
@@ -85,7 +85,7 @@ describe("annotation seat pre-dispatch gate", () => {
     chmodSync(mountPlan.annotationSink, 0o700);
     assertAnnotationSeatMountPlan(mountPlan, gateRoot, child);
     expect(() => assertAnnotationSeatMountPlan({ ...mountPlan, annotationInputs: qualification }, gateRoot, child)).toThrow("jev.annotation-seat-evidence-root-mounted");
-    expect(() => assertAnnotationSeatMountPlan({ ...mountPlan, annotationInputs: root }, gateRoot, child)).toThrow("jev.annotation-seat-evidence-root-mounted");
+    expect(() => assertAnnotationSeatMountPlan({ ...mountPlan, annotationInputs: gateRoot }, gateRoot, child)).toThrow("jev.annotation-seat-evidence-root-mounted");
   });
 
   test("runAnnotationSeatPreDispatchGate passes with local probe child", async () => {
