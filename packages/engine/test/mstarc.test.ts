@@ -54,6 +54,21 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
     expect(parseMstarc("[config]\nenforcement=\n")).toEqual({});
   });
 
+  test("parses raw Jev values, with the last nonempty value winning", () => {
+    expect(
+      parseMstarc("[config]\njev_mode=shadow\njev_transport=typesafe\njev_mode=unknown\n"),
+    ).toEqual({ jevMode: "unknown", jevTransport: "typesafe" });
+  });
+
+  test("a final empty Jev value clears an earlier value without changing other keys", () => {
+    expect(
+      parseMstarc(
+        "[config]\nharness_dir=.custom\njev_mode=shadow\njev_transport=typesafe\njev_mode=\njev_transport=\n",
+      ),
+    ).toEqual({ harnessDir: ".custom" });
+    expect(parseMstarc("[config]\njev_mode=\njev_transport=\n")).toEqual({});
+  });
+
   test("parses the canonical [config] harness_dir form", () => {
     expect(parseMstarc("[config]\nharness_dir=.custom_dir\n")).toEqual({ harnessDir: ".custom_dir" });
   });

@@ -80,7 +80,9 @@ var CONFIG_KEYS = {
   [MSTARC_SPECS_DIR_KEY]: "specsDir",
   [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
   [MSTARC_PROJECT_DIR_KEY]: "projectDir",
-  [MSTARC_ENFORCEMENT_KEY]: "enforcement"
+  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
+  jev_mode: "jevMode",
+  jev_transport: "jevTransport"
 };
 function parseMstarc(text) {
   let section = null;
@@ -103,8 +105,11 @@ function parseMstarc(text) {
     if (field === undefined)
       continue;
     const value = line.slice(eq + 1).trim();
-    if (value === "")
+    if (value === "") {
+      if (field === "jevMode" || field === "jevTransport")
+        delete out[field];
       continue;
+    }
     if (field === "enforcement" && value !== "hard" && value !== "soft")
       continue;
     out[field] = value;
