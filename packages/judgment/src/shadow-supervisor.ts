@@ -15,6 +15,7 @@ export type { BaselineFreezeInput, EvidenceClass, FrozenBaseline, FrozenShadowEv
 
 export type ShadowMountPlan = Readonly<{
   syntheticSource: string;
+  runtimeAssets: string;
   ordinaryOutput: string;
   requests: string;
   publicStatus: string;
@@ -82,7 +83,7 @@ function stageSourceView(sourceRoot: string, runRoot: string, runId: string, sou
   const root = realpathSync(sourceRoot);
   const allowed = new Map<string, (typeof sources)[number]>();
   for (const source of sources) {
-    if (!source.path || source.path.startsWith("/") || source.path.includes("\\") ||
+    if (!source.path || source.path === ".runtime" || source.path.startsWith(".runtime/") || source.path.startsWith("/") || source.path.includes("\\") ||
         source.path.split("/").some((part) => !part || part === "." || part === "..") || allowed.has(source.path)) {
       throw new Error("jev.source-manifest-invalid");
     }
@@ -139,6 +140,7 @@ function stageSourceView(sourceRoot: string, runRoot: string, runId: string, sou
     manifest.push({ id: source.id, path, sha256, startLine: source.startLine, endLine: source.endLine, observedInRunId: source.observedInRunId, basis: source.basis, revision: source.revision ?? null });
   }
   atomicJson(resolve(runRoot, "source-manifest.json"), { schema: "mstar.shadow-source-manifest/v1", runId, totalBytes, files: manifest });
+  mkdirSync(resolve(view, ".runtime"), { mode: 0o500 });
   for (const directory of [...expectedDirectories].sort((a, b) => b.length - a.length)) chmodSync(resolve(view, directory), 0o500);
   chmodSync(view, 0o500);
   return view;
@@ -162,14 +164,14 @@ function atomicJson(path: string, value: unknown): void {
 }
 function assertMountPlan(plan: ShadowMountPlan, runRoot: string, child: ApprovedChild): void {
   if (plan.readOnlyRoot !== true || plan.nonRoot !== true || plan.dropCapabilities !== true || plan.hostPid !== false || plan.dockerSocket !== false || plan.evaluatorCredentialEnv.length !== 0) throw new Error("jev.mount-policy-invalid");
-  const canonical = [plan.syntheticSource, plan.ordinaryOutput, plan.requests, plan.publicStatus, plan.scratch].map((path) => {
+  const canonical = [plan.syntheticSource, plan.runtimeAssets, plan.ordinaryOutput, plan.requests, plan.publicStatus, plan.scratch].map((path) => {
     if (!isAbsolute(path)) throw new Error("jev.mount-path-invalid");
     return realpathSync(path);
   });
-  if (!statSync(canonical[0]!).isDirectory() || !statSync(canonical[1]!).isDirectory() || !statSync(canonical[2]!).isDirectory() || !statSync(canonical[3]!).isFile() || !statSync(canonical[4]!).isDirectory()) throw new Error("jev.mount-shape-invalid");
+  if (!statSync(canonical[0]!).isDirectory() || !statSync(canonical[1]!).isDirectory() || !statSync(canonical[2]!).isDirectory() || !statSync(canonical[3]!).isDirectory() || !statSync(canonical[4]!).isFile() || !statSync(canonical[5]!).isDirectory()) throw new Error("jev.mount-shape-invalid");
   const owner = statSync(runRoot);
-  const output = statSync(canonical[1]!);
-  const requests = statSync(canonical[2]!);
+  const output = statSync(canonical[2]!);
+  const requests = statSync(canonical[3]!);
   if (child.uid === 0 || child.uid !== owner.uid || child.gid !== owner.gid || output.uid !== child.uid || requests.uid !== child.uid || (output.mode & 0o300) !== 0o300 || (requests.mode & 0o300) !== 0o300) throw new Error("jev.nonroot-mount-permission-invalid");
   if (new Set(canonical).size !== canonical.length) throw new Error("jev.mount-overlap");
   for (const forbidden of plan.evaluatorData) {
@@ -194,7 +196,7 @@ export function buildDockerLaunchArgs(child: ApprovedChild, runId: string, plan:
   return Object.freeze([
     "run", "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
     `--user=${child.uid}:${child.gid}`, "--pids-limit=64", "--memory=256m", "--cpus=1", `--tmpfs=/mnt/scratch:rw,nosuid,nodev,noexec,size=16m,uid=${child.uid},gid=${child.gid},mode=0700`,
-    `--mount=type=bind,src=${plan.syntheticSource},dst=/mnt/source,readonly`, `--mount=type=bind,src=${plan.ordinaryOutput},dst=/mnt/output`,
+    `--mount=type=bind,src=${plan.syntheticSource},dst=/mnt/source,readonly`, `--mount=type=bind,src=${plan.runtimeAssets},dst=/mnt/source/.runtime,readonly`, `--mount=type=bind,src=${plan.ordinaryOutput},dst=/mnt/output`,
     `--mount=type=bind,src=${plan.requests},dst=/mnt/requests`, `--mount=type=bind,src=${plan.publicStatus},dst=/mnt/status.json,readonly`,
     "--env=JEV_COMPONENT_WORKER=1", "--env=HOME=/mnt/scratch", "--env=JEV_REQUESTS_DIR=/mnt/requests", "--env=JEV_STATUS_PATH=/mnt/status.json", child.imageDigest, child.containerExecutable, ...child.argv, runId,
   ]);

@@ -9,6 +9,8 @@ import { CONTRACT_REVISION, NATIVE_ENDPOINT, NATIVE_MODEL, PACK_SCHEMA, PILOT_SC
 import { canonicalJsonBytes } from "../src/review-advice.js";
 import { assessShadowRun, buildDockerLaunchArgs, freezeBaseline, recordWorkUnitDisposition, runShadowSupervisor, type ApprovedChild, type ShadowMountPlan } from "../src/shadow-supervisor.js";
 
+import { calibrationBaselineInventory, stageCalibrationSources } from "../scripts/evaluate.js";
+
 const roots: string[] = [];
 const hash = "a".repeat(64);
 const fixturePath = new URL("./fixtures/reviewer-probe.mjs", import.meta.url).pathname;
@@ -23,7 +25,7 @@ function makeWritable(path: string): void {
 function workspace(): string {
   const root = mkdtempSync(join(tmpdir(), "jev-supervisor-"));
   roots.push(root);
-  for (const name of ["source", "output", "requests", "scratch", "evaluator"]) mkdirSync(join(root, name));
+  for (const name of ["source", "runtime", "output", "requests", "scratch", "evaluator"]) mkdirSync(join(root, name));
   writeFileSync(join(root, "status.json"), "{}");
   return root;
 }
@@ -51,7 +53,7 @@ function inputs(root: string, workerSource?: string) {
     tokenPolicy: { method: TOKEN_POLICY_METHOD, perAttemptReservation: TOKEN_RESERVATION_PER_ATTEMPT, maxRunReservedInputTokens: TOKEN_RESERVATION_PER_ATTEMPT }, sourcePolicy: { minimization: "literal excerpt", retention: "run-bound" }, protocolVersion: "protocol-1", splitId: "split-1", calibrationId: "calibration-1",
   });
   const child: ApprovedChild = { id: "probe-1", executable: childPath, sha256: createHash("sha256").update(readFileSync(childPath)).digest("hex"), runtimePath: process.execPath, runtimeSha256: createHash("sha256").update(readFileSync(process.execPath)).digest("hex"), imageDigest: "node@sha256:" + hash, containerExecutable: "/worker/reviewer-probe.mjs", uid: process.getuid(), gid: process.getgid(), argv: [], maxElapsedMs: 2_000, maxOutputBytes: 4_096 };
-  const mountPlan: ShadowMountPlan = { syntheticSource: join(root, "source"), ordinaryOutput: join(root, "output"), requests: join(root, "requests"), publicStatus: join(root, "status.json"), scratch: join(root, "scratch"), evaluatorData: [join(root, "evaluator")], evaluatorCredentialEnv: [], readOnlyRoot: true, nonRoot: true, dropCapabilities: true, hostPid: false, dockerSocket: false };
+  const mountPlan: ShadowMountPlan = { syntheticSource: join(root, "source"), runtimeAssets: join(root, "runtime"), ordinaryOutput: join(root, "output"), requests: join(root, "requests"), publicStatus: join(root, "status.json"), scratch: join(root, "scratch"), evaluatorData: [join(root, "evaluator")], evaluatorCredentialEnv: [], readOnlyRoot: true, nonRoot: true, dropCapabilities: true, hostPid: false, dockerSocket: false };
   return { root, pack, pilot, child, mountPlan, baseline: { inventory: [{ id: "unit-1" }], seatOutputs: [{ unitId: "unit-1", outputId: "output-1" }], originalConsumption: { consumedOutputs: [{ unitId: "unit-1", outputId: "output-1", consumed: true, consumedAt: 1 }] }, finalReport: { status: "complete" } } };
 }
 const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.execPath, [child.executable, ...child.argv, runId], { env: { PATH: process.env.PATH ?? "", HOME: process.cwd() }, stdio: ["ignore", "pipe", "pipe"] });
@@ -66,7 +68,8 @@ describe("trusted shadow supervisor", () => {
     expect(args).toContain("--cap-drop=ALL");
     expect(args).toContain("--network=none");
     expect(args).toContain(`--user=${fixture.child.uid}:${fixture.child.gid}`);
-    expect(args).toContain("--mount=type=bind,src=" + args.find((value) => value.includes("dst=/mnt/status.json,readonly"))!.split("src=")[1]!.split(",dst=")[0] + ",dst=/mnt/status.json,readonly");
+    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.syntheticSource},dst=/mnt/source,readonly`)).toBe(true);
+    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.runtimeAssets},dst=/mnt/source/.runtime,readonly`)).toBe(true);
     expect(args.some((arg) => arg.startsWith("--pid=") || arg.includes("docker.sock"))).toBe(false);
     expect(args.some((arg) => arg.startsWith("--env=") && arg.includes("TYPESAFE"))).toBe(false);
   });
@@ -204,6 +207,24 @@ describe("trusted shadow supervisor", () => {
     expect(await runShadowCommand(["study", "--root", fixture.root], testLauncher)).toBe(0);
     expect(await runShadowCommand(["assess", "--root", fixture.root])).toBe(0);
   });
+  test("calibration inventory uses the assessor's required id field", () => {
+    const fixture = inputs(workspace());
+    const inventory = calibrationBaselineInventory(fixture.pack.tasks[0]!.workUnit.id);
+    expect(inventory).toEqual([{ id: "unit-1", synthetic: true }]);
+    const baseline = freezeBaseline({ runId: "run-1", ...fixture.baseline, inventory });
+    expect(() => assessShadowRun({
+      baseline, receipts: [], childEvents: [], evidenceClass: "synthetic-offline", elapsedMs: 1,
+      packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: [],
+      originalConsumption: fixture.baseline.originalConsumption, originalSeatOutputs: fixture.baseline.seatOutputs,
+    })).not.toThrow();
+    expect(() => assessShadowRun({
+      baseline: freezeBaseline({ runId: "run-1", ...fixture.baseline, inventory: [{ unitId: "unit-1", synthetic: true }] }),
+      receipts: [], childEvents: [], evidenceClass: "synthetic-offline", elapsedMs: 1,
+      packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: ["unit-1"],
+      originalConsumption: fixture.baseline.originalConsumption, originalSeatOutputs: fixture.baseline.seatOutputs,
+    })).toThrow("jev.baseline-inventory-invalid");
+  });
+
   test("does not assess a frozen inventory unit omitted from the pack as complete", () => {
     const fixture = inputs(workspace());
     const baseline = freezeBaseline({
@@ -230,6 +251,34 @@ describe("trusted shadow supervisor", () => {
     });
     expect(assessment.metrics).toMatchObject({ workUnits: 2, incompleteUnits: 1 });
     expect(assessment.failures).toContain("jev.receipt-accounting-incomplete");
+  });
+
+  test("stages citation files separately from the readonly runtime-asset mount", async () => {
+    const worker = `const runId=process.argv.at(-1); for (const type of ["start","baseline-frozen","request","complete"]) console.log(JSON.stringify({type,runId,at:Date.now()}));`;
+    const fixture = inputs(workspace(), worker);
+    const calibrationSource = join(fixture.root, "calibration-source");
+    mkdirSync(calibrationSource);
+    stageCalibrationSources(calibrationSource, fixture.pack.sources, {
+      "src/example.ts": { text: "literal source\nanother literal\n" },
+    });
+    const mountPlan = { ...fixture.mountPlan, syntheticSource: calibrationSource };
+    for (const name of ["worker.mjs", "mstar-harness.js", "pack.json", "pilot.json"]) {
+      writeFileSync(join(fixture.mountPlan.runtimeAssets, name), name);
+    }
+    let launcherObserved = false;
+    const launcher = (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => {
+      expect(readFileSync(join(plan.syntheticSource, "src", "example.ts"), "utf8")).toBe("literal source\nanother literal\n");
+      expect(readdirSync(plan.syntheticSource).sort()).toEqual([".runtime", "src"]);
+      expect(["worker.mjs", "mstar-harness.js", "pack.json", "pilot.json"].every((name) =>
+        readFileSync(join(plan.runtimeAssets, name), "utf8") === name)).toBe(true);
+      launcherObserved = true;
+      return testLauncher(child, runId);
+    };
+    await runShadowSupervisor({
+      ...fixture, mountPlan, runRoot: fixture.root, runId: "run-1", evidenceClass: "component",
+      baseline: fixture.baseline,
+    }, undefined, launcher);
+    expect(launcherObserved).toBe(true);
   });
 
   test("bounded source view rejects an unmanifested file", async () => {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_RUN_RESERVED_INPUT_TOKENS, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot, type A05Label, type JudgmentPilot, type ReviewDecisionPack } from "../src/contracts.js";
 import { buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
@@ -175,6 +175,22 @@ function developmentCitations(side: SyntheticSide, files: Record<string, Synthet
   return items;
 }
 
+export const calibrationBaselineInventory = (unitId: string) => [{ id: unitId, synthetic: true }];
+
+export function stageCalibrationSources(
+  sourceDir: string,
+  sources: ReviewDecisionPack["sources"],
+  files: Readonly<Record<string, { text?: string; content?: string }>>,
+): void {
+  for (const source of sources) {
+    const content = files[source.path]?.text ?? files[source.path]?.content;
+    if (content === undefined) fail("Development source content missing");
+    const destination = resolve(sourceDir, source.path);
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+    writeFileSync(destination, content, { flag: "wx", mode: 0o400 });
+  }
+}
+
 async function calibrateDevelopment(root: string, protocol: Record<string, unknown>, preflightOnly = false): Promise<{ status: string; attempted: number; succeeded: number; failed: number; runId?: string; checked?: number }> {
   const previousManifest = readJson<{ runId: string; plannedVariants: number; identity: { cliSha256: string }; protocolSha256: string; splitSha256: string; goldSha256: string }>(root, "runs/development/run-manifest.json");
   const previousOutcomes = readJson<{ outcomes: Array<{ runId: string; requestSha256: string | null }> }>(root, "development-run.json").outcomes;
@@ -268,11 +284,11 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   const outcomes: Array<Record<string, unknown>> = [];
   let attempted = 0, succeeded = 0, failed = 0, cliSubmissions = 0, shadowFailures = 0;
   const worker = `import { spawnSync } from "node:child_process";
-const runId=process.argv[2], start=Date.now();
+const runId=process.argv[2], start=Date.now(), runtime="/mnt/source/.runtime";
+process.chdir(runtime);
 const event=type=>process.stdout.write(JSON.stringify({type,runId,at:Date.now()-start})+"\\n");
-process.chdir("/mnt/source");
 event("start"); event("baseline-frozen"); event("request");
-const child=spawnSync("/usr/local/bin/node",["/mnt/source/mstar-harness.js","judgment","review-advice","--file","pack.json","--pilot","pilot.json","--workspace","/mnt/source","--json"],{encoding:"utf8",timeout:9500,maxBuffer:8192,env:process.env});
+const child=spawnSync("/usr/local/bin/node",[runtime+"/mstar-harness.js","judgment","review-advice","--file",runtime+"/pack.json","--pilot",runtime+"/pilot.json","--workspace","/mnt/source","--json"],{encoding:"utf8",timeout:9500,maxBuffer:8192,env:process.env});
 let status; try { status=JSON.parse(child.stdout).status; } catch {}
 event(status==="recorded"?"complete":"error");
 process.exit(status==="recorded"&&child.status===0?0:1);
@@ -364,25 +380,28 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     checked++;
     if (preflightOnly) continue;
     for (const dir of [sourceDir, outputDir, requestDir, scratchDir, evaluatorDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const mountedCliPath = resolve(sourceDir, "mstar-harness.js");
+    stageCalibrationSources(sourceDir, packSources, files);
+    const runtimeAssets = resolve(itemRoot, "runtime-assets");
+    mkdirSync(runtimeAssets, { mode: 0o700 });
+    const mountedCliPath = resolve(runtimeAssets, "mstar-harness.js");
     copyFileSync(cliPath, mountedCliPath);
     if (digest(readFileSync(mountedCliPath)) !== cliSha256) fail("Packaged CLI changed before sandbox invocation");
-    writeFileSync(resolve(sourceDir, "worker.mjs"), worker, { mode: 0o600 });
-    writeFileSync(resolve(sourceDir, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n", { mode: 0o600 });
-    writeFileSync(resolve(sourceDir, "pack.json"), canonicalJsonBytes(pack), { mode: 0o600 });
-    writeFileSync(resolve(sourceDir, "pilot.json"), canonicalJsonBytes(pilot), { mode: 0o600 });
-    writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId, status: "idle" }), { mode: 0o600 });
+    writeFileSync(resolve(runtimeAssets, "worker.mjs"), worker, { mode: 0o400 });
+    writeFileSync(resolve(runtimeAssets, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n", { mode: 0o400 });
+    writeFileSync(resolve(runtimeAssets, "pack.json"), canonicalJsonBytes(pack), { mode: 0o400 });
+    writeFileSync(resolve(runtimeAssets, "pilot.json"), canonicalJsonBytes(pilot), { mode: 0o400 });
+    writeFileSync(resolve(statusPath), JSON.stringify({ schema: "mstar.judgment-status/v1", runId, status: "idle" }), { mode: 0o600 });
     writeFileSync(resolve(evaluatorDir, "request.json"), prepared.bytes, { mode: 0o600 });
-    const mountPlan = { syntheticSource: sourceDir, ordinaryOutput: outputDir, requests: requestDir, publicStatus: statusPath,
+    const mountPlan = { syntheticSource: sourceDir, runtimeAssets, ordinaryOutput: outputDir, requests: requestDir, publicStatus: statusPath,
       scratch: scratchDir, evaluatorData: [evaluatorDir], evaluatorCredentialEnv: [],
       readOnlyRoot: true, nonRoot: true, dropCapabilities: true, hostPid: false, dockerSocket: false } as const;
-    const child = { id: `child-${runId}`, executable: resolve(sourceDir, "worker.mjs"),
-      sha256: digest(Buffer.from(worker)), runtimePath: dockerPath, runtimeSha256: digest(readFileSync(dockerPath)),
+    const child = { id: `child-${runId}`, executable: resolve(runtimeAssets, "worker.mjs"),
+      sha256: digest(readFileSync(resolve(runtimeAssets, "worker.mjs"))), runtimePath: dockerPath, runtimeSha256: digest(readFileSync(dockerPath)),
       imageDigest, containerExecutable: "/usr/local/bin/node", uid: process.getuid!(), gid: process.getgid!(),
-      argv: ["/mnt/source/worker.mjs"], maxElapsedMs: budget.timeoutMsPerOperation, maxOutputBytes: budget.maxResponseBytes };
+      argv: ["/mnt/source/.runtime/worker.mjs"], maxElapsedMs: budget.timeoutMsPerOperation, maxOutputBytes: budget.maxResponseBytes };
     let transportAttempted = false;
     const input: ShadowRunInput = { runRoot: itemRoot, runId, pack, pilot, evidenceClass: "synthetic-offline",
-      child, mountPlan, baseline: { inventory: [{ unitId: `unit-${runId}`, synthetic: true }],
+      child, mountPlan, baseline: { inventory: calibrationBaselineInventory(pack.tasks[0]!.workUnit.id),
         seatOutputs: [], originalConsumption: { consumedOutputs: [] }, finalReport: { status: "original-work-unconsumed" } },
       sendRequest: async (request) => {
         transportAttempted = true;
