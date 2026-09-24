@@ -269,6 +269,46 @@ describe("inert judgment runtime", () => {
     expect(Object.keys(result)).toEqual(["schema", "contractRevision", "status", "advice"]);
   });
 
+  test("off during input collection aborts and ignores a late pilot read", async () => {
+    vi.useFakeTimers();
+    const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    const prepared = fixture();
+    let configReads = 0;
+    let inputReads = 0;
+    let submits = 0;
+    const enabled = resolveJudgmentConfig(workspace, workspace);
+    const { promise: pilotRead, resolve: finishPilotRead } = Promise.withResolvers<Uint8Array>();
+    const { promise: readingPilot, resolve: markReadingPilot } = Promise.withResolvers<void>();
+    const effects: RuntimeEffects = {
+      resolveConfig: () => {
+        configReads += 1;
+        return configReads <= 2 ? enabled : { state: "disabled" };
+      },
+      readFile: async (path) => {
+        inputReads += 1;
+        if (path.endsWith("pilot.json")) {
+          markReadingPilot();
+          return pilotRead;
+        }
+        return canonicalJsonBytes(prepared.pack);
+      },
+    };
+    const channel: EvaluatorChannel = {
+      submit: async () => { submits += 1; return channelResponse("recorded"); },
+      cancel: async () => {},
+    };
+
+    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    await readingPilot;
+    vi.advanceTimersByTime(100);
+    const result = await pending;
+    expect(result).toMatchObject({ status: "unavailable", code: "jev.revoked", advice: null });
+    finishPilotRead(canonicalJsonBytes(prepared.pilot));
+    await Promise.resolve();
+    expect(inputReads).toBe(1);
+    expect(submits).toBe(0);
+  });
+
   test("off observed during channel submission cancels it and cannot consume a late result", async () => {
     vi.useFakeTimers();
     const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
@@ -278,7 +318,7 @@ describe("inert judgment runtime", () => {
     const effects: RuntimeEffects = {
       resolveConfig: () => {
         configReads += 1;
-        return configReads <= 2 ? enabled : { state: "disabled" };
+        return configReads <= 7 ? enabled : { state: "disabled" };
       },
       readFile: async (path) => path.endsWith("pilot.json") ? canonicalJsonBytes(prepared.pilot) : canonicalJsonBytes(prepared.pack),
     };
