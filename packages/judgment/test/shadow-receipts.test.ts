@@ -19,9 +19,22 @@ describe("shadow baseline and work receipts", () => {
     const input = { baseline, receipts: [receipt("blocked")], evidenceClass: "component" as const,
       elapsedMs: 1, packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: ["unit-1"],
       originalConsumption: baselineInput().originalConsumption, originalSeatOutputs: baselineInput().seatOutputs };
-    expect(assessShadowRun({ ...input, childEvents: validEvents }).failures).toEqual([]);
+    expect(assessShadowRun({ ...input, childEvents: validEvents }).failures).toContain("jev.required-work-unit-blocked");
     expect(assessShadowRun({ ...input, childEvents: [validEvents[0]!, validEvents[2]!, validEvents[1]!, validEvents[3]!] }).failures).toContain("probe-lifecycle-invalid");
     expect(assessShadowRun({ ...input, childEvents: [...validEvents.slice(0, 3), { type: "error", runId: "run-1", at: 4 }] }).failures).toContain("probe-lifecycle-invalid");
+  });
+  test("fails required blocked work when no original output was consumed", () => {
+    const baseline = freezeBaseline({
+      runId: "run-1", inventory: [{ id: "unit-1", revision: 1 }], seatOutputs: [],
+      originalConsumption: { consumedOutputs: [] }, finalReport: { status: "incomplete" },
+    });
+    const assessment = assessShadowRun({
+      baseline, receipts: [receipt("blocked")], childEvents: validEvents, evidenceClass: "component",
+      elapsedMs: 1, packId: "pack-1", packSha256: hash, scopeSha256: hash,
+      requiredUnitIds: ["unit-1"], originalConsumption: { consumedOutputs: [] }, originalSeatOutputs: [],
+    });
+    expect(assessment.metrics).toMatchObject({ completedUnits: 0, blockedUnits: 1 });
+    expect(assessment.failures).toContain("jev.required-work-unit-blocked");
   });
   test("freezes a detached, deeply immutable baseline and detects tampering", () => {
     const input = baselineInput();

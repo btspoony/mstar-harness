@@ -150,7 +150,7 @@ export function assertAuthorMountPlan(plan: AuthorMountPlan, gateRoot: string, c
   const sink = statSync(canonical[1]!);
   if (child.uid === 0 || child.uid !== owner.uid || child.gid !== owner.gid || sink.uid !== child.uid || (sink.mode & 0o300) !== 0o300) throw new Error("jev.author-nonroot-mount-permission-invalid");
   if (new Set(canonical).size !== canonical.length) throw new Error("jev.author-mount-overlap");
-  if (canonical.some((mount) => mount === qualificationRoot)) throw new Error("jev.author-evidence-root-mounted");
+  if (canonical.some((mount) => within(mount, qualificationRoot) || within(qualificationRoot, mount))) throw new Error("jev.author-evidence-root-mounted");
   if (!canonical.every((mount) => within(realpathSync(gateRoot), mount))) throw new Error("jev.author-mount-outside-gate");
   for (const forbidden of plan.forbiddenCustody) {
     const protectedPath = realpathSync(forbidden);

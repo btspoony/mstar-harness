@@ -85,6 +85,7 @@ describe("annotation seat pre-dispatch gate", () => {
     chmodSync(mountPlan.annotationSink, 0o700);
     assertAnnotationSeatMountPlan(mountPlan, gateRoot, child);
     expect(() => assertAnnotationSeatMountPlan({ ...mountPlan, annotationInputs: qualification }, gateRoot, child)).toThrow("jev.annotation-seat-evidence-root-mounted");
+    expect(() => assertAnnotationSeatMountPlan({ ...mountPlan, annotationInputs: root }, gateRoot, child)).toThrow("jev.annotation-seat-evidence-root-mounted");
   });
 
   test("runAnnotationSeatPreDispatchGate passes with local probe child", async () => {

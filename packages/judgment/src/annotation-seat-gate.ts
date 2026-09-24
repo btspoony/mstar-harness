@@ -177,7 +177,8 @@ export function assertAnnotationSeatMountPlan(plan: AnnotationSeatMountPlan, gat
   const sink = statSync(canonical[1]!);
   if (child.uid === 0 || child.uid !== owner.uid || child.gid !== owner.gid || sink.uid !== child.uid || (sink.mode & 0o300) !== 0o300) throw new Error("jev.annotation-seat-nonroot-mount-permission-invalid");
   if (new Set(canonical).size !== canonical.length) throw new Error("jev.annotation-seat-mount-overlap");
-  if (canonical.some((mount) => mount === qualificationRoot || mount === annotationViewRoot)) throw new Error("jev.annotation-seat-evidence-root-mounted");
+  if (canonical.some((mount) => [qualificationRoot, annotationViewRoot].some((protectedRoot) =>
+    within(mount, protectedRoot) || within(protectedRoot, mount)))) throw new Error("jev.annotation-seat-evidence-root-mounted");
   if (!canonical.every((mount) => within(realpathSync(gateRoot), mount))) throw new Error("jev.annotation-seat-mount-outside-gate");
   for (const forbidden of plan.forbiddenCustody) {
     const protectedPath = realpathSync(forbidden);

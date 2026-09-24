@@ -67,4 +67,42 @@ describe("annotation projection", () => {
       rmSync(outputRoot, { recursive: true, force: true });
     }
   });
+  test("redacts slot IDs in citation excerpts before emitting seat views", () => {
+    const fixtureParent = mkdtempSync(join(tmpdir(), "annotation-projection-citation-leak-"));
+    const qualificationRoot = qualificationFixture(fixtureParent);
+    const outputRoot = mkdtempSync(join(tmpdir(), "annotation-view-citation-leak-"));
+    try {
+      const shardPath = join(qualificationRoot, "sources", "shard-1.jsonl");
+      const groups = readFileSync(shardPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      groups[0].variants[0].left.citations[0].excerpt = "evidence from shard-1/group-001";
+      writeFileSync(shardPath, `${groups.map((group) => JSON.stringify(group)).join("\n")}\n`);
+      const result = runAnnotationProjection({ qualificationRoot, outputRoot, shuffleSeed: Buffer.alloc(32, 9) });
+      const seatView = readFileSync(result.seatViewPaths[0]!, "utf8");
+      expect(seatView).not.toContain("shard-1/group-001");
+      expect(seatView).toContain("[redacted-slot]");
+      expect(JSON.parse(readFileSync(result.leakReportPath, "utf8")).verdict).toBe("pass");
+    } finally {
+      rmSync(fixtureParent, { recursive: true, force: true });
+      rmSync(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("does not return a usable projection when the leak check fails", () => {
+    const fixtureParent = mkdtempSync(join(tmpdir(), "annotation-projection-unredacted-leak-"));
+    const qualificationRoot = qualificationFixture(fixtureParent);
+    const outputRoot = mkdtempSync(join(tmpdir(), "annotation-view-unredacted-leak-"));
+    try {
+      const shardPath = join(qualificationRoot, "sources", "shard-1.jsonl");
+      const groups = readFileSync(shardPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      groups[0].variants[0].left.citations[0].excerpt = "the cohort is holdout";
+      writeFileSync(shardPath, `${groups.map((group) => JSON.stringify(group)).join("\n")}\n`);
+      expect(() => runAnnotationProjection({ qualificationRoot, outputRoot, shuffleSeed: Buffer.alloc(32, 11) }))
+        .toThrow("jev.annotation-leak-check-failed");
+      expect(JSON.parse(readFileSync(join(outputRoot, "leak-check-report.json"), "utf8")).verdict).toBe("fail");
+      expect(() => readFileSync(join(outputRoot, "manifest.json"))).toThrow();
+    } finally {
+      rmSync(fixtureParent, { recursive: true, force: true });
+      rmSync(outputRoot, { recursive: true, force: true });
+    }
+  });
 });

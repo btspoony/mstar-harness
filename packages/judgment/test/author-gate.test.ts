@@ -98,6 +98,7 @@ describe("author pre-dispatch gate", () => {
     child.sha256 = createHash("sha256").update(readFileSync(child.executable)).digest("hex");
     assertAuthorMountPlan(mountPlan, gateRoot, child);
     expect(() => assertAuthorMountPlan({ ...mountPlan, authorInputs: qualification }, gateRoot, child)).toThrow("jev.author-evidence-root-mounted");
+    expect(() => assertAuthorMountPlan({ ...mountPlan, authorInputs: root }, gateRoot, child)).toThrow("jev.author-evidence-root-mounted");
   });
 
   test("runAuthorPreDispatchGate passes with local probe child", async () => {

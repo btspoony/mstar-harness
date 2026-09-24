@@ -182,10 +182,18 @@ export function stageCalibrationSources(
   sources: ReviewDecisionPack["sources"],
   files: Readonly<Record<string, { text?: string; content?: string }>>,
 ): void {
-  for (const source of sources) {
+  const root = resolve(sourceDir);
+  const staged = sources.map((source) => {
     const content = files[source.path]?.text ?? files[source.path]?.content;
     if (content === undefined) fail("Development source content missing");
-    const destination = resolve(sourceDir, source.path);
+    const destination = resolve(root, source.path);
+    const relativeDestination = relative(root, destination);
+    if (relativeDestination === ".." || relativeDestination.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(relativeDestination)) {
+      fail("jev.calibration-source-path-outside-root");
+    }
+    return { destination, content };
+  });
+  for (const { destination, content } of staged) {
     mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
     writeFileSync(destination, content, { flag: "wx", mode: 0o400 });
   }
@@ -442,7 +450,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
       topProbability: answer ? answer.probabilities[answer.choice]! : null,
       confidence: answer?.confidence ?? null });
     outcomes.push({ groupId: group.id, variantId: variant.id, primary: variant.primary, runId,
-      cliInvocation: ["/usr/local/bin/node", "/mnt/source/mstar-harness.js", "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json", "--workspace", "/mnt/source", "--json"],
+      cliInvocation: ["/usr/local/bin/node", "/mnt/source/.runtime/mstar-harness.js", "judgment", "review-advice", "--file", "/mnt/source/.runtime/pack.json", "--pilot", "/mnt/source/.runtime/pilot.json", "--workspace", "/mnt/source", "--json"],
       cliVersion, cliSha256, requestSha256: prepared.requestSha256, responseSha256, transportAttempted,
       usage, costUsd: null, // The frozen pricing declaration covers input only, not the complete bill.
       providerStatus: providerRecorded ? "recorded" : transportAttempted ? "failed" : "unissued",

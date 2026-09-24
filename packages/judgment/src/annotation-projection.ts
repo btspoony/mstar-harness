@@ -157,7 +157,7 @@ function remapCitations(
       sourceRef: fileMap[authorRef],
       startLine: entry.startLine,
       endLine: entry.endLine,
-      excerpt: entry.excerpt,
+      excerpt: screenSlotLeaks(entry.excerpt),
     });
   });
 }
@@ -463,6 +463,7 @@ export function runAnnotationProjection(input: AnnotationProjectionInput): Annot
   const leakReportPath = resolve(outputRoot, "leak-check-report.json");
   const leakReport = runLeakCheck(seatViewPaths, crosswalkPath);
   writeFileSync(leakReportPath, `${JSON.stringify(leakReport, null, 2)}\n`, { mode: 0o600 });
+  if (leakReport.verdict !== "pass") throw new Error("jev.annotation-leak-check-failed");
   const manifestPath = resolve(outputRoot, "manifest.json");
   writeFileSync(
     manifestPath,

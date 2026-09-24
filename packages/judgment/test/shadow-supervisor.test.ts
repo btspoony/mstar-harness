@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { runShadowCommand } from "../scripts/shadow.js";
 import { tmpdir } from "node:os";
@@ -279,6 +279,16 @@ describe("trusted shadow supervisor", () => {
       baseline: fixture.baseline,
     }, undefined, launcher);
     expect(launcherObserved).toBe(true);
+  });
+  test("refuses a traversal citation before writing outside the calibration source root", () => {
+    const fixture = inputs(workspace());
+    const sourceDir = join(fixture.root, "calibration-source");
+    const escapedPath = join(fixture.root, "escaped.txt");
+    mkdirSync(sourceDir);
+    expect(() => stageCalibrationSources(sourceDir, fixture.pack.sources.map((source) => ({ ...source, path: "../escaped.txt" })), {
+      "../escaped.txt": { text: "outside source root" },
+    })).toThrow("jev.calibration-source-path-outside-root");
+    expect(existsSync(escapedPath)).toBe(false);
   });
 
   test("bounded source view rejects an unmanifested file", async () => {
