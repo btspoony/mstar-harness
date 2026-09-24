@@ -55,8 +55,8 @@ type Manifest = { schema: string; contractRevision: string; files?: Array<{ path
 type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
 type Gold = Array<{ itemId: string; groupId: string; label: string; eligible?: boolean; quarantined?: boolean }>;
 type Annotation = {
-  itemId: string; groupId?: string; label: string; reducedPackSupport: string | { status: string; explanation: string };
-  sourceSha256: string; itemDigest: string; seat?: "A" | "B"; shard?: number; sessionId?: string; model?: string; assistance?: unknown;
+  itemId: string; groupId?: string; label: string; reducedPackSupport: { label: string; explanation?: string };
+  sourceSha256: string; itemDigest: string; seat?: string; shard?: string | number; sessionId?: string; model?: string; assistance?: unknown;
   rationale: string; anchors?: readonly unknown[]; citations?: readonly unknown[];
 };
 type CorpusVariantRef = { groupId: string; itemDigest?: string; sourceSha256?: string };
@@ -73,8 +73,10 @@ function indexCorpusVariants(corpus: Corpus): Map<string, CorpusVariantRef> {
   }
   return variants;
 }
-function supportStatus(value: Annotation["reducedPackSupport"]): string | undefined {
-  return typeof value === "string" ? value : value?.status;
+function supportStatus(value: unknown): string | undefined {
+  return typeof value === "object" && value !== null && "label" in value && typeof value.label === "string"
+    ? value.label
+    : undefined;
 }
 function validateAnnotationRow(
   row: Annotation,
@@ -88,7 +90,8 @@ function validateAnnotationRow(
       typeof row.rationale !== "string" || !row.rationale.trim()) fail("Annotation integrity failure: missing core field");
   const reducedPackSupport = supportStatus(row.reducedPackSupport);
   if (!["sufficient", "insufficient", "unresolved"].includes(reducedPackSupport ?? "") ||
-      (typeof row.reducedPackSupport === "object" && (typeof row.reducedPackSupport.explanation !== "string" || !row.reducedPackSupport.explanation.trim()))) {
+      ("explanation" in row.reducedPackSupport &&
+        (typeof row.reducedPackSupport.explanation !== "string" || !row.reducedPackSupport.explanation.trim()))) {
     fail("Annotation reduced-pack support missing or invalid");
   }
   const evidence = row.anchors ?? row.citations;
@@ -98,8 +101,17 @@ function validateAnnotationRow(
   if (row.groupId !== undefined && row.groupId !== variant.groupId) fail(`Annotation group/corpus mismatch: ${row.itemId}`);
   if ((variant.itemDigest && variant.itemDigest !== row.itemDigest) ||
       (variant.sourceSha256 && variant.sourceSha256 !== row.sourceSha256)) fail(`Annotation digest/corpus mismatch: ${row.itemId}`);
-  if (row.seat !== undefined && row.seat !== seat) fail(`Annotation seat mismatch: ${row.itemId}`);
-  if (row.shard !== undefined && row.shard !== shardIndex) fail(`Annotation shard mismatch: ${row.itemId}`);
+  if (row.seat !== undefined) {
+    const declaredSeat = /^(A|B)(?:\/([1-4]))?$/.exec(row.seat);
+    if (!declaredSeat || declaredSeat[1] !== seat ||
+        (declaredSeat[2] !== undefined && Number(declaredSeat[2]) !== shardIndex)) fail(`Annotation seat mismatch: ${row.itemId}`);
+  }
+  if (row.shard !== undefined) {
+    const declaredShard = typeof row.shard === "number"
+      ? (Number.isInteger(row.shard) ? row.shard : NaN)
+      : /^[1-4]$/.test(row.shard) ? Number(row.shard) : NaN;
+    if (declaredShard !== shardIndex) fail(`Annotation shard mismatch: ${row.itemId}`);
+  }
   return { ...row, groupId: variant.groupId, seat };
 }
 function verifyFiles(root: string, manifest: Manifest): void {

@@ -62,7 +62,7 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
     goldRows.push({ itemId, groupId, label: quarantined ? "unresolved" : "same_cause", ...(quarantined ? { eligible: false, quarantined: true } : {}) });
     for (const seat of ["A", "B"] as const) {
       annotationRows[seat][Math.floor(index / 90)].push({
-        itemId, label: labels[seat === "A" ? 0 : 1], reducedPackSupport: "sufficient",
+        itemId, label: labels[seat === "A" ? 0 : 1], reducedPackSupport: { label: "sufficient", explanation: "Synthetic test support." },
         sourceSha256, itemDigest, rationale: "Synthetic source-grounded comparison rationale.",
         anchors: [{ sourceRef: `file-${index}`, line: "1" }],
       });
@@ -103,10 +103,7 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
   });
   const annotations: Record<string, string> = {};
   for (const seat of ["A", "B"] as const) for (const shard of [1, 2, 3, 4]) {
-    annotations[`annotations/${seat}-${shard}.jsonl`] = annotationRows[seat][shard - 1].map((row) => JSON.stringify({
-      ...row,
-      ...(seat === "A" && shard === 1 ? { reducedPackSupport: { status: "sufficient", explanation: "Synthetic test support." } } : {}),
-    })).join("\n") + "\n";
+    annotations[`annotations/${seat}-${shard}.jsonl`] = annotationRows[seat][shard - 1].map((row) => JSON.stringify(row)).join("\n") + "\n";
   }
   const origins = [
     "Newly authored synthetic source families in this session; no real-source derivation or old fixture reuse.",
@@ -124,7 +121,7 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
     ...annotations, ...authors,
   }, overrides.manifestSchema);
 }
-function annotationRoot(rowText: string): string {
+function annotationRoot(rowText: string, seat = "A", shard = 1): string {
   const sourceSha256 = sha256("source");
   const itemDigest = sha256("item");
   return fixtureRoot({
@@ -132,7 +129,7 @@ function annotationRoot(rowText: string): string {
       id: "group-1", split: "development", lineageId: "lineage-1", causalClusterId: "cluster-1",
       variants: [{ id: "item-1", itemDigest, sourceSha256, primary: true }],
     }] }),
-    "annotations/A-1.jsonl": rowText,
+    [`annotations/${seat}-${shard}.jsonl`]: rowText,
   });
 }
 
@@ -252,29 +249,42 @@ describe("qualification integrity", () => {
     try { expect(await runEvaluationCommand(["check-corpus", "--root", root])).toBe(2); }
     finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("check-annotations derives group identity and reports absent seat metadata as undeclared", async () => {
+  test("check-annotations accepts reduced-pack support objects and equivalent declared identities", async () => {
     const row = {
       itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"),
       label: "same_cause", rationale: "An evidence-grounded synthetic annotation.",
-      reducedPackSupport: "sufficient", anchors: [{ sourceRef: "opaque-source", lines: "1-2" }],
+      reducedPackSupport: { label: "sufficient", explanation: "Support is available." },
+      anchors: [{ sourceRef: "opaque-source", lines: "1-2" }],
     };
-    const root = annotationRoot(`${JSON.stringify(row)}\n`);
+    const cases = [
+      { seat: "A", shard: 1, annotation: row },
+      { seat: "A", shard: 3, annotation: { ...row, seat: "A", shard: "3" } },
+      { seat: "A", shard: 4, annotation: { ...row, seat: "A/4" } },
+      { seat: "B", shard: 3, annotation: { ...row, seat: "B", shard: 3 } },
+    ];
+    const roots = cases.map(({ seat, shard, annotation }) =>
+      annotationRoot(`${JSON.stringify(annotation)}\n`, seat, shard));
     try {
-      const result = await captureCommand(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"]);
-      expect(result.code).toBe(0);
-      const report = JSON.parse(result.stdout);
-      expect(report.annotations).toBe(1);
-      expect(report.identityMetadata.seat.status).toBe("undeclared");
-      expect(report.identityMetadata.sessionId.status).toBe("undeclared");
-      expect(report.identityMetadata.model.status).toBe("undeclared");
-    } finally { rmSync(root, { recursive: true, force: true }); }
+      for (let index = 0; index < cases.length; index++) {
+        const { seat, shard } = cases[index]!;
+        const result = await captureCommand(["check-annotations", "--root", roots[index]!, "--seat", seat, "--shard", String(shard)]);
+        expect(result.code).toBe(0);
+        const report = JSON.parse(result.stdout);
+        expect(report.annotations).toBe(1);
+        expect(report.identityMetadata.sessionId.status).toBe("undeclared");
+      }
+      expect(JSON.parse((await captureCommand(["check-annotations", "--root", roots[0]!, "--seat", "A", "--shard", "1"])).stdout).identityMetadata.seat.status).toBe("undeclared");
+    } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
   });
   test("check-annotations rejects unknown, duplicate, and incomplete annotation rows", async () => {
-    const valid = { itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"), label: "same_cause", rationale: "Grounded.", reducedPackSupport: "sufficient", citations: ["opaque-source:1"] };
+    const valid = { itemId: "item-1", itemDigest: sha256("item"), sourceSha256: sha256("source"), label: "same_cause", rationale: "Grounded.", reducedPackSupport: { label: "sufficient", explanation: "Supported." }, citations: ["opaque-source:1"] };
     const roots = [
       annotationRoot(`${JSON.stringify({ ...valid, itemId: "unknown" })}\n`),
       annotationRoot(`${JSON.stringify(valid)}\n${JSON.stringify(valid)}\n`),
       annotationRoot(`${JSON.stringify({ ...valid, label: undefined })}\n`),
+      annotationRoot(`${JSON.stringify({ ...valid, label: "invalid_label" })}\n`),
+      annotationRoot(`${JSON.stringify({ ...valid, reducedPackSupport: undefined })}\n`),
+      annotationRoot(`${JSON.stringify({ ...valid, reducedPackSupport: { label: "invalid_support", explanation: "Bad." } })}\n`),
     ];
     try {
       for (const root of roots) expect(await runEvaluationCommand(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"])).toBe(2);
