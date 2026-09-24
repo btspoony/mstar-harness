@@ -3,7 +3,6 @@ import { constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { EvaluatorChannel, EvaluatorChannelResponse, JudgmentInvocation } from "./runtime.js";
-import { attestEvaluatorChannel } from "./evaluator-channel-trust.js";
 
 const MAX_REQUEST_BYTES = 1_048_576;
 const MAX_STATUS_BYTES = 4_096;
@@ -51,13 +50,11 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
   if (!within(workspace, root)) throw new Error("jev.channel-workspace-boundary");
   let requestDirectory: string;
   let statusPath: string;
-  let supervisorMounted = false;
   if (process.env.JEV_REQUESTS_DIR !== undefined || process.env.JEV_STATUS_PATH !== undefined) {
     if (process.env.JEV_REQUESTS_DIR !== "/mnt/requests" || process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-path-invalid");
     requestDirectory = realpathSync("/mnt/requests");
     statusPath = realpathSync("/mnt/status.json");
     if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile()) throw new Error("jev.channel-path-invalid");
-    supervisorMounted = true;
   } else {
     const mailbox = resolve(root, CHANNEL_NAME);
     if (!existsSync(mailbox)) mkdirSync(mailbox, { mode: 0o700 });
@@ -115,7 +112,7 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
       }
     },
   });
-  return supervisorMounted ? attestEvaluatorChannel(channel) : channel;
+  return channel;
 }
 
 /** Trusted-supervisor-only file mailbox adapter; never returns evaluator data or capabilities to the client. */
