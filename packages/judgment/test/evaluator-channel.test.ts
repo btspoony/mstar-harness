@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectEvaluatorChannel, createEvaluatorMailbox } from "../src/evaluator-channel.js";
+import { runReviewAdvice } from "../src/runtime.js";
 
 const roots: string[] = [];
 function makeRoot(): string {
@@ -37,6 +38,29 @@ describe("bounded evaluator mailbox", () => {
     expect(() => createEvaluatorMailbox({ runId: "run-1", requestDirectory: outside, statusPath: join(root, ".jev-mailbox", "status.json") })).toThrow("jev.mailbox-path-mismatch");
     const mailbox = createEvaluatorMailbox({ runId: "run-1", requestDirectory: join(root, ".jev-mailbox", "requests"), statusPath: join(root, ".jev-mailbox", "status.json") });
     expect(() => mailbox.publishStatus({ runId: "run-1", status: "recorded", code: "x".repeat(5_000) })).toThrow("jev.status-too-large");
+  });
+  test("runReviewAdvice channelIsValid denies the workspace-local fallback before pilot collection", async () => {
+    const root = makeRoot();
+    const previousRequestsDir = process.env.JEV_REQUESTS_DIR;
+    const previousStatusPath = process.env.JEV_STATUS_PATH;
+    delete process.env.JEV_REQUESTS_DIR;
+    delete process.env.JEV_STATUS_PATH;
+    try {
+      const invocation = { cwd: root, workspace: root, input: { kind: "stdin" } as const, pilotPath: "pilot.json" };
+      const channel = await connectEvaluatorChannel(invocation, new AbortController().signal);
+      let collected = false;
+      const result = await runReviewAdvice(invocation, new AbortController().signal, channel, {
+        resolveConfig: () => ({ state: "enabled", mode: "shadow", transport: "native-typesafe", cwd: root, workspace: root, configPath: join(root, ".mstarc") }),
+        readFile: async () => { collected = true; throw new Error("pilot collection must not run"); },
+      });
+      expect(result).toMatchObject({ status: "unavailable", code: "jev.channel-unavailable" });
+      expect(collected).toBe(false);
+    } finally {
+      if (previousRequestsDir === undefined) delete process.env.JEV_REQUESTS_DIR;
+      else process.env.JEV_REQUESTS_DIR = previousRequestsDir;
+      if (previousStatusPath === undefined) delete process.env.JEV_STATUS_PATH;
+      else process.env.JEV_STATUS_PATH = previousStatusPath;
+    }
   });
 
   test("cancellation marker invalidates a late recorded response", async () => {

@@ -51,11 +51,13 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
   if (!within(workspace, root)) throw new Error("jev.channel-workspace-boundary");
   let requestDirectory: string;
   let statusPath: string;
+  let supervisorMounted = false;
   if (process.env.JEV_REQUESTS_DIR !== undefined || process.env.JEV_STATUS_PATH !== undefined) {
     if (process.env.JEV_REQUESTS_DIR !== "/mnt/requests" || process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-path-invalid");
     requestDirectory = realpathSync("/mnt/requests");
     statusPath = realpathSync("/mnt/status.json");
     if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile()) throw new Error("jev.channel-path-invalid");
+    supervisorMounted = true;
   } else {
     const mailbox = resolve(root, CHANNEL_NAME);
     if (!existsSync(mailbox)) mkdirSync(mailbox, { mode: 0o700 });
@@ -87,7 +89,7 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
     }
     return { status: "unavailable", code: "jev.review-cancelled" };
   };
-  return attestEvaluatorChannel(Object.freeze({
+  const channel: EvaluatorChannel = Object.freeze({
     submit: async ({ packBytes, pilotDigest }, submitSignal) => {
       if (closed || signal.aborted || submitSignal.aborted) return { status: "unavailable", code: "jev.channel-closed" };
       if (!(packBytes instanceof Uint8Array) || packBytes.byteLength === 0 || packBytes.byteLength > MAX_REQUEST_BYTES || !/^[a-f0-9]{64}$/.test(pilotDigest)) return { status: "invalid", code: "jev.request-invalid" };
@@ -112,7 +114,8 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
         catch (error) { if (!existsSync(cancelPath)) throw error; }
       }
     },
-  }));
+  });
+  return supervisorMounted ? attestEvaluatorChannel(channel) : channel;
 }
 
 /** Trusted-supervisor-only file mailbox adapter; never returns evaluator data or capabilities to the client. */
