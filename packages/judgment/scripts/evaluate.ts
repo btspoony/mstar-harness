@@ -21,12 +21,12 @@ import {
   type QualificationRow,
 } from "../src/evaluation.js";
 
-const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, calibrate: true, holdout: true, report: true };
+const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, "calibrate-preflight": true, calibrate: true, holdout: true, report: true };
 const REVISION = "phase3a-native-20260924";
 function fail(message: string): never { throw new Error(message); }
 function args(argv: readonly string[]): { action: string; root: string; shard?: string; seat?: string } {
   const [action, ...tail] = argv;
-  if (!action || !Object.hasOwn(actions, action)) return fail("Usage: evaluate.ts <check-protocol|check-corpus|check-annotations|check-freeze|calibrate|holdout|report> --root <authorized-view> [--shard <id>] [--seat <A|B>]");
+  if (!action || !Object.hasOwn(actions, action)) return fail("Usage: evaluate.ts <check-protocol|check-corpus|check-annotations|check-freeze|calibrate-preflight|calibrate|holdout|report> --root <authorized-view>");
   let root: string | undefined, shard: string | undefined, seat: string | undefined;
   for (let i = 0; i < tail.length; i++) {
     const flag = tail[i], value = tail[++i];
@@ -175,14 +175,14 @@ function developmentCitations(side: SyntheticSide, files: Record<string, Synthet
   return items;
 }
 
-async function calibrateDevelopment(root: string, protocol: Record<string, unknown>): Promise<{ status: string; attempted: number; succeeded: number; failed: number }> {
-  // Existing outcomes are spent even when the CLI never reached the evaluator.
-  const evidence = resolve(root, "runs/development");
-  if (existsSync(resolve(root, "development-run.json"))) fail("Development run already sealed; no replay");
-  const previousManifestPath = resolve(evidence, "run-manifest.json");
-  const previousManifest = existsSync(previousManifestPath)
-    ? readJson<{ runId: string; plannedVariants: number; identity: { cliSha256: string }; protocolSha256: string; splitSha256: string; goldSha256: string }>(root, "runs/development/run-manifest.json")
-    : null;
+async function calibrateDevelopment(root: string, protocol: Record<string, unknown>, preflightOnly = false): Promise<{ status: string; attempted: number; succeeded: number; failed: number; runId?: string; checked?: number }> {
+  const previousManifest = readJson<{ runId: string; plannedVariants: number; identity: { cliSha256: string }; protocolSha256: string; splitSha256: string; goldSha256: string }>(root, "runs/development/run-manifest.json");
+  const previousOutcomes = readJson<{ outcomes: Array<{ runId: string; requestSha256: string | null }> }>(root, "development-run.json").outcomes;
+  const spentIds = new Set(previousOutcomes.map((outcome) => outcome.runId));
+  const spentRequests = new Set(previousOutcomes.map((outcome) => outcome.requestSha256).filter((hash): hash is string => hash !== null));
+  const runIdentity = `q-${randomUUID()}`;
+  const evidence = resolve(root, "runs/development", runIdentity);
+  if (existsSync(evidence)) fail("Development run identity already exists; no replay");
   if (await runEvaluationCommand(["check-protocol", "--root", root]) !== 0 ||
       await runEvaluationCommand(["check-freeze", "--root", root]) !== 0) fail("Development admission checks failed");
   const permission = readJson<Record<string, unknown>>(root, "permission.json");
@@ -245,8 +245,7 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
 
   const candidates = (protocol.calibration as { candidates: CalibrationBand[]; selection: string }).candidates;
   if (!Array.isArray(candidates) || candidates.length !== 5 || candidates.some((candidate, index) => candidate.id !== `b${index}`)) fail("Frozen calibration candidates invalid");
-  mkdirSync(evidence, { recursive: true, mode: 0o700 });
-  const runIdentity = `development-${randomUUID()}`;
+  if (!preflightOnly) mkdirSync(evidence, { mode: 0o700 });
   const identity = { cliPath, cliVersion, packageVersion, cliSha256, builderSha256: cliSha256, imageDigest, model: protocol.requestedModel, revision: REVISION };
   const manifest = {
     schema: "mstar.qualification-development-manifest/v1", runId: runIdentity, identity,
@@ -260,14 +259,11 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
     previousRunId: previousManifest?.runId ?? null,
     previousBuildSha256: previousManifest?.identity.cliSha256 ?? null,
   };
-  if (previousManifest) {
-    if (previousManifest.plannedVariants !== planned.length ||
-        previousManifest.protocolSha256 !== manifest.protocolSha256 ||
-        previousManifest.splitSha256 !== manifest.splitSha256 ||
-        previousManifest.goldSha256 !== manifest.goldSha256 ||
-        existsSync(resolve(evidence, "continuation-manifest.json"))) fail("Development continuation identity invalid");
-    writeFileSync(resolve(evidence, "continuation-manifest.json"), JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
-  } else writeFileSync(previousManifestPath, JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
+  if (previousManifest.plannedVariants !== planned.length ||
+      previousManifest.protocolSha256 !== manifest.protocolSha256 ||
+      previousManifest.splitSha256 !== manifest.splitSha256 ||
+      previousManifest.goldSha256 !== manifest.goldSha256) fail("Development freeze identity changed");
+  if (!preflightOnly) writeFileSync(resolve(evidence, "run-manifest.json"), JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
   const observations = new Map<string, CalibrationObservation>();
   const outcomes: Array<Record<string, unknown>> = [];
   let attempted = 0, succeeded = 0, failed = 0, cliSubmissions = 0, shadowFailures = 0;
@@ -281,29 +277,19 @@ let status; try { status=JSON.parse(child.stdout).status; } catch {}
 event(status==="recorded"?"complete":"error");
 process.exit(status==="recorded"&&child.status===0?0:1);
 `;
+  let checked = 0;
   for (let index = 0; index < planned.length; index++) {
     const { group, variant, original } = planned[index]!;
-    const runId = `dev-${String(index + 1).padStart(3, "0")}`;
+    const runId = `q-${randomUUID()}`;
+    if (spentIds.has(runId)) fail("Previous request identity cannot be replayed");
     const itemRoot = resolve(evidence, runId);
     const oldOutcomePath = resolve(itemRoot, "outcome.json");
-    if (existsSync(oldOutcomePath)) {
-      const old = readJson<Record<string, unknown>>(root, `runs/development/${runId}/outcome.json`);
-      if (old.groupId !== group.id || old.variantId !== variant.id || old.status !== "unavailable" ||
-          old.cliSha256 !== previousManifest?.identity.cliSha256 || old.transportAttempted === true) fail("Spent development outcome cannot be replayed or relabeled");
-      cliSubmissions++;
-      shadowFailures++;
-      observations.set(variant.id, { groupId: group.id, gold: gold.get(variant.id)!.label as CalibrationObservation["gold"],
-        choice: null, topProbability: null, confidence: null });
-      outcomes.push(old);
-      continue;
-    }
     const sourceDir = resolve(itemRoot, "source");
     const outputDir = resolve(itemRoot, "ordinary-output");
     const requestDir = resolve(itemRoot, "requests");
     const scratchDir = resolve(itemRoot, "scratch");
     const evaluatorDir = resolve(itemRoot, "evaluator");
     const statusPath = resolve(itemRoot, "status.json");
-    for (const dir of [sourceDir, outputDir, requestDir, scratchDir, evaluatorDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
     const source = sources.get(group.sourceSlot)!;
     const files = source.sourceFiles ?? source.files;
     if (!files || source.sourceFiles && source.files) fail("Development source file inventory ambiguous");
@@ -315,7 +301,10 @@ process.exit(status==="recorded"&&child.status===0?0:1);
       observations.set(variant.id, { groupId: group.id, gold: gold.get(variant.id)!.label as CalibrationObservation["gold"],
         choice: null, topProbability: null, confidence: null });
       outcomes.push(unissued);
-      writeFileSync(oldOutcomePath, JSON.stringify(unissued), { flag: "wx", mode: 0o600 });
+      if (!preflightOnly) {
+        mkdirSync(itemRoot, { recursive: true, mode: 0o700 });
+        writeFileSync(oldOutcomePath, JSON.stringify(unissued), { flag: "wx", mode: 0o600 });
+      }
       continue;
     }
     const pair = original!;
@@ -331,13 +320,14 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     const scope = { kind: "review" as const, reviewId: runId, snapshotSha256: variant.sourceSha256!, diffSha256: variant.itemDigest! };
     const rubricVersion = (protocol.rubric as { questionCanonicalJsonSha256: string }).questionCanonicalJsonSha256;
     const taskId = developmentPairId(variant.id);
+    const leftId = `left-${variant.id}`, rightId = `right-${variant.id}`;
     const pack: ReviewDecisionPack = validatePack({
       schema: "mstar.review-advice-pack/v1", contractRevision: REVISION, runId, packId: `pack-${runId}`,
       concernId: group.id, profile: "review", scope: { ...scope, tier: "default" }, recipient: { id: "synthesis", phase: "synthesis" },
       sources: packSources, state: { evidence: evidenceItems, subjects: [
-        { id: pair.left.id, kind: "finding", text: pair.left.claim, evidenceIds: leftIds },
-        { id: pair.right.id, kind: "finding", text: pair.right.claim, evidenceIds: rightIds },
-      ] }, tasks: [{ id: taskId, useCase: "JEV-A05", subjectIds: [pair.left.id, pair.right.id], workUnit: { id: `unit-${runId}`, revision: 0 } }],
+        { id: leftId, kind: "finding", text: pair.left.claim, evidenceIds: leftIds },
+        { id: rightId, kind: "finding", text: pair.right.claim, evidenceIds: rightIds },
+      ] }, tasks: [{ id: taskId, useCase: "JEV-A05", subjectIds: [leftId, rightId], workUnit: { id: `unit-${runId}`, revision: 0 } }],
       rubricVersion, builderVersion: cliSha256,
     });
     const packSha256 = digest(canonicalJsonBytes(pack));
@@ -360,6 +350,20 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     });
     const prepared = buildA05Request(pack, pilot);
     if (prepared.bytes.byteLength > budget.maxOutboundRequestBytes) fail("Development request exceeds frozen byte limit");
+    const marker = /\b(?:dev|holdout|shard|slot)[-_][a-z0-9-]+/i.exec(new TextDecoder().decode(prepared.bytes));
+    if (marker) {
+      const locate = (value: unknown, path: string): string | null => {
+        if (typeof value === "string") return value.includes(marker[0]) ? path : null;
+        if (Array.isArray(value)) return value.map((item, index) => locate(item, `${path}[${index}]`)).find(Boolean) ?? null;
+        if (value && typeof value === "object") return Object.entries(value).map(([key, item]) => locate(item, `${path}.${key}`)).find(Boolean) ?? null;
+        return null;
+      };
+      fail(`Development request contains a cohort or slot marker at ${locate(JSON.parse(new TextDecoder().decode(prepared.bytes)), "$")}`);
+    }
+    if (spentRequests.has(prepared.requestSha256)) fail("Previously issued request cannot be replayed");
+    checked++;
+    if (preflightOnly) continue;
+    for (const dir of [sourceDir, outputDir, requestDir, scratchDir, evaluatorDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
     const mountedCliPath = resolve(sourceDir, "mstar-harness.js");
     copyFileSync(cliPath, mountedCliPath);
     if (digest(readFileSync(mountedCliPath)) !== cliSha256) fail("Packaged CLI changed before sandbox invocation");
@@ -428,6 +432,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     writeFileSync(resolve(itemRoot, "outcome.json"), JSON.stringify(outcomes.at(-1)), { flag: "wx", mode: 0o600 });
     if (failure === "jev.response-invalid" || failure?.includes("usage-exceeds") || failure?.includes("early-reveal")) break;
   }
+  if (preflightOnly) return { status: "marker-free", attempted: 0, succeeded: 0, failed: 0, checked };
   const primary = groups.map((group) => observations.get(group.variants.find((variant) => variant.primary)!.id) ??
     { groupId: group.id, gold: gold.get(group.variants.find((variant) => variant.primary)!.id)!.label as CalibrationObservation["gold"],
       choice: null, topProbability: null, confidence: null });
@@ -469,9 +474,9 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     selectedBand: selected.band?.id ?? null, counts, knownLimitation: manifest.knownHoldoutLimitation,
     w5: false, holdoutUsed: false };
   for (const [name, value] of [["development-run.json", runRecord], ["bands.json", bandRecord], ["development-assessment.json", assessment]] as const) {
-    writeFileSync(resolve(root, name), JSON.stringify(value), { flag: "wx", mode: 0o600 });
+    writeFileSync(resolve(evidence, name), JSON.stringify(value), { flag: "wx", mode: 0o600 });
   }
-  return { status: assessment.status, attempted, succeeded, failed };
+  return { status: assessment.status, attempted, succeeded, failed, runId: runIdentity };
 }
 export async function runEvaluationCommand(argv = process.argv.slice(2)): Promise<number> {
   try {
@@ -695,10 +700,10 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       process.stdout.write(`${JSON.stringify({ action, status: "valid", freezeId: split.freezeId, splitSha256: fileDigest(root, splitPath), goldSha256: split.goldSha256 })}\n`);
       return 0;
     }
-    if (action === "calibrate") {
-      const result = await calibrateDevelopment(root, protocol);
+    if (action === "calibrate" || action === "calibrate-preflight") {
+      const result = await calibrateDevelopment(root, protocol, action === "calibrate-preflight");
       process.stdout.write(`${JSON.stringify({ action, ...result, w5: false })}\n`);
-      return result.status === "development-only" ? 0 : 1;
+      return action === "calibrate-preflight" || result.status === "development-only" ? 0 : 1;
     }
     if (action === "holdout") {
       const job = readJson<ShadowRunInput>(root, `${action}-run.json`);
