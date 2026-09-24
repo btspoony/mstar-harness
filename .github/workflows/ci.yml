@@ -147,7 +147,7 @@ jobs:
       # (types: ./dist/index.d.ts), which is gitignored — build it first.
       # The engine build is idempotent (rm -rf dist && bun build && bunx tsc).
       - name: Build engine (declarations for typecheck)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       - name: Typecheck
         run: bun run typecheck
@@ -205,7 +205,7 @@ jobs:
       # The engine's own specs import `@mstar-harness/engine`, which resolves to
       # packages/engine/dist — build the dist this job tests.
       - name: Build engine (dist for the engine specs)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       - name: Test engine
         run: bun run --cwd packages/engine test
@@ -250,7 +250,7 @@ jobs:
       # engine first (each consumer build inlines the engine dist), then the
       # consumers. The CLI's own dist is built by the "Test CLI" package script.
       - name: Build engine (dist for the CLI suite's consumer-manifest guard)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       - name: Build OpenCode
         run: bun run opencode:build
@@ -300,7 +300,7 @@ jobs:
       # The opencode build inlines the engine dist (workspace devDependency) —
       # build the engine first, as the single-job pipeline did.
       - name: Build engine (dist for the opencode build)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       # The execution-session specs spawn the checkout's real CLI entry
       # (`bun run packages/cli/src/index.ts …`); loading it resolves the whole
@@ -351,7 +351,7 @@ jobs:
       # The omp package build bundles the engine inline (devDependency) — build
       # the engine dist it resolves first.
       - name: Build engine (dist for the omp build)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       # The omp package build regenerates the gitignored discovery mirrors
       # (hooks/, tools/, skills/ under packages/omp) its convention-scan smoke
@@ -396,7 +396,7 @@ jobs:
       # engine when run inside the monorepo (bun workspace install), so a plain
       # `bun install` in a fresh checkout is self-sufficient.
       - name: Build engine (dist for the dsh build)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       # Runs bundle-assets first, which syncs the harness-skills /
       # harness-commands mirrors this package's tests read from its own package
@@ -461,7 +461,7 @@ jobs:
       # buildZcodeHooks(), which bundles hooks/src/mstar-write-gate.ts with the
       # engine inlined — the engine dist must exist for that resolution.
       - name: Build engine (dist for the hooks/scripts specs)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       # The ASCII lint below scans packages/cli/src recursively, so the
       # single-job pipeline always linted the generated dashboard module (the
@@ -517,7 +517,7 @@ jobs:
       # artifacts must exist before `npm pack`. Both builds inline the engine
       # dist — build that first.
       - name: Build engine (dist for the consumer builds)
-        run: bun run engine:build
+        run: bun run engine:build && bun run judgment:build
 
       - name: Build CLI
         run: bun run cli:build
