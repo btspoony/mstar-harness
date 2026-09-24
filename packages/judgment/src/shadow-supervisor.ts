@@ -302,15 +302,17 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
   }
   if (signal.aborted && !events.some((event) => event.type === "cancelled")) events.push({ type: "cancelled", at: performance.now(), runId: input.runId });
   const consumption = input.baseline.originalConsumption;
-  const completed = consumption !== null && typeof consumption === "object" && "completedUnitIds" in consumption && Array.isArray(consumption.completedUnitIds) ? new Set(consumption.completedUnitIds.filter((id): id is string => typeof id === "string")) : new Set<string>();
+  const consumedOutputs = consumption && typeof consumption === "object" && "consumedOutputs" in consumption && Array.isArray(consumption.consumedOutputs) ? consumption.consumedOutputs : [];
   for (const task of pack.tasks) {
-    const disposition = signal.aborted ? "cancelled" : completed.has(task.workUnit.id) ? "completed" : "blocked";
-    receipts.push(recordWorkUnitDisposition({ runId: input.runId, unitId: task.workUnit.id, packId: pack.packId, packSha256, scopeSha256: digest(pack.scope), disposition, originalConsumption: disposition === "completed" ? consumption : null }));
+    const matching = consumedOutputs.filter((output) => !!output && typeof output === "object" && "unitId" in output && output.unitId === task.workUnit.id && "outputId" in output && typeof output.outputId === "string" && "consumed" in output && output.consumed === true && "consumedAt" in output && typeof output.consumedAt === "number" && Number.isFinite(output.consumedAt) && output.consumedAt >= 0);
+    const consumedOutput = matching.length === 1 ? matching[0] : null;
+    const disposition = signal.aborted ? "cancelled" : consumedOutput !== null ? "completed" : "blocked";
+    receipts.push(recordWorkUnitDisposition({ runId: input.runId, unitId: task.workUnit.id, packId: pack.packId, packSha256, scopeSha256: digest(pack.scope), disposition, originalConsumption: disposition === "completed" ? consumedOutput : null }));
   }
   atomicJson(resolve(runRoot, "probe-events.json"), events);
   atomicJson(resolve(runRoot, "study-result.json"), { schema: "mstar.shadow-study-result/v1", runId: input.runId, evidenceClass: input.evidenceClass, elapsedMs, childOutputBytes: outputBytes, exitStatus: failures.length === 0 ? "completed" : "failed" });
   atomicJson(resolve(runRoot, "receipts.json"), receipts);
-  const assessment = assessShadowRun({ baseline, receipts, childEvents: events, evidenceClass: input.evidenceClass, elapsedMs, childOutputBytes: outputBytes, failures });
+  const assessment = assessShadowRun({ baseline, receipts, childEvents: events, evidenceClass: input.evidenceClass, elapsedMs, childOutputBytes: outputBytes, failures, packId: pack.packId, packSha256, scopeSha256: digest(pack.scope), requiredUnitIds: pack.tasks.map((task) => task.workUnit.id), originalConsumption: consumption, originalSeatOutputs: input.baseline.seatOutputs });
   atomicJson(resolve(runRoot, "assessment.json"), assessment);
   return assessment;
 }

@@ -41,7 +41,7 @@ function inputs(root: string, workerSource?: string) {
   });
   const child: ApprovedChild = { id: "probe-1", executable: childPath, sha256: createHash("sha256").update(readFileSync(childPath)).digest("hex"), runtimePath: process.execPath, runtimeSha256: createHash("sha256").update(readFileSync(process.execPath)).digest("hex"), imageDigest: "node@sha256:" + hash, containerExecutable: "/worker/reviewer-probe.mjs", uid: process.getuid(), gid: process.getgid(), argv: [], maxElapsedMs: 2_000, maxOutputBytes: 4_096 };
   const mountPlan: ShadowMountPlan = { syntheticSource: join(root, "source"), ordinaryOutput: join(root, "output"), requests: join(root, "requests"), publicStatus: join(root, "status.json"), scratch: join(root, "scratch"), evaluatorData: [join(root, "evaluator")], evaluatorCredentialEnv: [], readOnlyRoot: true, nonRoot: true, dropCapabilities: true, hostPid: false, dockerSocket: false };
-  return { root, pack, pilot, child, mountPlan, baseline: { inventory: [{ id: "unit-1" }], seatOutputs: [], originalConsumption: { completedUnitIds: ["unit-1"], evidence: "original-output-consumed" }, finalReport: { status: "complete" } } };
+  return { root, pack, pilot, child, mountPlan, baseline: { inventory: [{ id: "unit-1" }], seatOutputs: [{ unitId: "unit-1", outputId: "output-1" }], originalConsumption: { consumedOutputs: [{ unitId: "unit-1", outputId: "output-1", consumed: true, consumedAt: 1 }] }, finalReport: { status: "complete" } } };
 }
 const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.execPath, [child.executable, ...child.argv, runId], { env: { PATH: process.env.PATH ?? "", HOME: process.cwd() }, stdio: ["ignore", "pipe", "pipe"] });
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -97,7 +97,7 @@ describe("trusted shadow supervisor", () => {
     const childError = await runShadowSupervisor({ ...broken, runRoot: brokenRoot, runId: "run-1", evidenceClass: "component", baseline: broken.baseline }, undefined, testLauncher);
     expect(childError.failures).toContain("probe-child-exit-7");
     expect(childError.w5).toBe(false);
-    expect(() => assessShadowRun({ baseline: freezeBaseline({ runId: "run-1", ...slow.baseline }), receipts: [], childEvents: [], evidenceClass: "named-host", elapsedMs: 1 })).toThrow("jev.named-host-authorization-required");
+    expect(() => assessShadowRun({ baseline: freezeBaseline({ runId: "run-1", ...slow.baseline }), receipts: [], childEvents: [], evidenceClass: "named-host", elapsedMs: 1, packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: [], originalConsumption: slow.baseline.originalConsumption, originalSeatOutputs: slow.baseline.seatOutputs })).toThrow("jev.named-host-authorization-required");
     expect(() => recordWorkUnitDisposition({ runId: "run-1", unitId: "unit-1", packId: "pack-1", packSha256: hash, scopeSha256: hash, disposition: "completed", originalConsumption: null })).toThrow("jev.original-consumption-required");
   });
   test("assessment refuses failed or mismatched study results and failure event streams", async () => {
