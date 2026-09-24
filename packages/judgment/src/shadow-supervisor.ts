@@ -167,11 +167,15 @@ export function assessShadowRun(input: FrozenShadowEvidence): ShadowRunAssessmen
   return Object.freeze({ schema: "mstar.shadow-assessment/v1", runId: baseline.runId, evidenceClass: input.evidenceClass, qualification: input.evidenceClass === "component" ? "component-only" : "synthetic-offline", w5: false, baselineFrozen: true, childEvents: Object.freeze(childEvents), receipts: Object.freeze(receipts), metrics: Object.freeze({ childEvents: childEvents.length, completedUnits: receipts.filter((receipt) => receipt.disposition === "completed").length, blockedUnits: receipts.filter((receipt) => receipt.disposition === "blocked").length, cancelledUnits: receipts.filter((receipt) => receipt.disposition === "cancelled").length, elapsedMs: input.elapsedMs, childOutputBytes: input.childOutputBytes ?? 0 }), failures: Object.freeze(failures) });
 }
 
+const pinnedImageDigest = (value: string): boolean =>
+  /^.+@sha256:[a-f0-9]{64}$/.test(value) || /^sha256:[a-f0-9]{64}$/.test(value);
+
 export function buildDockerLaunchArgs(child: ApprovedChild, runId: string, plan: ShadowMountPlan): readonly string[] {
+  const runtimePath = realpathSync(child.runtimePath);
   if (!validId(runId) || !isAbsolute(child.runtimePath) || !/^[a-f0-9]{64}$/.test(child.runtimeSha256) ||
-      sha256File(child.runtimePath) !== child.runtimeSha256 ||
+      sha256File(runtimePath) !== child.runtimeSha256 ||
       !Array.isArray(child.argv) || child.argv.length > 16 || child.argv.some((arg) => typeof arg !== "string" || arg.length > 256 || arg.includes("\0")) ||
-      !/^.+@sha256:[a-f0-9]{64}$/.test(child.imageDigest) || !child.containerExecutable.startsWith("/") || child.containerExecutable.split("/").includes("..") ||
+      !pinnedImageDigest(child.imageDigest) || !child.containerExecutable.startsWith("/") || child.containerExecutable.split("/").includes("..") ||
       !Number.isSafeInteger(child.uid) || child.uid < 1 || !Number.isSafeInteger(child.gid) || child.gid < 1) throw new Error("jev.container-manifest-invalid");
   if ([plan.syntheticSource, plan.ordinaryOutput, plan.requests, plan.publicStatus].some((path) => path.includes(","))) throw new Error("jev.mount-path-unsupported");
   return Object.freeze([
