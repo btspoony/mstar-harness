@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { buildA05Request, canonicalJsonBytes } from "./review-advice.js";
 import { createEvaluatorMailbox } from "./evaluator-channel.js";
@@ -55,7 +56,7 @@ export type ShadowRunInput = Readonly<{
   signal?: AbortSignal;
 }>;
 
-export type ProbeLauncher = (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => ChildProcessWithoutNullStreams;
+export type ProbeLauncher = (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => ChildProcessByStdio<null, Readable, Readable>;
 
 const encoder = new TextEncoder();
 const MAX_ARTIFACT_BYTES = 1_048_576;
@@ -199,7 +200,7 @@ export function buildDockerLaunchArgs(child: ApprovedChild, runId: string, plan:
   ]);
 }
 
-function dockerProbeLauncher(child: ApprovedChild, runId: string, plan: ShadowMountPlan): ChildProcessWithoutNullStreams {
+function dockerProbeLauncher(child: ApprovedChild, runId: string, plan: ShadowMountPlan): ChildProcessByStdio<null, Readable, Readable> {
   return spawn(child.runtimePath, buildDockerLaunchArgs(child, runId, plan), { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 }
 function runApprovedChild(child: ApprovedChild, runId: string, plan: ShadowMountPlan, signal: AbortSignal, launcher: ProbeLauncher): Promise<ApprovedChildResult> {

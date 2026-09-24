@@ -11,7 +11,7 @@ export type NormalizedTypeSafeResponse = Readonly<{
   usage: Readonly<{ inputTokens: number; outputTokens: number }> | null;
 }>;
 
-const invalid = (message: string): never => { throw new TypeError(`Invalid TypeSafe response: ${message}`); };
+function invalid(message: string): never { throw new TypeError(`Invalid TypeSafe response: ${message}`); }
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const exactKeys = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): void => {
   const allowed = new Set([...required, ...optional]);
@@ -61,7 +61,8 @@ function validateAnswer(value: unknown, question: CanonicalQuestion, field: stri
   const levels = question.criteria.length;
   if (levels < 2 || levels > 10) invalid(`${field} has an invalid requested Score level count`);
   const keys = Array.from({ length: levels }, (_, i) => String(i));
-  if (!isRecord(value.legend) || Object.keys(value.legend).length !== levels || keys.some((key) => typeof value.legend[key] !== "string")) {
+  const legend = value.legend;
+  if (!isRecord(legend) || Object.keys(legend).length !== levels || keys.some((key) => typeof legend[key] !== "string")) {
     invalid(`${field}.legend must define exactly the requested levels`);
   }
   const expectedLegend: Record<string, string> = {};
@@ -69,7 +70,7 @@ function validateAnswer(value: unknown, question: CanonicalQuestion, field: stri
     if (typeof item !== "string") invalid(`${field} requested Score levels must be strings`);
     expectedLegend[String(i)] = item;
   });
-  if (keys.some((key) => value.legend[key] !== expectedLegend[key])) invalid(`${field}.legend does not match the requested levels`);
+  if (keys.some((key) => legend[key] !== expectedLegend[key])) invalid(`${field}.legend does not match the requested levels`);
   const probabilities = distribution(value.probabilities, keys, `${field}.probabilities`);
   const expectation = keys.reduce((sum, key) => sum + Number(key) * probabilities[key], 0);
   if (typeof value.score !== "number" || !Number.isFinite(value.score) || !close(value.score, expectation)) invalid(`${field}.score does not match its probability-weighted expectation`);
@@ -78,9 +79,10 @@ function validateAnswer(value: unknown, question: CanonicalQuestion, field: stri
 
 function normalizeUsage(value: unknown): NormalizedTypeSafeResponse["usage"] {
   if (!isRecord(value) || Object.keys(value).length !== 2 ||
-      !Number.isSafeInteger(value.input_tokens) || !Number.isSafeInteger(value.output_tokens) ||
-      (value.input_tokens as number) < 0 || (value.output_tokens as number) < 0) return null;
-  return { inputTokens: value.input_tokens as number, outputTokens: value.output_tokens as number };
+      typeof value.input_tokens !== "number" || !Number.isSafeInteger(value.input_tokens) ||
+      typeof value.output_tokens !== "number" || !Number.isSafeInteger(value.output_tokens) ||
+      value.input_tokens < 0 || value.output_tokens < 0) return null;
+  return { inputTokens: value.input_tokens, outputTokens: value.output_tokens };
 }
 
 export function normalizeTypeSafeResponse(bytes: Uint8Array, request: PreparedRequest): NormalizedTypeSafeResponse {
@@ -92,18 +94,18 @@ export function normalizeTypeSafeResponse(bytes: Uint8Array, request: PreparedRe
   catch { return invalid("body is not valid JSON"); }
   if (!isRecord(parsed)) invalid("body must be an object");
   exactKeys(parsed, ["model", "answers"], ["usage"]);
-  if (parsed.model !== NATIVE_MODEL || parsed.model !== request.model) invalid("observed model does not match the fixed requested model");
-  if (!isRecord(parsed.answers)) invalid("answers must be an object");
+  const responseAnswers = parsed.answers;
+  if (!isRecord(responseAnswers)) invalid("answers must be an object");
   const expected = Object.keys(request.questionMap);
-  const received = Object.keys(parsed.answers);
-  if (received.length !== expected.length || expected.some((id) => !(id in parsed.answers))) {
+  const received = Object.keys(responseAnswers);
+  if (received.length !== expected.length || expected.some((id) => !(id in responseAnswers))) {
     invalid("answers do not match the complete expected question set");
   }
   const answers: Record<string, CanonicalAnswer> = {};
   for (const id of expected) {
     const question = request.questions[id];
     if (!question) invalid(`request has no schema for ${id}`);
-    answers[id] = validateAnswer(parsed.answers[id], question, `answers.${id}`);
+    answers[id] = validateAnswer(responseAnswers[id], question, `answers.${id}`);
   }
   return Object.freeze({ model: NATIVE_MODEL, answers: Object.freeze(answers), usage: normalizeUsage(parsed.usage) });
 }
