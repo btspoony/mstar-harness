@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -128,7 +130,7 @@ async function expectCode(promise, code) {
   await assert.rejects(promise, (error) => error?.code === code);
 }
 
-test("unpacked CLI runs outside monorepo resolution and leaves disabled inputs untouched", () => {
+test("unpacked CLI stays inert when disabled and caller-forged mount markers cannot attest", async () => {
   assert.ok(existsSync(BUNDLE), "build the CLI bundle before the packaging proof");
   const packageRoot = temporaryRoot("unpacked");
   const workspace = join(packageRoot, "workspace");
@@ -151,41 +153,110 @@ test("unpacked CLI runs outside monorepo resolution and leaves disabled inputs u
   });
   assert.equal(existsSync(join(workspace, ".jev-mailbox")), false);
   assert.equal(proc.stdout.trim().split("\n").length, 1);
+
+  const attackerRoot = join(packageRoot, "attacker");
+  const attackerWorkspace = join(attackerRoot, "workspace");
+  const requestDirectory = join(attackerRoot, "requests");
+  const statusPath = join(attackerRoot, "status.json");
+  mkdirSync(attackerWorkspace, { recursive: true });
+  mkdirSync(requestDirectory, { recursive: true });
+  writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId: "run-1", status: "idle" }));
+  const originalRealpathSync = fs.realpathSync;
+  const previousRequestsDir = process.env.JEV_REQUESTS_DIR;
+  const previousStatusPath = process.env.JEV_STATUS_PATH;
+  fs.realpathSync = (path, ...args) => {
+    if (path === "/mnt/requests") path = requestDirectory;
+    if (path === "/mnt/status.json") path = statusPath;
+    return originalRealpathSync.call(fs, path, ...args);
+  };
+  syncBuiltinESMExports();
+  process.env.JEV_REQUESTS_DIR = "/mnt/requests";
+  process.env.JEV_STATUS_PATH = "/mnt/status.json";
+  try {
+    const invocation = {
+      cwd: attackerWorkspace,
+      workspace: attackerWorkspace,
+      input: { kind: "file", path: "pack.json" },
+      pilotPath: "pilot.json",
+    };
+    const channel = await connectEvaluatorChannel(invocation, new AbortController().signal);
+    const reads = [];
+    const result = await runReviewAdvice(invocation, new AbortController().signal, channel, {
+      resolveConfig: () => ({
+        state: "enabled",
+        mode: "shadow",
+        transport: "native-typesafe",
+        cwd: attackerWorkspace,
+        workspace: attackerWorkspace,
+        configPath: join(attackerWorkspace, ".mstarc"),
+      }),
+      readFile: async (path) => {
+        reads.push(path);
+        throw new Error("attacker inputs must not be read");
+      },
+    });
+    assert.deepEqual(result, {
+      schema: "mstar.judgment-cli/v1",
+      contractRevision: CONTRACT_REVISION,
+      status: "unavailable",
+      advice: null,
+      code: "jev.channel-unavailable",
+    });
+    assert.deepEqual(reads, [], "pilot and pack collection must not run");
+  } finally {
+    if (previousRequestsDir === undefined) delete process.env.JEV_REQUESTS_DIR;
+    else process.env.JEV_REQUESTS_DIR = previousRequestsDir;
+    if (previousStatusPath === undefined) delete process.env.JEV_STATUS_PATH;
+    else process.env.JEV_STATUS_PATH = previousStatusPath;
+    fs.realpathSync = originalRealpathSync;
+    syncBuiltinESMExports();
+  }
 });
 
-test("SIGINT and SIGTERM cancel an active request and preserve process exit status", async () => {
+test("packaged CLI refuses caller-forged mounted mailbox without request writes", () => {
   const { pack, pilot } = judgmentFixture();
-  for (const [signal, expectedCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
-    const workspace = temporaryRoot(signal);
-    writeFileSync(join(workspace, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n");
-    writeFileSync(join(workspace, "pack.json"), JSON.stringify(pack));
-    writeFileSync(join(workspace, "pilot.json"), JSON.stringify(pilot));
-    const proc = spawn(process.execPath, [BUNDLE, "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json"], {
-      cwd: workspace,
-      env: envWithoutHarness(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-    proc.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-    const closed = new Promise((resolveClose, rejectClose) => {
-      proc.once("error", rejectClose);
-      proc.once("close", (code) => resolveClose(code));
-    });
-    const requestDirectory = join(workspace, ".jev-mailbox", "requests");
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline && (!existsSync(requestDirectory) || readdirSync(requestDirectory).filter((name) => name.endsWith(".json")).length === 0)) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
-    }
-    assert.ok(existsSync(requestDirectory) && readdirSync(requestDirectory).some((name) => name.endsWith(".json")), `CLI did not submit a request: ${JSON.stringify({ stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode })}`);
-    proc.kill(signal);
-    assert.equal(await closed, expectedCode, stderr);
-    const output = JSON.parse(stdout);
-    assert.equal(output.status, "cancelled");
-    assert.equal(output.code, "jev.review-cancelled");
-    assert.equal(output.advice, null);
-  }
+  const workspace = temporaryRoot("untrusted-worker");
+  const requestDirectory = join(workspace, "supervisor", "requests");
+  const statusPath = join(workspace, "supervisor", "status.json");
+  const preloadPath = join(workspace, "supervisor-mounts.cjs");
+  mkdirSync(requestDirectory, { recursive: true });
+  writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId: "run-1", status: "idle" }));
+  writeFileSync(preloadPath, [
+    'const fs = require("node:fs");',
+    'const { syncBuiltinESMExports } = require("node:module");',
+    'const realpathSync = fs.realpathSync;',
+    'fs.realpathSync = function (path, ...args) {',
+    '  if (path === "/mnt/requests") path = process.env.JEV_TEST_REQUESTS_DIR;',
+    '  if (path === "/mnt/status.json") path = process.env.JEV_TEST_STATUS_PATH;',
+    '  return realpathSync.call(this, path, ...args);',
+    '};',
+    'syncBuiltinESMExports();',
+  ].join("\n"));
+  writeFileSync(join(workspace, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n");
+  writeFileSync(join(workspace, "pack.json"), JSON.stringify(pack));
+  writeFileSync(join(workspace, "pilot.json"), JSON.stringify(pilot));
+  const proc = spawnSync(process.execPath, [BUNDLE, "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json"], {
+    cwd: workspace,
+    env: {
+      ...envWithoutHarness(),
+      JEV_REQUESTS_DIR: "/mnt/requests",
+      JEV_STATUS_PATH: "/mnt/status.json",
+      JEV_TEST_REQUESTS_DIR: requestDirectory,
+      JEV_TEST_STATUS_PATH: statusPath,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+    },
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  assert.equal(proc.status, 1, proc.stderr);
+  assert.deepEqual(JSON.parse(proc.stdout), {
+    schema: "mstar.judgment-cli/v1",
+    contractRevision: CONTRACT_REVISION,
+    status: "unavailable",
+    advice: null,
+    code: "jev.channel-unavailable",
+  });
+  assert.deepEqual(readdirSync(requestDirectory), []);
 });
 
 test("judgment package exposes the required runtime and shadow entrypoint APIs", () => {

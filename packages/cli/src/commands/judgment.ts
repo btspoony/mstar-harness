@@ -2,10 +2,8 @@ import { Command } from "commander";
 import { resolve } from "node:path";
 import {
   CONTRACT_REVISION,
-  connectEvaluatorChannel,
   resolveJudgmentConfig,
   runReviewAdvice,
-  type EvaluatorChannel,
   type JudgmentCliResult,
   type JudgmentInvocation,
 } from "@mstar-harness/judgment";
@@ -77,15 +75,8 @@ export function registerJudgmentCommands(program: Command): void {
 
       let result: JudgmentCliResult;
       try {
-        const config = resolveJudgmentConfig(cwd, workspace);
-        let channel: EvaluatorChannel | null = null;
-        if (config.state === "enabled" &&
-            process.env.JEV_REQUESTS_DIR === "/mnt/requests" &&
-            process.env.JEV_STATUS_PATH === "/mnt/status.json") {
-          try { channel = await connectEvaluatorChannel(invocation, controller.signal); }
-          catch { /* Missing external attestation is reported as an unavailable channel. */ }
-        }
-        result = await runReviewAdvice(invocation, controller.signal, channel);
+        // Public CLI inputs cannot authenticate a supervisor launch; fail closed before collection.
+        result = await runReviewAdvice(invocation, controller.signal, null);
       } catch {
         result = Object.freeze({
           schema: SCHEMA,

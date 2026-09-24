@@ -96,7 +96,7 @@ async function createChannel(requestDirectory: string, statusPath: string, signa
     }
     return { status: "unavailable", code: "jev.review-cancelled" };
   };
-  return Object.freeze({
+  const channel: EvaluatorChannel = Object.freeze({
     submit: async ({ packBytes, pilotDigest }, submitSignal) => {
       if (closed || signal.aborted || submitSignal.aborted) return { status: "unavailable", code: "jev.channel-closed" };
       if (!(packBytes instanceof Uint8Array) || packBytes.byteLength === 0 || packBytes.byteLength > MAX_REQUEST_BYTES || !/^[a-f0-9]{64}$/.test(pilotDigest)) return { status: "invalid", code: "jev.request-invalid" };
@@ -122,6 +122,7 @@ async function createChannel(requestDirectory: string, statusPath: string, signa
       }
     },
   });
+  return channel;
 }
 function atomicWrite(path: string, bytes: Uint8Array): void {
   const temp = `${path}.${randomUUID()}.tmp`;
