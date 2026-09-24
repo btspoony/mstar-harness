@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectEvaluatorChannel, connectEvaluatorChannelForTest, createEvaluatorMailbox } from "../src/evaluator-channel.js";
+import { assertSupervisorMountInfo, connectEvaluatorChannel, connectEvaluatorChannelForTest, createEvaluatorMailbox } from "../src/evaluator-channel.js";
 import { isAttestedEvaluatorChannel } from "../src/evaluator-channel-trust.js";
 
 const roots: string[] = [];
@@ -16,6 +16,19 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const invocation = (root: string) => ({ cwd: root, workspace: root, input: { kind: "stdin" as const }, pilotPath: null });
 
 describe("bounded evaluator mailbox", () => {
+  test("attests only the complete sibling mount set with correct access modes", () => {
+    const lines = [
+      ["/mnt/source", "ro"], ["/mnt/output", "rw"], ["/mnt/requests", "rw"],
+      ["/mnt/status.json", "ro"], ["/mnt/scratch", "rw"],
+    ] as const;
+    const mountInfo = (entries: readonly (readonly [string, string])[]) =>
+      entries.map(([path, mode], i) => `${i + 1} 0 0:1 / ${path} ${mode},nosuid - tmpfs tmpfs ${mode}`).join("\n");
+    expect(() => assertSupervisorMountInfo(mountInfo(lines))).not.toThrow();
+    expect(() => assertSupervisorMountInfo(mountInfo(lines.filter(([path]) => path !== "/mnt/requests")))).toThrow("jev.channel-mount-unconfined");
+    expect(() => assertSupervisorMountInfo(mountInfo([...lines, ["/mnt/unexpected", "rw"]]))).toThrow("jev.channel-mount-unconfined");
+    expect(() => assertSupervisorMountInfo(mountInfo(lines.map(([path, mode]) => [path, path === "/mnt/requests" ? "ro" : mode])))).toThrow("jev.channel-mount-unconfined");
+    expect(() => assertSupervisorMountInfo(mountInfo(lines.map(([path, mode]) => [path, path === "/mnt/status.json" ? "rw" : mode])))).toThrow("jev.channel-mount-unconfined");
+  });
   test("durably admits one matching run request before acknowledging status", async () => {
     const root = makeRoot();
     const channel = await connectEvaluatorChannelForTest(invocation(root), new AbortController().signal);
