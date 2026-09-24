@@ -34,7 +34,7 @@ function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string |
   return root;
 }
 
-function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string; missingDisposition?: boolean; invalidOrigin?: boolean; missingQuarantine?: boolean; badEligibleDenominators?: boolean; unrecordedCollision?: boolean; emptyGold?: boolean } = {}): string {
+function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string; missingDisposition?: boolean; invalidOrigin?: boolean; missingQuarantine?: boolean; badEligibleDenominators?: boolean; unrecordedCollision?: boolean; emptyGold?: boolean; missingGoldForAnnotatedVariant?: boolean } = {}): string {
   const groups: Array<Record<string, unknown>> = [];
   const assignments: Record<string, string> = {};
   const goldRows: Array<Record<string, unknown>> = [];
@@ -59,7 +59,9 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
       variants: [{ id: itemId, itemDigest, sourceSha256, primary: true }],
     });
     const labels = quarantined ? ["same_cause", "different_cause"] : ["same_cause", "same_cause"];
-    goldRows.push({ itemId, groupId, label: quarantined ? "unresolved" : "same_cause", ...(quarantined ? { eligible: false, quarantined: true } : {}) });
+    if (!overrides.missingGoldForAnnotatedVariant || index !== 0) {
+      goldRows.push({ itemId, groupId, label: quarantined ? "unresolved" : "same_cause", ...(quarantined ? { eligible: false, quarantined: true } : {}) });
+    }
     for (const seat of ["A", "B"] as const) {
       const shardIndex = Math.floor(index / 90) + 1;
       const reducedPackSupport = seat === "A" && shardIndex === 1
@@ -431,6 +433,12 @@ describe("qualification integrity", () => {
       rmSync(missingQuarantine, { recursive: true, force: true });
       rmSync(wrongEligibleCounts, { recursive: true, force: true });
     }
+  });
+  test("check-freeze rejects annotations for corpus variants without gold rows", async () => {
+    const root = frozenRoot({ missingGoldForAnnotatedVariant: true });
+    try {
+      expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("check-freeze recomputes the manifest digest committed by freeze.json", async () => {
     const root = frozenRoot();

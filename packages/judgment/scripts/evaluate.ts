@@ -647,6 +647,8 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
           }
         }
       }
+      const annotationWithoutGold = annotations.find((row) => !goldIds.has(row.itemId));
+      if (annotationWithoutGold) fail(`Freeze annotation has no gold row: ${annotationWithoutGold.itemId}`);
       validateFreezeLabels(gold, annotations.filter((row) => goldIds.has(row.itemId)));
       const manifestPaths = new Set(manifest.files?.map((entry) => entry.path));
       const requiredPaths = [
