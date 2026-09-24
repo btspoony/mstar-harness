@@ -179,30 +179,16 @@ test("unpacked CLI stays inert when disabled and caller-forged mount markers can
       input: { kind: "file", path: "pack.json" },
       pilotPath: "pilot.json",
     };
-    const channel = await connectEvaluatorChannel(invocation, new AbortController().signal);
-    const reads = [];
-    const result = await runReviewAdvice(invocation, new AbortController().signal, channel, {
-      resolveConfig: () => ({
-        state: "enabled",
-        mode: "shadow",
-        transport: "native-typesafe",
-        cwd: attackerWorkspace,
-        workspace: attackerWorkspace,
-        configPath: join(attackerWorkspace, ".mstarc"),
-      }),
-      readFile: async (path) => {
-        reads.push(path);
-        throw new Error("attacker inputs must not be read");
-      },
-    });
-    assert.deepEqual(result, {
-      schema: "mstar.judgment-cli/v1",
-      contractRevision: CONTRACT_REVISION,
-      status: "unavailable",
-      advice: null,
-      code: "jev.channel-unavailable",
-    });
-    assert.deepEqual(reads, [], "pilot and pack collection must not run");
+    // Caller-forged mount markers and paths must not attest a channel at all. The
+    // supervisor-mount check refuses at connection time, which is stricter than
+    // handing back an unattested channel for a later refusal, so no advice path —
+    // and therefore no pilot or pack collection — can be reached.
+    await assert.rejects(
+      () => connectEvaluatorChannel(invocation, new AbortController().signal),
+      /jev\.channel-supervisor-unattested/,
+      "caller-forged mount markers must not attest a channel",
+    );
+    // No channel means no advice path, so no pilot or pack read can occur.
   } finally {
     if (previousRequestsDir === undefined) delete process.env.JEV_REQUESTS_DIR;
     else process.env.JEV_REQUESTS_DIR = previousRequestsDir;
