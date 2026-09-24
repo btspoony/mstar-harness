@@ -9,6 +9,7 @@ export type QualificationRow = Readonly<{
   primary?: boolean;
   gold: GoldLabel;
   outcome: OutcomeReason;
+  accepted: boolean;
   rawLabel?: A05Label;
   arm?: "A" | "B" | "C";
   lineageId?: string;
@@ -41,7 +42,8 @@ function validateRows(rows: readonly QualificationRow[]): void {
   let arm: QualificationRow["arm"];
   for (const row of rows) {
     if (!row || typeof row.groupId !== "string" || !row.groupId || typeof row.variantId !== "string" || !row.variantId || !Object.hasOwn(labels, row.gold) && row.gold !== "unresolved" ||
-        !["accepted", "model-abstain", "policy-abstain", "transport-failure", "invalid-response", "insufficient-input", "stale", "budget", "cancellation"].includes(row.outcome)) throw new TypeError("qualification.row-invalid");
+        !["accepted", "model-abstain", "policy-abstain", "transport-failure", "invalid-response", "insufficient-input", "stale", "budget", "cancellation"].includes(row.outcome) ||
+        typeof row.accepted !== "boolean") throw new TypeError("qualification.row-invalid");
     if (row.arm !== undefined) {
       if (arm !== undefined && row.arm !== arm) throw new TypeError("qualification.arm-mixing");
       arm = row.arm;
@@ -50,11 +52,21 @@ function validateRows(rows: readonly QualificationRow[]): void {
     if (variants.has(key)) throw new TypeError("qualification.duplicate-variant");
     variants.add(key);
     if (row.rawLabel !== undefined && !Object.hasOwn(labels, row.rawLabel)) throw new TypeError("qualification.label-invalid");
-    if (row.outcome === "accepted" && (!row.rawLabel || row.accepted !== true) || row.outcome !== "accepted" && row.accepted === true) throw new TypeError("qualification.acceptance-invalid");
+    const attributable = row.outcome === "accepted" || row.outcome === "model-abstain" || row.outcome === "policy-abstain";
+    if (row.outcome === "accepted" && (!row.rawLabel || row.accepted !== true) ||
+        row.outcome !== "accepted" && row.accepted === true ||
+        !attributable && row.rawLabel !== undefined) throw new TypeError("qualification.acceptance-invalid");
   }
   const primaryCounts = new Map<string, number>();
-  for (const row of rows) if (row.primary) primaryCounts.set(row.groupId, (primaryCounts.get(row.groupId) ?? 0) + 1);
-  for (const count of primaryCounts.values()) if (count > 1) throw new TypeError("qualification.primary-duplicate");
+  const groupCounts = new Map<string, number>();
+  for (const row of rows) {
+    groupCounts.set(row.groupId, (groupCounts.get(row.groupId) ?? 0) + 1);
+    if (row.primary === true) primaryCounts.set(row.groupId, (primaryCounts.get(row.groupId) ?? 0) + 1);
+  }
+  for (const group of groupCounts.keys()) {
+    if ((primaryCounts.get(group) ?? 0) > 1) throw new TypeError("qualification.primary-duplicate");
+    if (primaryCounts.get(group) !== 1) throw new TypeError("qualification.primary-required");
+  }
   const groupLineages = new Map<string, string>();
   const groupClusters = new Map<string, string>();
   for (const row of rows) {
@@ -135,9 +147,17 @@ export type QualificationSummary = Readonly<{
     usefulSameRecall: Readonly<{ successes: number; total: number; value: number | null; lower95: number | null }>;
     selectiveAccuracy: Readonly<{ successes: number; total: number; value: number | null; lower95: number | null }>;
   }>;
+  bootstrap: Readonly<{
+    method: "seeded-causal-cluster-bootstrap/v1";
+    seed: number;
+    replicates: number;
+    clusters: number;
+    endpoints: Readonly<Record<"precision" | "usefulSameRecall" | "selectiveAccuracy", Readonly<{ lower95: number | null; upper95: number | null }>>>;
+  }>;
   unresolvedGold: number;
   reducedPackInadequacy: number;
-  coverageRegression: number;
+  coverageRegression: number | null;
+  coverageComplete: boolean;
   bMinusA: Readonly<{ credited: false; value: 0 }>;
 }>;
 
@@ -150,7 +170,7 @@ export function summarizeQualification(rows: readonly QualificationRow[], option
   const confusion: Record<string, number> = {};
   let rawCorrect = 0, rawTotal = 0, precisionSuccess = 0, precisionTotal = 0, recallSuccess = 0, recallTotal = 0, selectiveSuccess = 0, selectiveTotal = 0;
   const primaryByGroup = new Map<string, QualificationRow>();
-  for (const row of rows) if (row.primary || !primaryByGroup.has(row.groupId)) primaryByGroup.set(row.groupId, row);
+  for (const row of rows) if (row.primary === true) primaryByGroup.set(row.groupId, row);
   for (const row of rows) {
     const bucket = classifyOutcome(row.outcome);
     outcomeCounts[bucket.bucket]++;
@@ -179,14 +199,55 @@ export function summarizeQualification(rows: readonly QualificationRow[], option
   for (const row of primaryByGroup.values()) if (row.gold !== "unresolved" && row.outcome === "accepted" && row.accepted && row.rawLabel !== undefined) {
     policyTotal++; if (row.rawLabel === row.gold) policyCorrect++;
   }
-  const original = new Set(options.originalUnitIds ?? []);
-  const missing = new Set<string>();
-  for (const armCoverage of [options.aCoverage, options.bCoverage, options.cCoverage]) {
-    if (armCoverage === undefined) continue;
-    const present = new Set(armCoverage);
-    for (const id of original) if (!present.has(id)) missing.add(id);
+  const coverageComplete = options.originalUnitIds !== undefined && options.originalUnitIds.length > 0 && options.aCoverage !== undefined && options.bCoverage !== undefined && options.cCoverage !== undefined;
+  let coverageRegression: number | null = null;
+  if (coverageComplete) {
+    const original = new Set(options.originalUnitIds);
+    const missing = new Set<string>();
+    for (const armCoverage of [options.aCoverage, options.bCoverage, options.cCoverage]) {
+      const present = new Set(armCoverage);
+      for (const id of original) if (!present.has(id)) missing.add(id);
+    }
+    coverageRegression = missing.size;
   }
-  const coverageRegression = missing.size;
+  const seed = 0x51f15e, replicates = 2000;
+  const clusterMap = new Map<string, QualificationRow[]>();
+  for (const row of primaryByGroup.values()) {
+    const cluster = row.causalClusterId ?? row.groupId;
+    const members = clusterMap.get(cluster) ?? [];
+    members.push(row);
+    clusterMap.set(cluster, members);
+  }
+  const clusters = [...clusterMap.values()];
+  let randomState = seed;
+  const random = (): number => {
+    randomState = (randomState + 0x6d2b79f5) | 0;
+    let t = randomState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const bootstrapValues: Record<"precision" | "usefulSameRecall" | "selectiveAccuracy", number[]> = { precision: [], usefulSameRecall: [], selectiveAccuracy: [] };
+  for (let i = 0; i < replicates && clusters.length > 0; i++) {
+    let pS = 0, pN = 0, rS = 0, rN = 0, sS = 0, sN = 0;
+    for (let j = 0; j < clusters.length; j++) for (const row of clusters[Math.floor(random() * clusters.length)]) {
+      if (row.gold === "unresolved") continue;
+      if (row.gold === "same_cause") rN++;
+      if (row.outcome === "accepted" && row.accepted && row.rawLabel === "same_cause") {
+        pN++; if (row.gold === "same_cause") { pS++; rS++; }
+      }
+      if (row.outcome === "accepted" && row.accepted && (row.rawLabel === "same_cause" || row.rawLabel === "different_cause")) {
+        sN++; if (row.rawLabel === row.gold) sS++;
+      }
+    }
+    const values = { precision: ratio(pS, pN), usefulSameRecall: ratio(rS, rN), selectiveAccuracy: ratio(sS, sN) };
+    for (const key of Object.keys(values) as Array<keyof typeof values>) if (values[key] !== null) bootstrapValues[key].push(values[key]!);
+  }
+  const interval = (values: number[]) => {
+    if (!values.length) return Object.freeze({ lower95: null, upper95: null });
+    values.sort((a, b) => a - b);
+    return Object.freeze({ lower95: values[Math.floor((values.length - 1) * 0.025)], upper95: values[Math.ceil((values.length - 1) * 0.975)] });
+  };
   return Object.freeze({
     revision: "phase3a-native-20260924", totals: Object.freeze({ rows: rows.length, groups: groups.size, variants: rows.length, attempts: rows.filter((r) => r.attempted ?? ["accepted", "model-abstain", "policy-abstain", "transport-failure", "invalid-response"].includes(r.outcome)).length }),
     outcomeCounts: Object.freeze(outcomeCounts), unissuedReasons: Object.freeze(unissuedReasons),
@@ -196,8 +257,10 @@ export function summarizeQualification(rows: readonly QualificationRow[], option
       precision: Object.freeze({ successes: precisionSuccess, total: precisionTotal, value: ratio(precisionSuccess, precisionTotal), lower95: clopperPearsonLower(precisionSuccess, precisionTotal) }),
       usefulSameRecall: Object.freeze({ successes: recallSuccess, total: recallTotal, value: ratio(recallSuccess, recallTotal), lower95: clopperPearsonLower(recallSuccess, recallTotal) }),
       selectiveAccuracy: Object.freeze({ successes: selectiveSuccess, total: selectiveTotal, value: ratio(selectiveSuccess, selectiveTotal), lower95: clopperPearsonLower(selectiveSuccess, selectiveTotal) }),
-    }), unresolvedGold: rows.filter((r) => r.gold === "unresolved").length,
+    }),
+    bootstrap: Object.freeze({ method: "seeded-causal-cluster-bootstrap/v1", seed, replicates, clusters: clusters.length, endpoints: Object.freeze({ precision: interval(bootstrapValues.precision), usefulSameRecall: interval(bootstrapValues.usefulSameRecall), selectiveAccuracy: interval(bootstrapValues.selectiveAccuracy) }) }),
+    unresolvedGold: rows.filter((r) => r.gold === "unresolved").length,
     reducedPackInadequacy: rows.filter((r) => r.reducedPackSupport === "insufficient").length,
-    coverageRegression, bMinusA: Object.freeze({ credited: false, value: 0 as const }),
+    coverageRegression, coverageComplete, bMinusA: Object.freeze({ credited: false, value: 0 as const }),
   });
 }

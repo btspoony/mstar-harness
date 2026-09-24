@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import { MAX_RUN_RESERVED_INPUT_TOKENS, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT } from "../src/contracts.js";
 import { runShadowSupervisor, type ShadowRunInput } from "../src/shadow-supervisor.js";
 import { summarizeQualification, type QualificationRow } from "../src/evaluation.js";
 
@@ -47,8 +48,12 @@ type Corpus = { groups: Array<{ id: string; split: string; lineageId: string; ca
 type Gold = Array<{ itemId: string; groupId: string; label: string }>;
 function assertRevision(value: { contractRevision?: string }): void { if (value.contractRevision !== REVISION) fail("Frozen revision mismatch"); }
 function verifyFiles(root: string, manifest: Manifest): void {
-  if (!Array.isArray(manifest.files)) fail("Manifest file commitments missing");
-  for (const entry of manifest.files) if (!entry.path || fileDigest(root, entry.path) !== entry.sha256) fail("Artifact digest mismatch");
+  if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail("Manifest file commitments missing");
+  const paths = new Set<string>();
+  for (const entry of manifest.files) {
+    if (!entry.path || !/^[a-f0-9]{64}$/.test(entry.sha256) || paths.has(entry.path) || fileDigest(root, entry.path) !== entry.sha256) fail("Artifact digest mismatch");
+    paths.add(entry.path);
+  }
 }
 export async function runEvaluationCommand(argv = process.argv.slice(2)): Promise<number> {
   try {
@@ -62,6 +67,19 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       const permission = readJson<Record<string, unknown>>(root, "permission.json");
       assertRevision(permission as { contractRevision?: string });
       if (permission.status !== "synthetic-only-policy-declaration; not a self-authorizing pilot") fail("Permission declaration mismatch");
+      const tokenPolicy = budget.tokenPolicy as Record<string, unknown> | null;
+      if (!tokenPolicy || typeof tokenPolicy !== "object" || tokenPolicy.method !== TOKEN_POLICY_METHOD ||
+          tokenPolicy.perAttemptReservation !== TOKEN_RESERVATION_PER_ATTEMPT || tokenPolicy.maxRunReservedInputTokens !== MAX_RUN_RESERVED_INPUT_TOKENS ||
+          !String(tokenPolicy.providerContextPolicy).includes("no local tokenizer/preflight context-fit claim")) fail("Frozen provider-context reservation mismatch");
+      const allocation = budget.requestAllocation as Record<string, unknown> | null;
+      if (!allocation || allocation.developmentVariantCallsMax !== 120 || allocation.holdoutVariantCallsMax !== 600 ||
+          allocation.temporalVariantCallsMax !== 48 || allocation.variantCallsMax !== 768 || allocation.selectedControlCallsMax !== 32 ||
+          allocation.allocatedCallsMax !== 800 || allocation.unallocatedSafetyHeadroomNotRetries !== 200 || allocation.allRequestsMax !== 1_000 ||
+          budget.maxPacksPerRun !== 1_000 || budget.maxTasksPerPack !== 4 || budget.maxPairsPerPack !== 4 ||
+          budget.maxAttemptsPerRequest !== 1 || budget.maxConcurrentRequests !== 1 || budget.timeoutMsPerOperation !== 10_000 ||
+          budget.maxRunOptionalElapsedMs !== 10_000_000 || budget.maxPackBytes !== 65_536 ||
+          budget.maxOutboundRequestBytes !== 32_768 || budget.maxResponseBytes !== 65_536 ||
+          typeof budget.attemptPolicy !== "string" || !budget.attemptPolicy.includes("No SDK retry")) fail("Frozen attempt caps mismatch");
       process.stdout.write(`${JSON.stringify({ action, status: "valid", revision: REVISION })}\n`);
       return 0;
     }
@@ -73,8 +91,8 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       const groups = shard ? corpus.groups.filter((g) => g.id.startsWith(`${shard}/`)) : corpus.groups;
       if (!Array.isArray(corpus.groups) || groups.some((g) => !g.id || !g.lineageId || !g.causalClusterId || !Array.isArray(g.variants) || g.variants.length < 1 || g.variants.length > 2 || g.variants.filter((v) => v.primary).length !== 1)) fail("Corpus group integrity failure");
       const lineage = new Map<string, string>(), causal = new Map<string, string>();
-      for (const group of groups) for (const [table, value] of [[lineage, group.lineageId], [causal, group.causalClusterId]] as const) { const old = table.get(value); if (old && old !== group.split) fail("Lineage/causal split leakage"); table.set(value, group.split); }
-      process.stdout.write(`${JSON.stringify({ action, status: "valid", groups: groups.length })}\n`); return 0;
+      for (const group of corpus.groups) for (const [table, value] of [[lineage, group.lineageId], [causal, group.causalClusterId]] as const) { const old = table.get(value); if (old && old !== group.split) fail("Lineage/causal split leakage"); table.set(value, group.split); }
+      process.stdout.write(`${JSON.stringify({ action, status: "valid", scope: shard ? "shard" : "global", shard: shard ?? null, groups: groups.length, globalClosureChecked: true })}\n`); return 0;
     }
     if (action === "check-annotations") {
       const rows = readJsonLines<Gold[number]>(root, `annotations/${seat ?? "A"}-${shard ?? "1"}.jsonl`);
@@ -82,10 +100,24 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       process.stdout.write(`${JSON.stringify({ action, status: "valid", annotations: rows.length })}\n`); return 0;
     }
     if (action === "check-freeze") {
-      const split = readJson<{ contractRevision?: string; sha256?: string }>(root, "split-manifest.json");
-      const gold = readJsonLines<unknown>(root, "gold/adjudicated.jsonl");
-      if (!split.sha256 || !gold) fail("Freeze inputs missing");
-      process.stdout.write(`${JSON.stringify({ action, status: "valid", splitSha256: split.sha256 })}\n`); return 0;
+      const split = readJson<{ schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string; goldSha256?: string; goldCount?: number }>(root, "split-manifest.json");
+      assertRevision(split);
+      if (split.schema !== "mstar.qualification-split-manifest/v1" || !split.freezeId || !split.frozenAt ||
+          split.assignments === null || typeof split.assignments !== "object" || Array.isArray(split.assignments) ||
+          Object.keys(split.assignments as object).length === 0 ||
+          !/^[a-f0-9]{64}$/.test(split.assignmentSha256 ?? "") || digest(Buffer.from(JSON.stringify(split.assignments))) !== split.assignmentSha256) fail("Split freeze commitment invalid");
+      const goldBytes = readFileSync(resolve(root, "gold/adjudicated.jsonl"));
+      const gold = readJsonLines<Gold[number]>(root, "gold/adjudicated.jsonl");
+      const assignmentIds = new Set(Object.keys(split.assignments as Record<string, unknown>));
+      const goldIds = new Set<string>();
+      if (gold.length === 0 || split.goldCount !== gold.length || !/^[a-f0-9]{64}$/.test(split.goldSha256 ?? "") || digest(goldBytes) !== split.goldSha256) fail("Gold freeze commitment invalid");
+      for (const row of gold) {
+        if (!row.itemId || !row.groupId || goldIds.has(row.itemId) || !assignmentIds.has(row.groupId) ||
+            !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.label)) fail("Gold freeze commitment invalid");
+        goldIds.add(row.itemId);
+      }
+      if (!manifest.files?.some((entry) => entry.path === "split-manifest.json") || !manifest.files.some((entry) => entry.path === "gold/adjudicated.jsonl")) fail("Freeze artifacts are not committed by manifest");
+      process.stdout.write(`${JSON.stringify({ action, status: "valid", freezeId: split.freezeId, splitSha256: fileDigest(root, "split-manifest.json"), goldSha256: split.goldSha256 })}\n`); return 0;
     }
     if (action === "calibrate" || action === "holdout") {
       const job = readJson<ShadowRunInput>(root, `${action}-run.json`);
