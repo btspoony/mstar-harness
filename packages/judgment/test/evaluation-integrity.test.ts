@@ -1,27 +1,42 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { summarizeQualification, type QualificationRow } from "../src/evaluation.js";
+import { summarizeQualification, validateFreezeGroups, validateFreezeLabels, type QualificationRow } from "../src/evaluation.js";
 import { runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string | null = "mstar.qualification-manifest/v1"): string {
   const allArtifacts = { "protocol.json": "{}", ...artifacts };
   const root = mkdtempSync(join(tmpdir(), "qualification-eval-"));
-  for (const [path, content] of Object.entries(allArtifacts)) {
+  const committed = Object.entries(allArtifacts).filter(([path]) => path !== "freeze.json");
+  for (const [path, content] of committed) {
     const target = join(root, path);
     const parent = target.slice(0, target.lastIndexOf("/"));
     mkdirSync(parent, { recursive: true });
     writeFileSync(target, content);
   }
-  const files = Object.entries(allArtifacts).map(([path, content]) => ({ path, sha256: sha256(content) }));
-  writeFileSync(join(root, "manifest.json"), JSON.stringify({ ...(manifestSchema === null ? {} : { schema: manifestSchema }), contractRevision: "phase3a-native-20260924", files }));
+  const files = committed.map(([path, content]) => ({ path, sha256: sha256(content) }));
+  const manifestBytes = JSON.stringify({ ...(manifestSchema === null ? {} : { schema: manifestSchema }), contractRevision: "phase3a-native-20260924", files });
+  writeFileSync(join(root, "manifest.json"), manifestBytes);
+  if (Object.hasOwn(allArtifacts, "freeze.json")) {
+    const byPath = new Map(files.map((entry) => [entry.path, entry.sha256]));
+    const annotationCommitments = files.filter((entry) => /^annotations\/[AB]-[1-4]\.jsonl$/.test(entry.path))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    writeFileSync(join(root, "freeze.json"), JSON.stringify({
+      manifestSha256: sha256(manifestBytes), sourceManifestSha256: sha256(manifestBytes),
+      corpusSha256: byPath.get("corpus.json"), splitSha256: byPath.get("split-manifest.json"),
+      goldSha256: byPath.get("gold/adjudicated.jsonl"), adjudicationSha256: byPath.get("adjudication.jsonl"),
+      annotationSha256: sha256(JSON.stringify(annotationCommitments)),
+    }));
+  }
   return root;
 }
 
-function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string } = {}): string {
+function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string; missingDisposition?: boolean; invalidOrigin?: boolean } = {}): string {
+  const sourceSha256 = sha256("source");
+  const itemDigest = sha256("item");
   const gold = `${JSON.stringify({ itemId: "item-1", groupId: "1/g1", label: "insufficient_evidence" })}\n`;
   const assignments = { "1/g1": "holdout" };
   const split = JSON.stringify({
@@ -34,8 +49,43 @@ function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: stri
     goldSha256: sha256(gold),
     goldCount: 1,
   });
-  return fixtureRoot({ "split-manifest.json": split, "gold/adjudicated.jsonl": gold }, overrides.manifestSchema);
+  const corpus = JSON.stringify({ groups: [
+    { id: "1/g1", split: "holdout", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "item-1", primary: true }] },
+  ] });
+  const annotations: Record<string, string> = {};
+  for (const seat of ["A", "B"]) {
+    for (const shard of [1, 2, 3, 4]) {
+      annotations[`annotations/${seat}-${shard}.jsonl`] = shard === 1
+        ? `${JSON.stringify({ itemId: "item-1", groupId: "1/g1", label: seat === "A" ? "same_cause" : "insufficient_evidence", reducedPackSupport: "sufficient", sourceSha256, itemDigest })}\n`
+        : "";
+    }
+  }
+  const adjudication = {
+    itemId: "item-1", groupId: "1/g1", labelA: "same_cause", labelB: "insufficient_evidence",
+    sourceSha256, itemDigest, ...(overrides.missingDisposition ? {} : { disposition: "resolved_insufficiency" }),
+    resolvedLabel: "insufficient_evidence", rationale: "synthetic test rationale", sourceEvidence: [{ source: "file-1", line: 1 }],
+  };
+  const origins = [
+    "Newly authored synthetic source families in this session; no real-source derivation or old fixture reuse.",
+    "Newly authored synthetic source and review findings; no production source or explored fixtures used.",
+    "New domain-specific synthetic source families written in this author session from the brief, without consulting historical fixtures or other shards.",
+    "Newly authored synthetic repository/source families, not derived from exploratory fixtures, production code, or external data.",
+  ];
+  const authors = Object.fromEntries(origins.map((origin, index) => [
+    `authoring/shard-${index + 1}-provenance.json`,
+    JSON.stringify({ origin: overrides.invalidOrigin && index === 0 ? "Synthetic source derived from old fixtures." : origin }),
+  ]));
+  return fixtureRoot({
+    "split-manifest.json": split,
+    "gold/adjudicated.jsonl": gold,
+    "corpus.json": corpus,
+    "adjudication.jsonl": `${JSON.stringify(adjudication)}\n`,
+    "freeze.json": "{}",
+    ...annotations,
+    ...authors,
+  }, overrides.manifestSchema);
 }
+
 
 describe("qualification integrity", () => {
   test("refuses duplicated primary opportunities and cross-group lineage leakage", () => {
@@ -81,6 +131,38 @@ describe("qualification integrity", () => {
     expect(summary.outcomeCounts.accepted).toBe(0);
     expect(summary.endpoints.selectiveAccuracy.total).toBe(0);
     expect(() => summarizeQualification([{ ...abstention, outcome: "accepted", accepted: true }])).toThrow("acceptance-invalid");
+  });
+  test("freeze cohort closure and group denominators fail closed", () => {
+    expect(() => validateFreezeGroups([
+      { id: "g1", split: "development", lineageId: "lineage-x", causalClusterId: "cluster-1", variants: [{ id: "v1" }] },
+      { id: "g2", split: "holdout", lineageId: "lineage-x", causalClusterId: "cluster-2", variants: [{ id: "v2" }] },
+    ], { g1: "development", g2: "holdout" })).toThrow("Freeze lineage/causal cluster crosses cohorts");
+    expect(() => validateFreezeGroups([
+      { id: "g1", split: "development", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "v1" }] },
+    ], { g1: "development", missing: "holdout" })).toThrow("Freeze group denominator incomplete or duplicated");
+    expect(() => validateFreezeGroups([
+      { id: "g1", split: "development", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "v1" }] },
+    ], {})).toThrow("Freeze cohort assignment missing or invalid");
+    expect(() => validateFreezeGroups([
+      { id: "g1", split: "holdout", lineageId: "lineage-1", causalClusterId: "cluster-1", variants: [{ id: "v1" }] },
+    ], { g1: "development" })).toThrow("Freeze corpus/split cohort mismatch");
+  });
+  test("freeze requires one A and one B label per adjudicated item", () => {
+    const gold = [{ itemId: "i1", groupId: "g1" }];
+    expect(() => validateFreezeLabels(gold, [
+      { itemId: "i1", groupId: "g1", label: "same_cause", seat: "A" },
+    ])).toThrow("Freeze requires two seat labels per case");
+    expect(() => validateFreezeLabels(gold, [
+      { itemId: "i1", groupId: "g1", label: "same_cause", seat: "A" },
+      { itemId: "i1", groupId: "g1", label: "different_cause", seat: "A" },
+    ])).toThrow("Freeze duplicate seat label");
+  });
+  test("check-freeze recomputes committed corpus and annotation hashes", async () => {
+    const root = frozenRoot();
+    try {
+      writeFileSync(join(root, "corpus.json"), '{"groups":[]}\n');
+      expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("reports reproducible causal-cluster bootstrap intervals", () => {
     const rows = [
@@ -147,6 +229,39 @@ describe("qualification integrity", () => {
     } finally {
       for (const root of roots) rmSync(root, { recursive: true, force: true });
     }
+  });
+  test("requires third-read dispositions and rejects old-fixture provenance", async () => {
+    const missingDisposition = frozenRoot({ missingDisposition: true });
+    const oldFixture = frozenRoot({ invalidOrigin: true });
+    try {
+      expect(await runEvaluationCommand(["check-freeze", "--root", missingDisposition])).toBe(2);
+      expect(await runEvaluationCommand(["check-freeze", "--root", oldFixture])).toBe(2);
+    } finally {
+      rmSync(missingDisposition, { recursive: true, force: true });
+      rmSync(oldFixture, { recursive: true, force: true });
+    }
+  });
+  test("check-freeze recomputes corpus and annotation file hashes", async () => {
+    const corpusRoot = frozenRoot();
+    const annotationRoot = frozenRoot();
+    try {
+      writeFileSync(join(corpusRoot, "corpus.json"), '{"groups":[]}\n');
+      writeFileSync(join(annotationRoot, "annotations/A-1.jsonl"), '{"changed":true}\n');
+      expect(await runEvaluationCommand(["check-freeze", "--root", corpusRoot])).toBe(2);
+      expect(await runEvaluationCommand(["check-freeze", "--root", annotationRoot])).toBe(2);
+    } finally {
+      rmSync(corpusRoot, { recursive: true, force: true });
+      rmSync(annotationRoot, { recursive: true, force: true });
+    }
+  });
+  test("check-freeze recomputes the manifest digest committed by freeze.json", async () => {
+    const root = frozenRoot();
+    try {
+      const freeze = JSON.parse(readFileSync(join(root, "freeze.json"), "utf8")) as Record<string, string>;
+      freeze.manifestSha256 = "0".repeat(64);
+      writeFileSync(join(root, "freeze.json"), JSON.stringify(freeze));
+      expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   test("rejects empty gold despite embedded split digests", async () => {
     const gold = "";

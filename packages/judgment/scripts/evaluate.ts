@@ -3,7 +3,12 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { MAX_RUN_RESERVED_INPUT_TOKENS, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT } from "../src/contracts.js";
 import { runShadowSupervisor, type ShadowRunInput } from "../src/shadow-supervisor.js";
-import { summarizeQualification, type QualificationRow } from "../src/evaluation.js";
+import {
+  validateFreezeGroups,
+  validateFreezeLabels,
+  summarizeQualification,
+  type QualificationRow,
+} from "../src/evaluation.js";
 
 const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, calibrate: true, holdout: true, report: true };
 const REVISION = "phase3a-native-20260924";
@@ -45,16 +50,17 @@ function fileDigest(root: string, rel: string): string {
 }
 type Manifest = { schema: string; contractRevision: string; files?: Array<{ path: string; sha256: string }> };
 type Corpus = { groups: Array<{ id: string; split: string; lineageId: string; causalClusterId: string; variants: Array<{ id: string; primary?: boolean }> }> };
-type Gold = Array<{ itemId: string; groupId: string; label: string }>;
-function assertRevision(value: { contractRevision?: string }): void { if (value.contractRevision !== REVISION) fail("Frozen revision mismatch"); }
+type Gold = Array<{ itemId: string; groupId: string; label: string; reducedPackSupport?: string }>;
+type Annotation = { itemId: string; groupId: string; label: string; reducedPackSupport?: string; sourceSha256?: string; itemDigest?: string; seat: "A" | "B" };
 function verifyFiles(root: string, manifest: Manifest): void {
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail("Manifest file commitments missing");
   const paths = new Set<string>();
   for (const entry of manifest.files) {
-    if (!entry.path || !/^[a-f0-9]{64}$/.test(entry.sha256) || paths.has(entry.path) || fileDigest(root, entry.path) !== entry.sha256) fail("Artifact digest mismatch");
+    if (!entry.path || !/^[a-f0-9]{64}$/.test(entry.sha256) || paths.has(entry.path) || fileDigest(root, entry.path) !== entry.sha256) fail(`Artifact digest mismatch: ${entry.path}`);
     paths.add(entry.path);
   }
 }
+function assertRevision(value: { contractRevision?: string }): void { if (value.contractRevision !== REVISION) fail("Frozen revision mismatch"); }
 export async function runEvaluationCommand(argv = process.argv.slice(2)): Promise<number> {
   try {
     const { action, root, shard, seat } = args(argv);
@@ -104,7 +110,9 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       process.stdout.write(`${JSON.stringify({ action, status: "valid", annotations: rows.length })}\n`); return 0;
     }
     if (action === "check-freeze") {
-      const split = readJson<{ schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string; goldSha256?: string; goldCount?: number }>(root, "split-manifest.json");
+      const splitPath = "split-manifest.json";
+      const goldPath = "gold/adjudicated.jsonl";
+      const split = readJson<{ schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string; goldSha256?: string; goldCount?: number }>(root, splitPath);
       assertRevision(split);
       if (split.schema !== "mstar.qualification-split-manifest/v1" ||
           typeof split.freezeId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(split.freezeId) ||
@@ -112,18 +120,115 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
           split.assignments === null || typeof split.assignments !== "object" || Array.isArray(split.assignments) ||
           Object.keys(split.assignments as object).length === 0 ||
           !/^[a-f0-9]{64}$/.test(split.assignmentSha256 ?? "") || digest(Buffer.from(JSON.stringify(split.assignments))) !== split.assignmentSha256) fail("Split freeze commitment invalid");
-      const goldBytes = readFileSync(resolve(root, "gold/adjudicated.jsonl"));
-      const gold = readJsonLines<Gold[number]>(root, "gold/adjudicated.jsonl");
+      const corpus = readJson<Corpus>(root, "corpus.json");
+      if (!Array.isArray(corpus.groups)) fail("Freeze corpus groups missing");
+      validateFreezeGroups(corpus.groups, split.assignments as Record<string, unknown>);
+      const corpusVariantGroups = new Map<string, string>();
+      for (const group of corpus.groups) {
+        if (!Array.isArray(group.variants) || group.variants.some((variant) => !variant.id || corpusVariantGroups.has(variant.id))) fail("Freeze corpus variant integrity failure");
+        for (const variant of group.variants) corpusVariantGroups.set(variant.id, group.id);
+      }
+      const gold = readJsonLines<Gold[number]>(root, goldPath);
       const assignmentIds = new Set(Object.keys(split.assignments as Record<string, unknown>));
       const goldIds = new Set<string>();
-      if (gold.length === 0 || split.goldCount !== gold.length || !/^[a-f0-9]{64}$/.test(split.goldSha256 ?? "") || digest(goldBytes) !== split.goldSha256) fail("Gold freeze commitment invalid");
+      if (gold.length === 0 || split.goldCount !== gold.length || !/^[a-f0-9]{64}$/.test(split.goldSha256 ?? "") || fileDigest(root, goldPath) !== split.goldSha256) fail("Gold freeze commitment invalid");
       for (const row of gold) {
         if (!row.itemId || !row.groupId || goldIds.has(row.itemId) || !assignmentIds.has(row.groupId) ||
+            corpusVariantGroups.get(row.itemId) !== row.groupId ||
             !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.label)) fail("Gold freeze commitment invalid");
         goldIds.add(row.itemId);
       }
-      if (!manifest.files?.some((entry) => entry.path === "split-manifest.json") || !manifest.files.some((entry) => entry.path === "gold/adjudicated.jsonl")) fail("Freeze artifacts are not committed by manifest");
-      process.stdout.write(`${JSON.stringify({ action, status: "valid", freezeId: split.freezeId, splitSha256: fileDigest(root, "split-manifest.json"), goldSha256: split.goldSha256 })}\n`); return 0;
+      const annotations: Annotation[] = [];
+      for (const seat of ["A", "B"] as const) {
+        for (let shardIndex = 1; shardIndex <= 4; shardIndex++) {
+          const annotationPath = `annotations/${seat}-${shardIndex}.jsonl`;
+          const rows = readJsonLines<Omit<Annotation, "seat">>(root, annotationPath);
+          if (rows.some((row) => !row.itemId || !row.groupId || !["same_cause", "different_cause", "insufficient_evidence"].includes(row.label))) fail("Freeze annotation integrity failure");
+          annotations.push(...rows.map((row) => ({ ...row, seat })));
+        }
+      }
+      validateFreezeLabels(gold, annotations.filter((row) => goldIds.has(row.itemId)));
+      const manifestPaths = new Set(manifest.files?.map((entry) => entry.path));
+      const requiredPaths = [
+        splitPath, goldPath, "corpus.json", "adjudication.jsonl",
+        ...["A", "B"].flatMap((seat) => [1, 2, 3, 4].map((shardIndex) => `annotations/${seat}-${shardIndex}.jsonl`)),
+        ...[1, 2, 3, 4].map((shardIndex) => `authoring/shard-${shardIndex}-provenance.json`),
+      ];
+      for (const requiredPath of requiredPaths) {
+        if (!manifestPaths.has(requiredPath)) fail(`Freeze artifact digest missing: ${requiredPath}`);
+      }
+      const freeze = readJson<{
+        manifestSha256?: string; sourceManifestSha256?: string; corpusSha256?: string; splitSha256?: string;
+        goldSha256?: string; adjudicationSha256?: string; annotationSha256?: string;
+      }>(root, "freeze.json");
+      const manifestSha256 = fileDigest(root, "manifest.json");
+      if (freeze.manifestSha256 !== manifestSha256 || freeze.sourceManifestSha256 !== manifestSha256) fail("Freeze manifest digest mismatch");
+      if (freeze.corpusSha256 !== fileDigest(root, "corpus.json")) fail("Freeze corpus digest mismatch");
+      if (freeze.splitSha256 !== fileDigest(root, splitPath)) fail("Freeze split digest mismatch");
+      if (freeze.goldSha256 !== fileDigest(root, goldPath)) fail("Freeze gold digest mismatch");
+      if (freeze.adjudicationSha256 !== fileDigest(root, "adjudication.jsonl")) fail("Freeze adjudication digest mismatch");
+      const annotationCommitments = manifest.files
+        ?.filter((entry) => /^annotations\/[AB]-[1-4]\.jsonl$/.test(entry.path))
+        .sort((left, right) => left.path.localeCompare(right.path))
+        .map(({ path, sha256 }) => ({ path, sha256 }));
+      if (!annotationCommitments || annotationCommitments.length !== 8 ||
+          freeze.annotationSha256 !== digest(Buffer.from(JSON.stringify(annotationCommitments)))) fail("Freeze annotation digest mismatch");
+      const annotationsByItem = new Map<string, Map<"A" | "B", Omit<Annotation, "seat">>>();
+      for (const annotation of annotations) {
+        const seats = annotationsByItem.get(annotation.itemId) ?? new Map<"A" | "B", Omit<Annotation, "seat">>();
+        seats.set(annotation.seat, annotation);
+        annotationsByItem.set(annotation.itemId, seats);
+        if (!["sufficient", "insufficient", "unresolved"].includes(annotation.reducedPackSupport ?? "")) fail("Freeze annotation sufficiency missing or invalid");
+        if (!/^[a-f0-9]{64}$/.test(annotation.sourceSha256 ?? "") ||
+            !/^[a-f0-9]{64}$/.test(annotation.itemDigest ?? "")) fail("Freeze annotation digest missing or invalid");
+      }
+      const adjudicationRows = readJsonLines<{
+        itemId: string; groupId: string; labelA: string; labelB: string; sourceSha256: string; itemDigest: string;
+        disposition: string; resolvedLabel: string; rationale: string; sourceEvidence: unknown[];
+      }>(root, "adjudication.jsonl");
+      const adjudications = new Map<string, (typeof adjudicationRows)[number]>();
+      for (const row of adjudicationRows) {
+        if (!row.itemId || !row.groupId || adjudications.has(row.itemId) ||
+            !["same_cause", "different_cause", "insufficient_evidence"].includes(row.labelA) ||
+            !["same_cause", "different_cause", "insufficient_evidence"].includes(row.labelB) ||
+            !/^[a-f0-9]{64}$/.test(row.sourceSha256) || !/^[a-f0-9]{64}$/.test(row.itemDigest) ||
+            typeof row.rationale !== "string" || !row.rationale.trim() || !Array.isArray(row.sourceEvidence) || row.sourceEvidence.length === 0) fail("Freeze adjudication integrity failure");
+        if (typeof row.disposition !== "string" || !row.disposition.trim()) fail("Freeze third-read disposition missing");
+        if (!["resolved_gold", "resolved_insufficiency", "preserved_disagreement"].includes(row.disposition) ||
+            !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.resolvedLabel)) fail("Freeze third-read disposition invalid");
+        const seats = annotationsByItem.get(row.itemId);
+        const annotationA = seats?.get("A"), annotationB = seats?.get("B");
+        if (!annotationA || !annotationB || annotationA.groupId !== row.groupId || annotationB.groupId !== row.groupId ||
+            annotationA.label !== row.labelA || annotationB.label !== row.labelB ||
+            annotationA.sourceSha256 !== row.sourceSha256 || annotationB.sourceSha256 !== row.sourceSha256 ||
+            annotationA.itemDigest !== row.itemDigest || annotationB.itemDigest !== row.itemDigest) fail("Freeze adjudication label or digest join mismatch");
+        const dispositionMatches = row.disposition === "resolved_gold"
+          ? row.resolvedLabel === "same_cause" || row.resolvedLabel === "different_cause"
+          : row.disposition === "resolved_insufficiency"
+            ? row.resolvedLabel === "insufficient_evidence"
+            : row.resolvedLabel === "unresolved";
+        if (!dispositionMatches) fail("Freeze third-read disposition conflicts with resolved label");
+        const goldRow = gold.find((entry) => entry.itemId === row.itemId);
+        if (!goldRow || goldRow.groupId !== row.groupId || goldRow.label !== row.resolvedLabel) fail("Freeze adjudication does not match gold");
+        adjudications.set(row.itemId, row);
+      }
+      for (const row of gold) {
+        const seats = annotationsByItem.get(row.itemId)!;
+        const annotationA = seats.get("A")!, annotationB = seats.get("B")!;
+        const needsAdjudication = annotationA.label !== annotationB.label ||
+          annotationA.reducedPackSupport !== "sufficient" || annotationB.reducedPackSupport !== "sufficient";
+        if (needsAdjudication && !adjudications.has(row.itemId)) fail(`Freeze third-read disposition missing: ${row.itemId}`);
+      }
+      for (const shardIndex of [1, 2, 3, 4]) {
+        const origin = readJson<{ origin?: string }>(root, `authoring/shard-${shardIndex}-provenance.json`).origin ?? "";
+        if (!/\bsynthetic\b/i.test(origin) ||
+            !/\b(newly authored|written in this author session|source families written)\b/i.test(origin) ||
+            !/\b(no|not|without|never)\b.{0,80}\b(old|explor(?:ed|atory)|historical)\s+fixtures?\b/i.test(origin)) {
+          fail(`Cannot verify no old-fixture provenance: authoring/shard-${shardIndex}-provenance.json origin declaration missing`);
+        }
+      }
+      process.stdout.write(`${JSON.stringify({ action, status: "valid", freezeId: split.freezeId, splitSha256: fileDigest(root, splitPath), goldSha256: split.goldSha256 })}\n`);
+      return 0;
     }
     if (action === "calibrate" || action === "holdout") {
       const job = readJson<ShadowRunInput>(root, `${action}-run.json`);

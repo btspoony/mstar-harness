@@ -24,6 +24,70 @@ export type QualificationRow = Readonly<{
   costUsd?: number | null;
 }>;
 
+export type FreezeCorpusGroup = Readonly<{
+  id: string;
+  split: string;
+  lineageId: string;
+  causalClusterId: string;
+  variants: readonly Readonly<{ id: string }>[];
+}>;
+
+/** Validates the cohort denominator and cluster closure before a freeze is accepted. */
+export function validateFreezeGroups(
+  groups: readonly FreezeCorpusGroup[],
+  assignments: Readonly<Record<string, unknown>>,
+): void {
+  const groupIds = new Set<string>();
+  const lineageCohorts = new Map<string, unknown>();
+  const causalCohorts = new Map<string, unknown>();
+  for (const group of groups) {
+    if (!group || typeof group.id !== "string" || !group.id || groupIds.has(group.id) ||
+        typeof group.lineageId !== "string" || !group.lineageId ||
+        typeof group.causalClusterId !== "string" || !group.causalClusterId) {
+      throw new TypeError("Freeze corpus group integrity failure");
+    }
+    groupIds.add(group.id);
+    const cohort = assignments[group.id];
+    if (cohort !== "development" && cohort !== "holdout" && cohort !== "temporal") {
+      throw new TypeError("Freeze cohort assignment missing or invalid");
+    }
+    if (group.split !== cohort) throw new TypeError("Freeze corpus/split cohort mismatch");
+    for (const [clusters, id] of [[lineageCohorts, group.lineageId], [causalCohorts, group.causalClusterId]] as const) {
+      const previous = clusters.get(id);
+      if (previous !== undefined && previous !== cohort) throw new TypeError("Freeze lineage/causal cluster crosses cohorts");
+      clusters.set(id, cohort);
+    }
+  }
+  if (groups.length === 0 || Object.keys(assignments).length !== groupIds.size ||
+      Object.keys(assignments).some((id) => !groupIds.has(id))) {
+    throw new TypeError("Freeze group denominator incomplete or duplicated");
+  }
+}
+
+/** Ensures each frozen gold case has one independent label from each seat. */
+export function validateFreezeLabels(
+  gold: readonly Readonly<{ itemId: string; groupId: string }>[],
+  annotations: readonly Readonly<{ itemId: string; groupId: string; label: string; seat: "A" | "B" }>[],
+): void {
+  const goldByItem = new Map<string, string>();
+  for (const row of gold) goldByItem.set(row.itemId, row.groupId);
+  const labelsByItem = new Map<string, Set<string>>();
+  for (const row of annotations) {
+    if (!row || typeof row.itemId !== "string" || typeof row.groupId !== "string" ||
+        !["same_cause", "different_cause", "insufficient_evidence"].includes(row.label) ||
+        (row.seat !== "A" && row.seat !== "B") || goldByItem.get(row.itemId) !== row.groupId) {
+      throw new TypeError("Freeze annotation integrity failure");
+    }
+    const seats = labelsByItem.get(row.itemId) ?? new Set<string>();
+    if (seats.has(row.seat)) throw new TypeError("Freeze duplicate seat label");
+    seats.add(row.seat);
+    labelsByItem.set(row.itemId, seats);
+  }
+  if (gold.some((row) => labelsByItem.get(row.itemId)?.size !== 2)) {
+    throw new TypeError("Freeze requires two seat labels per case");
+  }
+}
+
 const labels: Record<string, true> = { same_cause: true, different_cause: true, insufficient_evidence: true };
 const unissued: Partial<Record<OutcomeReason, true>> = { "insufficient-input": true, stale: true, budget: true, cancellation: true };
 
