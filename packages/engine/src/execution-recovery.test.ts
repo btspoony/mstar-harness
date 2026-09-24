@@ -50,6 +50,7 @@ import {
   exportExecutionState,
   previewExecutionRestore,
   restoreExecutionBackup,
+  EXECUTION_RECOVERY_PROTOCOL_VERSION,
   type ExecutionRecoveryPreview,
 } from "./execution-recovery.js";
 import {
@@ -70,9 +71,11 @@ import {
   backupStore,
   canonicalPath,
   currentAuthorityHandle,
+  readRetainedBodyInventory,
+  retainedInventoryPath,
   type BackupReceipt,
 } from "./store-activation.js";
-import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-recovery-"));
@@ -459,12 +462,16 @@ describe("execution-restore", () => {
     expect(corrupt.code).toBe("store.activation-stale");
     expect(corrupt.message).toMatch(/integrity_check|verif|not a SQLite|unreadable/);
 
-    // A copy written by a NEWER build is not a recovery point for this one.
+    // A copy written by a NEWER build is not a recovery point for this one. The
+    // future version is DERIVED from this build's own migration list, so a new
+    // append-only migration (the coverage column) can never collide with the
+    // fixture's "newer build" row.
     const tooNewPath = join(world.harness, "archived", "recovery", "too-new-point.db");
     writeFileSync(tooNewPath, readFileSync(point.backupPath));
     rawRun(
       tooNewPath,
-      "insert into schema_version(version, name, checksum, applied_at) values (5, 'future-authority', 'deadbeef', ?)",
+      "insert into schema_version(version, name, checksum, applied_at) values (?, 'future-authority', 'deadbeef', ?)",
+      MIGRATIONS.length + 1,
       TS,
     );
     const tooNew = await refusalOf(() => previewExecutionRestore(world.context, tooNewPath));
@@ -929,12 +936,11 @@ describe("execution-restore", () => {
 
     // Live corruption that prevents a complete loss inventory: the point and
     // the live store are BOTH kept, and no destructive restore is attempted.
-    const liveBytes = readFileSync(world.dbPath);
-    const damaged = Buffer.from(liveBytes);
-    damaged.fill(0x5a, 0, Math.min(4096, damaged.length));
-    writeFileSync(world.dbPath, damaged);
-    rmSync(`${world.dbPath}-wal`, { force: true });
-    rmSync(`${world.dbPath}-shm`, { force: true });
+    // Remove a required authority table instead of relying on raw page damage:
+    // a valid SQLite file is still incomplete when its committed-operation
+    // inventory cannot be read.
+    rawRun(world.dbPath, "drop table execution_operations");
+    const damaged = readFileSync(world.dbPath);
     const pointBytes = sha256OfFile(point.backupPath);
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
@@ -1144,6 +1150,9 @@ type RecoveryRecord = {
   liveStoreSha256: string;
   restoredCopySha256: string;
   requiredRebind: string;
+  /** §7 R4: the retained digests one attempt recorded for crash diagnosis. */
+  retainedDigest: string;
+  retainedLiveDigest: string;
 };
 
 /** Every durable recovery receipt this store has written, newest name last. */
@@ -1245,5 +1254,257 @@ describe("execution-export", () => {
     expect(parsed.migrations).toEqual([]);
     expect(parsed.execution).toMatchObject({ authorityState: "active" });
     expect(exported.sha256).toBe(sha256OfBytes(Buffer.from(exported.canonicalJson, "utf8")));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2b — the retained accepted bodies in the loss-aware whole-store restore
+// (§7 R4)
+// ---------------------------------------------------------------------------
+
+/** The retained body dir of the fixture's workflow, and its accepted bodies. */
+function bodyDirOf(world: World): string {
+  return join(world.harness, "workflows", WF);
+}
+
+function noteBytes(id: string, text: string): string {
+  return `${JSON.stringify({ version: 1, id, workflowId: WF, sessionId: COORDINATOR, kind: "note", ts: TS, text })}\n`;
+}
+
+/** Plant the retained bodies the recovery protocol freezes. */
+function plantBodies(world: World): { notes: string; selection: string; launches: string } {
+  const dir = bodyDirOf(world);
+  mkdirSync(dir, { recursive: true });
+  const notes = join(dir, "notes.jsonl");
+  const launches = join(dir, "omp-launches.json");
+  const selection = join(world.harness, "snapshots", "engine-status.json");
+  writeFileSync(notes, `${JSON.stringify({ kind: "note", ts: TS, text: "legacy body" })}\n${noteBytes("note-1", "recorded")}`);
+  writeFileSync(join(dir, "agent-flow.jsonl"), `${JSON.stringify({ v: 1, ts: 1, kind: "dispatch", role: "plan-pm" })}\n`);
+  writeFileSync(launches, `${JSON.stringify({ version: 1, workflow_id: WF, intents: [] })}\n`);
+  mkdirSync(dirname(selection), { recursive: true });
+  writeFileSync(selection, `${JSON.stringify({ sv: 1, entries: {}, bindings: {} })}\n`);
+  return { notes, selection, launches };
+}
+
+/** The accepted-record digests of one body, by §5's own LF rule. */
+function recordsOf(path: string): string[] {
+  const bytes = readFileSync(path);
+  const records: string[] = [];
+  let start = 0;
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (bytes[index] !== 0x0a) continue;
+    records.push(sha256OfBytes(bytes.subarray(start, index)));
+    start = index + 1;
+  }
+  return records;
+}
+
+/**
+ * The live store's authority generation, read through the engine's own read
+ * adapter: the LOGICAL state a refusal must leave untouched. A WAL-mode
+ * database's main-file bytes are not that proof — SQLite's own last clean close
+ * folds the `-wal` into the file — so a byte comparison would report the store's
+ * cleanup as a write.
+ */
+async function liveAuthority(context: StoreContext): Promise<{ token: string; epoch: number }> {
+  const state = await readExecutionState(context);
+  return { token: state.token, epoch: state.epoch };
+}
+
+describe("Phase 2b - retained accepted bodies and the loss-aware restore", () => {
+  test("Phase 2b freezes the retained bodies with the point and preserves append-only accepted history", async () => {
+    const world = await recoveryWorld("phase2b-append");
+    const bodies = plantBodies(world);
+    const preRestoreHandle = await currentAuthorityHandle(world.context);
+    const point = await recoveryPoint(world, "retained-point");
+
+    const retained = point.retained!;
+    expect(retained.bodies.map((body) => body.path)).toEqual([
+      "snapshots/engine-status.json",
+      `workflows/${WF}/agent-flow.jsonl`,
+      `workflows/${WF}/notes.jsonl`,
+      `workflows/${WF}/omp-launches.json`,
+    ]);
+    const notes = retained.bodies.find((body) => body.path.endsWith("notes.jsonl"))!;
+    expect(notes.records).toEqual(recordsOf(bodies.notes));
+    expect(notes.partial).toBeNull();
+    expect(retained.bodies.find((body) => body.path === "snapshots/engine-status.json")!.selection).toBe(true);
+    expect(await readRetainedBodyInventory(point.backupPath)).toEqual(retained);
+    // A store that records no populated coverage generation says so on both
+    // sides rather than inventing one.
+    const clean = await previewExecutionRestore(world.context, point.backupPath);
+    expect(clean.backupCoverageDigest).toBeNull();
+    expect(clean.liveCoverageDigest).toBeNull();
+    expect(clean.retainedDifferences).toEqual([]);
+
+    // A post-point accepted record: §7 preserves it instead of a loss.
+    const before = recordsOf(bodies.notes).length;
+    writeFileSync(bodies.notes, `${readFileSync(bodies.notes, "utf8")}${noteBytes("note-2", "after the point")}`);
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const difference = preview.retainedDifferences.find((entry) => entry.path.endsWith("notes.jsonl"))!;
+    expect(difference).toMatchObject({ kind: "preserved", lostRecords: 0, preservedRecords: 1 });
+    expect(preview.retainedDigest).toBe(retained.digest);
+    expect(preview.authorityDifferences).toEqual([]);
+    expect(preview.lostOperationIds).toEqual([]);
+
+    // Nothing the point held is lost, so no loss approval is owed — and the
+    // appended record survives the replacement.
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      acceptLossDigest: null,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(receipt.retainedDigest).toBe(retained.digest);
+    expect(receipt.retainedLiveDigest).toBe(preview.retainedLiveDigest);
+    expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
+    expect(recordsOf(bodies.notes).length).toBe(before + 1);
+    expect(readFileSync(bodies.notes, "utf8")).toContain("after the point");
+    const stale = await refusalOf(() => assertAuthorityCurrent(world.context, preRestoreHandle));
+    expect(stale.code).toBe("store.stale-epoch");
+  });
+
+  test("Phase 2b refuses an interrupted append with every artifact retained and an explicit salvage scope", async () => {
+    const world = await recoveryWorld("phase2b-interrupted");
+    const bodies = plantBodies(world);
+    const point = await recoveryPoint(world, "interrupted-point");
+    const liveState = await liveAuthority(world.context);
+    const pointBytes = sha256OfFile(point.backupPath);
+    const clean = readFileSync(bodies.notes);
+
+    // An unterminated record the point never recorded: no accepted identity, so
+    // no hash reconciles it, and both stores plus every body stay in place — the
+    // live authority generation unmoved (a logical proof, not the WAL store's
+    // main-file bytes).
+    writeFileSync(bodies.notes, `${readFileSync(bodies.notes, "utf8")}{"version":1`);
+    const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
+    expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
+    expect(refusal.message).toContain("salvage scope");
+    expect(refusal.message).toContain("notes.jsonl");
+    expect(await liveAuthority(world.context)).toEqual(liveState);
+    expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
+
+    // An interrupted tail the POINT recorded is carried by exact hash instead of
+    // being guessed at.
+    writeFileSync(bodies.notes, clean);
+    const interruptedTail = '{"v":1,"ts":2';
+    writeFileSync(
+      join(bodyDirOf(world), "agent-flow.jsonl"),
+      `${JSON.stringify({ v: 1, ts: 1, kind: "dispatch" })}${interruptedTail}`,
+    );
+    const second = await recoveryPoint(world, "interrupted-tail-point");
+    expect(second.retained!.bodies.find((body) => body.path.endsWith("agent-flow.jsonl"))!.partial).not.toBeNull();
+    const carried = await previewExecutionRestore(world.context, second.backupPath);
+    expect(carried.retainedDifferences.some((entry) => entry.path.endsWith("agent-flow.jsonl"))).toBe(false);
+    expect(carried.retainedDigest).toBe(second.retained!.digest);
+  });
+
+  test("Phase 2b reconciles a crashed attempt by exact hash and refuses a replay whose retained set moved", async () => {
+    const world = await recoveryWorld("phase2b-crash");
+    const bodies = plantBodies(world);
+    const point = await recoveryPoint(world, "crash-retained-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+
+    const crash = await errorOf(async () => {
+      process.env.MSTAR_STORE_TEST_RUNNER = "1";
+      process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-replacement";
+      try {
+        return await restoreExecutionBackup(world.context, {
+          preview,
+          acceptLossDigest: preview.lossDigest,
+          operator: OPERATOR,
+          authorization: AUTHORIZATION,
+        });
+      } finally {
+        delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+        delete process.env.MSTAR_STORE_TEST_RUNNER;
+      }
+    });
+    expect(crash.message).toContain("before-replacement");
+
+    // The durable receipt decides the store by exact hash and carries both
+    // retained digests, so the retained verification is resumable rather than
+    // repeated from memory.
+    const pending = recoveryRecords(world).at(-1)!;
+    expect(pending.phase).toBe("replacing");
+    expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
+    expect(pending.restoredCopySha256).not.toBe(pending.liveStoreSha256);
+    expect(pending.retainedDigest).toBe(preview.retainedDigest);
+    expect(pending.retainedLiveDigest).toBe(preview.retainedLiveDigest);
+
+    // A replay whose retained set moved since the crash refuses on the exact
+    // digests rather than replacing under a stale description.
+    writeFileSync(join(bodyDirOf(world), "agent-flow.jsonl"), `${JSON.stringify({ v: 1, ts: 9, kind: "dispatch", role: "plan-pm" })}\n`);
+    const moved = await refusalOf(() =>
+      restoreExecutionBackup(world.context, {
+        preview,
+        acceptLossDigest: preview.lossDigest,
+        operator: OPERATOR,
+        authorization: AUTHORIZATION,
+      }),
+    );
+    expect(moved.code).toBe("execution.recovery-loss-unaccepted");
+    expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
+
+    // The clean replay of the same attempt installs the point and records the
+    // retained differences it did not roll back.
+    const fresh = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview: fresh,
+      acceptLossDigest: fresh.lossDigest,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(receipt.storeId).toBe(world.storeId);
+    expect(receipt.epoch).toBe(Math.max(fresh.liveEpoch, point.epoch) + 1);
+    const finalized = recoveryRecords(world).at(-1)!;
+    expect(finalized.phase).toBe("replaced");
+    expect(finalized.newEpoch).toBe(receipt.epoch);
+  });
+
+  test("Phase 2b refuses a missing, forged or old-generation retained record and a present compaction journal", async () => {
+    const world = await recoveryWorld("phase2b-receipt");
+    plantBodies(world);
+    const point = await recoveryPoint(world, "receipt-retained-point");
+    const sidecar = retainedInventoryPath(point.backupPath);
+    const recorded = readFileSync(sidecar);
+
+    rmSync(sidecar, { force: true });
+    const missing = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
+    expect(missing.code).toBe("store.activation-stale");
+    expect(missing.message).toContain("records no retained-body inventory");
+
+    writeFileSync(sidecar, '{"version":1,"protocol":"retained-body-inventory-v1","storeId":"other"}\n');
+    const forged = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
+    expect(forged.code).toBe("store.activation-stale");
+    writeFileSync(sidecar, recorded);
+    expect((await readRetainedBodyInventory(point.backupPath)).digest).toBe(point.retained!.digest);
+
+    // §7 R4: an older loss-payload generation is refused by name, not silently
+    // restored without the body loss it cannot describe.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const oldGeneration = await refusalOf(() =>
+      restoreExecutionBackup(world.context, {
+        preview: { ...preview, version: EXECUTION_RECOVERY_PROTOCOL_VERSION - 1 },
+        acceptLossDigest: preview.lossDigest,
+        operator: OPERATOR,
+        authorization: AUTHORIZATION,
+      }),
+    );
+    expect(oldGeneration.code).toBe("execution.migration-conflict");
+    expect(oldGeneration.message).toContain("loss-payload version");
+
+    // §5: a present compaction journal refuses the freeze AND the preview, with
+    // the store and every body left exactly where they are.
+    writeFileSync(join(bodyDirOf(world), "agent-flow-compaction.json"), `${JSON.stringify({ version: 1, lines: 1 })}\n`);
+    const liveState = await liveAuthority(world.context);
+    const frozenHere = await refusalOf(() => recoveryPoint(world, "compaction-point"));
+    expect(frozenHere.code).toBe("store.activation-stale");
+    expect(frozenHere.message).toContain("agent-flow-compaction.json");
+    expect(await liveAuthority(world.context)).toEqual(liveState);
+    const previewRefusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
+    expect(previewRefusal.code).toBe("store.activation-stale");
+    expect(previewRefusal.message).toContain("agent-flow-compaction.json");
+    expect(await liveAuthority(world.context)).toEqual(liveState);
   });
 });

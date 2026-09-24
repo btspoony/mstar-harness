@@ -57,6 +57,7 @@ export {
   canonicalizeNearestExisting,
   detectHarnessKind,
   emitGitignoreSnippet,
+  hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -593,6 +594,15 @@ export {
   readExecutionState,
   serializeExecutionValue,
 } from "./execution-store.js";
+export type { ExecutionBinding } from "./execution-session.js";
+export {
+  assertExecutionSessionCurrent,
+  createLocalExecutionIdentity,
+  decodeExecutionSessionRef,
+  encodeExecutionSessionRef,
+  executionContextFor,
+  resumeExecutionSession,
+} from "./execution-session.js";
 // §3 the DB plan-operation surface: ONE entry point for the whole closed
 // `CoordinationOperation` union — prepare, progress, residual-add,
 // residual-close, handoff, accept, return, integration-start,
@@ -906,40 +916,99 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// Execution migration: the executable §6 protocol (stages R1–R3). R1 landed
+// Execution migration: the executable §6 protocol (stages R1-R3). R1 landed
 // the read-only preview and the staged apply: `previewExecutionMigration` reads
-// the legacy workspace as evidence and returns the canonical, content-addressed
-// manifest;
-// `applyExecutionMigration` stages every core row plus the manifest record in
-// one transaction against a verified recovery point, and never activates.
-// R2 adds the three separate crash-safe steps: `activateExecutionMigration`
-// performs the single all-or-nothing cutover behind the deferred-surface
-// barrier, `retireExecutionSources` moves the exact core sources into
-// manifest-addressed history under a resumable per-item ledger, and
-// `abortExecutionMigration` returns a STAGED manifest to legacy without
-// touching active data. `executionManifestHash` is exported so a caller can
-// hand the reviewed hash back verbatim. ADDITIVE export — the engine package's
-// exports map is the only reachable surface for consumers.
+// the legacy workspace as evidence (plus the explicit operator inventory named
+// by `inventoryPath`) and returns the canonical, content-addressed version 2
+// manifest with its exact per-surface source assignment;
+// `applyExecutionMigration` stages every core row plus the manifest record and
+// the validated coverage in one transaction against a verified recovery point,
+// and never activates. R2 adds the three separate crash-safe steps:
+// `activateExecutionMigration` takes the §4.2 maintenance → root → workflow lock
+// ladder and RECOMPUTES the coverage from the named bytes, requiring it to equal
+// BOTH the digest the operator approved and the set recorded at staging, before
+// it performs the single store-wide all-or-nothing cutover (one epoch advance,
+// imported references revoked, held ownership represented); a deferred (2b)
+// surface is diagnostic evidence only and is never an activation
+// precondition. `retireExecutionSources` moves the exact core sources and the
+// `retire`-disposition session envelopes into manifest-addressed history under a
+// resumable, fsynced per-item ledger, and `abortExecutionMigration` returns a
+// STAGED manifest to legacy without touching active data.
+// `collectExecutionCoverage` is the read-only coverage collector,
+// `executionManifestHash` is exported so a caller can hand the reviewed hash
+// back verbatim. ADDITIVE export - the engine package's exports map is the only
+// reachable surface for consumers.
 export type {
   ExecutionDeferredSurface,
   ExecutionManifest,
+  ExecutionManifestDocument,
+  ExecutionManifestSurface,
   ExecutionMigrationAbortInput,
   ExecutionMigrationActivationInput,
   ExecutionMigrationApplyInput,
+  ExecutionMigrationCoverageInput,
+  ExecutionMigrationHostSession,
   ExecutionMigrationInput,
+  ExecutionMigrationInventory,
   ExecutionMigrationReceipt,
   ExecutionMigrationRetireInput,
+  ExecutionMigrationRoots,
   ExecutionSourceWitness,
+  HostDiscoveryProof,
 } from "./execution-migrate.js";
 export {
   abortExecutionMigration,
   activateExecutionMigration,
   applyExecutionMigration,
+  collectExecutionCoverage,
+  EXECUTION_MIGRATION_INVENTORY_VERSION,
+  EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION,
   EXECUTION_MIGRATION_MANIFEST_VERSION,
   executionManifestHash,
   previewExecutionMigration,
   retireExecutionSources,
 } from "./execution-migrate.js";
+// §4.1/§4.2 the pure coverage substrate (C2): the closed 18-surface inventory,
+// the canonical receipt/codec table, the producer entry point C3 builds its
+// receipts with and the one validator every boundary closes through. ADDITIVE
+// export — the engine package's exports map is the only reachable surface for
+// the migration transport (`collectExecutionCoverage`) and for consumers that
+// must recompute a receipt.
+export type {
+  ConsumerDiscoveryProof,
+  CoverageWitness,
+  ExecutionCoverageEvidence,
+  ExecutionCoverageManifest,
+  ExecutionCoverageReceipt,
+  ExecutionCoverageSet,
+  ExecutionSurface,
+} from "./execution-coverage.js";
+export {
+  EXECUTION_COVERAGE_SURFACES,
+  buildExecutionCoverageReceipt,
+  coverageWitnessKey,
+  executionCoverageDigest,
+  executionCoverageSurfaceScope,
+  validateExecutionCoverage,
+} from "./execution-coverage.js";
+// §5 F1 the retained workflow-notes ledger: the append-only accepted-record
+// writer plus its pure coverage normalizer. ADDITIVE export — the accepted
+// record shape, its receipt and the coverage facts are the whole published
+// surface, and the write path stays behind the engine's own authorization.
+export type {
+  WorkflowNote,
+  WorkflowNoteAcceptedRecord,
+  WorkflowNoteAppendReceipt,
+  WorkflowNoteHistoricalRecord,
+  WorkflowNotesCoverageFacts,
+} from "./execution-ledgers.js";
+export {
+  ExecutionLedgerError,
+  EXECUTION_LEDGER_ERROR_CODES,
+  appendWorkflowNote,
+  normalizeWorkflowNotesCoverage,
+  workflowNotesLedgerPath,
+} from "./execution-ledgers.js";
 // Execution recovery: the consistent whole-store backup, the explicit-loss
 // atomic restore and the diagnostic export (primary spec §8, R3 of the
 // migration protocol). `previewExecutionRestore` is the

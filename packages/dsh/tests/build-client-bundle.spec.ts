@@ -226,3 +226,55 @@ describe('offTableDeepseekRequires — the post-build purity gate allows exactly
     expect(offTableDeepseekRequires(bundleText)).toEqual(['@deepseek-ai/dsh-client-locale'])
   })
 })
+
+describe('buildClientBundle — the artifact is a pure function of DECLARED inputs', () => {
+  it('re-derives the shipped client bundle from the declared producer and mode', async () => {
+    // The manifest does not byte-pin `dist/client.js` (its bytes belong to this
+    // producer, not to a recorded digest): this is the proof that replaces that
+    // pin. The producer is invoked the way the package build invokes it — its
+    // own CLI, explicit `--out`/`--mode` — and the result must equal the
+    // artifact on disk, so a hand-edited or stale bundle fails here in ANY
+    // environment (no ambient input is read; the build pins its own cwd).
+    const { CLIENT_BUNDLE_MODE } = await import('../scripts/build-client-bundle.ts')
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { createHash } = await import('node:crypto')
+    const { spawnSync } = await import('node:child_process')
+
+    const shipped = readFileSync(join(PKG_DIR, 'dist', 'client.js'))
+    const outDir = mkdtempSync(join(tmpdir(), 'dsh-client-rebuild-'))
+    try {
+      const run = spawnSync('bun', [join(PKG_DIR, 'scripts', 'build-client-bundle.ts'), '--out', outDir, '--mode', CLIENT_BUNDLE_MODE], {
+        cwd: PKG_DIR,
+        encoding: 'utf8',
+      })
+      expect(run.status, run.stderr ?? '').toBe(0)
+      const rebuilt = readFileSync(join(outDir, 'client.js'))
+      const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
+      const shippedDigest = digest(shipped)
+      const rebuiltDigest = digest(rebuilt)
+      // The hashes are PRINTED, not just compared: a CI log then records the
+      // artifact this platform built AND the byte-exact re-derivation beside it,
+      // so a cross-platform divergence (bun's emission changing between
+      // platforms) is visible without reproducing the environment.
+      console.log(`[dsh-client] shipped=${shippedDigest} rebuilt=${rebuiltDigest}`)
+      expect(rebuiltDigest).toBe(shippedDigest)
+    } finally {
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults to the declared production mode and takes the mode as an explicit input', async () => {
+    const { CLIENT_BUNDLE_MODE, clientBundleDefine } = await import('../scripts/build-client-bundle.ts')
+    expect(CLIENT_BUNDLE_MODE).toBe('production')
+    expect(clientBundleDefine('production')).toEqual({
+      'process.env.NODE_ENV': '"production"',
+      'import.meta.env': '{"MODE":"production","DEV":false,"PROD":true}',
+    })
+    // A different mode is an explicit request, not an inherited environment.
+    expect(clientBundleDefine('development')).toEqual({
+      'process.env.NODE_ENV': '"development"',
+      'import.meta.env': '{"MODE":"development","DEV":true,"PROD":false}',
+    })
+  })
+})

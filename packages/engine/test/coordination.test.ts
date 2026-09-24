@@ -1965,6 +1965,27 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
   }, 30000);
 
+  test("report-only completion accepts matching policy evidence without integration or merge proof", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const snapshot = snapshotOf(fixture) as Record<string, unknown>;
+    snapshot.delivery_kind = "verification/report-only";
+    snapshot.completion_policy = "acceptance report";
+    delete snapshot.branch;
+    delete snapshot.integration_worktree_path;
+    delete snapshot.integration_merge_lease;
+    snapshot.delivery = { completion: { policy: "acceptance report", evidence: "report.md" } };
+    writeJson(fixture.snapshotPath, snapshot);
+
+    const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(completed.outcome).toBe("completed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
+    expect(planRowOf(fixture, PLAN_ID).execution_lease).toBeUndefined();
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).integration).toBeUndefined();
+    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" })).outcome).toBe("already-completed");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+  }, 30000);
+
   test("delivery evidence refuses before Done and succeeds after Done with a full registered tail", async () => {
     const fixture = await acceptedStandaloneFixture();
     const before = readFileSync(fixture.snapshotPath);
@@ -3038,6 +3059,38 @@ async function failureOf(run: () => Promise<unknown>): Promise<Error> {
 }
 
 /**
+ * Activate an instrument through the REAL local store, and return it. Scoped
+ * coordination is served only by the store `createFsStore` created: an injected
+ * foreign store is wrapped by `guardedInjectedStore` and keeps no `root` claim,
+ * so `localStore` refuses it (`coordination.local-store-required`) before the
+ * instrument's ports are ever consulted. An instrument that must be reached
+ * through the coordination surface therefore installs its ports — and its
+ * claimed root, the consultation a window can trigger on — on that same
+ * instance, instead of standing in for it. The instrument receives the
+ * ORIGINAL ports as its `inner`, so its pass-through calls cannot recurse into
+ * itself.
+ */
+function instrumentLocalStore<T extends ArtifactStore & { root: string }>(
+  harness: string,
+  build: (inner: ArtifactStore & { root: string }) => T,
+): T {
+  const local = createFsStore(harness);
+  const originalPut = local.put;
+  const originalGet = local.get;
+  const inner: ArtifactStore & { root: string } = {
+    root: local.root,
+    put: (doc) => originalPut(doc),
+    get: <R>(ref: ArtifactRef) => originalGet<R>(ref),
+  };
+  const instrument = build(inner);
+  local.put = (doc) => instrument.put(doc);
+  local.get = <R>(ref: ArtifactRef) => instrument.get<R>(ref);
+  Object.defineProperty(local, "root", { configurable: true, get: () => instrument.root });
+  setArtifactStore(local);
+  return instrument;
+}
+
+/**
  * A store double standing in for a harness where a competing writer is active.
  *
  * A competing writer reaches the snapshot the moment the write lock is free, so
@@ -3244,7 +3297,10 @@ describe("Prepare workflow amendment", () => {
   test("both real plan-header forms are read by value: `**Label:** v` and `**Label**: v`", async () => {
     // Every other case writes the dominant form (the colon inside the bold).
     // The bootstrap plan's own header block writes the colon after the bold,
-    // and its branch fields must read the same.
+    // and its branch fields must read the same. A real reviewed plan also
+    // carries the descriptive `**Working branch policy:**` line beside its
+    // `**Working branch:**` declaration; the policy is prose about the branch,
+    // never the branch value.
     const colonAfterBold = makePrepareFixture();
     await ensurePrepareCoordinator(colonAfterBold);
     writeText(
@@ -3256,6 +3312,7 @@ describe("Prepare workflow amendment", () => {
         "**Status:** Todo",
         "**Main worktree branch**: main",
         `**Working branch:** feature/${PREPARE_APPEND}`,
+        "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
         "",
         "Body.",
         "",
@@ -3265,7 +3322,11 @@ describe("Prepare workflow amendment", () => {
     const amended = await amendPrepare(colonAfterBold, preparePatchOf(colonAfterBold));
 
     expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
-    expect(prepareSnapshotOf(colonAfterBold).plans).toHaveLength(2);
+    const acceptedRows = prepareSnapshotOf(colonAfterBold).plans;
+    expect(acceptedRows).toHaveLength(2);
+    // The accepted row carries the branch the `Working branch` header declares,
+    // not the policy sentence beside it.
+    expect(acceptedRows[1]!.metadata).toMatchObject({ working_branch: `feature/${PREPARE_APPEND}` });
 
     // The same form declaring another branch refuses: the parsed value is
     // compared, never swallowed into the markup.
@@ -3388,32 +3449,52 @@ describe("Prepare workflow amendment", () => {
   test("both reviewed branch headers are required on an appended plan", async () => {
     // The plan document is the reviewed authority for the branch metadata: an
     // absent header is never treated as agreement with the branches the append
-    // itself claims.
-    const planCases: ReadonlyArray<{ name: string; lines: readonly string[] }> = [
+    // itself claims, and the descriptive `Working branch policy` line beside it
+    // is prose — it cannot stand in for the `Working branch` declaration.
+    const planCases: ReadonlyArray<{
+      name: string;
+      lines: readonly string[];
+      /** The declaration the refusal must name as missing. */
+      field: string;
+      header: string;
+    }> = [
       {
-        name: "missing-working-branch",
-        lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", "**Main worktree branch:** main"],
+        name: "working-branch-policy-only",
+        lines: [
+          `**plan_id:** ${PREPARE_APPEND}`,
+          "**Status:** Todo",
+          "**Main worktree branch:** main",
+          "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
+        ],
+        field: "metadata.working_branch",
+        header: "Working branch",
       },
       {
         name: "missing-main-worktree-branch",
         lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", `**Working branch:** feature/${PREPARE_APPEND}`],
+        field: "mainWorktreeBranch",
+        header: "Main worktree branch",
       },
     ];
 
     for (const planCase of planCases) {
       const fixture = makePrepareFixture();
       await ensurePrepareCoordinator(fixture);
-      writeText(
-        join(fixture.planDir, `${PREPARE_APPEND}.md`),
-        [`# Plan ${PREPARE_APPEND}`, "", ...planCase.lines, "", "Body.", ""].join("\n"),
-      );
+      const planPath = join(fixture.planDir, `${PREPARE_APPEND}.md`);
+      writeText(planPath, [`# Plan ${PREPARE_APPEND}`, "", ...planCase.lines, "", "Body.", ""].join("\n"));
       const before = protectedBytes(fixture);
 
-      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+      const failure = await failureOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+      if (!(failure instanceof CoordinationError)) throw failure;
 
-      expect(`${planCase.name}: ${refusal.code}`).toBe(
-        `${planCase.name}: coordination.prepare-amendment.invalid-plan`,
-      );
+      const label = `${planCase.name}: `;
+      expect(`${label}${failure.code}`).toBe(`${label}coordination.prepare-amendment.invalid-plan`);
+      // The refusal names the missing declaration, the row and the reviewed
+      // file as facts, so it stays actionable without pinning one sentence.
+      expect(failure.message).toContain(planCase.header);
+      expect(failure.message).toContain(planPath);
+      expect(failure.details).toMatchObject({ plan_id: PREPARE_APPEND, field: planCase.field, path: planPath });
+      // It refuses before mutation: every protected byte is unchanged.
       expect(protectedBytes(fixture)).toEqual(before);
     }
   });
@@ -4105,13 +4186,10 @@ describe("Prepare workflow amendment", () => {
     await ensurePrepareCoordinator(fixture);
     const view = await prepareViewOf(fixture);
     const lockDir = join(dirname(fixture.snapshotPath), ".status-write.lockdir");
-    const store = new CompetingCommitStore(
-      createFsStore(fixture.harness),
-      fixture.snapshotPath,
-      lockDir,
-      "2099-01-01T00:00:00.000Z",
+    const store = instrumentLocalStore(
+      fixture.harness,
+      (inner) => new CompetingCommitStore(inner, fixture.snapshotPath, lockDir, "2099-01-01T00:00:00.000Z"),
     );
-    setArtifactStore(store);
 
     const amended = await amendWith(fixture, preparePatchOf(fixture), {
       snapshotVersion: view.view.snapshotVersion,
@@ -5103,8 +5181,7 @@ describe("prepare coordinator recovery", () => {
     // An IO failure between the exclusive envelope creation and the snapshot
     // commit is NOT a semantic refusal: the call reports failure, never a
     // success receipt, and reclaims exactly the envelope it created.
-    const failing = new FailOnceSnapshotStore(createFsStore(fixture.harness));
-    setArtifactStore(failing);
+    instrumentLocalStore(fixture.harness, (inner) => new FailOnceSnapshotStore(inner));
     await expect(recoverPrepareCoordinator(request)).rejects.toThrow(/injected store failure/);
     expect(existsSync(newEnvelope)).toBe(false);
     expect(protectedBytes(fixture)).toEqual(before);
@@ -5215,7 +5292,10 @@ describe("prepare coordinator recovery", () => {
     // since been replaced by an unrelated session file: `created` is only a
     // historical boolean, so cleanup must compare the CURRENT bytes before it
     // unlinks anything, and leave the replacement untouched.
-    setArtifactStore(new ReplaceEnvelopeOnFailureStore(createFsStore(fixture.harness), newEnvelope, alien));
+    instrumentLocalStore(
+      fixture.harness,
+      (inner) => new ReplaceEnvelopeOnFailureStore(inner, newEnvelope, alien),
+    );
     await expect(
       recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
     ).rejects.toThrow(/injected store failure/);

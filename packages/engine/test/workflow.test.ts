@@ -37,6 +37,7 @@ import {
   closeWorkflow,
   consultDeliveryEvidence,
   declareWorkflowDeliveryKind,
+  isStandaloneReportOnlyWorkflow,
   isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
   readWorkflowSnapshot,
@@ -976,6 +977,69 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     });
     expect(result.written).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual({ compound: { outcome: "created" } });
+  });
+
+  /**
+   * The report-only fixture: the declared kind whose ONE evidence member
+   * (`completion`) is recorded BEFORE the row is Done (contract §1) — the
+   * mirror of the development tail the cases above cover.
+   */
+  function reportOnlyFixture(overrides: Record<string, unknown> = {}) {
+    return fixture({
+      delivery_kind: "verification/report-only",
+      branch: undefined,
+      completion_policy: "acceptance report",
+      ...overrides,
+    });
+  }
+
+  const completion = { policy: "acceptance report", evidence: "sdd/plan-a/report.md" };
+
+  test("the fulfilment is recorded before Done, then frozen: only a CHANGED reference is refused (F-2)", async () => {
+    const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "InReview", done_at: undefined })] });
+    const recorded = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
+    expect(recorded.written).toBe(true);
+
+    // The row becomes Done exactly as `complete` writes it — the recorded
+    // fulfilment is now the basis of that `Done` fact.
+    const done = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    (done.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+    writeFileSync(path, JSON.stringify(done, null, 4) + "\n");
+    const afterDone = readFileSync(path, "utf8");
+
+    // Re-pointing the recorded evidence is a different completion of the same
+    // policy, never an evidence update: refused, with the DB route's own code.
+    let refusal = "";
+    try {
+      await recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "sdd/plan-a/forged.md" } } });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    expect(refusal).toContain("coordination.invalid-transition");
+    expect(readFileSync(path, "utf8")).toBe(afterDone);
+
+    // An identical re-record is the retried recording: a no-op, never a refusal.
+    const again = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-13T01:00:00Z" });
+    expect(again.written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(afterDone);
+
+    // And the close still succeeds on the frozen evidence it consults.
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
+    expect(closed.status).toBe("completed");
+  });
+
+  test("a first-time fulfilment recorded after Done is refused too (the ordering is before Done, F-2)", async () => {
+    const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "Done" })] });
+    const before = readFileSync(path, "utf8");
+    let refusal = "";
+    try {
+      await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    expect(refusal).toContain("coordination.invalid-transition");
+    expect(refusal).toContain("before the row is marked Done");
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 
   test("grandfathering: pre-existing delivery evidence with non-Done rows is untouched and close consultation is unchanged", async () => {
@@ -2194,12 +2258,195 @@ describe("standalone-completion-shape", () => {
     });
   }
 
+  /** One row of the standalone completed shape, with the caller's handoff (if any). */
+  function rewrittenRow(input: { handoff?: Record<string, unknown>; rowStatus?: string }): Record<string, unknown> {
+    const row = standaloneCompletedRow();
+    const coordination = row.coordination as Record<string, unknown>;
+    const { handoff: _replaced, ...rest } = coordination;
+    const status = input.rowStatus ?? "Done";
+    return {
+      ...row,
+      status,
+      done_at: status === "Done" ? "2026-09-15" : undefined,
+      coordination: input.handoff === undefined ? rest : { ...rest, handoff: input.handoff },
+    };
+  }
+
+  /** The same snapshot carrying a handoff the caller rewrote, at its own row status. */
+  function rewrittenSnapshot(input: {
+    handoff?: Record<string, unknown>;
+    rowStatus?: string;
+    overrides?: Record<string, unknown>;
+  }): Record<string, unknown> {
+    return standaloneSnapshot({
+      delivery_kind: "verification/report-only",
+      completion_policy: "acceptance report",
+      branch: undefined,
+      integration_worktree_path: undefined,
+      integration_merge_lease: undefined,
+      delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
+      plans: [rewrittenRow(input)],
+      ...input.overrides,
+    });
+  }
+
+  /** A well-formed integration record — the contamination N1 refuses by state. */
+  const integrationRecord = {
+    target_branch: "integration/fixture",
+    worktree_path: "/tmp/integration-wt",
+    base_sha: "b".repeat(40),
+    started_at: "2026-09-15T00:30:00Z",
+  };
+
   test("accepts the precise standalone completed handoff without integration", () => {
     const snapshot = standaloneSnapshot();
     delete (snapshot as Record<string, unknown>).integration_worktree_path;
     const result = validateWorkflowSnapshot(snapshot);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+
+  test("accepts a single-row report-only completed shape without integration or branch anchors", () => {
+    const snapshot = standaloneSnapshot({
+      delivery_kind: "verification/report-only",
+      completion_policy: "acceptance report",
+      branch: undefined,
+      delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
+    });
+    expect(isStandaloneReportOnlyWorkflow(snapshot)).toBe(true);
+    expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, violations: [] });
+  });
+
+  test("refuses completed report-only integration contamination", () => {
+    const contaminated = [
+      { integration_worktree_path: "/tmp/integration" },
+      { branch: { integration: "integration/fixture" } },
+      { plans: [ { ...standaloneCompletedRow(), coordination: {
+        ...standaloneCompletedRow().coordination,
+        handoff: { ...(standaloneCompletedRow().coordination as Record<string, unknown>).handoff, integration: {} },
+      } } ] },
+    ];
+    for (const overrides of contaminated) {
+      const snapshot = standaloneSnapshot({
+        delivery_kind: "verification/report-only",
+        completion_policy: "acceptance report",
+        branch: undefined,
+        delivery: { completion: { policy: "acceptance report", evidence: "report.md" } },
+        ...overrides,
+      });
+      expect(validateWorkflowSnapshot(snapshot).ok).toBe(false);
+    }
+  });
+
+  test("refuses a Done row whose stored handoff was rewritten back to accepted (F-1)", () => {
+    // The state a rewritten stored handoff takes on this transport: the row is
+    // Done, the handoff says `accepted`, the evidence the close consults is
+    // intact. It used to validate — every completed-shape check above was
+    // skipped by an early return — and the close then wrote `completed`.
+    const snapshot = rewrittenSnapshot({ handoff: { ...standaloneCompletedHandoff(), state: "accepted" } });
+    expect((snapshot.plans as Array<Record<string, unknown>>)[0]!.status).toBe("Done");
+    expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+  });
+
+  test("the rewritten shape refuses its integration contamination too (a non-completed state is no bypass, F-1)", () => {
+    // The state requirement and N1's contamination checks are evaluated on the
+    // SAME document: neither a rewritten state nor a stowaway integration
+    // record is reachable by the other.
+    const rewritten = rewrittenSnapshot({
+      handoff: { ...standaloneCompletedHandoff(), state: "accepted", integration: integrationRecord },
+      overrides: { integration_worktree_path: "/tmp/integration" },
+    });
+    const messages = validateWorkflowSnapshot(rewritten).violations.map((v) => v.message).join(" | ");
+    expect(messages).toContain('requires handoff.state "completed"');
+    expect(messages).toContain("must not carry integration");
+    expect(messages).toContain("must not carry integration_worktree_path");
+  });
+
+  test("accepts an in-progress standalone row whose accepted handoff is stored (the requirement is the Done shape, F-1)", () => {
+    // `accept` writes exactly this: the row is not Done yet and the handoff is
+    // `accepted`. The positive state requirement must not touch it.
+    const inProgress = rewrittenSnapshot({
+      handoff: { ...standaloneCompletedHandoff(), state: "accepted", completed_at: undefined },
+      rowStatus: "InReview",
+    });
+    expect(validateWorkflowSnapshot(inProgress)).toEqual({ ok: true, violations: [] });
+  });
+
+  test("closeWorkflow refuses that rewritten document without writing (F-1)", async () => {
+    // The close reads through `normalizeWorkflowSnapshot`, so the incoherence
+    // refuses the terminal write itself — the same door every other writer uses.
+    const closeId = "00000101-report-only-rewrite";
+    const root = tmpRoot("workflow-rewrite-close-");
+    try {
+      const dir = join(root, "workflows", closeId);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshot = rewrittenSnapshot({
+        handoff: { ...standaloneCompletedHandoff(), state: "accepted", integration: integrationRecord },
+        overrides: { id: closeId, integration_worktree_path: "/tmp/integration" },
+      });
+      writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
+      setArtifactStore(createFsStore(root));
+      const before = readFileSync(path, "utf8");
+      await expect(closeWorkflow(closeId, dir, { endedAt: "2026-09-16" })).rejects.toThrow(
+        /coordination\.row\.handoff-field/,
+      );
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(JSON.parse(before).status).toBe("running");
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a Done row whose coordination block lost its handoff (F-1 variant)", () => {
+    // Deleting only the handoff leaves the coordination block's own marker
+    // (revision + the bound plan session) in place: the row is still visibly
+    // coordinated while the record its `Done` was authorized against is gone.
+    const snapshot = rewrittenSnapshot({});
+    const coordination = ((snapshot.plans as Array<Record<string, unknown>>)[0]!.coordination ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(coordination.handoff).toBeUndefined();
+    expect(Object.keys(coordination)).toContain("session");
+    expectViolations(validateWorkflowSnapshot(snapshot), "coordination.row.handoff-field");
+  });
+
+  test("closeWorkflow and the phase-6 gate refuse that handoff-less document without writing (F-1 variant)", async () => {
+    const closeId = "00000101-report-only-no-handoff";
+    const root = tmpRoot("workflow-no-handoff-close-");
+    try {
+      const dir = join(root, "workflows", closeId);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      writeFileSync(path, JSON.stringify(rewrittenSnapshot({ overrides: { id: closeId } }), null, 4) + "\n");
+      setArtifactStore(createFsStore(root));
+      const before = readFileSync(path, "utf8");
+      await expect(closeWorkflow(closeId, dir, { endedAt: "2026-09-16" })).rejects.toThrow(
+        /coordination\.row\.handoff-field/,
+      );
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(JSON.parse(before).status).toBe("running");
+      // The read-only gate runs the SAME validator as the close's write door.
+      const terminal = { ...(JSON.parse(before) as Record<string, unknown>), status: "completed", ended_at: "2026-09-16" };
+      const gate = evaluatePostMergeClose(terminal, { version: 2, updated_at: "2026-09-16", workflows: [] });
+      expect(gate.ok).toBe(false);
+      expect(gate.violations.map((v) => v.code)).toContain("PHASE6_INVALID_SNAPSHOT");
+    } finally {
+      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a Done standalone row with no coordination block at all (the migrated v1 shape)", () => {
+    // The reverse boundary is deliberate and has its own producer: the v1 lift
+    // writes a completed standalone row verbatim with no coordination block
+    // anywhere (`buildStandaloneSnapshot`, packages/engine/src/migrate.ts). The
+    // handoff requirement above applies to a COORDINATED row only, so this
+    // legacy shape — and with it the normal all-Done close — stays accepted.
+    const snapshot = validSnapshot({ type: "plan", status: "running", ended_at: undefined, ...registeredDelivery });
+    expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, violations: [] });
   });
 
   test("refuses the same completed shape on the iteration route", () => {

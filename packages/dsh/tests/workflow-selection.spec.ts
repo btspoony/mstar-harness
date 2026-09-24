@@ -17,14 +17,28 @@
  *   file (both hit the `existsSync` short-circuit).
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, symlink, utimes } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+  storeDbPath,
+} from '@mstar-harness/engine'
+import {
+  adoptExecutionBinding,
+  clearExecutionBinding,
+  resolveExecutionLedgerTarget,
   resolveActiveWorkflow,
   resolveReadWorkflow,
   _terminalStatusCacheHas,
 } from '../src/gates/workflow-selection.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { leaseGateViolations } from '../src/gates/dispatch.ts'
 import { seedHarness, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
 
@@ -713,4 +727,179 @@ it('automatically selects canonical integration cwd and refuses conflicting topo
       else expect(selected).toMatchObject({ kind: 'active', workflowId: 'wf-a' })
     }
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('requires canonical native adoption for active writers and permits legacy only after clear', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-ledger-target-')))
+  const harnessDir = join(root, '.mstar')
+  const cwd = root
+  await mkdir(cwd, { recursive: true })
+  try {
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+    })
+    const binding = {
+      version: 1 as const,
+      harnessRoot: harnessDir,
+      session: { storeId: 'store-a', epoch: 3, workflowId: 'wf-a', role: 'coordinator' as const, sessionId: 'session-a', planId: null },
+    }
+    expect(adoptExecutionBinding(harnessDir, 'session-a', cwd, { ...binding, harnessRoot: join(root, 'foreign') })).toBe(false)
+    expect(adoptExecutionBinding(harnessDir, 'session-a', cwd, binding)).toBe(true)
+    // The DB is absent, so a canonical execution witness cannot silently
+    // become a legacy writer or an idle/no-work answer.
+    await expect(resolveExecutionLedgerTarget('session-a', cwd)).resolves.toBeNull()
+    expect(clearExecutionBinding(harnessDir, 'session-a', cwd)).toBe(true)
+    await expect(resolveExecutionLedgerTarget('session-a', cwd)).resolves.toMatchObject({
+      workflowId: 'wf-a',
+      source: 'legacy',
+      epoch: null,
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('legacy targets accept only a real workflow directory (symlinked dir, dangling link, file link)', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-ledger-legacy-dir-')))
+  const harnessDir = join(root, '.mstar')
+  const workflowRoot = join(harnessDir, 'workflows')
+  const realDir = join(root, 'real-wf-a')
+  try {
+    await mkdir(realDir, { recursive: true })
+    await writeFile(join(realDir, 'snapshot.json'), v2Snapshot('wf-a'))
+    await mkdir(workflowRoot, { recursive: true })
+    await seedHarness(harnessDir, { 'status.json': v2Root([v2WorkflowEntry('wf-a')]) })
+
+    // A symlinked workflow dir resolves to the CANONICAL spelling: the ledger,
+    // its identity index and its cursor must share one dir per lifecycle.
+    await symlink(realDir, join(workflowRoot, 'wf-a'))
+    await expect(resolveExecutionLedgerTarget('s-legacy', root)).resolves.toEqual({
+      workflowId: 'wf-a',
+      workflowDir: realDir,
+      sessionId: 's-legacy',
+      source: 'legacy',
+      epoch: null,
+    })
+
+    // A dangling symlink is not a directory and must never become a target ...
+    await rm(join(workflowRoot, 'wf-a'), { force: true })
+    await symlink(join(root, 'gone-wf-a'), join(workflowRoot, 'wf-a'))
+    await expect(resolveExecutionLedgerTarget('s-legacy', root)).resolves.toBeNull()
+
+    // ... and neither is a symlink to a regular file.
+    const plainFile = join(root, 'not-a-workflow-dir')
+    await writeFile(plainFile, 'not a directory\n')
+    await rm(join(workflowRoot, 'wf-a'), { force: true })
+    await symlink(plainFile, join(workflowRoot, 'wf-a'))
+    await expect(resolveExecutionLedgerTarget('s-legacy', root)).resolves.toBeNull()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The REAL active authority (`initializeStore` → `initializeExecutionAuthority`
+ * → catalog registration → `createExecutionWorkflow` → `bindExecutionSession`),
+ * i.e. the same fixture convention `execution-read.spec.ts` uses: nothing here
+ * is mocked and no reader result is canned.
+ */
+it('serves an execution target only for the current canonical session, refusing stale and revoked authority', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-ledger-active-')))
+  const harnessDir = join(root, '.mstar')
+  const cwd = root
+  const wfId = 'wf-a'
+  const sessionId = 'host-a'
+  const stamp = '2026-09-23T00:00:00.000Z'
+  try {
+    await mkdir(harnessDir, { recursive: true })
+    ;(await initializeStore({ harnessDir })).close()
+    const initialized = await initializeExecutionAuthority({ harnessDir })
+    await registerCatalogEntity(
+      { harnessDir },
+      { kind: 'plan', id: 'plan-a', title: 'plan-a title', rootKind: 'plans', relativePath: 'plans/plan-a.md' },
+      { operationId: 'register-plan-a', actor: 'workflow-selection.spec' },
+    )
+    const created = await createExecutionWorkflow(
+      // The creating identity IS the coordinator that may bind: the engine
+      // refuses a coordinator bind from any other caller (only the validated
+      // recovery transition replaces the creator), so the fixture keeps one
+      // identity for create + bind.
+      { harnessDir, caller: { sessionId, role: 'coordinator', workflowId: wfId, planId: null } },
+      {
+        entry: { id: wfId, type: 'plan', started_at: stamp, dir: `workflows/${wfId}` },
+        snapshot: {
+          schema_version: 1,
+          id: wfId,
+          type: 'plan',
+          status: 'running',
+          started_at: stamp,
+          updated_at: stamp,
+          plans: [{ id: 'plan-a', title: 'plan-a title', file: 'plans/plan-a.md', status: 'Todo' }],
+          delivery_kind: 'development',
+          branch: { source: `feature/${wfId}`, target: 'main' },
+        } as never,
+        expected: initialized.token,
+        operationId: 'create-wf-a',
+      },
+    )
+    const bound = await bindExecutionSession(
+      { harnessDir, caller: { sessionId, role: 'coordinator', workflowId: wfId, planId: null } },
+      {
+        workflowId: wfId,
+        planId: null,
+        role: 'coordinator',
+        expected: created.data.workflows[0]!.workflowToken,
+        operationId: 'bind-host-a',
+      },
+    )
+    // The row's dir exists only AFTER activation: a legacy workflow dir present
+    // at initialisation would refuse the authority itself.
+    await mkdir(join(harnessDir, 'workflows', wfId), { recursive: true })
+    ;(await openStore({ harnessDir }, 'read')).close()
+    const binding = { version: 1 as const, harnessRoot: harnessDir, session: bound.data }
+
+    // Positive: canonical adoption plus the session row current at this store/epoch.
+    expect(adoptExecutionBinding(harnessDir, sessionId, cwd, binding)).toBe(true)
+    await expect(resolveExecutionLedgerTarget(sessionId, cwd)).resolves.toEqual({
+      workflowId: wfId,
+      workflowDir: join(harnessDir, 'workflows', wfId),
+      sessionId,
+      source: 'execution',
+      epoch: created.epoch,
+    })
+
+    // A witness from another epoch is STALE: no writer, and no re-adoption
+    // inferred from the in-memory cache.
+    expect(updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+      executionBinding: { ...binding, session: { ...bound.data, epoch: created.epoch + 5 } },
+      excludedBeforeSeq: 0,
+    }).kind).toBe('written')
+    await expect(resolveExecutionLedgerTarget(sessionId, cwd)).resolves.toBeNull()
+
+    // A REVOKED row (the state `recoverExecutionCoordinator` leaves for the
+    // replaced holder — written here as the raw fixture row, the engine's own
+    // test convention) is not a current binding.
+    expect(updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { executionBinding: binding, excludedBeforeSeq: 0 }).kind).toBe('written')
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      // The engine's own revocation statement (`revokeSessionRow`): the prior
+      // holder's row is KEPT as history and stops being an ACTIVE binding.
+      db.prepare(
+        "update execution_sessions set state = 'revoked', revision = revision + 1 " +
+          "where workflow_id = ? and role = ? and session_id = ? and state <> 'revoked'",
+      ).run(wfId, 'coordinator', sessionId)
+    } finally {
+      db.close()
+    }
+    ;(await openStore({ harnessDir }, 'read')).close()
+    await expect(resolveExecutionLedgerTarget(sessionId, cwd)).resolves.toBeNull()
+
+    // With the authority ACTIVE a cleared witness yields NO writer: the route
+    // is authoritative, so no file-based (legacy) target is inferred.
+    expect(clearExecutionBinding(harnessDir, sessionId, cwd)).toBe(true)
+    await expect(resolveExecutionLedgerTarget(sessionId, cwd)).resolves.toBeNull()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

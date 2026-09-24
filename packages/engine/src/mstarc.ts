@@ -78,6 +78,10 @@ export type MstarcConfig = {
   projectDir?: string;
   /** Declared hard-gate policy — `hard` or `soft` (anything else ignored). */
   enforcement?: "hard" | "soft";
+  /** Raw Jev mode; interpretation belongs to the judgment runtime. */
+  jevMode?: string;
+  /** Raw Jev transport; interpretation belongs to the judgment runtime. */
+  jevTransport?: string;
 };
 
 /** `[config]` key → config field mapping (unknown keys ignored). */
@@ -91,13 +95,16 @@ const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
   [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
   [MSTARC_PROJECT_DIR_KEY]: "projectDir",
   [MSTARC_ENFORCEMENT_KEY]: "enforcement",
+  jev_mode: "jevMode",
+  jev_transport: "jevTransport",
 };
 
 /**
  * Parse `.mstarc` text — minimal INI subset: `#`/`;` comments, `[section]`
  * headers, `key=value` pairs (trimmed). Only the `[config]` section is
  * read; unknown keys are ignored (forward compatibility). The last
- * occurrence of a key wins; an empty value is treated as unset.
+ * occurrence of a key wins; empty values are unset, with Jev keys clearing
+ * any earlier value.
  */
 export function parseMstarc(text: string): MstarcConfig {
   let section: string | null = null;
@@ -116,7 +123,10 @@ export function parseMstarc(text: string): MstarcConfig {
     const field = CONFIG_KEYS[line.slice(0, eq).trim()];
     if (field === undefined) continue;
     const value = line.slice(eq + 1).trim();
-    if (value === "") continue;
+    if (value === "") {
+      if (field === "jevMode" || field === "jevTransport") delete out[field];
+      continue;
+    }
     // `enforcement` accepts only `hard` / `soft` — anything else is ignored
     // (the resolver treats it as unset; documented in plan-conventions).
     if (field === "enforcement" && value !== "hard" && value !== "soft") continue;

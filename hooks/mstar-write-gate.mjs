@@ -4,35 +4,45 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync3, readlinkSync, realpathSync, statSync as statSync2, writeSync } from "node:fs";
+import { readFileSync as readFileSync3, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative4, resolve } from "node:path";
 
 // packages/engine/dist/engine.js
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync15, mkdirSync as mkdirSync6, readdirSync as readdirSync7, readFileSync as readFileSync11, realpathSync as realpathSync5, statSync as statSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync6, readdirSync as readdirSync8, readFileSync as readFileSync11, realpathSync as realpathSync5, statSync as statSync6, writeFileSync as writeFileSync5 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute11, join as join18, relative as relative3, resolve as resolve13 } from "node:path";
-import { dirname as dirname7, join as join17, resolve as resolvePath, sep as sep7 } from "node:path";
-import { existsSync as existsSync13, lstatSync, mkdirSync as mkdirSync5, readFileSync as readFileSync10, statSync as statSync5, unlinkSync as unlinkSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename6, dirname as dirname6, isAbsolute as isAbsolute10, join as join16, relative as relative2, resolve as resolve12, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join18, relative as relative3, resolve as resolve13 } from "node:path";
+import { dirname as dirname8, join as join17, resolve as resolvePath, sep as sep7 } from "node:path";
+import {
+  existsSync as existsSync13,
+  lstatSync as lstatSync2,
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync10,
+  readdirSync as readdirSync7,
+  readlinkSync,
+  statSync as statSync5,
+  unlinkSync as unlinkSync5,
+  writeFileSync as writeFileSync4
+} from "node:fs";
+import { basename as basename6, dirname as dirname7, isAbsolute as isAbsolute10, join as join16, relative as relative2, resolve as resolve12, sep as sep6 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
 import { dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, existsSync as existsSync3, openSync, statSync as statSync3, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync3, fstatSync, lstatSync, openSync, readSync, statSync as statSync3, unlinkSync as unlinkSync3 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { join as join5, resolve as resolve5 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname5, join as join9, resolve as resolve8, sep as sep3 } from "node:path";
+import { dirname as dirname6, join as join9, resolve as resolve8, sep as sep3 } from "node:path";
 import { isAbsolute as isAbsolute6, join as join8, resolve as resolve7 } from "node:path";
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync3 } from "node:fs";
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
-import { basename as basename10, dirname as dirname12, join as join21, relative as relative5, resolve as resolve15 } from "node:path";
+import { basename as basename10, dirname as dirname13, join as join21, relative as relative5, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash15 } from "node:crypto";
 import { appendFileSync, readFileSync as readFileSync20 } from "node:fs";
@@ -70,7 +80,9 @@ var CONFIG_KEYS = {
   [MSTARC_SPECS_DIR_KEY]: "specsDir",
   [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
   [MSTARC_PROJECT_DIR_KEY]: "projectDir",
-  [MSTARC_ENFORCEMENT_KEY]: "enforcement"
+  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
+  jev_mode: "jevMode",
+  jev_transport: "jevTransport"
 };
 function parseMstarc(text) {
   let section = null;
@@ -93,8 +105,11 @@ function parseMstarc(text) {
     if (field === undefined)
       continue;
     const value = line.slice(eq + 1).trim();
-    if (value === "")
+    if (value === "") {
+      if (field === "jevMode" || field === "jevTransport")
+        delete out[field];
       continue;
+    }
     if (field === "enforcement" && value !== "hard" && value !== "soft")
       continue;
     out[field] = value;
@@ -367,7 +382,7 @@ function validatePlanHandoff(value, what = "coordination.handoff", route = "inte
     }
   }
   if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    if (route === "standalone-development" && value.state === "completed") {
+    if ((route === "standalone-development" || route === "standalone-report-only") && value.state === "completed") {
       if (value.completed_at === undefined) {
         violations.push(invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`));
       }
@@ -708,9 +723,77 @@ async function connect(dbPath, mode) {
   const { DatabaseSync } = await loadSqliteDriver();
   return openConnection(dbPath, mode, DatabaseSync);
 }
+var DATABASE_HEADER_BYTES = 100;
+var SQLITE_FORMAT_MAGIC = "SQLite format 3\x00";
+var WAL_FILE_FORMAT_VERSION = 2;
+function assertAbsentOrRegularStoreFile(dbPath) {
+  let stats;
+  let examineError;
+  try {
+    stats = lstatSync(dbPath);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT")
+      return;
+    examineError = error;
+  }
+  if (stats?.isFile())
+    return;
+  const observed = stats === undefined ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})` : stats.isSymbolicLink() ? "it is a symbolic link" : "it is not a regular file";
+  throw new StoreError("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
+}
+function isWalFormatDatabase(header, bytes) {
+  if (bytes < DATABASE_HEADER_BYTES)
+    return false;
+  if (header.toString("latin1", 0, 16) !== SQLITE_FORMAT_MAGIC)
+    return false;
+  const pageSize = header.readUInt16BE(16);
+  const legalPageSize = pageSize === 1 ? 65536 : pageSize;
+  if (legalPageSize < 512 || legalPageSize > 65536 || (legalPageSize & legalPageSize - 1) !== 0)
+    return false;
+  if (header[18] !== WAL_FILE_FORMAT_VERSION || header[19] !== WAL_FILE_FORMAT_VERSION)
+    return false;
+  if (header[21] !== 64 || header[22] !== 32 || header[23] !== 32)
+    return false;
+  if (header.readUInt32BE(44) > 4)
+    return false;
+  if (header.readUInt32BE(56) > 3)
+    return false;
+  return bytes % legalPageSize === 0;
+}
+function ensureJournalForRead(dbPath) {
+  if (existsSync3(`${dbPath}-wal`))
+    return;
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  let bytes;
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      bytes = fstatSync(source).size;
+      if (readSync(source, header, 0, header.length, 0) < header.length)
+        return;
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    return;
+  }
+  if (!isWalFormatDatabase(header, bytes))
+    return;
+  let journal;
+  try {
+    journal = openSync(`${dbPath}-wal`, "wx");
+  } catch {
+    return;
+  }
+  closeSync(journal);
+}
 function openConnection(dbPath, mode, DatabaseSync) {
   let db;
   try {
+    assertAbsentOrRegularStoreFile(dbPath);
+    if (mode === "read")
+      ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
     refuseOpenFailure(error, dbPath);
@@ -1108,11 +1191,15 @@ create table execution_migrations(
   updated_at text not null
 );
 `;
+var MIGRATION_5_SQL = `
+alter table execution_migrations add column coverage_json text;
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
-  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL }
+  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
+  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL }
 ];
 var EXECUTION_TABLE_NAMES = [
   "execution_meta",
@@ -1214,6 +1301,7 @@ function readExecutionMeta(db, schemaVersion) {
 async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
+  assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync3(dbPath)) {
     throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace (or the staged migration for an existing workspace). Nothing was created.`);
   }
@@ -1241,6 +1329,7 @@ async function openStore(context, mode) {
     refuseOpenFailure(error, dbPath);
   }
 }
+var fsStoreInstances = new WeakSet;
 var ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
 var ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
 var COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
@@ -1270,22 +1359,50 @@ var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
 function isStandaloneDevelopmentWorkflow(snapshot) {
   return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
 }
+function isStandaloneReportOnlyWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "verification/report-only" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
 function rowValidationRoute(snapshot, row) {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
   }
   return "integration";
 }
 function validateStandaloneCompletedCoherence(snapshot, row) {
   const violations = [];
-  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id)
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  if (!standalone || row.id !== snapshot.plans[0]?.id)
     return violations;
   const coordination = row.coordination;
-  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff))
+  if (!isPlainObject(coordination))
     return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff — a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`));
+    }
+    return violations;
+  }
   const handoff = coordination.handoff;
-  if (handoff.state !== "completed" || handoff.integration !== undefined)
+  const completed = handoff.state === "completed";
+  if (row.status !== "Done" && !completed)
     return violations;
+  if (!completed) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
+  }
+  if (handoff.integration !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    if (snapshot.integration_worktree_path !== undefined) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry integration_worktree_path"));
+    }
+    if (isNonEmptyString(snapshot.branch?.integration)) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry branch.integration"));
+    }
+  }
   if (row.status !== "Done") {
     violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires row ${String(row.id)} to be Done`));
   }
@@ -1295,12 +1412,12 @@ function validateStandaloneCompletedCoherence(snapshot, row) {
   if (snapshot.integration_merge_lease !== undefined) {
     violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires no integration_merge_lease on the snapshot"));
   }
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
-  } else {
-    if (handoff.source_branch !== source) {
+  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+    const source = snapshot.branch?.source;
+    const target = snapshot.branch?.target;
+    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
+    } else if (handoff.source_branch !== source) {
       violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
     }
   }
@@ -1658,7 +1775,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname5(resolve8(docOrPath));
+      harnessDir = dirname6(resolve8(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -1794,7 +1911,7 @@ function resolveCompassEnforcement(harnessDir) {
 }
 function resolveMstarcEnforcement(harnessDir) {
   const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname5(dir));
+  const rc = loadMstarc(dir, dirname6(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -2176,7 +2293,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
-  for (let dir = start;; dir = dirname6(dir)) {
+  for (let dir = start;; dir = dirname7(dir)) {
     let linked = false;
     try {
       linked = statSync5(join16(dir, ".git")).isFile();
@@ -2188,7 +2305,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
     if (linked) {
       throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join16(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join16(dir, ".git") });
     }
-    const parent = dirname6(dir);
+    const parent = dirname7(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -2220,7 +2337,7 @@ function catalogRootDir(context, rootKind) {
   const harness = resolveProcessHarnessDir(start) ?? start;
   switch (rootKind) {
     case "repository":
-      return dirname7(harness);
+      return dirname8(harness);
     case "harness":
       return harness;
     case "plans":
@@ -2254,7 +2371,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     }
     if (dir === boundary)
       return null;
-    const parent = dirname8(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -2272,7 +2389,7 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname8(boundary);
+        boundary = dirname9(boundary);
     }
     return resolve13(boundary);
   } catch {}
@@ -2284,7 +2401,7 @@ function isAtOrBelow2(dir, root) {
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve13(harnessDir);
-  const rc = loadMstarc(dir, dirname8(dir));
+  const rc = loadMstarc(dir, dirname9(dir));
   const declared = rc?.config[key];
   return declared ? resolve13(rc.dir, declared) : null;
 }
@@ -2296,7 +2413,7 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     return declared;
   }
   const harness = resolve13(harnessDir);
-  const repoRoot = dirname8(harness);
+  const repoRoot = dirname9(harness);
   const candidates = [
     join18(harness, "specs"),
     join18(repoRoot, "docs", "specs"),
@@ -2383,7 +2500,7 @@ function isDirectory(dir) {
 }
 function hasFiles(dir) {
   try {
-    for (const entry of readdirSync7(dir, { withFileTypes: true })) {
+    for (const entry of readdirSync8(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
         if (hasFiles(join18(dir, entry.name)))
           return true;
@@ -2433,7 +2550,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname12(dir);
+    const parent = dirname13(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -2467,8 +2584,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname12(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname12(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -2476,7 +2593,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname12(resolved));
+  const fallbackDir = resolveHarnessDir(dirname13(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -3997,6 +4114,8 @@ function readRoadmap(db, filters) {
     badges
   };
 }
+var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
+var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
 
@@ -4063,7 +4182,7 @@ function landedPathOf(resolved) {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve(dirname(resolved), readlinkSync(resolved));
+      return resolve(dirname(resolved), readlinkSync2(resolved));
     } catch {
       let dir = dirname(resolved);
       for (;; ) {

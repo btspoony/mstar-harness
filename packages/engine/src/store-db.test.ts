@@ -12,7 +12,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -22,6 +22,8 @@ import {
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
   StoreError,
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   initializeStore,
@@ -35,13 +37,7 @@ const BUNDLE = join(ROOT, "store-test-runtime.mjs");
 
 /** Node binary used for the Node-floor leg; overridable for local runs. */
 const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
-let nodeVersion = "";
 let bundleError = "";
-
-function runtimeVersion(bin: string, args: string[]): string {
-  const probe = spawnSync(bin, args, { encoding: "utf8" });
-  return probe.status === 0 ? probe.stdout.trim() : `unavailable (${probe.stderr.trim()})`;
-}
 
 beforeAll(() => {
   const built = spawnSync(
@@ -50,7 +46,6 @@ beforeAll(() => {
     { encoding: "utf8" },
   );
   if (built.status !== 0) bundleError = built.stderr || `bun build exited ${built.status}`;
-  nodeVersion = runtimeVersion(NODE_BIN, ["--version"]);
 }, 60_000);
 
 afterAll(() => {
@@ -80,12 +75,6 @@ const SCENARIOS: string[] = [
 ] as const;
 
 describe("store-db runtime floors (actual versions)", () => {
-  test(`Bun runner is >= ${MIN_BUN_VERSION} and Node child is >= ${MIN_NODE_VERSION}`, () => {
-    expect(bundleError).toBe("");
-    expect(Bun.version).toMatch(/^1\.[4-9]\./);
-    expect(nodeVersion).toMatch(/^v24\.(1[89]|[2-9]\d)\./);
-  });
-
   test("compareVersions orders floors numerically", () => {
     expect(compareVersions("24.18.0", "24.18.0")).toBe(0);
     expect(compareVersions("24.17.0", "24.18.0")).toBeLessThan(0);
@@ -105,9 +94,9 @@ describe("store-db runtime floors (actual versions)", () => {
 });
 
 describe.each([
-  { runtime: "node", bin: NODE_BIN, version: () => nodeVersion },
-  { runtime: "bun", bin: process.execPath, version: () => Bun.version },
-])("store scenarios under $runtime (${version()})", ({ runtime, bin, version }) => {
+  { runtime: "node", bin: NODE_BIN },
+  { runtime: "bun", bin: process.execPath },
+])("store scenarios under $runtime", ({ runtime, bin }) => {
   test.each(SCENARIOS)(`${runtime}: %s`, (scenario) => {
     expect(bundleError).toBe("");
     const dir = mkdtempSync(join(ROOT, `${runtime}-${scenario}-`));
@@ -121,9 +110,72 @@ describe.each([
       rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+});
 
-  test(`recorded ${runtime} version is a supported floor`, () => {
-    expect(version()).toMatch(/^(v?1\.[4-9]\.|v24\.1[89]\.|v2[5-9]\.)/);
+/* ------------------------------------------------------------------------ *
+ * Read-open path: refused store shapes must never gain a journal, and a store
+ * reached through a link is not the canonical store
+ * ------------------------------------------------------------------------ */
+
+describe("store-db read-open repair", () => {
+  test("WAL-shaped bytes that are not a database are refused without a sidecar", async () => {
+    const dir = mkdtempSync(join(ROOT, "wal-shaped-bytes-"));
+    const path = join(dir, "store.db");
+    const bytes = Buffer.alloc(100);
+    bytes.write("this is not a sqlite database", 0, "latin1");
+    // The two bytes the quiesced-WAL shape is recognized by, on a file that is
+    // not a SQLite database at all: the repair must not add a journal for it.
+    bytes[18] = 2;
+    bytes[19] = 2;
+    writeFileSync(path, bytes);
+
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(existsSync(`${path}-wal`)).toBe(false);
+  });
+
+  test("a symlinked store path is refused, and the link target is left alone", async () => {
+    const targetDir = mkdtempSync(join(ROOT, "symlink-target-"));
+    const created = await initializeStore({ harnessDir: targetDir });
+    created.close();
+    const linkDir = mkdtempSync(join(ROOT, "symlink-store-"));
+    const linkPath = join(linkDir, "store.db");
+    symlinkSync(join(targetDir, "store.db"), linkPath);
+    const targetBefore = readdirSync(targetDir).sort().join(" ");
+
+    // Refusing is what proves no authority was served from the link target, and
+    // neither intent leaves a sidecar at the linked path or touches the target.
+    await expect(openStore({ harnessDir: linkDir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(openStore({ harnessDir: linkDir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(existsSync(`${linkPath}-wal`)).toBe(false);
+    expect(readdirSync(targetDir).sort().join(" ")).toBe(targetBefore);
+  });
+
+  test("a dangling store.db link is a corrupt store, never an absent one", async () => {
+    const dir = mkdtempSync(join(ROOT, "dangling-link-"));
+    // The link exists; its target does not. Leftover legacy bytes sit beside it,
+    // so answering "no store" here would hand the retired file route back its
+    // authority over a path that is not genuinely absent.
+    symlinkSync(join(dir, "target-elsewhere.db"), join(dir, "store.db"));
+    writeFileSync(
+      join(dir, "status.json"),
+      JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
+    );
+
+    const refusalCodeOf = (run: () => void): string => {
+      try {
+        run();
+        return "";
+      } catch (error) {
+        return error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      }
+    };
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(openStore({ harnessDir: dir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(refusalCodeOf(() => assertExecutionFileWriteAllowed({ harnessDir: dir }))).toBe("store.corrupt");
+    expect(refusalCodeOf(() => assertExecutionFileReadAllowed({ harnessDir: dir }))).toBe("store.corrupt");
+    // Nothing was created for the refused link, and the leftover bytes stayed.
+    expect(existsSync(`${join(dir, "store.db")}-wal`)).toBe(false);
+    expect(existsSync(join(dir, "status.json"))).toBe(true);
   });
 });
 

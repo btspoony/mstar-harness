@@ -5,7 +5,8 @@
  * carries for S6).
  *
  * Run with
- * `bun test packages/engine/src/execution-consumers.test.ts --test-name-pattern 'execution-authority-read'`.
+ * `bun test packages/engine/src/execution-consumers.test.ts --test-name-pattern 'execution-authority-read'`
+ * (the retained-evidence proof is selected by `-t "retained evidence"`).
  *
  * Every case runs the REAL modules against a REAL `node:sqlite` store in a
  * per-test temporary control root: the real `initializeExecutionAuthority` /
@@ -34,26 +35,59 @@
  *   already committed, an authority that becomes unavailable refuses EVERY
  *   authoritative read and never serves the retired file route's leftover bytes
  *   or a projection derived from them.
+ * - `retained evidence …`: SDD evidence bodies stay FILES under the configured
+ *   roots with the byte hashes the handoff record pins, across a fixture
+ *   authority switch and with no copy in the store; a missing body, edited
+ *   bytes and a symlink escape out of the plan's own areas each refuse — none
+ *   of them can become an accepted approval.
+ * - `retained evidence at the acceptance consumer …`: the same properties at
+ *   the real DB `handoff` / `accept` verbs of a real Git control harness — the
+ *   handoff RECORDS the configured bodies with their byte digests, and the
+ *   acceptance transition refuses bodies that are missing, escaped or edited.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
+import { assertEvidenceInsidePlanArea, planAreaRoots, type HandoffEvidence } from "./coordination.js";
+import { assertHandoffEvidenceUnchanged, readHandoffEvidence } from "./coordination-transitions.js";
+import {
+  acceptExecutionPlan,
+  handoffExecutionPlan,
+  prepareExecutionPlan,
+  progressExecutionPlan,
+} from "./execution-coordination.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
   createExecutionWorkflow,
+  bindExecutionSession,
   initializeExecutionAuthority,
   parseExecutionToken,
+  readExecutionPlan,
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionPlanView,
+  type ExecutionSessionRef,
   type ExecutionState,
+  type ExecutionToken,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
+import { resolveSddDir } from "./path.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, type StoreContext } from "./store-db.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
@@ -141,14 +175,21 @@ async function activeGraph(label: string): Promise<StoreContext> {
   return context;
 }
 
-/** A store whose recorded migrations stop before `execution-authority`. */
+/**
+ * A store whose recorded migrations stop before `execution-authority`
+ * (migration 4): the execution schema was never applied to it, so its recorded
+ * rows must stay a CONTIGUOUS prefix (1..3). Deleting only migration 4 would
+ * leave the [1,2,3,5] hole a real corrupted store has, and the C1 contiguity
+ * check refuses that shape as `store.schema-drift` — this fixture is about a
+ * store that simply predates the execution tables, not about drift.
+ */
 async function preExecutionStore(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
   const db = new DatabaseSync(join(context.harnessDir, "store.db"));
   try {
-    db.exec("delete from schema_version where version = 4");
+    db.exec("delete from schema_version where version >= 4");
   } finally {
     db.close();
   }
@@ -516,5 +557,468 @@ describe("execution-cross-domain \u2014 an unavailable authority refuses every r
     // pre-state — a rewrite that keeps the old marker fragment must fail here.
     expect(readFileSync(snapshotPath)).toEqual(plantedSnapshot);
     expect(readFileSync(rootRegisterPath)).toEqual(plantedRootRegister);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Retained SDD evidence (S9)
+ * ------------------------------------------------------------------------ */
+
+const RETAINED_PLAN = "20260920-consumers-retained";
+const QC_BODY = "reviewed QC body\n";
+const CONSOLIDATED_BODY = "consolidated QC body\n";
+const QA_BODY = "QA verdict body\n";
+
+/** The three handoff evidence bodies of one plan, under the CONFIGURED SDD
+ * resolution — the same resolution the containment boundary derives its roots
+ * from. */
+function retainedBodies(harnessDir: string): { qc: string; consolidated: string; qa: string } {
+  const sddDir = resolveSddDir(harnessDir, RETAINED_PLAN);
+  mkdirSync(sddDir, { recursive: true });
+  return { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
+}
+
+/** Write one evidence body and return its BYTE digest — what a handoff record
+ * pins. */
+function writeBody(path: string, text: string): string {
+  writeFileSync(path, text, "utf8");
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** The plan session's handoff evidence request: paths and decisions only.
+ * `revisions` default to placeholder SHAs the helper-level cases do not use;
+ * the handoff consumer's fixture passes the Git revisions it pinned. */
+function handoffRequest(
+  bodies: { qc: string; consolidated: string; qa: string },
+  revisions: { sourceSha: string; baseSha: string } = { sourceSha: "a".repeat(40), baseSha: "b".repeat(40) },
+): HandoffEvidence {
+  return {
+    source_sha: revisions.sourceSha,
+    review_base: revisions.baseSha,
+    review_head: revisions.sourceSha,
+    qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
+    qa: { gate: "mandatory", decision: "pass", report: bodies.qa },
+  };
+}
+
+/** The typed refusal of one synchronous call: its stable code, whatever domain
+ * raised it. */
+function refusalCodeOf(action: () => unknown): string {
+  try {
+    action();
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error) return String(error.code);
+    return "";
+  }
+  throw new Error("expected a refusal");
+}
+
+/**
+ * Evidence stays at the configured SDD roots as FILES with byte hashes, across
+ * an authority switch: the bodies a plan wrote before its store was activated
+ * are still the bytes its handoff record pins afterwards, and the acceptance
+ * gates (containment, existence, digest) are the ones that decide whether that
+ * evidence can be an accepted approval.
+ */
+describe("retained evidence \u2014 SDD bodies and byte hashes across the authority switch", () => {
+  test("retained evidence bodies stay files whose byte hashes survive fixture activation", async () => {
+    // A store that holds an issue/catalog authority and no execution authority
+    // yet: the bodies are written and hashed BEFORE the switch.
+    const context = await legacyStore("retained-evidence-switch");
+    const bodies = retainedBodies(context.harnessDir);
+    const digests = {
+      qc: writeBody(bodies.qc, QC_BODY),
+      consolidated: writeBody(bodies.consolidated, CONSOLIDATED_BODY),
+      qa: writeBody(bodies.qa, QA_BODY),
+    };
+
+    // The switch: the fixture's execution authority becomes ACTIVE.
+    await initializeExecutionAuthority(context);
+    expect(await resolveExecutionReadRoute(context)).toBe("execution");
+
+    // The handoff route's own boundary: containment and existence against the
+    // plan's own areas, derived from the configured resolution.
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_paths)).not.toThrow();
+
+    // The record pins BYTE hashes, and they still describe the files.
+    expect([input.qc_reports[0]!.sha256, input.qc_consolidated.sha256, input.qa_report.sha256]).toEqual([
+      digests.qc,
+      digests.consolidated,
+      digests.qa,
+    ]);
+    expect(readFileSync(bodies.qc, "utf8")).toEqual(QC_BODY);
+    expect(() => assertHandoffEvidenceUnchanged(input, "handoff")).not.toThrow();
+
+    // No blanket blob conversion: the bodies are files, and the active store —
+    // main file and, when present, its write-ahead log — holds no copy of them.
+    const storedBytes = [join(context.harnessDir, "store.db"), join(context.harnessDir, "store.db-wal")]
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path));
+    for (const text of [QC_BODY, CONSOLIDATED_BODY, QA_BODY]) {
+      expect(storedBytes.some((bytes) => bytes.includes(Buffer.from(text)))).toBe(false);
+    }
+  });
+
+  test("retained evidence: a missing body is unavailable and cannot be accepted", async () => {
+    const context = await activeGraph("retained-evidence-missing");
+    const bodies = retainedBodies(context.harnessDir);
+    writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
+
+    rmSync(bodies.qc);
+
+    // Gone is unavailable: the containment boundary refuses the absent body,
+    // and the sealed digest pin cannot be satisfied by it either.
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.evidence-stale");
+    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
+    // The request itself refuses a path with nothing behind it, so a missing
+    // report never reaches an accepted approval.
+    expect(refusalCodeOf(() => readHandoffEvidence(handoffRequest(bodies)))).toBe("coordination.invalid-input");
+  });
+
+  test("retained evidence: changed bytes and a symlink escape cannot count as accepted approval", async () => {
+    const context = await activeGraph("retained-evidence-mutation");
+    const bodies = retainedBodies(context.harnessDir);
+    const qcDigest = writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
+    const input = readHandoffEvidence(handoffRequest(bodies));
+    const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
+    expect(input.qc_reports[0]!.sha256).toEqual(qcDigest);
+
+    // An edited report is a different body: the pinned byte digest refuses it.
+    writeBody(bodies.qc, `${QC_BODY}edited\n`);
+    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
+
+    // A symlink that resolves outside the plan's own areas is refused by the
+    // containment boundary. The escape is real — the bytes read through the
+    // link are the outside file's — so containment, not the caller's path
+    // spelling, is what stops it.
+    const outside = join(context.harnessDir, "outside-body.md");
+    const outsideText = "a body outside every plan area\n";
+    writeBody(outside, outsideText);
+    const escaped = join(resolveSddDir(context.harnessDir, RETAINED_PLAN), "escaped.md");
+    symlinkSync(outside, escaped);
+    expect(readFileSync(escaped, "utf8")).toEqual(outsideText);
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [escaped]))).toBe("coordination.path-mismatch");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Retained SDD evidence at the acceptance consumer (S9)
+ * ------------------------------------------------------------------------ */
+
+const RETAINED_WORKFLOW = "wf-consumers-retained";
+
+type RetainedSeat = { caller: ExecutionCaller; session: ExecutionSessionRef };
+
+type RetainedHandoffFixture = {
+  context: StoreContext;
+  harnessRoot: string;
+  worktreePath: string;
+  sourceSha: string;
+  baseSha: string;
+  coordinator: RetainedSeat;
+  plan: RetainedSeat;
+};
+
+/** One git command in a fixture repository; returns its trimmed stdout. */
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
+/** The reviewed Assignment a DB `prepare` seals: the C1 header block (every
+ * header the parser requires) pinned to THIS store's harness, workflow and
+ * plan, with the plan's own worktree as the reviewed checkout. */
+function writeRetainedAssignment(harnessRoot: string, worktreePath: string): string {
+  const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
+  const sddDir = join(harnessRoot, "sdd", RETAINED_PLAN);
+  mkdirSync(dirname(planPath), { recursive: true });
+  mkdirSync(sddDir, { recursive: true });
+  writeFileSync(planPath, `# ${RETAINED_PLAN}\n`, "utf8");
+  const headers: Record<string, string> = {
+    "Execution scope": "plan",
+    "Execute as": "project-manager",
+    Delegation: "allowed",
+    "Control harness root": harnessRoot,
+    "Workflow id": RETAINED_WORKFLOW,
+    "Plan id": RETAINED_PLAN,
+    "Plan Path": planPath,
+    "Worktree path": worktreePath,
+    "Working branch": `feature/${RETAINED_PLAN}`,
+    "SDD dir": sddDir,
+    "QA gate": "mandatory",
+    "Findings cleanup": "allow-residual",
+    "Prepare gate": "go",
+  };
+  const assignmentPath = join(harnessRoot, "assignments", `${RETAINED_PLAN}.md`);
+  mkdirSync(dirname(assignmentPath), { recursive: true });
+  writeFileSync(
+    assignmentPath,
+    `${Object.entries(headers)
+      .map(([header, value]) => `**${header}**: ${value}`)
+      .join("\n")}\n`,
+    "utf8",
+  );
+  return assignmentPath;
+}
+
+/** The three handoff evidence bodies of the retained plan, under the CONFIGURED
+ * SDD resolution of the fixture's control harness. */
+function retainedHandoffBodies(harnessRoot: string): { qc: string; consolidated: string; qa: string } {
+  const sddDir = resolveSddDir(harnessRoot, RETAINED_PLAN);
+  mkdirSync(join(sddDir, "review"), { recursive: true });
+  return {
+    qc: join(sddDir, "review", "qc1.md"),
+    consolidated: join(sddDir, "review", "qc.md"),
+    qa: join(sddDir, "qa.md"),
+  };
+}
+
+/** The plan token one seat reads right now (the CAS every call pins). */
+async function retainedPlanToken(context: StoreContext, seat: RetainedSeat): Promise<ExecutionToken> {
+  const read = await readExecutionPlan(domainContext(context, seat.caller), seat.session, RETAINED_PLAN);
+  return read.token;
+}
+
+/**
+ * A real Git control harness in its own temporary control root: the retained
+ * plan is registered, prepared from its reviewed Assignment, bound to its plan
+ * session (which claims the execution lease) and reported InReview — the state
+ * the DB handoff acceptance transition starts from. Nothing here is a stub: the
+ * authority is ACTIVE, the checkout is a real worktree and the evidence lives
+ * under the configured SDD dir.
+ */
+async function retainedHandoffFixture(label: string): Promise<RetainedHandoffFixture> {
+  const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
+  git(repoRoot, ["init", "-q", "-b", "main"]);
+  git(repoRoot, ["-c", "user.email=mstar@example.com", "-c", "user.name=mstar", "commit", "-q", "--allow-empty", "-m", "init"]);
+  const harnessRoot = join(repoRoot, ".mstar");
+  mkdirSync(harnessRoot, { recursive: true });
+  const context: StoreContext = { harnessDir: repoRoot };
+  const store = await initializeStore(context);
+  store.close();
+  const initialized = await initializeExecutionAuthority(context);
+  await registerCatalogEntity(
+    context,
+    {
+      kind: "plan",
+      id: RETAINED_PLAN,
+      title: `${RETAINED_PLAN} title`,
+      rootKind: "plans",
+      relativePath: `plans/${RETAINED_PLAN}.md`,
+    },
+    { operationId: `register-${label}`, actor: "execution-consumers.test" },
+  );
+
+  // The plan's own checkout: the source_sha a handoff pins is this HEAD.
+  const worktreePath = join(repoRoot, "wt-retained");
+  git(repoRoot, ["worktree", "add", "-q", "-b", `feature/${RETAINED_PLAN}`, worktreePath]);
+  writeFileSync(join(worktreePath, "slice.txt"), "reviewed slice\n", "utf8");
+  git(worktreePath, ["add", "-A"]);
+  git(worktreePath, ["-c", "user.email=mstar@example.com", "-c", "user.name=mstar", "commit", "-q", "-m", "feat: slice"]);
+  const sourceSha = git(worktreePath, ["rev-parse", "HEAD"]);
+  const baseSha = git(repoRoot, ["rev-parse", "HEAD"]);
+
+  const coordinatorCaller: ExecutionCaller = {
+    sessionId: "host-retained-coordinator",
+    role: "coordinator",
+    workflowId: RETAINED_WORKFLOW,
+    planId: null,
+  };
+  const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
+    entry: { id: RETAINED_WORKFLOW, type: "plan", started_at: TS, dir: `workflows/${RETAINED_WORKFLOW}` },
+    snapshot: {
+      schema_version: 1,
+      id: RETAINED_WORKFLOW,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      plans: [{ id: RETAINED_PLAN, title: `${RETAINED_PLAN} title`, file: `plans/${RETAINED_PLAN}.md`, status: "Todo" }],
+      delivery_kind: "development",
+      branch: { base: "main", source: `feature/${RETAINED_PLAN}`, target: "main" },
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${label}`,
+  });
+  const workflow = created.data.workflows[0]!;
+  const bound = await bindExecutionSession(domainContext(context, coordinatorCaller), {
+    workflowId: RETAINED_WORKFLOW,
+    planId: null,
+    role: "coordinator",
+    expected: workflow.workflowToken,
+    operationId: `bind-coordinator-${label}`,
+  });
+  // The plan's own token, read at the state the prepare runs against (the bind
+  // above moved the workflow revision, not the plan's).
+  const planTokenAtPrepare = (await readExecutionState(context)).data.workflows[0]!.planTokens[RETAINED_PLAN]!;
+  const coordinator: RetainedSeat = { caller: coordinatorCaller, session: bound.data };
+  await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
+    operationId: `prepare-${label}`,
+    session: coordinator.session,
+    expected: planTokenAtPrepare,
+    planId: RETAINED_PLAN,
+    operation: { kind: "prepare", assignmentPath: writeRetainedAssignment(harnessRoot, worktreePath) },
+  });
+
+  // The plan session's bind claims the execution lease of the plan's own scope.
+  const planCaller: ExecutionCaller = {
+    sessionId: "host-retained-plan",
+    role: "plan-pm",
+    workflowId: RETAINED_WORKFLOW,
+    planId: RETAINED_PLAN,
+  };
+  const planSession = await bindExecutionSession(domainContext(context, planCaller), {
+    workflowId: RETAINED_WORKFLOW,
+    planId: RETAINED_PLAN,
+    role: "plan-pm",
+    expected: await retainedPlanToken(context, coordinator),
+    operationId: `bind-plan-${label}`,
+  });
+  const plan: RetainedSeat = { caller: planCaller, session: planSession.data };
+  await progressExecutionPlan(domainContext(context, planCaller), {
+    operationId: `progress-${label}`,
+    session: plan.session,
+    expected: await retainedPlanToken(context, plan),
+    planId: RETAINED_PLAN,
+    operation: { kind: "progress", progress: { status: "InReview", summary: "reviewed", evidence_paths: [] } },
+  });
+  return { context, harnessRoot, worktreePath, sourceSha, baseSha, coordinator, plan };
+}
+
+/** One plan-session `handoff` of the retained fixture's plan. */
+async function retainedHandoff(
+  fixture: RetainedHandoffFixture,
+  bodies: { qc: string; consolidated: string; qa: string },
+  operationId: string,
+) {
+  return handoffExecutionPlan(domainContext(fixture.context, fixture.plan.caller), {
+    operationId,
+    session: fixture.plan.session,
+    expected: await retainedPlanToken(fixture.context, fixture.plan),
+    planId: RETAINED_PLAN,
+    operation: {
+      kind: "handoff",
+      evidence: handoffRequest(bodies, { sourceSha: fixture.sourceSha, baseSha: fixture.baseSha }),
+    },
+  });
+}
+
+/** One coordinator `accept` of the named handoff attempt. */
+async function retainedAccept(fixture: RetainedHandoffFixture, handoffId: string, operationId: string) {
+  return acceptExecutionPlan(domainContext(fixture.context, fixture.coordinator.caller), {
+    operationId,
+    session: fixture.coordinator.session,
+    expected: await retainedPlanToken(fixture.context, fixture.coordinator),
+    planId: RETAINED_PLAN,
+    operation: { kind: "accept", handoffId },
+  });
+}
+
+/**
+ * The acceptance transition, not the helpers: these cases drive the real DB
+ * `handoff` / `accept` verbs of a real fixture and assert what they RECORD and
+ * what they REFUSE.
+ */
+describe("retained evidence at the acceptance consumer", () => {
+  test("retained evidence: the handoff records the configured SDD bodies with their byte digests", async () => {
+    const fixture = await retainedHandoffFixture("retained-evidence-consumer-ok");
+    try {
+      const bodies = retainedHandoffBodies(fixture.harnessRoot);
+      const digests = {
+        qc: writeBody(bodies.qc, QC_BODY),
+        consolidated: writeBody(bodies.consolidated, CONSOLIDATED_BODY),
+        qa: writeBody(bodies.qa, QA_BODY),
+      };
+
+      const handed = await retainedHandoff(fixture, bodies, "handoff-retained-ok");
+      const handoff = handed.data.coordination!.handoff!;
+      // The consumer recorded the FILES at the configured SDD paths with the
+      // byte hashes it read from them — not a copy, not a digest of anything
+      // else.
+      expect(handoff.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
+      expect([handoff.qc.reports[0]!.sha256, handoff.qc.consolidated.sha256, handoff.qa.report.sha256]).toEqual([
+        digests.qc,
+        digests.consolidated,
+        digests.qa,
+      ]);
+      expect(handoff.state).toBe("submitted");
+
+      // The acceptance transition verifies exactly those digests, and the
+      // bodies are still the files it verified.
+      const accepted = await retainedAccept(fixture, handoff.id, "accept-retained-ok");
+      expect(accepted.data.coordination!.handoff!.state).toBe("accepted");
+      expect(readFileSync(bodies.qc, "utf8")).toEqual(QC_BODY);
+      expect(createHash("sha256").update(readFileSync(bodies.consolidated)).digest("hex")).toEqual(digests.consolidated);
+    } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("retained evidence: missing, escaped and edited bodies cannot be accepted by the consumer", async () => {
+    const fixture = await retainedHandoffFixture("retained-evidence-consumer-refusals");
+    try {
+      const bodies = retainedHandoffBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+
+      // (1) A body symlinked OUT of the plan's own areas is refused by the
+      // consumer's containment boundary, even though the link resolves to real
+      // bytes the digest step would happily read.
+      const outside = join(fixture.context.harnessDir, "outside-body.md");
+      writeBody(outside, "a body outside every plan area\n");
+      const escaped = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "escaped.md");
+      symlinkSync(outside, escaped);
+      const escapedRefusal = await refusalOf(() =>
+        retainedHandoff(fixture, { ...bodies, qa: escaped }, "handoff-retained-escaped"),
+      );
+      expect(escapedRefusal.code).toBe("coordination.path-mismatch");
+      rmSync(escaped);
+
+      // (2) A missing body never reaches the acceptance work: the request gate
+      // refuses the path with nothing behind it.
+      rmSync(bodies.qa);
+      const missingRefusal = await refusalOf(() => retainedHandoff(fixture, bodies, "handoff-retained-missing"));
+      expect(missingRefusal.code).toBe("coordination.invalid-input");
+      writeBody(bodies.qa, QA_BODY);
+
+      // (3) The unchanged bodies hand off, and the attempt is recorded.
+      const handed = await retainedHandoff(fixture, bodies, "handoff-retained-sealed");
+      const handoffId = handed.data.coordination!.handoff!.id;
+
+      // (4) Bytes edited AFTER the seal cannot be accepted: `accept` re-reads
+      // the pinned paths and refuses — the attempt stays `submitted`.
+      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited\n`);
+      const editedRefusal = await refusalOf(() => retainedAccept(fixture, handoffId, "accept-retained-edited"));
+      expect(editedRefusal.code).toBe("coordination.evidence-stale");
+      const afterEdit = await readExecutionPlan(
+        domainContext(fixture.context, fixture.coordinator.caller),
+        fixture.coordinator.session,
+        RETAINED_PLAN,
+      );
+      expect(afterEdit.data.coordination!.handoff!.state).toBe("submitted");
+
+      // (5) A body that vanished after the seal is unavailable too — the same
+      // refusal, never a phantom approval.
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      rmSync(bodies.qc);
+      const removedRefusal = await refusalOf(() => retainedAccept(fixture, handoffId, "accept-retained-removed"));
+      expect(removedRefusal.code).toBe("coordination.evidence-stale");
+
+      // (6) Restoring the bodies lets the SAME attempt through: the refusals
+      // above are the acceptance path's verdict on the evidence, not a stuck
+      // record.
+      writeBody(bodies.qc, QC_BODY);
+      const accepted = await retainedAccept(fixture, handoffId, "accept-retained-restored");
+      expect(accepted.data.coordination!.handoff!.state).toBe("accepted");
+    } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
   });
 });
