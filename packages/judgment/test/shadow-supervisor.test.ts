@@ -63,13 +63,13 @@ describe("trusted shadow supervisor", () => {
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());
     const result = await runShadowSupervisor({ ...args, runRoot: args.root, runId: "run-1", evidenceClass: "component", baseline: args.baseline }, undefined, testLauncher);
-    expect(result.failures).toEqual([]);
+    expect(result.failures).toContain("probe-lifecycle-invalid"); // Confinement probe has no recorded provider response.
     expect(result.evidenceClass).toBe("component");
     expect(result.w5).toBe(false);
-    expect(result.metrics.childEvents).toBe(5);
+    expect(result.metrics.childEvents).toBe(4);
     expect(result.metrics.completedUnits).toBe(1);
     expect(result.receipts[0]?.jevWorkCredit).toBe(0);
-    expect(result.childEvents.map((event) => event.type)).toEqual(["baseline-frozen", "start", "baseline-frozen", "request", "complete"]);
+    expect(result.childEvents.map((event) => event.type)).toEqual(["start", "baseline-frozen", "request", "complete"]);
   });
 
   test("rejects early reveal, foreign run identity, forbidden mounts, and named-host evidence", async () => {

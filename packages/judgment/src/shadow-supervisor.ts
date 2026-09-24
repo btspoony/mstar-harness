@@ -199,7 +199,7 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
   const baseline = freezeBaseline({ runId: input.runId, ...input.baseline });
   atomicJson(resolve(runRoot, "baseline.json"), baseline);
   const started = performance.now();
-  const events: ProbeEvent[] = [{ type: "baseline-frozen", at: started, runId: input.runId }];
+  const events: ProbeEvent[] = [];
   const receipts: WorkUnitReceipt[] = [];
   const failures: string[] = [];
   const packSha256 = createHash("sha256").update(canonicalJsonBytes(pack)).digest("hex");
@@ -213,6 +213,7 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
   let elapsedMs = 0;
   let outputBytes = 0;
   let childResult: ApprovedChildResult | undefined;
+  let providerRecorded = false;
   const childPromise = runApprovedChild(input.child, input.runId, input.mountPlan, signal, launcher);
   const requestPromise = mailbox.readNext(mailboxController.signal);
   try {
@@ -223,7 +224,6 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
     if (first.kind === "request" && first.request !== null) {
       const request = first.request;
       mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "pending" });
-      events.push({ type: "request", at: performance.now(), runId: input.runId });
       const requestPack = Buffer.from(request.packBytes, "base64");
       if (request.pilotDigest !== digest(pilot) || !requestPack.equals(canonicalJsonBytes(pack))) {
         mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "invalid", code: "jev.foreign-request" });
@@ -265,7 +265,7 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
             mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "cancelled", code: "jev.review-cancelled" });
           } else {
             mailbox.publishStatus({ runId: input.runId, requestId: request.requestId, status: "recorded" });
-            events.push({ type: "complete", at: performance.now(), runId: input.runId });
+            providerRecorded = true;
           }
         } catch (error) {
           const failureCode = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" && /^[a-z0-9][a-z0-9.-]{0,95}$/.test(error.code) ? error.code : "jev.evaluation-failed";
@@ -295,11 +295,8 @@ export async function runShadowSupervisor(input: ShadowRunInput, signal = input.
     outputBytes = childResult.outputBytes;
     if (childResult.exitCode !== 0) failures.push(`probe-child-exit-${childResult.exitCode ?? "signal"}`);
     const childTypes = childResult.events.map((event) => event.type);
-    const requestIndex = childTypes.indexOf("request");
-    const completeIndex = childTypes.indexOf("complete");
-    const baselineIndex = childTypes.indexOf("baseline-frozen");
-    if (childTypes[0] !== "start" || requestIndex < 0 || completeIndex <= requestIndex || baselineIndex < 0) failures.push("probe-lifecycle-invalid");
-    if (requestIndex >= 0 && baselineIndex > requestIndex) failures.push("jev.early-reveal-rejected");
+    if (!providerRecorded || childResult.exitCode !== 0 || childTypes.join(",") !== "start,baseline-frozen,request,complete") failures.push("probe-lifecycle-invalid");
+    if (childTypes.includes("request") && childTypes.indexOf("baseline-frozen") > childTypes.indexOf("request")) failures.push("jev.early-reveal-rejected");
   }
   if (signal.aborted && !events.some((event) => event.type === "cancelled")) events.push({ type: "cancelled", at: performance.now(), runId: input.runId });
   const consumption = input.baseline.originalConsumption;

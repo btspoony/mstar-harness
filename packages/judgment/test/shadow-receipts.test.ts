@@ -6,7 +6,6 @@ const baselineInput = () => ({ runId: "run-1", inventory: [{ id: "unit-1", revis
 const consumed = { unitId: "unit-1", outputId: "output-1", consumed: true, consumedAt: 1 };
 const receipt = (disposition: WorkUnitReceipt["disposition"], unitId = "unit-1", scopeSha256 = hash, packSha256 = hash, originalConsumption: unknown | null = disposition === "completed" ? consumed : null) => recordWorkUnitDisposition({ runId: "run-1", unitId, packId: "pack-1", packSha256, scopeSha256, disposition, originalConsumption, attemptId: "attempt-1" });
 const validEvents = [
-  { type: "baseline-frozen", runId: "run-1", at: 0 },
   { type: "start", runId: "run-1", at: 1 },
   { type: "baseline-frozen", runId: "run-1", at: 2 },
   { type: "request", runId: "run-1", at: 3 },
@@ -15,6 +14,15 @@ const validEvents = [
 const assess = (baseline: FrozenBaseline, receipts: readonly WorkUnitReceipt[], requiredUnitIds = ["unit-1"], originalConsumption = baselineInput().originalConsumption, scopeSha256 = hash, packSha256 = hash, originalSeatOutputs = baselineInput().seatOutputs) => assessShadowRun({ baseline, receipts, childEvents: validEvents, evidenceClass: "component", elapsedMs: 1, packId: "pack-1", packSha256, scopeSha256, requiredUnitIds, originalConsumption, originalSeatOutputs });
 
 describe("shadow baseline and work receipts", () => {
+  test("requires child start, baseline, request, and genuine completion in order", () => {
+    const baseline = freezeBaseline(baselineInput());
+    const input = { baseline, receipts: [receipt("blocked")], evidenceClass: "component" as const,
+      elapsedMs: 1, packId: "pack-1", packSha256: hash, scopeSha256: hash, requiredUnitIds: ["unit-1"],
+      originalConsumption: baselineInput().originalConsumption, originalSeatOutputs: baselineInput().seatOutputs };
+    expect(assessShadowRun({ ...input, childEvents: validEvents }).failures).toEqual([]);
+    expect(assessShadowRun({ ...input, childEvents: [validEvents[0]!, validEvents[2]!, validEvents[1]!, validEvents[3]!] }).failures).toContain("probe-lifecycle-invalid");
+    expect(assessShadowRun({ ...input, childEvents: [...validEvents.slice(0, 3), { type: "error", runId: "run-1", at: 4 }] }).failures).toContain("probe-lifecycle-invalid");
+  });
   test("freezes a detached, deeply immutable baseline and detects tampering", () => {
     const input = baselineInput();
     const frozen = freezeBaseline(input);
