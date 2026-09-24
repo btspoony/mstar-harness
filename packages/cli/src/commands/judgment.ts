@@ -31,10 +31,11 @@ export function judgmentExitCode(result: JudgmentCliResult, signal?: NodeJS.Sign
   if (signal === "SIGINT") return 130;
   if (signal === "SIGTERM") return 143;
   if (result.status === "disabled" || result.status === "recorded") return 0;
+  if (result.status === "invalid") return 2;
   return result.status === "cancelled" ? 130 : 1;
 }
 
-type ReviewAdviceOptions = { file?: string; stdin?: boolean; pilot: string; workspace?: string };
+type ReviewAdviceOptions = { file?: string; stdin?: boolean; pilot: string; workspace?: string; json?: boolean };
 
 export function registerJudgmentCommands(program: Command): void {
   const judgment = program.command("judgment").description("Synthetic-only judgment services");
@@ -45,6 +46,7 @@ export function registerJudgmentCommands(program: Command): void {
     .option("--stdin", "Read review decision pack JSON from stdin")
     .requiredOption("--pilot <path>", "Explicit synthetic-only pilot JSON (inside the workspace)")
     .option("--workspace <path>", "Workspace boundary (default: current directory)")
+    .option("--json", "Write the structured JSON result envelope")
     .exitOverride()
     .action(async (options: ReviewAdviceOptions) => {
       if ((options.file === undefined) === (options.stdin !== true)) {
@@ -77,9 +79,11 @@ export function registerJudgmentCommands(program: Command): void {
       try {
         const config = resolveJudgmentConfig(cwd, workspace);
         let channel: EvaluatorChannel | null = null;
-        if (config.state === "enabled") {
+        if (config.state === "enabled" &&
+            process.env.JEV_REQUESTS_DIR === "/mnt/requests" &&
+            process.env.JEV_STATUS_PATH === "/mnt/status.json") {
           try { channel = await connectEvaluatorChannel(invocation, controller.signal); }
-          catch { /* The runtime reports a stable unavailable channel status. */ }
+          catch { /* Missing external attestation is reported as an unavailable channel. */ }
         }
         result = await runReviewAdvice(invocation, controller.signal, channel);
       } catch {

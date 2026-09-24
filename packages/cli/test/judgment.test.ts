@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { judgmentExitCode } from "../src/commands/judgment";
@@ -49,6 +49,33 @@ describe("mstar judgment review-advice", () => {
     });
     expect(existsSync(join(cwd, ".jev-mailbox"))).toBe(false);
   });
+  test("accepts --json and refuses an unconfined enabled mailbox before reading inputs", () => {
+    const cwd = workspace();
+    writeFileSync(join(cwd, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    const result = run(["--file", "missing-pack.json", "--pilot", "missing-pilot.json", "--json"], cwd);
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      schema: "mstar.judgment-cli/v1",
+      status: "unavailable",
+      code: "jev.channel-unavailable",
+      advice: null,
+    });
+    expect(existsSync(join(cwd, ".jev-mailbox"))).toBe(false);
+  });
+  test("invalid runtime configuration emits one JSON envelope and exits 2", () => {
+    const cwd = workspace();
+    writeFileSync(join(cwd, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=assist\n");
+    const result = run(["--file", "pack.json", "--pilot", "pilot.json", "--json"], cwd);
+    expect(result.status).toBe(2);
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      schema: "mstar.judgment-cli/v1",
+      status: "invalid",
+      code: "jev.assist-not-qualified",
+      advice: null,
+    });
+  });
 
   test("review-advice help remains a successful help request rather than a usage failure", () => {
     const result = run(["--help"], workspace());
@@ -85,5 +112,6 @@ describe("mstar judgment review-advice", () => {
     expect(judgmentExitCode({ ...result, status: "cancelled" })).toBe(130);
     expect(judgmentExitCode(result, "SIGINT")).toBe(130);
     expect(judgmentExitCode(result, "SIGTERM")).toBe(143);
+    expect(judgmentExitCode({ ...result, status: "invalid" })).toBe(2);
   });
 });

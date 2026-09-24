@@ -38,6 +38,10 @@ describe("TypeSafe response normalization", () => {
     const valid = normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": nearSum } }), request);
     expect(valid.answers["a05_task-1"].type).toBe("choice");
     expect(() => normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": { ...nearSum, choice: "insufficient_evidence" } } }), request)).toThrow("maximal label");
+    expect(() => normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": {
+      type: "choice", choice: "same_cause",
+      probabilities: { same_cause: 0.4999995, different_cause: 0.5000005, insufficient_evidence: 0 }, confidence: 0.5,
+    } } }), request)).toThrow("maximal label");
     expect(() => normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": { ...baseChoice, probabilities: { same_cause: 0.8, different_cause: 0.1, insufficient_evidence: 0.100002 } } } }), request)).toThrow("sum to 1");
   });
 
@@ -60,10 +64,16 @@ describe("TypeSafe response normalization", () => {
     expect(() => normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { score: { ...score, score: 0.61 } } }), scoreRequest)).toThrow("expectation");
   });
 
-  test("uses null for unknown usage and rejects model identity drift", () => {
+  test("keeps genuinely absent usage unknown and rejects malformed present usage", () => {
     const request = syntheticRequest({ "a05_task-1": A05_QUESTION });
     expect(normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": baseChoice } }), request).usage).toBeNull();
-    expect(normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": baseChoice }, usage: { input_tokens: "unknown", output_tokens: 2 } }), request).usage).toBeNull();
+    for (const usage of [
+      { input_tokens: "unknown", output_tokens: 2 },
+      { input_tokens: -1, output_tokens: 2 },
+      { input_tokens: 1, output_tokens: 2, extra: 3 },
+    ]) {
+      expect(() => normalizeTypeSafeResponse(encode({ model: NATIVE_MODEL, answers: { "a05_task-1": baseChoice }, usage }), request)).toThrow("usage");
+    }
     expect(() => normalizeTypeSafeResponse(encode({ model: "jev-latest", answers: { "a05_task-1": baseChoice } }), request)).toThrow("observed model");
   });
 });

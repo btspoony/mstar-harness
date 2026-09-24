@@ -49,7 +49,7 @@ function validateAnswer(value: unknown, question: CanonicalQuestion, field: stri
     const probabilities = distribution(value.probabilities, keys, `${field}.probabilities`);
     if (typeof value.choice !== "string" || !keys.includes(value.choice)) invalid(`${field}.choice is not an allowed label`);
     const maximum = Math.max(...Object.values(probabilities));
-    if (probabilities[value.choice] < maximum - PROTOCOL_NUMERIC_TOLERANCE) invalid(`${field}.choice is not a maximal label`);
+    if (probabilities[value.choice] !== maximum) invalid(`${field}.choice is not a maximal label`);
     return { type: "choice", choice: value.choice, probabilities, confidence: confidence(value.confidence) };
   }
   if (question.type === "noul") {
@@ -77,10 +77,10 @@ function validateAnswer(value: unknown, question: CanonicalQuestion, field: stri
   return { type: "score", score: value.score, legend: expectedLegend, probabilities, confidence: confidence(value.confidence) };
 }
 
-function normalizeUsage(value: unknown): NormalizedTypeSafeResponse["usage"] {
+function normalizeUsage(value: unknown): NonNullable<NormalizedTypeSafeResponse["usage"]> {
   if (!isRecord(value) || Object.keys(value).length !== 2 ||
       !Number.isSafeInteger(value.input_tokens) || !Number.isSafeInteger(value.output_tokens) ||
-      (value.input_tokens as number) < 0 || (value.output_tokens as number) < 0) return null;
+      (value.input_tokens as number) < 0 || (value.output_tokens as number) < 0) invalid("usage must contain non-negative safe input_tokens and output_tokens");
   return { inputTokens: value.input_tokens as number, outputTokens: value.output_tokens as number };
 }
 
@@ -107,5 +107,9 @@ export function normalizeTypeSafeResponse(bytes: Uint8Array, request: PreparedRe
     if (!question) invalid(`request has no schema for ${id}`);
     answers[id] = validateAnswer(answerMap[id], question, `answers.${id}`);
   }
-  return Object.freeze({ model: NATIVE_MODEL, answers: Object.freeze(answers), usage: normalizeUsage(parsed.usage) });
+  return Object.freeze({
+    model: NATIVE_MODEL,
+    answers: Object.freeze(answers),
+    usage: Object.hasOwn(parsed, "usage") ? normalizeUsage(parsed.usage) : null,
+  });
 }

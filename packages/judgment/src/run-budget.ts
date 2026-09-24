@@ -227,6 +227,33 @@ function lockOwner(path: string): { pid: number; token: string } | null {
     return null;
   }
 }
+function reclaimStaleLock(path: string, directory: string, observed: { pid: number; token: string }): void {
+  const guardPath = `${path}.reclaim`;
+  const token = randomUUID();
+  const owner = `${process.pid}:${token}\n`;
+  let guard: number;
+  try {
+    guard = openSync(guardPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+    throw error;
+  }
+  try {
+    writeFileSync(guard, owner, "utf8");
+    fsyncSync(guard);
+    const current = lockOwner(path);
+    if (current?.pid === observed.pid && current.token === observed.token && !pidIsAlive(current.pid)) {
+      unlinkSync(path);
+      fsyncDirectory(directory);
+    }
+  } finally {
+    closeSync(guard);
+    if (readFileSync(guardPath, "utf8") === owner) {
+      unlinkSync(guardPath);
+      fsyncDirectory(directory);
+    }
+  }
+}
 
 async function withExclusiveLock<T>(directory: string, operation: () => T): Promise<T> {
   const path = join(directory, ".reservation.lock");
@@ -250,16 +277,8 @@ async function withExclusiveLock<T>(directory: string, operation: () => T): Prom
       }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const current = lockOwner(path);
-      if (current && !pidIsAlive(current.pid)) {
-        try {
-          unlinkSync(path);
-          fsyncDirectory(directory);
-        } catch (unlinkError) {
-          if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
-        }
-      } else if (Date.now() >= deadline) {
-        fail("run-budget.lock-busy", "Timed out waiting for the run reservation lock");
-      }
+      if (current && !pidIsAlive(current.pid)) reclaimStaleLock(path, directory, current);
+      if (Date.now() >= deadline) fail("run-budget.lock-busy", "Timed out waiting for the run reservation lock");
       const { promise, resolve: resume } = Promise.withResolvers<void>();
       setTimeout(resume, LOCK_RETRY_MS);
       await promise;

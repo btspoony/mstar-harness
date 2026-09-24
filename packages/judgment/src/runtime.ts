@@ -14,6 +14,7 @@ import { buildA05Request, canonicalJsonBytes, type PreparedRequest } from "./rev
 import { normalizeTypeSafeResponse, type NormalizedTypeSafeResponse } from "./normalize.js";
 import { sendNativeRequest, type NativeTransportInput, type NativeTransportResult } from "./typesafe.js";
 import { createRunBudgetPolicy, reserveRunBudget, RunBudgetError, type ReusedRunResult, type RunReservation } from "./run-budget.js";
+import { isAttestedEvaluatorChannel } from "./evaluator-channel-trust.js";
 
 const CLI_SCHEMA = "mstar.judgment-cli/v1" as const;
 const RESULT_SCHEMA = "mstar.judgment-result/v1" as const;
@@ -98,6 +99,7 @@ export type RuntimeEffects = Readonly<{
   resolveConfig?: typeof resolveJudgmentConfig;
   readFile?: (path: string, maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
   readStdin?: (maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
+  isStdinTTY?: () => boolean;
 }>;
 
 export class JudgmentRuntimeError extends Error {
@@ -234,6 +236,7 @@ function invocationIsValid(invocation: JudgmentInvocation): boolean {
 
 function channelIsValid(channel: EvaluatorChannel | null): channel is EvaluatorChannel {
   return channel !== null && typeof channel === "object" &&
+    isAttestedEvaluatorChannel(channel) &&
     typeof channel.submit === "function" && typeof channel.cancel === "function";
 }
 
@@ -262,6 +265,7 @@ export async function runReviewAdvice(
   if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
 
   const readFile = effects.readFile ?? ((path, maxBytes, readSignal) => fileBytes(path, maxBytes, config.workspace, readSignal));
+  let collectionDeadline: NodeJS.Timeout | undefined;
   const collectionController = new AbortController();
   const abortCollectionFromCaller = () => collectionController.abort("review-cancelled");
   signal.addEventListener("abort", abortCollectionFromCaller, { once: true });
@@ -306,6 +310,7 @@ export async function runReviewAdvice(
       return cliResult("invalid", "jev.pilot-config-mismatch");
     }
     const maxPackBytes = pilot.limits.maxPackBytes;
+    collectionDeadline = setTimeout(() => collectionController.abort("deadline"), pilot.limits.timeoutMs);
     let packBytes: Uint8Array;
     try {
       assertConfigCurrent();
@@ -313,12 +318,14 @@ export async function runReviewAdvice(
         const packPath = workspaceInputPath(config.cwd, config.workspace, invocation.input.path);
         packBytes = await raceWithSignal(Promise.resolve(readFile(packPath, maxPackBytes, collectionController.signal)), collectionController.signal);
       } else {
+        if (effects.isStdinTTY?.() ?? process.stdin.isTTY === true) throw new JudgmentRuntimeError("jev.stdin-tty", "TTY stdin cannot be used as a review pack source");
         packBytes = await raceWithSignal(Promise.resolve((effects.readStdin ?? stdinBytes)(maxPackBytes, collectionController.signal)), collectionController.signal);
       }
       assertConfigCurrent();
       if (packBytes.byteLength > maxPackBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
     } catch (error) {
       if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
+      if (collectionController.signal.reason === "deadline") return cliResult("unavailable", "jev.deadline");
       if (collectionController.signal.reason === "revoked") return cliResult("unavailable", "jev.revoked");
       if (error instanceof JudgmentRuntimeError) return cliResult("invalid", error.code);
       return cliResult("invalid", "jev.pack-unavailable");
@@ -381,6 +388,7 @@ export async function runReviewAdvice(
       controller.signal.removeEventListener("abort", cancelChannel);
     }
   } finally {
+    if (collectionDeadline !== undefined) clearTimeout(collectionDeadline);
     stopWatchingConfig();
   }
 }
