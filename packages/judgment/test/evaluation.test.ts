@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clopperPearsonLower, classifyOutcome, summarizeQualification, type QualificationRow } from "../src/evaluation.js";
+import { clopperPearsonLower, classifyOutcome, selectDevelopmentBand, summarizeQualification, type CalibrationObservation, type QualificationRow } from "../src/evaluation.js";
 
 const row = (overrides: Partial<QualificationRow> = {}): QualificationRow => ({ groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, ...overrides });
 
@@ -41,6 +41,19 @@ describe("deterministic qualification metrics", () => {
     expect(summary.outcomeCounts["transport-failure"]).toBe(1);
     expect(summary.unissuedReasons.cancellation).toBe(1);
     expect(summary.endpoints.usefulSameRecall).toMatchObject({ successes: 0, total: 3 });
+  });
+  test("development bands require fifteen correct same decisions and zero dangerous false positives", () => {
+    const good: CalibrationObservation[] = Array.from({ length: 15 }, (_, i) => ({
+      groupId: `g${i}`, gold: "same_cause", choice: "same_cause", topProbability: 0.9, confidence: 0.86,
+    }));
+    const candidates = [
+      { id: "b0", same: [0.75, 0.70] as const, different: [0.6, 0.6] as const, insufficient: [0.5, 0.5] as const },
+      { id: "b1", same: [0.85, 0.8] as const, different: [0.7, 0.65] as const, insufficient: [0.6, 0.55] as const },
+    ];
+    const dangerous: CalibrationObservation = { groupId: "fp", gold: "different_cause", choice: "same_cause", topProbability: 0.8, confidence: 0.75 };
+    expect(selectDevelopmentBand([...good, dangerous], candidates).band?.id).toBe("b1");
+    expect(selectDevelopmentBand(good.slice(1), candidates).band).toBeNull();
+    expect(selectDevelopmentBand([...good, { ...dangerous, topProbability: 0.95, confidence: 0.85 }], candidates).band).toBeNull();
   });
   test("replayed raw rows have byte-for-byte deterministic aggregate output", () => {
     const rows = [row(), row({ groupId: "g2", variantId: "v1", gold: "different_cause", rawLabel: "different_cause" })];

@@ -23,6 +23,233 @@ export type QualificationRow = Readonly<{
   outputTokens?: number | null;
   costUsd?: number | null;
 }>;
+export type CalibrationBand = Readonly<{ id: string; same: readonly [number, number]; different: readonly [number, number]; insufficient: readonly [number, number] }>;
+export type CalibrationObservation = Readonly<{
+  groupId: string;
+  gold: GoldLabel;
+  choice: A05Label | null;
+  topProbability: number | null;
+  confidence: number | null;
+}>;
+/** Provider-visible pair IDs must be opaque, never cohort/run/shard labels. */
+export function developmentPairId(variantId: string): string {
+  if (!/^[a-f0-9]{32}$/.test(variantId)) throw new TypeError("qualification.variant-identity-invalid");
+  return `pair-${variantId}`;
+}
+
+/** The frozen development-only rule; no unobserved response can count toward an accepted decision. */
+export function selectDevelopmentBand(
+  observations: readonly CalibrationObservation[],
+  candidates: readonly CalibrationBand[],
+  minimumCorrectSame = 15,
+): Readonly<{ band: CalibrationBand | null; candidates: readonly Readonly<{ id: string; acceptedCorrectSame: number; dangerousFalsePositives: number; acceptedDecisions: number; admissible: boolean }>[] }> {
+  const groups = new Set<string>();
+  for (const row of observations) {
+    if (groups.has(row.groupId) || !row.groupId || !["same_cause", "different_cause", "insufficient_evidence", "unresolved"].includes(row.gold) ||
+        row.choice !== null && !["same_cause", "different_cause", "insufficient_evidence"].includes(row.choice) ||
+        row.choice !== null && (row.topProbability === null || row.confidence === null ||
+          !Number.isFinite(row.topProbability) || !Number.isFinite(row.confidence) ||
+          row.topProbability < 0 || row.topProbability > 1 || row.confidence < 0 || row.confidence > 1)) {
+      throw new TypeError("qualification.calibration-observation-invalid");
+    }
+    groups.add(row.groupId);
+  }
+  let selected: CalibrationBand | null = null;
+  let maximum = -1;
+  const results = candidates.map((candidate) => {
+    let acceptedCorrectSame = 0, dangerousFalsePositives = 0, acceptedDecisions = 0;
+    for (const row of observations) {
+      if (row.choice === null || row.topProbability === null || row.confidence === null || row.gold === "unresolved") continue;
+      const thresholds = row.choice === "same_cause" ? candidate.same : row.choice === "different_cause" ? candidate.different : candidate.insufficient;
+      if (row.topProbability < thresholds[0] || row.confidence < thresholds[1]) continue;
+      if (row.choice === "same_cause") {
+        if (row.gold === "same_cause") acceptedCorrectSame++;
+        else dangerousFalsePositives++;
+      }
+      if (row.choice !== "insufficient_evidence") acceptedDecisions++;
+    }
+    const admissible = dangerousFalsePositives === 0 && acceptedCorrectSame >= minimumCorrectSame;
+    if (admissible && acceptedDecisions >= maximum) {
+      maximum = acceptedDecisions;
+      selected = candidate; // Frozen candidates are ordered b0..b4; a tie takes the stricter band.
+    }
+    return { id: candidate.id, acceptedCorrectSame, dangerousFalsePositives, acceptedDecisions, admissible };
+  });
+  return { band: selected, candidates: results };
+}
+
+export type FreezeCorpusGroup = Readonly<{
+  id: string;
+  split: string;
+  lineageId: string;
+  causalClusterId: string;
+  eligible?: boolean;
+  quarantined?: boolean;
+  quarantineReason?: string;
+  variants: readonly Readonly<{ id: string; primary?: boolean }>[];
+}>;
+
+/** Validates the assignment denominator and reports only explicitly quarantined cross-cohort clusters. */
+export type FreezeClusterCollision = Readonly<{ kind: "lineage" | "causal"; clusterId: string; groupIds: readonly string[] }>;
+export function validateFreezeGroups(
+  groups: readonly FreezeCorpusGroup[],
+  assignments: Readonly<Record<string, unknown>>,
+  quarantinedGroupIds: ReadonlySet<string> = new Set(),
+): FreezeClusterCollision[] {
+  const groupIds = new Set<string>();
+  const lineages = new Map<string, Array<{ id: string; cohort: string }>>();
+  const causalClusters = new Map<string, Array<{ id: string; cohort: string }>>();
+  for (const group of groups) {
+    if (!group || typeof group.id !== "string" || !group.id || groupIds.has(group.id) ||
+        typeof group.lineageId !== "string" || !group.lineageId ||
+        typeof group.causalClusterId !== "string" || !group.causalClusterId) {
+      throw new TypeError("Freeze corpus group integrity failure");
+    }
+    groupIds.add(group.id);
+    const cohort = assignments[group.id];
+    if (cohort !== "development" && cohort !== "holdout" && cohort !== "temporal") {
+      throw new TypeError("Freeze cohort assignment missing or invalid");
+    }
+    if (group.split !== cohort) throw new TypeError("Freeze corpus/split cohort mismatch");
+    for (const [clusters, id] of [[lineages, group.lineageId], [causalClusters, group.causalClusterId]] as const) {
+      const members = clusters.get(id) ?? [];
+      members.push({ id: group.id, cohort });
+      clusters.set(id, members);
+    }
+  }
+  if (groups.length === 0 || Object.keys(assignments).length !== groupIds.size ||
+      Object.keys(assignments).some((id) => !groupIds.has(id))) {
+    throw new TypeError("Freeze group denominator incomplete or duplicated");
+  }
+  const quarantinedCollisions: FreezeClusterCollision[] = [];
+  for (const [kind, clusters] of [["lineage", lineages], ["causal", causalClusters]] as const) {
+    for (const [clusterId, members] of clusters) {
+      if (new Set(members.map((member) => member.cohort)).size > 1) {
+        if (members.some((member) => !quarantinedGroupIds.has(member.id))) {
+          throw new TypeError("Freeze lineage/causal cluster crosses cohorts");
+        }
+        quarantinedCollisions.push({ kind, clusterId, groupIds: members.map((member) => member.id) });
+      }
+    }
+  }
+  return quarantinedCollisions;
+}
+
+export type FreezeQuarantine = Readonly<{
+  excludedGroupIds?: readonly string[];
+  collisions?: readonly Readonly<{
+    kind?: string;
+    groupIds?: readonly string[];
+    sourceSlots?: readonly string[];
+    rawLineageId?: string;
+    rawCausalClusterId?: string;
+    lineageId?: string;
+    causalClusterId?: string;
+    assignedCohorts?: Readonly<Record<string, unknown>>;
+    reason?: string;
+  }>[];
+}>;
+
+export type FreezeEligibleDenominators = Readonly<{
+  developmentGroups?: number;
+  holdoutGroups?: number;
+  totalGroups?: number;
+  developmentPrimaryCases?: number;
+  holdoutPrimaryCases?: number;
+  totalPrimaryCases?: number;
+}>;
+
+/** Checks the one protocol-declared collision and computes eligible counts separately from assignment counts. */
+export function validateFreezeQuarantine(
+  groups: readonly FreezeCorpusGroup[],
+  assignments: Readonly<Record<string, unknown>>,
+  quarantine: FreezeQuarantine | undefined,
+  eligibleDenominators: FreezeEligibleDenominators | undefined,
+): Set<string> {
+  if (!quarantine || !Array.isArray(quarantine.excludedGroupIds) || quarantine.excludedGroupIds.length !== 2 ||
+      new Set(quarantine.excludedGroupIds).size !== 2 || !Array.isArray(quarantine.collisions) || quarantine.collisions.length !== 1) {
+    throw new TypeError("Freeze quarantine record missing or invalid");
+  }
+  const excluded = new Set(quarantine.excludedGroupIds);
+  const collision = quarantine.collisions[0]!;
+  if (collision.kind !== "lineage-and-causal" ||
+      !Array.isArray(collision.groupIds) || collision.groupIds.length !== 2 ||
+      new Set(collision.groupIds).size !== 2 || collision.groupIds.some((id: string) => !excluded.has(id)) ||
+      !Array.isArray(collision.sourceSlots) ||
+      collision.sourceSlots.length !== 2 ||
+      !collision.sourceSlots.includes("shard-3/group-010") ||
+      !collision.sourceSlots.includes("shard-4/group-025") ||
+      collision.rawLineageId !== "lineage-library-reservation" ||
+      collision.rawCausalClusterId !== "cluster-library-reservation" ||
+      typeof collision.reason !== "string" || !collision.reason.trim()) {
+    throw new TypeError("Freeze quarantine collision record invalid");
+  }
+  const byId = new Map(groups.map((group) => [group.id, group]));
+  const cohortCounts = { development: 0, holdout: 0 };
+  const eligibleGroups = { development: 0, holdout: 0 };
+  const primaryCases = { development: 0, holdout: 0 };
+  for (const [id, cohort] of Object.entries(assignments)) {
+    if (cohort === "development" || cohort === "holdout") cohortCounts[cohort]++;
+    const group = byId.get(id)!;
+    const shouldBeExcluded = excluded.has(id);
+    const invalidEligibility = shouldBeExcluded
+      ? group.eligible !== false || group.quarantined !== true || group.quarantineReason !== collision.reason
+      : group.eligible === false || group.quarantined === true || Boolean(group.quarantineReason);
+    if (!Array.isArray(group.variants) || group.variants.length < 1 || group.variants.length > 2 ||
+        group.variants.filter((variant) => variant.primary).length !== 1 || invalidEligibility) {
+      throw new TypeError("Freeze quarantine corpus flags inconsistent");
+    }
+    if (shouldBeExcluded && cohort !== collision.assignedCohorts?.[id]) throw new TypeError("Freeze quarantine cohort changed");
+    if (!shouldBeExcluded && group.quarantineReason) throw new TypeError("Freeze non-quarantine group has quarantine reason");
+    if (!shouldBeExcluded && (cohort === "development" || cohort === "holdout")) {
+      eligibleGroups[cohort]++;
+      primaryCases[cohort] += group.variants.filter((variant) => variant.primary).length;
+    }
+  }
+  const collisionGroups = collision.groupIds.map((id: string) => byId.get(id));
+  if (excluded.size !== collision.groupIds.length || collisionGroups.some((group: FreezeCorpusGroup | undefined) => !group) ||
+      collisionGroups.some((group: FreezeCorpusGroup | undefined) => !group || group.lineageId !== collision.lineageId || group.causalClusterId !== collision.causalClusterId) ||
+      collisionGroups[0]!.split === collisionGroups[1]!.split ||
+      !["development", "holdout"].includes(collision.assignedCohorts?.[collision.groupIds[0]!] as string) ||
+      !["development", "holdout"].includes(collision.assignedCohorts?.[collision.groupIds[1]!] as string) ||
+      Object.keys(collision.assignedCohorts ?? {}).length !== 2 ||
+      cohortCounts.development !== 60 || cohortCounts.holdout !== 300 ||
+      eligibleGroups.development !== 59 || eligibleGroups.holdout !== 299 ||
+      primaryCases.development !== 59 || primaryCases.holdout !== 299) {
+    throw new TypeError("Freeze assignment or eligible denominator mismatch");
+  }
+  if (!eligibleDenominators || eligibleDenominators.developmentGroups !== 59 ||
+      eligibleDenominators.holdoutGroups !== 299 || eligibleDenominators.totalGroups !== 358 ||
+      eligibleDenominators.developmentPrimaryCases !== 59 ||
+      eligibleDenominators.holdoutPrimaryCases !== 299 || eligibleDenominators.totalPrimaryCases !== 358) {
+    throw new TypeError("Freeze eligible denominator commitment mismatch");
+  }
+  return excluded;
+}
+
+/** Ensures each frozen gold case has one independent label from each seat. */
+export function validateFreezeLabels(
+  gold: readonly Readonly<{ itemId: string; groupId: string }>[],
+  annotations: readonly Readonly<{ itemId: string; groupId: string; label: string; seat: "A" | "B" }>[],
+): void {
+  const goldByItem = new Map<string, string>();
+  for (const row of gold) goldByItem.set(row.itemId, row.groupId);
+  const labelsByItem = new Map<string, Set<string>>();
+  for (const row of annotations) {
+    if (!row || typeof row.itemId !== "string" || typeof row.groupId !== "string" ||
+        !["same_cause", "different_cause", "insufficient_evidence"].includes(row.label) ||
+        (row.seat !== "A" && row.seat !== "B") || goldByItem.get(row.itemId) !== row.groupId) {
+      throw new TypeError("Freeze annotation integrity failure");
+    }
+    const seats = labelsByItem.get(row.itemId) ?? new Set<string>();
+    if (seats.has(row.seat)) throw new TypeError("Freeze duplicate seat label");
+    seats.add(row.seat);
+    labelsByItem.set(row.itemId, seats);
+  }
+  if (gold.some((row) => labelsByItem.get(row.itemId)?.size !== 2)) {
+    throw new TypeError("Freeze requires two seat labels per case");
+  }
+}
 
 const labels: Record<string, true> = { same_cause: true, different_cause: true, insufficient_evidence: true };
 const unissued: Partial<Record<OutcomeReason, true>> = { "insufficient-input": true, stale: true, budget: true, cancellation: true };

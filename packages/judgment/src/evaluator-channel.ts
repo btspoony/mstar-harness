@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
+import { accessSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { attestEvaluatorChannel } from "./evaluator-channel-trust.js";
@@ -23,28 +23,41 @@ function assertSafeDirectory(path: string, root: string): string {
   return canonical;
 }
 
-function mountedReadOnly(path: string, expected: "ro" | "rw"): boolean {
-  const mountInfo = readFileSync("/proc/self/mountinfo", "utf8");
-  const escapedPath = path.replaceAll("\\", "\\134").replaceAll(" ", "\\040").replaceAll("\t", "\\011").replaceAll("\n", "\\012");
-  const entries = mountInfo.split("\n").filter(Boolean);
-  const matching = entries.filter((line) => {
+/** Assert the complete supervisor mount set, not a false parent/child relationship between siblings. */
+export function assertSupervisorMountInfo(mountInfo: string): void {
+  const expected: Record<string, "ro" | "rw"> = {
+    "/mnt/source": "ro", "/mnt/output": "rw", "/mnt/requests": "rw",
+    "/mnt/status.json": "ro", "/mnt/scratch": "rw",
+  };
+  const found = new Set<string>();
+  for (const line of mountInfo.split("\n")) {
+    if (!line) continue;
     const fields = line.split(" - ", 1)[0]!.split(" ");
-    return fields[4] === escapedPath && fields[5]!.split(",").includes(expected);
-  });
-  return matching.length === 1;
+    const path = fields[4]?.replaceAll("\\040", " ").replaceAll("\\011", "\t").replaceAll("\\012", "\n").replaceAll("\\134", "\\");
+    if (!path || path !== "/mnt" && !path.startsWith("/mnt/")) continue;
+    if (!Object.hasOwn(expected, path) || found.has(path)) throw new Error("jev.channel-mount-unconfined");
+    const options = fields[5]?.split(",") ?? [];
+    if (!options.includes(expected[path]!) || options.includes(expected[path] === "ro" ? "rw" : "ro")) {
+      throw new Error("jev.channel-mount-unconfined");
+    }
+    found.add(path);
+  }
+  if (found.size !== Object.keys(expected).length) throw new Error("jev.channel-mount-unconfined");
 }
 
 function assertSupervisorMounts(): Readonly<{ requestDirectory: string; statusPath: string }> {
   if (process.env.JEV_COMPONENT_WORKER !== "1" ||
       process.env.JEV_REQUESTS_DIR !== "/mnt/requests" ||
       process.env.JEV_STATUS_PATH !== "/mnt/status.json") throw new Error("jev.channel-supervisor-unattested");
-  if (!mountedReadOnly("/mnt/requests", "rw") || !mountedReadOnly("/mnt/status.json", "ro")) throw new Error("jev.channel-mount-unconfined");
+  assertSupervisorMountInfo(readFileSync("/proc/self/mountinfo", "utf8"));
   const requestDirectory = realpathSync("/mnt/requests");
   const statusPath = realpathSync("/mnt/status.json");
   if (!statSync(requestDirectory).isDirectory() || !statSync(statusPath).isFile() ||
-      requestDirectory === statusPath || !within(requestDirectory, statusPath) && !within(statusPath, requestDirectory)) {
+      requestDirectory === statusPath) {
     throw new Error("jev.channel-mount-invalid");
   }
+  try { accessSync(requestDirectory, constants.W_OK); }
+  catch { throw new Error("jev.channel-mount-unconfined"); }
   const uid = readFileSync("/proc/self/status", "utf8").match(/^Uid:\s+(\d+)\s+(\d+)/m);
   if (!uid || uid[1] === "0" || uid[2] === "0") throw new Error("jev.channel-process-unconfined");
   return { requestDirectory, statusPath };

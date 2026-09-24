@@ -143,7 +143,7 @@ export function assessShadowRun(input: FrozenShadowEvidence): ShadowRunAssessmen
     return Object.freeze({ type: event.type, runId: event.runId, at: event.at });
   });
   const eventSequence = childEvents.map((event) => event.type);
-  const lifecycleInvalid = eventSequence.some((type) => type === "cancelled" || type === "error") || eventSequence.join(",") !== "baseline-frozen,start,baseline-frozen,request,complete";
+  const lifecycleInvalid = eventSequence.some((type) => type === "cancelled" || type === "error") || eventSequence.join(",") !== "start,baseline-frozen,request,complete";
   const unitIds = new Set<string>();
   const receipts = input.receipts.map((receipt) => {
     if (!receipt || receipt.schema !== "mstar.shadow-receipt/v1" || receipt.runId !== baseline.runId || !validId(receipt.unitId) || !validId(receipt.packId) ||

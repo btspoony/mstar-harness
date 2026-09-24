@@ -60,5 +60,35 @@ export type {
   WorkUnitDispositionInput,
   WorkUnitReceipt,
 } from "./shadow-supervisor.js";
+export { allowedAuthorOutputs, authorSlotKeys, createOnlyAuthorSinkWrite, validateAuthorSinkRelativePath } from "./author-sink.js";
+export {
+  assertAuthorMountPlan,
+  buildAuthorDockerLaunchArgs,
+  provisionAuthorGateLayout,
+  runAuthorPreDispatchGate,
+  writeAuthorGateEvidence,
+} from "./author-gate.js";
+export type { AuthorGateInput, AuthorGateResult, AuthorMountPlan, DenyProbeRecord } from "./author-gate.js";
+export { allowedAnnotationOutput, createOnlyAnnotationSinkWrite, validateAnnotationSinkRelativePath } from "./annotation-sink.js";
+export type { AnnotationSeat } from "./annotation-sink.js";
+export {
+  assertAnnotationSeatMountPlan,
+  buildAnnotationSeatDockerLaunchArgs,
+  provisionAnnotationSeatGateLayout,
+  runAnnotationSeatPreDispatchGate,
+  writeAnnotationSeatGateEvidence,
+} from "./annotation-seat-gate.js";
+export type { AnnotationSeatGateInput, AnnotationSeatGateResult, AnnotationSeatMountPlan } from "./annotation-seat-gate.js";
+
 export { classifyOutcome, clopperPearsonLower, summarizeQualification } from "./evaluation.js";
 export type { EvaluationOutcome, GoldLabel, OutcomeReason, QualificationRow, QualificationSummary } from "./evaluation.js";
+export { opaqueId128, runAnnotationProjection, runLeakCheck } from "./annotation-projection.js";
+export type {
+  AnnotationProjectionInput,
+  AnnotationProjectionResult,
+  CrosswalkEntry,
+  LeakCheckDimension,
+  LeakCheckReport,
+  ProjectedGroup,
+  ProjectedVariant,
+} from "./annotation-projection.js";

@@ -6,6 +6,7 @@ import {
   TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot,
 } from "../src/contracts.js";
 import { A05_QUESTION, buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
+import { developmentPairId } from "../src/evaluation.js";
 
 function reorderObjectKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(reorderObjectKeys);
@@ -45,6 +46,16 @@ function fixture() {
 }
 
 describe("fixed A05 request builder", () => {
+  test("qualification pair bytes do not reveal cohort, shard, or slot identifiers", () => {
+    const { pack, pilot } = fixture();
+    const opaqueId = developmentPairId("a".repeat(32));
+    const anonymized = validatePack({ ...pack, tasks: [{ ...pack.tasks[0]!, id: opaqueId }] });
+    const bound = validatePilot({ ...pilot, packManifest: [{ packId: pack.packId, packSha256: createHash("sha256").update(canonicalJsonBytes(anonymized)).digest("hex") }] });
+    const request = new TextDecoder().decode(buildA05Request(anonymized, bound).bytes);
+    expect(request).toContain(opaqueId);
+    expect(request).not.toMatch(/dev-|holdout|shard-|slot-/i);
+    expect(() => developmentPairId("dev-1")).toThrow("qualification.variant-identity-invalid");
+  });
 
   test("canonicalizes sparse array slots as null so output remains valid JSON", () => {
     const sparse = new Array(2);
