@@ -16,7 +16,7 @@ export type NativeTransportResult = Readonly<{
   elapsedMs: number;
 }>;
 
-const failure = (message: string): never => { throw new Error(`TypeSafe transport: ${message}`); };
+function failure(message: string): never { throw new Error(`TypeSafe transport: ${message}`); }
 
 export async function sendNativeRequest(input: NativeTransportInput): Promise<NativeTransportResult> {
   const startedAt = performance.now();
@@ -43,7 +43,7 @@ export async function sendNativeRequest(input: NativeTransportInput): Promise<Na
         Authorization: `Bearer ${input.credential}`,
         "Content-Type": "application/json",
       },
-      body: input.requestBytes,
+      body: input.requestBytes as BodyInit,
       redirect: "manual",
       signal: controller.signal,
     }), aborted]);
@@ -79,7 +79,7 @@ export async function sendNativeRequest(input: NativeTransportInput): Promise<Na
     if (reader) void reader.cancel().catch(() => {});
     if (error instanceof Error && error.message.startsWith("TypeSafe transport:")) throw error;
     if (controller.signal.aborted) failure(controller.signal.reason === "deadline" ? "deadline exceeded" : "request cancelled");
-    failure("request failed");
+    return failure("request failed");
   } finally {
     clearTimeout(timer);
     input.signal?.removeEventListener("abort", abortFromCaller);

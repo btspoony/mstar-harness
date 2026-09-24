@@ -19,3 +19,44 @@ export type {
   ReviewTier,
   WorkUnit,
 } from "./contracts.js";
+export { buildCandidatePairs, buildShadowPack } from "./audit-shadow.js";
+export type { CandidatePair, FindingSource, ReviewScope, StructuredFinding } from "./audit-shadow.js";
+export { connectEvaluatorChannel, createEvaluatorMailbox } from "./evaluator-channel.js";
+export {
+  JudgmentRuntimeError,
+  evaluateNative,
+  resolveJudgmentConfig,
+  runReviewAdvice,
+  type JudgmentCliResult,
+  type JudgmentCliStatus,
+  type JudgmentInvocation,
+  type ResolvedJudgmentConfig,
+  type EvaluatorChannel,
+  type EvaluatorChannelResponse,
+  type EvaluatorContext,
+  type JudgmentResult,
+  type RuntimeEffects,
+} from "./runtime.js";
+export { buildA05Request, canonicalJsonBytes, type CanonicalQuestion, type PreparedRequest } from "./review-advice.js";
+export {
+  assessShadowRun,
+  buildDockerLaunchArgs,
+  freezeBaseline,
+  recordWorkUnitDisposition,
+  runShadowSupervisor,
+} from "./shadow-supervisor.js";
+export type {
+  ApprovedChild,
+  ApprovedChildResult,
+  BaselineFreezeInput,
+  EvidenceClass,
+  FrozenBaseline,
+  FrozenShadowEvidence,
+  ProbeEvent,
+  ProbeLauncher,
+  ShadowMountPlan,
+  ShadowRunAssessment,
+  ShadowRunInput,
+  WorkUnitDispositionInput,
+  WorkUnitReceipt,
+} from "./shadow-supervisor.js";

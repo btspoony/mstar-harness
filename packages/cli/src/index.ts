@@ -179,6 +179,7 @@ import {
 } from "./execution-workflow";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
+import { judgmentUsageFailurePayload, registerJudgmentCommands } from "./commands/judgment";
 import { registerStoreCommands } from "./store-migrate";
 import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
@@ -6402,6 +6403,7 @@ registerSessionCommands(program);
 registerIssueCommands(program);
 
 registerCatalogCommands(program);
+registerJudgmentCommands(program);
 
 // `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
 // engine store boundary and the migration transport (contract §2/§7).
@@ -6582,7 +6584,10 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // Commander already wrote the message (and help text) to stderr; with
   // `--json` the invocation still gets the A2 failure object on stdout.
   if (error instanceof CommanderError) {
-    if (process.argv.includes("--json")) {
+    const judgmentPayload = error.exitCode === 0 ? null : judgmentUsageFailurePayload(process.argv, error.message);
+    if (judgmentPayload !== null) {
+      console.log(judgmentPayload);
+    } else if (process.argv.includes("--json")) {
       const payload =
         planUsageFailurePayload(process.argv, error.message) ??
         issueUsageFailurePayload(process.argv, error.message) ??

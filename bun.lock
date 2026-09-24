@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "^3.11.0",
+        "@mstar-harness/engine": "^3.11.2",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
@@ -14,7 +14,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "3.11.0",
+      "version": "3.11.2",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -26,13 +26,14 @@
       },
       "devDependencies": {
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/judgment": "workspace:*",
         "htm": "^3.1.1",
         "preact": "^10.29.8",
       },
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "3.11.0",
+      "version": "3.11.2",
       "devDependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@shikijs/langs": "^4.3.1",
@@ -136,7 +137,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "3.11.0",
+      "version": "3.11.2",
       "devDependencies": {
         "@types/node": "^25.6.0",
         "bun-types": "^1.2.17",
@@ -155,7 +156,7 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "3.11.0",
+      "version": "3.11.2",
       "devDependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@oh-my-pi/pi-coding-agent": "18.2.1",
@@ -169,7 +170,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "3.11.0",
+      "version": "3.11.2",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },

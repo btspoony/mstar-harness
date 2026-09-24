@@ -8,8 +8,8 @@
     "types": ["bun-types"],
     "declaration": true,
     "emitDeclarationOnly": true,
-    "rootDir": "src",
+    "rootDir": "..",
     "outDir": "dist"
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }
