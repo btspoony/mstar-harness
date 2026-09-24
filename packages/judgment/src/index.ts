@@ -71,3 +71,13 @@ export {
 export type { AuthorGateInput, AuthorGateResult, AuthorMountPlan, DenyProbeRecord } from "./author-gate.js";
 export { classifyOutcome, clopperPearsonLower, summarizeQualification } from "./evaluation.js";
 export type { EvaluationOutcome, GoldLabel, OutcomeReason, QualificationRow, QualificationSummary } from "./evaluation.js";
+export { opaqueId128, runAnnotationProjection, runLeakCheck } from "./annotation-projection.js";
+export type {
+  AnnotationProjectionInput,
+  AnnotationProjectionResult,
+  CrosswalkEntry,
+  LeakCheckDimension,
+  LeakCheckReport,
+  ProjectedGroup,
+  ProjectedVariant,
+} from "./annotation-projection.js";
