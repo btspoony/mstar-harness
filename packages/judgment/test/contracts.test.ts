@@ -98,7 +98,9 @@ describe("versioned judgment contracts", () => {
     alias.profile = "audit";
     expect(() => validatePack(alias)).toThrow("only review profile");
     const extra = makePack();
-    extra.secret = "credential";
+    // Any unknown field must be rejected; the name is deliberately neutral so a
+    // secret-pattern scanner does not read this negative test as a real credential.
+    extra.unexpectedField = "unexpected";
     expect(() => validatePack(extra)).toThrow("unknown field");
     const wrongRecipient = makePack();
     wrongRecipient.recipient.phase = "collect";
