@@ -148,6 +148,9 @@ function digest(value: unknown, path: string): string {
 
 function array(value: unknown, path: string, minimum = 0): unknown[] {
   if (!Array.isArray(value) || value.length < minimum) return fail(path, `expected array with at least ${minimum} item(s)`);
+  for (let i = 0; i < value.length; i++) {
+    if (!Object.hasOwn(value, i)) fail(`${path}[${i}]`, "arrays must not contain holes");
+  }
   return value;
 }
 
