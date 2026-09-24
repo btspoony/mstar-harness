@@ -7,7 +7,7 @@ import { summarizeQualification, type QualificationRow } from "../src/evaluation
 import { runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
-function fixtureRoot(artifacts: Record<string, string>): string {
+function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string | null = "mstar.qualification-manifest/v1"): string {
   const allArtifacts = { "protocol.json": "{}", ...artifacts };
   const root = mkdtempSync(join(tmpdir(), "qualification-eval-"));
   for (const [path, content] of Object.entries(allArtifacts)) {
@@ -17,8 +17,24 @@ function fixtureRoot(artifacts: Record<string, string>): string {
     writeFileSync(target, content);
   }
   const files = Object.entries(allArtifacts).map(([path, content]) => ({ path, sha256: sha256(content) }));
-  writeFileSync(join(root, "manifest.json"), JSON.stringify({ schema: "mstar.qualification-manifest/v1", contractRevision: "phase3a-native-20260924", files }));
+  writeFileSync(join(root, "manifest.json"), JSON.stringify({ ...(manifestSchema === null ? {} : { schema: manifestSchema }), contractRevision: "phase3a-native-20260924", files }));
   return root;
+}
+
+function frozenRoot(overrides: { manifestSchema?: string | null; freezeId?: string; frozenAt?: string; splitSchema?: string } = {}): string {
+  const gold = `${JSON.stringify({ itemId: "item-1", groupId: "1/g1", label: "insufficient_evidence" })}\n`;
+  const assignments = { "1/g1": "holdout" };
+  const split = JSON.stringify({
+    schema: overrides.splitSchema ?? "mstar.qualification-split-manifest/v1",
+    contractRevision: "phase3a-native-20260924",
+    freezeId: overrides.freezeId ?? "freeze-1",
+    frozenAt: overrides.frozenAt ?? "2026-09-24T00:00:00.000Z",
+    assignments,
+    assignmentSha256: sha256(JSON.stringify(assignments)),
+    goldSha256: sha256(gold),
+    goldCount: 1,
+  });
+  return fixtureRoot({ "split-manifest.json": split, "gold/adjudicated.jsonl": gold }, overrides.manifestSchema);
 }
 
 describe("qualification integrity", () => {
@@ -58,6 +74,14 @@ describe("qualification integrity", () => {
     expect(() => summarizeQualification([{ ...base, outcome: "transport-failure", accepted: false }])).toThrow("acceptance-invalid");
     expect(() => summarizeQualification([{ ...base, outcome: "budget", accepted: false }])).toThrow("acceptance-invalid");
   });
+  test("insufficient evidence remains attributable only as model-abstain, never accepted completion credit", () => {
+    const abstention = { ...base, gold: "insufficient_evidence" as const, rawLabel: "insufficient_evidence" as const, outcome: "model-abstain" as const, accepted: false };
+    const summary = summarizeQualification([abstention]);
+    expect(summary.outcomeCounts["model-abstain"]).toBe(1);
+    expect(summary.outcomeCounts.accepted).toBe(0);
+    expect(summary.endpoints.selectiveAccuracy.total).toBe(0);
+    expect(() => summarizeQualification([{ ...abstention, outcome: "accepted", accepted: true }])).toThrow("acceptance-invalid");
+  });
   test("reports reproducible causal-cluster bootstrap intervals", () => {
     const rows = [
       base,
@@ -80,6 +104,49 @@ describe("qualification integrity", () => {
     try {
       expect(await runEvaluationCommand(["check-protocol", "--root", root])).toBe(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("rejects contradictory reservation prose even when it contains the required disclaimer", async () => {
+    const budget = {
+      contractRevision: "phase3a-native-20260924",
+      tokenPolicy: {
+        method: "provider-context-reservation/v1",
+        perAttemptReservation: 65_536,
+        maxRunReservedInputTokens: 65_536_000,
+        providerContextPolicy: "local tokenizer estimate enabled; no local tokenizer/preflight context-fit claim",
+      },
+      requestAllocation: {
+        developmentVariantCallsMax: 120, holdoutVariantCallsMax: 600, temporalVariantCallsMax: 48,
+        variantCallsMax: 768, selectedControlCallsMax: 32, allocatedCallsMax: 800,
+        unallocatedSafetyHeadroomNotRetries: 200, allRequestsMax: 1_000,
+      },
+      attemptPolicy: "No SDK retry",
+      maxPacksPerRun: 1_000, maxTasksPerPack: 4, maxPairsPerPack: 4,
+      maxAttemptsPerRequest: 1, maxConcurrentRequests: 1, timeoutMsPerOperation: 10_000,
+      maxRunOptionalElapsedMs: 10_000_000, maxPackBytes: 65_536,
+      maxOutboundRequestBytes: 32_768, maxResponseBytes: 65_536,
+    };
+    const root = fixtureRoot({
+      "protocol.json": JSON.stringify({ schema: "mstar.qualification-protocol/v1", contractRevision: "phase3a-native-20260924", mode: "shadow", transport: "native-typesafe" }),
+      "budget.json": JSON.stringify(budget),
+      "permission.json": JSON.stringify({ contractRevision: "phase3a-native-20260924", status: "synthetic-only-policy-declaration; not a self-authorizing pilot" }),
+    });
+    try {
+      expect(await runEvaluationCommand(["check-protocol", "--root", root])).toBe(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("requires manifest schema and well-formed frozen split identity", async () => {
+    const valid = frozenRoot();
+    const wrongManifestSchema = frozenRoot({ manifestSchema: "mstar.other-manifest/v1" });
+    const missingManifestSchema = frozenRoot({ manifestSchema: null });
+    const invalidFreezeId = frozenRoot({ freezeId: "not a valid ID" });
+    const invalidFrozenAt = frozenRoot({ frozenAt: "not-a-timestamp" });
+    const roots = [valid, wrongManifestSchema, missingManifestSchema, invalidFreezeId, invalidFrozenAt];
+    try {
+      expect(await runEvaluationCommand(["check-freeze", "--root", valid])).toBe(0);
+      for (const root of roots.slice(1)) expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
+    } finally {
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
+    }
   });
   test("rejects empty gold despite embedded split digests", async () => {
     const gold = "";

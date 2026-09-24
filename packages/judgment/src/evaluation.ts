@@ -53,7 +53,8 @@ function validateRows(rows: readonly QualificationRow[]): void {
     variants.add(key);
     if (row.rawLabel !== undefined && !Object.hasOwn(labels, row.rawLabel)) throw new TypeError("qualification.label-invalid");
     const attributable = row.outcome === "accepted" || row.outcome === "model-abstain" || row.outcome === "policy-abstain";
-    if (row.outcome === "accepted" && (!row.rawLabel || row.accepted !== true) ||
+    if (row.outcome === "accepted" && (!row.rawLabel || row.rawLabel === "insufficient_evidence" || row.accepted !== true) ||
+        row.outcome === "model-abstain" && row.rawLabel === "insufficient_evidence" && row.accepted ||
         row.outcome !== "accepted" && row.accepted === true ||
         !attributable && row.rawLabel !== undefined) throw new TypeError("qualification.acceptance-invalid");
   }

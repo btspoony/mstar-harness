@@ -68,9 +68,12 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       assertRevision(permission as { contractRevision?: string });
       if (permission.status !== "synthetic-only-policy-declaration; not a self-authorizing pilot") fail("Permission declaration mismatch");
       const tokenPolicy = budget.tokenPolicy as Record<string, unknown> | null;
+      const providerContextPolicy = tokenPolicy?.providerContextPolicy as Record<string, unknown> | null;
       if (!tokenPolicy || typeof tokenPolicy !== "object" || tokenPolicy.method !== TOKEN_POLICY_METHOD ||
           tokenPolicy.perAttemptReservation !== TOKEN_RESERVATION_PER_ATTEMPT || tokenPolicy.maxRunReservedInputTokens !== MAX_RUN_RESERVED_INPUT_TOKENS ||
-          !String(tokenPolicy.providerContextPolicy).includes("no local tokenizer/preflight context-fit claim")) fail("Frozen provider-context reservation mismatch");
+          !providerContextPolicy || typeof providerContextPolicy !== "object" || Array.isArray(providerContextPolicy) ||
+          Object.keys(providerContextPolicy).length !== 2 ||
+          providerContextPolicy.localTokenizerEstimate !== false || providerContextPolicy.localPreflightContextFitClaim !== false) fail("Frozen provider-context reservation mismatch");
       const allocation = budget.requestAllocation as Record<string, unknown> | null;
       if (!allocation || allocation.developmentVariantCallsMax !== 120 || allocation.holdoutVariantCallsMax !== 600 ||
           allocation.temporalVariantCallsMax !== 48 || allocation.variantCallsMax !== 768 || allocation.selectedControlCallsMax !== 32 ||
@@ -84,6 +87,7 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
       return 0;
     }
     const manifest = readJson<Manifest>(root, "manifest.json");
+    if (manifest.schema !== "mstar.qualification-manifest/v1") fail("Qualification manifest schema mismatch");
     assertRevision(manifest);
     verifyFiles(root, manifest);
     if (action === "check-corpus") {
@@ -102,7 +106,9 @@ export async function runEvaluationCommand(argv = process.argv.slice(2)): Promis
     if (action === "check-freeze") {
       const split = readJson<{ schema?: string; contractRevision?: string; freezeId?: string; frozenAt?: string; assignments?: unknown; assignmentSha256?: string; goldSha256?: string; goldCount?: number }>(root, "split-manifest.json");
       assertRevision(split);
-      if (split.schema !== "mstar.qualification-split-manifest/v1" || !split.freezeId || !split.frozenAt ||
+      if (split.schema !== "mstar.qualification-split-manifest/v1" ||
+          typeof split.freezeId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(split.freezeId) ||
+          typeof split.frozenAt !== "string" || !Number.isFinite(Date.parse(split.frozenAt)) || new Date(split.frozenAt).toISOString() !== split.frozenAt ||
           split.assignments === null || typeof split.assignments !== "object" || Array.isArray(split.assignments) ||
           Object.keys(split.assignments as object).length === 0 ||
           !/^[a-f0-9]{64}$/.test(split.assignmentSha256 ?? "") || digest(Buffer.from(JSON.stringify(split.assignments))) !== split.assignmentSha256) fail("Split freeze commitment invalid");
