@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,12 +157,36 @@ test("SIGINT and SIGTERM cancel an active request and preserve process exit stat
   const { pack, pilot } = judgmentFixture();
   for (const [signal, expectedCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
     const workspace = temporaryRoot(signal);
+    const requestDirectory = join(workspace, "supervisor", "requests");
+    const statusPath = join(workspace, "supervisor", "status.json");
+    const preloadPath = join(workspace, "supervisor-mounts.cjs");
+    mkdirSync(requestDirectory, { recursive: true });
+    writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId: "run-1", status: "idle" }));
+    writeFileSync(preloadPath, [
+      'const fs = require("node:fs");',
+      'const { syncBuiltinESMExports } = require("node:module");',
+      'const realpathSync = fs.realpathSync;',
+      'fs.realpathSync = function (path, ...args) {',
+      '  if (path === "/mnt/requests") path = process.env.JEV_TEST_REQUESTS_DIR;',
+      '  if (path === "/mnt/status.json") path = process.env.JEV_TEST_STATUS_PATH;',
+      '  return realpathSync.call(this, path, ...args);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join("\n"));
     writeFileSync(join(workspace, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n");
     writeFileSync(join(workspace, "pack.json"), JSON.stringify(pack));
     writeFileSync(join(workspace, "pilot.json"), JSON.stringify(pilot));
+    const env = {
+      ...envWithoutHarness(),
+      JEV_REQUESTS_DIR: "/mnt/requests",
+      JEV_STATUS_PATH: "/mnt/status.json",
+      JEV_TEST_REQUESTS_DIR: requestDirectory,
+      JEV_TEST_STATUS_PATH: statusPath,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+    };
     const proc = spawn(process.execPath, [BUNDLE, "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json"], {
       cwd: workspace,
-      env: envWithoutHarness(),
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -173,12 +197,16 @@ test("SIGINT and SIGTERM cancel an active request and preserve process exit stat
       proc.once("error", rejectClose);
       proc.once("close", (code) => resolveClose(code));
     });
-    const requestDirectory = join(workspace, ".jev-mailbox", "requests");
     const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline && (!existsSync(requestDirectory) || readdirSync(requestDirectory).filter((name) => name.endsWith(".json")).length === 0)) {
+    let requests = [];
+    while (Date.now() < deadline) {
+      requests = readdirSync(requestDirectory).filter((name) => name.endsWith(".json"));
+      if (requests.length > 0) break;
+      if (proc.exitCode !== null) break;
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));
     }
-    assert.ok(existsSync(requestDirectory) && readdirSync(requestDirectory).some((name) => name.endsWith(".json")), `CLI did not submit a request: ${JSON.stringify({ stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode })}`);
+    assert.equal(requests.length, 1, `CLI did not submit a request: ${JSON.stringify({ stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode })}`);
+    assert.equal(JSON.parse(readFileSync(join(requestDirectory, requests[0]), "utf8")).schema, "mstar.judgment-request/v1");
     proc.kill(signal);
     assert.equal(await closed, expectedCode, stderr);
     const output = JSON.parse(stdout);

@@ -3,6 +3,7 @@ import { constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { EvaluatorChannel, EvaluatorChannelResponse, JudgmentInvocation } from "./runtime.js";
+import { attestEvaluatorChannel } from "./evaluator-channel-trust.js";
 
 const MAX_REQUEST_BYTES = 1_048_576;
 const MAX_STATUS_BYTES = 4_096;
@@ -86,7 +87,7 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
     }
     return { status: "unavailable", code: "jev.review-cancelled" };
   };
-  return Object.freeze({
+  return attestEvaluatorChannel(Object.freeze({
     submit: async ({ packBytes, pilotDigest }, submitSignal) => {
       if (closed || signal.aborted || submitSignal.aborted) return { status: "unavailable", code: "jev.channel-closed" };
       if (!(packBytes instanceof Uint8Array) || packBytes.byteLength === 0 || packBytes.byteLength > MAX_REQUEST_BYTES || !/^[a-f0-9]{64}$/.test(pilotDigest)) return { status: "invalid", code: "jev.request-invalid" };
@@ -111,7 +112,7 @@ export async function connectEvaluatorChannel(invocation: JudgmentInvocation, si
         catch (error) { if (!existsSync(cancelPath)) throw error; }
       }
     },
-  });
+  }));
 }
 
 /** Trusted-supervisor-only file mailbox adapter; never returns evaluator data or capabilities to the client. */
