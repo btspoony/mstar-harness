@@ -79,6 +79,7 @@ import {
   requireExecutionToken,
   requireSessionRef,
 } from "./execution-session";
+import { payloadFileHelp, validatePayload } from "./issue";
 
 /** Detail keys the A2 failure shape may carry, in spec order. */
 const FAILURE_DETAIL_KEYS = ["holder", "path", "expected", "actual"] as const;
@@ -363,6 +364,19 @@ function readJsonPayload(raw: string | undefined, flag: string, verb: string): u
   } catch (error) {
     throw new SddScriptError(`${flag} payload is not valid JSON: ${(error as Error).message}`, 2);
   }
+}
+function readSchemaPayload(
+  raw: string | undefined,
+  flag: string,
+  verb: string,
+  typeName: "PlanProgress" | "ClosureEvidence" | "HandoffEvidence",
+  condition?: string,
+): unknown {
+  const payload = readJsonPayload(raw, flag, verb);
+  const record = asRecord(payload);
+  if (!record) throw new SddScriptError(`${flag} must be a JSON object`, 2);
+  validatePayload(typeName, record, condition);
+  return payload;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1252,7 +1266,7 @@ export function registerPlanCommands(program: Command): void {
     .description("Replace this plan's progress summary and status (active plan session)")
     .option("--session <path>", "Absolute plan session JSON envelope path")
     .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
-    .option("--file <path>", "Absolute path of the PlanProgress JSON payload")
+    .option("--file <path>", payloadFileHelp("PlanProgress"))
     .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
     .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
     .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
@@ -1261,7 +1275,7 @@ export function registerPlanCommands(program: Command): void {
       runVerb("progress", options, {}, (json) =>
         mutate("progress", options, json, false, (opts) => ({
           kind: "progress",
-          progress: readJsonPayload(opts.file as string | undefined, "--file", "progress") as ProgressPayload,
+          progress: readSchemaPayload(opts.file as string | undefined, "--file", "progress", "PlanProgress") as ProgressPayload,
         })),
       ),
     );
@@ -1298,7 +1312,7 @@ export function registerPlanCommands(program: Command): void {
     .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
     .option("--issue <id>", "Issue id linked to this plan")
     .option("--disposition <disposition>", "Terminal disposition: resolved | waived | duplicate | superseded")
-    .option("--file <path>", "Absolute path of the ClosureEvidence JSON payload")
+    .option("--file <path>", payloadFileHelp("ClosureEvidence"))
     .option("--expect-issue <revision>", "Current issue revision (the DB mutation's CAS value; always an integer)")
     .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
     .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
@@ -1317,7 +1331,15 @@ export function registerPlanCommands(program: Command): void {
             "--expect-issue",
             "issue-close",
           );
-          const evidence = readJsonPayload(opts.file as string | undefined, "--file", "issue-close") as ClosureEvidence;
+          const closureCondition =
+            disposition === "resolved" ? "close" : disposition === "waived" ? "waive" : disposition === "duplicate" ? "duplicate" : "supersede";
+          const evidence = readSchemaPayload(
+            opts.file as string | undefined,
+            "--file",
+            "issue-close",
+            "ClosureEvidence",
+            closureCondition,
+          ) as ClosureEvidence;
           return { kind: "residual-close", issueId, disposition, evidence, expectedIssueRevision };
         }),
       ),
@@ -1328,7 +1350,7 @@ export function registerPlanCommands(program: Command): void {
     .description("Submit the immutable, pinned handoff for this plan and keep it InReview (plan session)")
     .option("--session <path>", "Absolute plan session JSON envelope path")
     .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
-    .option("--file <path>", "Absolute path of the HandoffEvidence JSON payload")
+    .option("--file <path>", payloadFileHelp("HandoffEvidence"))
     .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
     .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
     .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
@@ -1337,7 +1359,7 @@ export function registerPlanCommands(program: Command): void {
       runVerb("handoff", options, {}, (json) =>
         mutate("handoff", options, json, false, (opts) => ({
           kind: "handoff",
-          evidence: readJsonPayload(opts.file as string | undefined, "--file", "handoff") as HandoffEvidence,
+          evidence: readSchemaPayload(opts.file as string | undefined, "--file", "handoff", "HandoffEvidence") as HandoffEvidence,
         })),
       ),
     );

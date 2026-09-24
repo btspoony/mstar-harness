@@ -729,7 +729,7 @@ describe("mstar plan — strict-input", () => {
     // is read, so a malformed token never degrades into a payload-read failure
     // and the payload bytes are never consumed.
     const evidencePath = join(fixture.root, "evidence.json");
-    const payload = `${JSON.stringify({ reason: "fixed", references: ["packages/cli/src/index.ts"] }, null, 2)}\n`;
+    const payload = `${JSON.stringify({ reason: "fixed", references: ["packages/cli/src/index.ts"], alignmentRef: "PM acceptance" }, null, 2)}\n`;
     writeText(evidencePath, payload);
     // Two payload states: the existing file above, and a missing one. The
     // missing leg is the one that pins the ordering — with the payload read
@@ -978,6 +978,32 @@ describe("mstar plan — scoped-operations", () => {
     // The sibling row is untouched — independent rows never invalidate each other.
     expect(rows[1]!.status).toBe("Todo");
     expect((rows[1] as Record<string, unknown>).coordination).toBeUndefined();
+  });
+  test("schema-required handoff fields pass the engine route", () => {
+    const fixture = makeIntegrationFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    toInReview(fixture, planSession, "schema parity handoff");
+
+    const result = runCli(["schema", "HandoffEvidence"], fixture.root);
+    expect(result.exitCode).toBe(0);
+    const schema = JSON.parse(result.stdout) as {
+      fields: Array<{ name: string; required: boolean; properties?: Record<string, { required: boolean }> }>;
+    };
+    const requiredNames = (fields: Array<{ name: string; required: boolean }>) =>
+      fields.filter((field) => field.required).map((field) => field.name);
+    expect(requiredNames(schema.fields)).toEqual(["source_sha", "review_head", "review_base", "qc", "qa"]);
+    expect(requiredNames(Object.entries(schema.fields.find((field) => field.name === "qc")!.properties!).map(([name, field]) => ({
+      name,
+      required: field.required,
+    })))).toEqual(["decision", "reports", "consolidated"]);
+    expect(requiredNames(Object.entries(schema.fields.find((field) => field.name === "qa")!.properties!).map(([name, field]) => ({
+      name,
+      required: field.required,
+    })))).toEqual(["gate", "decision", "report"]);
+
+    submitHandoff(fixture, planSession);
   });
 
   test("a stale row revision is refused and the authoritative bytes do not change", () => {
