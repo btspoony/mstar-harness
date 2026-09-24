@@ -8,14 +8,15 @@ import { runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fixtureRoot(artifacts: Record<string, string>): string {
+  const allArtifacts = { "protocol.json": "{}", ...artifacts };
   const root = mkdtempSync(join(tmpdir(), "qualification-eval-"));
-  for (const [path, content] of Object.entries(artifacts)) {
+  for (const [path, content] of Object.entries(allArtifacts)) {
     const target = join(root, path);
     const parent = target.slice(0, target.lastIndexOf("/"));
     mkdirSync(parent, { recursive: true });
     writeFileSync(target, content);
   }
-  const files = Object.entries(artifacts).map(([path, content]) => ({ path, sha256: sha256(content) }));
+  const files = Object.entries(allArtifacts).map(([path, content]) => ({ path, sha256: sha256(content) }));
   writeFileSync(join(root, "manifest.json"), JSON.stringify({ schema: "mstar.qualification-manifest/v1", contractRevision: "phase3a-native-20260924", files }));
   return root;
 }
