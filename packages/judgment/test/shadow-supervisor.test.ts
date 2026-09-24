@@ -100,6 +100,31 @@ describe("trusted shadow supervisor", () => {
     expect(() => assessShadowRun({ baseline: freezeBaseline({ runId: "run-1", ...slow.baseline }), receipts: [], childEvents: [], evidenceClass: "named-host", elapsedMs: 1 })).toThrow("jev.named-host-authorization-required");
     expect(() => recordWorkUnitDisposition({ runId: "run-1", unitId: "unit-1", packId: "pack-1", packSha256: hash, scopeSha256: hash, disposition: "completed", originalConsumption: null })).toThrow("jev.original-consumption-required");
   });
+  test("assessment refuses failed or mismatched study results and failure event streams", async () => {
+    const failed = inputs(workspace(), "process.exit(7);");
+    writeFileSync(join(failed.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: failed.pack, pilot: failed.pilot, child: failed.child, mountPlan: failed.mountPlan, baseline: failed.baseline }));
+    expect(await runShadowCommand(["study", "--root", failed.root], testLauncher)).toBe(1);
+    expect(await runShadowCommand(["assess", "--root", failed.root])).toBe(2);
+
+    const mismatched = inputs(workspace());
+    writeFileSync(join(mismatched.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: mismatched.pack, pilot: mismatched.pilot, child: mismatched.child, mountPlan: mismatched.mountPlan, baseline: mismatched.baseline }));
+    expect(await runShadowCommand(["study", "--root", mismatched.root], testLauncher)).toBe(0);
+    const studyResult = JSON.parse(readFileSync(join(mismatched.root, "study-result.json"), "utf8"));
+    rmSync(join(mismatched.root, "study-result.json"));
+    writeFileSync(join(mismatched.root, "study-result.json"), JSON.stringify({ ...studyResult, runId: "foreign-run" }));
+    expect(await runShadowCommand(["assess", "--root", mismatched.root])).toBe(2);
+
+    const validBaseline = freezeBaseline({ runId: "run-1", ...mismatched.baseline });
+    const invalidEvents = [
+      { type: "baseline-frozen" as const, at: 0, runId: "run-1" },
+      { type: "start" as const, at: 1, runId: "run-1" },
+      { type: "baseline-frozen" as const, at: 2, runId: "run-1" },
+      { type: "request" as const, at: 3, runId: "run-1" },
+      { type: "error" as const, at: 4, runId: "run-1" },
+    ];
+    expect(assessShadowRun({ baseline: validBaseline, receipts: [], childEvents: invalidEvents, evidenceClass: "component", elapsedMs: 1 }).failures).toContain("probe-lifecycle-invalid");
+  });
+
   test("finite study and assess commands consume child artifacts", async () => {
     const fixture = inputs(workspace());
     writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan, baseline: fixture.baseline }));

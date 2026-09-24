@@ -14,6 +14,25 @@ type StudyManifest = Readonly<{
   mountPlan: ShadowMountPlan;
   baseline: Readonly<{ inventory: unknown; seatOutputs: unknown; originalConsumption: unknown; finalReport: unknown }>;
 }>;
+type StudyResult = Readonly<{
+  schema: "mstar.shadow-study-result/v1";
+  runId: string;
+  evidenceClass: Exclude<EvidenceClass, "named-host">;
+  elapsedMs: number;
+  childOutputBytes: number;
+  exitStatus: "completed" | "failed";
+}>;
+function readStudyResult(root: string, manifest: StudyManifest, baseline: FrozenBaseline): StudyResult {
+  const value = JSON.parse(readFileSync(resolve(root, "study-result.json"), "utf8")) as Partial<StudyResult>;
+  if (value.schema !== "mstar.shadow-study-result/v1" || typeof value.runId !== "string" ||
+      (value.evidenceClass !== "component" && value.evidenceClass !== "synthetic-offline") ||
+      typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs) || value.elapsedMs < 0 || value.elapsedMs > 86_400_000 ||
+      !Number.isSafeInteger(value.childOutputBytes) || value.childOutputBytes! < 0 || value.childOutputBytes! > 1_048_576 ||
+      (value.exitStatus !== "completed" && value.exitStatus !== "failed")) return fail("Invalid study result");
+  if (value.runId !== manifest.runId || value.runId !== baseline.runId || value.evidenceClass !== manifest.evidenceClass) return fail("Study result identity mismatch");
+  if (value.exitStatus !== "completed") return fail("Study did not complete successfully");
+  return value as StudyResult;
+}
 function fail(message: string): never { throw new Error(message); }
 function rootFromArgs(args: readonly string[]): string {
   if (args.length !== 2 || args[0] !== "--root" || !isAbsolute(args[1]!)) return fail(ROOT_USAGE);
@@ -56,8 +75,8 @@ export async function runShadowCommand(args = process.argv.slice(2), launcher?: 
     if (command === "assess") {
       const baseline = baselineFrom(root);
       const manifest = readManifest(root);
-      const studyResult = JSON.parse(readFileSync(resolve(root, "study-result.json"), "utf8")) as { elapsedMs?: unknown; childOutputBytes?: unknown };
-      const result = assessShadowRun({ baseline, receipts: receiptsFrom(root), childEvents: eventsFrom(root), evidenceClass: manifest.evidenceClass, elapsedMs: typeof studyResult.elapsedMs === "number" ? studyResult.elapsedMs : 0, childOutputBytes: typeof studyResult.childOutputBytes === "number" ? studyResult.childOutputBytes : 0 });
+      const studyResult = readStudyResult(root, manifest, baseline);
+      const result = assessShadowRun({ baseline, receipts: receiptsFrom(root), childEvents: eventsFrom(root), evidenceClass: manifest.evidenceClass, elapsedMs: studyResult.elapsedMs, childOutputBytes: studyResult.childOutputBytes });
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return result.failures.length === 0 ? 0 : 1;
     }

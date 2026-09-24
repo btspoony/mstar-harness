@@ -146,6 +146,9 @@ export function assessShadowRun(input: FrozenShadowEvidence): ShadowRunAssessmen
     if (!event || event.runId !== baseline.runId || !eventTypes.includes(event.type) || !Number.isFinite(event.at) || event.at < 0) throw new Error("jev.child-event-invalid");
     return Object.freeze({ type: event.type, runId: event.runId, at: event.at });
   });
+  const eventSequence = childEvents.map((event) => event.type);
+  const lifecycleInvalid = eventSequence.some((type) => type === "cancelled" || type === "error") ||
+    eventSequence.join(",") !== "baseline-frozen,start,baseline-frozen,request,complete";
   if (!Array.isArray(input.receipts) || input.receipts.length > 256) throw new Error("jev.receipt-limit");
   const unitIds = new Set<string>();
   const receipts = input.receipts.map((receipt) => {
@@ -157,9 +160,10 @@ export function assessShadowRun(input: FrozenShadowEvidence): ShadowRunAssessmen
         receipt.attemptId !== null && !validId(receipt.attemptId) || unitIds.has(receipt.unitId)) throw new Error("jev.receipt-run-mismatch");
     unitIds.add(receipt.unitId);
     return Object.freeze({ schema: receipt.schema, runId: receipt.runId, unitId: receipt.unitId, packId: receipt.packId, packSha256: receipt.packSha256, scopeSha256: receipt.scopeSha256, model: receipt.model, owner: receipt.owner, disposition: receipt.disposition, originalConsumptionSha256: receipt.originalConsumptionSha256, attemptId: receipt.attemptId, jevWorkCredit: 0 as const });
+
   });
   if (!Number.isFinite(input.elapsedMs) || input.elapsedMs < 0 || input.elapsedMs > 86_400_000 || !Number.isSafeInteger(input.childOutputBytes ?? 0) || (input.childOutputBytes ?? 0) < 0 || (input.childOutputBytes ?? 0) > MAX_ARTIFACT_BYTES) throw new Error("jev.assessment-metrics-invalid");
-  const failures = (input.failures ?? []).slice(0, 32).map((failure) => typeof failure === "string" ? failure.replace(/[^a-zA-Z0-9.-]/g, "-").slice(0, 96) : "jev.failure-invalid");
+  const failures = [...(lifecycleInvalid ? ["probe-lifecycle-invalid"] : []), ...(input.failures ?? [])].slice(0, 32).map((failure) => typeof failure === "string" ? failure.replace(/[^a-zA-Z0-9.-]/g, "-").slice(0, 96) : "jev.failure-invalid");
   return Object.freeze({ schema: "mstar.shadow-assessment/v1", runId: baseline.runId, evidenceClass: input.evidenceClass, qualification: input.evidenceClass === "component" ? "component-only" : "synthetic-offline", w5: false, baselineFrozen: true, childEvents: Object.freeze(childEvents), receipts: Object.freeze(receipts), metrics: Object.freeze({ childEvents: childEvents.length, completedUnits: receipts.filter((receipt) => receipt.disposition === "completed").length, blockedUnits: receipts.filter((receipt) => receipt.disposition === "blocked").length, cancelledUnits: receipts.filter((receipt) => receipt.disposition === "cancelled").length, elapsedMs: input.elapsedMs, childOutputBytes: input.childOutputBytes ?? 0 }), failures: Object.freeze(failures) });
 }
 
