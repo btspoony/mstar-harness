@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, createReadStream, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { findMstarc, parseMstarc, type MstarcConfig } from "../../engine/src/mstarc.js";
@@ -96,8 +96,8 @@ export type EvaluatorChannel = Readonly<{
 
 export type RuntimeEffects = Readonly<{
   resolveConfig?: typeof resolveJudgmentConfig;
-  readFile?: (path: string, maxBytes: number) => Promise<Uint8Array>;
-  readStdin?: (maxBytes: number) => Promise<Uint8Array>;
+  readFile?: (path: string, maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
+  readStdin?: (maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
 }>;
 
 export class JudgmentRuntimeError extends Error {
@@ -113,7 +113,8 @@ function cliResult(status: JudgmentCliStatus, code?: string): JudgmentCliResult 
     : Object.freeze({ schema: CLI_SCHEMA, contractRevision: CONTRACT_REVISION, status, advice: null, code });
 }
 
-function fileBytes(path: string, maxBytes: number, workspace: string): Uint8Array {
+async function fileBytes(path: string, maxBytes: number, workspace: string, signal: AbortSignal): Promise<Uint8Array> {
+  if (signal.aborted) throw activeError(signal);
   const canonicalPath = realpathSync(path);
   const canonicalRelative = relative(workspace, canonicalPath);
   if (canonicalRelative === ".." || canonicalRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(canonicalRelative)) {
@@ -123,17 +124,29 @@ function fileBytes(path: string, maxBytes: number, workspace: string): Uint8Arra
   const fd = openSync(canonicalPath, constants.O_RDONLY | noFollow);
   try {
     if (!fstatSync(fd).isFile()) throw new JudgmentRuntimeError("jev.input-invalid", "Input must be a regular file");
-    const chunks: Buffer[] = [];
-    const chunk = Buffer.alloc(Math.min(8_192, maxBytes + 1));
-    let total = 0;
-    while (total <= maxBytes) {
-      const length = readSync(fd, chunk, 0, Math.min(chunk.length, maxBytes + 1 - total), null);
-      if (length === 0) break;
-      total += length;
-      if (total > maxBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
-      chunks.push(Buffer.from(chunk.subarray(0, length)));
+    const stream = createReadStream(canonicalPath, {
+      fd,
+      autoClose: false,
+      highWaterMark: 8_192,
+      start: 0,
+      end: maxBytes,
+      signal,
+    });
+    try {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const value of stream) {
+        if (signal.aborted) throw activeError(signal);
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        total += chunk.byteLength;
+        if (total > maxBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
+        chunks.push(chunk);
+      }
+      if (signal.aborted) throw activeError(signal);
+      return Buffer.concat(chunks, total);
+    } finally {
+      stream.destroy();
     }
-    return Buffer.concat(chunks, total);
   } finally {
     closeSync(fd);
   }
@@ -147,16 +160,50 @@ function workspaceInputPath(cwd: string, workspace: string, path: string): strin
   return resolved;
 }
 
-async function stdinBytes(maxBytes: number): Promise<Uint8Array> {
+function stdinBytes(maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
+  const { promise, resolve, reject } = Promise.withResolvers<Uint8Array>();
+  if (signal.aborted) {
+    reject(activeError(signal));
+    return promise;
+  }
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const value of process.stdin) {
+  const cleanup = () => {
+    process.stdin.removeListener("data", onData);
+    process.stdin.removeListener("end", onEnd);
+    process.stdin.removeListener("error", onError);
+    signal.removeEventListener("abort", onAbort);
+    process.stdin.pause();
+  };
+  const onData = (value: Buffer | string) => {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
     total += chunk.byteLength;
-    if (total > maxBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
+    if (total > maxBytes) {
+      cleanup();
+      reject(new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit"));
+      return;
+    }
     chunks.push(chunk);
-  }
-  return Buffer.concat(chunks, total);
+  };
+  const onEnd = () => {
+    cleanup();
+    resolve(Buffer.concat(chunks, total));
+  };
+  const onError = (error: Error) => {
+    cleanup();
+    reject(error);
+  };
+  const onAbort = () => {
+    cleanup();
+    reject(activeError(signal));
+  };
+  process.stdin.pause();
+  process.stdin.on("data", onData);
+  process.stdin.once("end", onEnd);
+  process.stdin.once("error", onError);
+  signal.addEventListener("abort", onAbort, { once: true });
+  process.stdin.resume();
+  return promise;
 }
 
 function parseObject(bytes: Uint8Array, code: string): unknown {
@@ -214,7 +261,7 @@ export async function runReviewAdvice(
   if (invocation.pilotPath === null) return cliResult("invalid", "jev.pilot-required");
   if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
 
-  const readFile = effects.readFile ?? (async (path, maxBytes) => fileBytes(path, maxBytes, config.workspace));
+  const readFile = effects.readFile ?? ((path, maxBytes, readSignal) => fileBytes(path, maxBytes, config.workspace, readSignal));
   const collectionController = new AbortController();
   const abortCollectionFromCaller = () => collectionController.abort("review-cancelled");
   signal.addEventListener("abort", abortCollectionFromCaller, { once: true });
@@ -246,7 +293,7 @@ export async function runReviewAdvice(
     try {
       assertConfigCurrent();
       const pilotPath = workspaceInputPath(config.cwd, config.workspace, invocation.pilotPath);
-      const pilotBytes = await raceWithSignal(Promise.resolve(readFile(pilotPath, MAX_PILOT_BYTES)), collectionController.signal);
+      const pilotBytes = await raceWithSignal(Promise.resolve(readFile(pilotPath, MAX_PILOT_BYTES, collectionController.signal)), collectionController.signal);
       assertConfigCurrent();
       pilot = validatePilot(parseObject(pilotBytes, "jev.pilot-invalid"));
     } catch (error) {
@@ -264,9 +311,9 @@ export async function runReviewAdvice(
       assertConfigCurrent();
       if (invocation.input.kind === "file") {
         const packPath = workspaceInputPath(config.cwd, config.workspace, invocation.input.path);
-        packBytes = await raceWithSignal(Promise.resolve(readFile(packPath, maxPackBytes)), collectionController.signal);
+        packBytes = await raceWithSignal(Promise.resolve(readFile(packPath, maxPackBytes, collectionController.signal)), collectionController.signal);
       } else {
-        packBytes = await raceWithSignal(Promise.resolve((effects.readStdin ?? stdinBytes)(maxPackBytes)), collectionController.signal);
+        packBytes = await raceWithSignal(Promise.resolve((effects.readStdin ?? stdinBytes)(maxPackBytes, collectionController.signal)), collectionController.signal);
       }
       assertConfigCurrent();
       if (packBytes.byteLength > maxPackBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");

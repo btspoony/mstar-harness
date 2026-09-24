@@ -269,7 +269,7 @@ describe("inert judgment runtime", () => {
     expect(Object.keys(result)).toEqual(["schema", "contractRevision", "status", "advice"]);
   });
 
-  test("off during input collection aborts and ignores a late pilot read", async () => {
+  test("off during input collection ignores a late pilot result without reading pack", async () => {
     vi.useFakeTimers();
     const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
     const prepared = fixture();
@@ -309,6 +309,94 @@ describe("inert judgment runtime", () => {
     expect(submits).toBe(0);
   });
 
+  test("off during an active pilot read aborts that read and ignores late bytes", async () => {
+    vi.useFakeTimers();
+    const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    const prepared = fixture();
+    let configReads = 0;
+    let inputReads = 0;
+    let readAborted = false;
+    let submits = 0;
+    const enabled = resolveJudgmentConfig(workspace, workspace);
+    const { promise: readingPilot, resolve: markReadingPilot } = Promise.withResolvers<void>();
+    const { promise: pilotRead, reject: rejectPilotRead } = Promise.withResolvers<Uint8Array>();
+    const effects: RuntimeEffects = {
+      resolveConfig: () => {
+        configReads += 1;
+        return configReads <= 2 ? enabled : { state: "disabled" };
+      },
+      readFile: async (path, _maxBytes, readSignal) => {
+        inputReads += 1;
+        if (path.endsWith("pilot.json")) {
+          markReadingPilot();
+          readSignal.addEventListener("abort", () => {
+            readAborted = true;
+            rejectPilotRead(new Error("read aborted"));
+          }, { once: true });
+          return pilotRead;
+        }
+        return canonicalJsonBytes(prepared.pack);
+      },
+    };
+    const channel: EvaluatorChannel = {
+      submit: async () => { submits += 1; return channelResponse("recorded"); },
+      cancel: async () => {},
+    };
+
+    const pending = runReviewAdvice(invocation(workspace), new AbortController().signal, channel, effects);
+    await readingPilot;
+    vi.advanceTimersByTime(100);
+    const result = await pending;
+    expect(result).toMatchObject({ status: "unavailable", code: "jev.revoked", advice: null });
+    expect(readAborted).toBe(true);
+    expect(inputReads).toBe(1);
+    expect(submits).toBe(0);
+  });
+
+  test("off during an active stdin read aborts stdin consumption", async () => {
+    vi.useFakeTimers();
+    const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
+    const prepared = fixture();
+    let configReads = 0;
+    let stdinReads = 0;
+    let stdinAborted = false;
+    let submits = 0;
+    const enabled = resolveJudgmentConfig(workspace, workspace);
+    const { promise: readingStdin, resolve: markReadingStdin } = Promise.withResolvers<void>();
+    const { promise: stdinRead, reject: rejectStdinRead } = Promise.withResolvers<Uint8Array>();
+    const effects: RuntimeEffects = {
+      resolveConfig: () => {
+        configReads += 1;
+        return configReads <= 4 ? enabled : { state: "disabled" };
+      },
+      readFile: async () => canonicalJsonBytes(prepared.pilot),
+      readStdin: async (_maxBytes, readSignal) => {
+        stdinReads += 1;
+        markReadingStdin();
+          readSignal.addEventListener("abort", () => {
+            stdinAborted = true;
+            rejectStdinRead(new Error("stdin read aborted"));
+          }, { once: true });
+          return stdinRead;
+      },
+    };
+    const channel: EvaluatorChannel = {
+      submit: async () => { submits += 1; return channelResponse("recorded"); },
+      cancel: async () => {},
+    };
+    const pending = runReviewAdvice({
+      ...invocation(workspace),
+      input: { kind: "stdin" },
+    }, new AbortController().signal, channel, effects);
+    await readingStdin;
+    vi.advanceTimersByTime(100);
+    const result = await pending;
+    expect(result).toMatchObject({ status: "unavailable", code: "jev.revoked", advice: null });
+    expect(stdinAborted).toBe(true);
+    expect(stdinReads).toBe(1);
+    expect(submits).toBe(0);
+  });
+
   test("off observed during channel submission cancels it and cannot consume a late result", async () => {
     vi.useFakeTimers();
     const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
@@ -341,6 +429,7 @@ describe("inert judgment runtime", () => {
     expect(result).toMatchObject({ status: "unavailable", code: "jev.revoked", advice: null });
     expect(cancels).toBe(1);
   });
+
 
   test("whole-review cancellation is distinct from an optional channel failure", async () => {
     const workspace = workspaceWithConfig("[config]\njev_mode=shadow\njev_transport=typesafe\n");
