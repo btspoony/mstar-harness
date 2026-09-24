@@ -23,6 +23,12 @@ import {
 
 const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, "calibrate-preflight": true, calibrate: true, holdout: true, report: true };
 const REVISION = "phase3a-native-20260924";
+const CALIBRATION_RUNTIME = "/mnt/source/.runtime";
+export const calibrationCliInvocation = Object.freeze([
+  "/usr/local/bin/node", `${CALIBRATION_RUNTIME}/mstar-harness.js`, "judgment", "review-advice",
+  "--file", `${CALIBRATION_RUNTIME}/pack.json`, "--pilot", `${CALIBRATION_RUNTIME}/pilot.json`,
+  "--workspace", "/mnt/source", "--json",
+]);
 function fail(message: string): never { throw new Error(message); }
 function args(argv: readonly string[]): { action: string; root: string; shard?: string; seat?: string } {
   const [action, ...tail] = argv;
@@ -292,7 +298,7 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   const outcomes: Array<Record<string, unknown>> = [];
   let attempted = 0, succeeded = 0, failed = 0, cliSubmissions = 0, shadowFailures = 0;
   const worker = `import { spawnSync } from "node:child_process";
-const runId=process.argv[2], start=Date.now(), runtime="/mnt/source/.runtime";
+const runId=process.argv[2], start=Date.now(), runtime="${CALIBRATION_RUNTIME}";
 process.chdir(runtime);
 const event=type=>process.stdout.write(JSON.stringify({type,runId,at:Date.now()-start})+"\\n");
 event("start"); event("baseline-frozen"); event("request");
@@ -450,7 +456,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
       topProbability: answer ? answer.probabilities[answer.choice]! : null,
       confidence: answer?.confidence ?? null });
     outcomes.push({ groupId: group.id, variantId: variant.id, primary: variant.primary, runId,
-      cliInvocation: ["/usr/local/bin/node", "/mnt/source/.runtime/mstar-harness.js", "judgment", "review-advice", "--file", "/mnt/source/.runtime/pack.json", "--pilot", "/mnt/source/.runtime/pilot.json", "--workspace", "/mnt/source", "--json"],
+      cliInvocation: calibrationCliInvocation,
       cliVersion, cliSha256, requestSha256: prepared.requestSha256, responseSha256, transportAttempted,
       usage, costUsd: null, // The frozen pricing declaration covers input only, not the complete bill.
       providerStatus: providerRecorded ? "recorded" : transportAttempted ? "failed" : "unissued",

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { summarizeQualification, validateFreezeGroups, validateFreezeLabels, type QualificationRow } from "../src/evaluation.js";
-import { runEvaluationCommand } from "../scripts/evaluate.js";
+import { calibrationCliInvocation, runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string | null = "mstar.qualification-manifest/v1"): string {
@@ -152,6 +152,13 @@ async function captureCommand(args: string[]): Promise<{ code: number; stdout: s
 
 
 describe("qualification integrity", () => {
+  test("records the runtime-mounted CLI invocation with container-absolute input paths", () => {
+    expect(calibrationCliInvocation).toEqual([
+      "/usr/local/bin/node", "/mnt/source/.runtime/mstar-harness.js", "judgment", "review-advice",
+      "--file", "/mnt/source/.runtime/pack.json", "--pilot", "/mnt/source/.runtime/pilot.json",
+      "--workspace", "/mnt/source", "--json",
+    ]);
+  });
   test("refuses duplicated primary opportunities and cross-group lineage leakage", () => {
     expect(() => summarizeQualification([base, { ...base, variantId: "v2", primary: true }])).toThrow("primary-duplicate");
     expect(() => summarizeQualification([base, { ...base, groupId: "g2", variantId: "v2", lineageId: "lineage-a", causalClusterId: "cluster-b" }])).toThrow("group-leakage");
