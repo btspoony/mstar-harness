@@ -10,9 +10,9 @@
  * projection.test.ts):
  *
  * - the exact §5 source set (root status.json, root-declared and retained
- *   workflow snapshots, catalog-linked compass/roadmap documents) and the
+ *   workflow snapshots, catalog-linked compass documents) and the
  *   exact §5 table columns/keys;
- * - catalog-owned compass/roadmap paths (never README discovery);
+ * - catalog-owned compass paths (never README discovery);
  * - reuse of the shared validators (legacy snapshot alias accepted, invalid
  *   JSON/root refused) instead of a second parser;
  * - the fingerprint is byte-based: a same-size, same-mtime content change
@@ -298,11 +298,10 @@ describe("projection source capture (contract \u00a75)", () => {
     expect(capture.formatVersion).toBe(PROJECTION_FORMAT_VERSION);
     expect(capture.sources.map((source) => source.sourceKey)).toEqual([
       "compass:iterations:iter-a/delivery-compass.md",
-      "roadmap:projects:proj-a/roadmap.md",
       "root:harness:status.json",
       "workflow:harness:workflows/wf-a/snapshot.json",
     ]);
-    expect(capture.sources.map((source) => source.state)).toEqual(["ok", "ok", "ok", "ok"]);
+    expect(capture.sources.map((source) => source.state)).toEqual(["ok", "ok", "ok"]);
     expect(capture.sources.every((source) => /^[0-9a-f]{64}$/.test(source.sha256 ?? ""))).toBe(true);
     expect(capture.sources.every((source) => source.diagnostic === null)).toBe(true);
     // The workflow source keeps only its root-registration shape: declared by
@@ -382,50 +381,12 @@ describe("projection source capture (contract \u00a75)", () => {
         "ended_at",
         "status",
       ]);
-      expect(columnNames(db, "projection_roadmaps")).toEqual([
-        "generation",
-        "project_id",
-        "direction",
-        "goals_json",
-        "milestones_json",
-      ]);
-      expect(primaryKey(db, "projection_sources")).toEqual(["generation", "source_key"]);
-      expect(primaryKey(db, "projection_workflows")).toEqual(["generation", "id"]);
-      expect(primaryKey(db, "projection_plans")).toEqual(["generation", "workflow_id", "plan_id"]);
-      expect(primaryKey(db, "projection_leases")).toEqual(["generation", "workflow_id", "plan_id", "kind"]);
       expect(primaryKey(db, "projection_compasses")).toEqual(["generation", "iteration_id"]);
-      expect(primaryKey(db, "projection_roadmaps")).toEqual(["generation", "project_id"]);
     } finally {
       handle.close();
     }
   });
 
-  test("compass/roadmap paths come from the catalog, not from README discovery", async () => {
-    const f = await fixture("catalog-paths-");
-    await seedStandard(f);
-    // A retired index row must never become a source.
-    write(join(f.iterationsDir, "README.md"), "| plan | delivery-compass.md |\n|------|---------------------|\n");
-    const first = await captureProjectionSources(f.context);
-    expect(first.sources.some((source) => source.relativePath.includes("README"))).toBe(false);
-
-    // Relocating the catalog registration moves the source (the catalog is
-    // the path authority): the old path stops being a source and the new one
-    // becomes one.
-    write(join(f.iterationsDir, "iter-a/compass-v2.md"), COMPASS);
-    const current = await getCatalog(f.context, { kind: "document", id: "doc-compass" });
-    await updateCatalogEntity(
-      f.context,
-      { kind: "document", id: "doc-compass" },
-      { relativePath: "iter-a/compass-v2.md" },
-      current.entity.revision,
-      op("cat-compass-move"),
-    );
-    const second = await captureProjectionSources(f.context);
-    expect(second.blocked).toBe(false);
-    expect(second.sources.map((source) => source.sourceKey)).toContain("compass:iterations:iter-a/compass-v2.md");
-    expect(second.sources.map((source) => source.sourceKey)).not.toContain("compass:iterations:iter-a/delivery-compass.md");
-    expect(second.sourceSetHash).not.toBe(first.sourceSetHash);
-  });
 
   test("reuses the shared validators: the legacy snapshot alias is accepted, bad JSON and a bad root are not", async () => {
     const f = await fixture("validators-");
@@ -467,36 +428,6 @@ describe("projection source capture (contract \u00a75)", () => {
     expect(staleRoot.diagnostics.find((diagnostic) => diagnostic.sourceKey === "root:harness:status.json")?.reason).toBe("invalid");
   });
 
-  test("a same-size, same-mtime content change moves the digest and the source-set hash", async () => {
-    const f = await fixture("mtime-");
-    await seedStandard(f);
-    const roadmapPath = join(f.projectsDir, "proj-a/roadmap.md");
-    const before = await captureProjectionSources(f.context);
-    const roadmapSource = before.sources.find((source) => source.kind === "roadmap");
-    expect(roadmapSource?.sha256).toMatch(/^[0-9a-f]{64}$/);
-
-    const original = readFileSync(roadmapPath, "utf8");
-    const stats = statSync(roadmapPath);
-    const changed = original.replace("Direction-A", "Direction-B");
-    expect(changed).not.toBe(original);
-    expect(changed.length).toBe(original.length);
-    writeFileSync(roadmapPath, changed);
-    utimesSync(roadmapPath, stats.atime, stats.mtime);
-    const afterStats = statSync(roadmapPath);
-    expect(afterStats.size).toBe(stats.size);
-    expect(Math.abs(afterStats.mtimeMs - stats.mtimeMs)).toBeLessThan(2);
-
-    const after = await captureProjectionSources(f.context);
-    const changedSource = after.sources.find((source) => source.kind === "roadmap");
-    expect(changedSource?.state).toBe("ok");
-    expect(changedSource?.sha256).not.toBe(roadmapSource?.sha256);
-    expect(after.sourceSetHash).not.toBe(before.sourceSetHash);
-    // Nothing else moved: mtime/size hints were never the token.
-    expect(after.sources.filter((source) => source.kind !== "roadmap")).toEqual(
-      before.sources.filter((source) => source.kind !== "roadmap"),
-    );
-  });
-
   test("missing and inaccessible declared sources are classified, not guessed", async () => {
     const f = await fixture("states-");
     await seedStandard(f);
@@ -512,32 +443,6 @@ describe("projection source capture (contract \u00a75)", () => {
       expect.objectContaining({ sourceKey: "workflow:harness:workflows/wf-b/snapshot.json", reason: "missing" }),
     );
 
-    // A directory where a document should be cannot be read: `inaccessible`.
-    rmSync(join(f.projectsDir, "proj-a/roadmap.md"), { force: true });
-    mkdirSync(join(f.projectsDir, "proj-a/roadmap.md"), { recursive: true });
-    const blocked = await captureProjectionSources(f.context);
-    expect(blocked.sources.find((source) => source.kind === "roadmap")).toMatchObject({ state: "inaccessible" });
-    expect(blocked.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "roadmap:projects:proj-a/roadmap.md", reason: "inaccessible" }),
-    );
-  });
-
-  test("a source that moves while it is being read is a named changed-during-read diagnostic", async () => {
-    const f = await fixture("churn-");
-    await seedStandard(f);
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_CHURN_PATH = "proj-a/roadmap.md";
-
-    const capture = await captureProjectionSources(f.context);
-    expect(capture.blocked).toBe(true);
-    expect(capture.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "roadmap:projects:proj-a/roadmap.md", reason: "changed-during-read" }),
-    );
-    // The row that could not be validated against the digest it was hashed
-    // with is not projected at all.
-    expect(capture.rows.roadmaps).toEqual([]);
-    // Everything else was read cleanly and is untouched by the moving source.
-    expect(capture.rows.workflows.map((workflow) => workflow.id)).toEqual(["wf-a"]);
   });
 
   test("capture writes nothing and publishes no absolute path", async () => {
