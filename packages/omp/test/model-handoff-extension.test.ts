@@ -50,8 +50,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createExtensionModelQuery } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/model-api";
 import type { ModelControlsHost } from "@oh-my-pi/pi-coding-agent/session/model-controls";
 import { ModelControls } from "@oh-my-pi/pi-coding-agent/session/model-controls";
-import { CustomMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/custom-message";
-import { ensureThemeSync } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import modelHandoffFactory, {
@@ -2309,40 +2307,17 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
 
 /* ------------------------------------------------- coordinator bar titles --- */
 
-/** SGR styling, stripped so a rendered row can be asserted as plain text. */
-const SGR = /\u001b\[[0-9;]*m/g;
-/** Box outline glyphs, removed so a wrapped body can be read as one string. */
-const BOX_GLYPHS = /[│╭╮╰╯─]/g;
-
 /**
- * Render this session's captured `custom_message` entries through the host's own
- * `CustomMessageComponent` — the component the transcript dispatcher mounts for
- * an extension message — so the bar header and the body are observed on the real
- * renderer instead of on our own string maths. No host process is started.
+ * The extension's own visible output for a captured `custom_message` entry is
+ * the `formatNotice` string — the `<title>: <detail>` line the host bar mounts
+ * under the entry's `customType` label. Asserting that string keeps the
+ * observation on the extension's output contract instead of on the host's
+ * private UI components, which the 18.3.0 host package stopped shipping.
  */
-function renderCustomMessages(entries: readonly SessionEntry[]): readonly (readonly string[])[] {
-  ensureThemeSync();
+function customMessageTexts(entries: readonly SessionEntry[]): readonly string[] {
   return entries
     .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
-    .map((entry) => {
-      const message: ConstructorParameters<typeof CustomMessageComponent>[0] = {
-        role: "custom",
-        customType: entry.customType,
-        content: entry.content,
-        display: true,
-        timestamp: 0,
-      };
-      return new CustomMessageComponent(message, undefined).render(78).map((row) => row.replace(SGR, ""));
-    });
-}
-
-/** Every rendered row except the bar header, as one whitespace-normalized string. */
-function bodyText(rows: readonly string[], header: string | undefined): string {
-  return rows
-    .filter((row) => row !== header)
-    .join(" ")
-    .replace(BOX_GLYPHS, "")
-    .replace(/\s+/g, " ");
+    .map((entry) => String(entry.content));
 }
 
 describe("coordinator notice bar titles", () => {
@@ -2378,17 +2353,13 @@ describe("coordinator notice bar titles", () => {
     expect(durableTypes.every((type) => type === "mstar:model-handoff")).toBe(true);
     expect(decideSessionState(harness.ledger(), harness.sessionManager.getSessionId()).kind).toBe("terminal");
 
-    // The real component: the visible type is the bar header and asserts no
-    // workflow status; the observed id/status and the reason stay in the body.
-    const [rows] = renderCustomMessages(harness.ledger());
-    const header = rows!.filter((row) => row.includes("mstar:notice"));
-    expect(header).toHaveLength(1);
-    expect(header[0]).not.toContain("bar-title-iteration");
-    expect(header[0]).not.toContain("Workflow");
-
-    const body = bodyText(rows!, header[0]);
-    expect(body).toContain("Workflow bar-title-iteration is running");
-    expect(body).toContain("model handoff cancelled for this coordinator session");
+    // The bar label itself is the entry's customType (asserted above); the
+    // status sentence and the reason live in the single formatNotice line,
+    // each stated once.
+    const [content] = customMessageTexts(harness.ledger());
+    expect(content).toContain("Workflow bar-title-iteration is running");
+    expect(content).toContain("model handoff cancelled for this coordinator session");
+    expect(content?.match(/is running/g) ?? []).toHaveLength(1);
 
     // The machine refusal code is unchanged.
     expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");

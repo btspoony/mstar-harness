@@ -81,8 +81,6 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { CustomMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/custom-message";
-import { ensureThemeSync } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
   bindExecutionSession,
@@ -1561,40 +1559,17 @@ describe("phase2 host adapter", () => {
 
 /* ------------------------------------------------- coordinator bar titles --- */
 
-/** SGR styling, stripped so a rendered row can be asserted as plain text. */
-const SGR = /\u001b\[[0-9;]*m/g;
-/** Box outline glyphs, removed so a wrapped body can be read as one string. */
-const BOX_GLYPHS = /[│╭╮╰╯─]/g;
-
 /**
- * Render this session's captured `custom_message` entries through the host's own
- * `CustomMessageComponent` — the component the transcript dispatcher mounts for
- * an extension message — so the bar header and the body are observed on the real
- * renderer instead of on our own string maths. No host process is started.
+ * The extension's own visible output for a captured `custom_message` entry is
+ * the `formatNotice` string — the `<title>: <detail>` line the host bar mounts
+ * under the entry's `customType` label. Asserting that string keeps the
+ * observation on the extension's output contract instead of on the host's
+ * private UI components, which the 18.3.0 host package stopped shipping.
  */
-function renderCustomMessages(entries: readonly SessionEntry[]): readonly (readonly string[])[] {
-  ensureThemeSync();
+function customMessageTexts(entries: readonly SessionEntry[]): readonly string[] {
   return entries
     .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
-    .map((entry) => {
-      const message: ConstructorParameters<typeof CustomMessageComponent>[0] = {
-        role: "custom",
-        customType: entry.customType,
-        content: entry.content,
-        display: true,
-        timestamp: 0,
-      };
-      return new CustomMessageComponent(message, undefined).render(78).map((row) => row.replace(SGR, ""));
-    });
-}
-
-/** Every rendered row except the bar header, as one whitespace-normalized string. */
-function bodyText(rows: readonly string[], header: string | undefined): string {
-  return rows
-    .filter((row) => row !== header)
-    .join(" ")
-    .replace(BOX_GLYPHS, "")
-    .replace(/\s+/g, " ");
+    .map((entry) => String(entry.content));
 }
 
 describe("coordinator notice bar titles", () => {
@@ -1647,27 +1622,18 @@ describe("coordinator notice bar titles", () => {
     expect(state.binding).toBeNull();
     expect(state.legacy).toMatchObject({ workflowId: WORKFLOW_ID });
 
-    // (c) The real component: the visible type is the bar header and asserts no
-    // workflow status; the observed id/status/code stay in the body.
-    const [advisoryRows, noticeRows] = renderCustomMessages(harness.ledger());
-    const advisoryHeader = advisoryRows!.filter((row) => row.includes("mstar:advisory"));
-    const noticeHeader = noticeRows!.filter((row) => row.includes("mstar:notice"));
-    expect(advisoryHeader).toHaveLength(1);
-    expect(noticeHeader).toHaveLength(1);
-    expect(noticeHeader[0]).not.toContain(WORKFLOW_ID);
-    expect(noticeHeader[0]).not.toContain("Workflow");
-    expect(noticeHeader[0]).not.toContain("completed");
-    expect(noticeHeader[0]).not.toContain("phase2.workflow-terminal");
-
-    const noticeBody = bodyText(noticeRows!, noticeHeader[0]);
-    expect(noticeBody).toContain(WORKFLOW_ID);
-    expect(noticeBody).toContain("completed");
-    expect(noticeBody).toContain("phase2.workflow-terminal");
+    // (c) The bar labels are the entries' customTypes (asserted above); the
+    // status sentence, the refusal code and the advisory's doc pointer live in
+    // the single formatNotice lines, the status stated exactly once.
+    const texts = customMessageTexts(harness.ledger());
+    const noticeText = texts.find((text) => text.includes("phase2.workflow-terminal"));
+    const advisoryText = texts.find((text) => text.includes("phase-2-worktree-lease.md"));
+    expect(noticeText).toBeDefined();
+    expect(advisoryText).toBeDefined();
+    expect(noticeText).toContain(WORKFLOW_ID);
+    expect(noticeText).toContain("completed");
     // Title and detail never state the same status sentence twice.
-    expect(noticeBody.match(/is completed/g) ?? []).toHaveLength(1);
-
-    const advisoryBody = bodyText(advisoryRows!, advisoryHeader[0]);
-    expect(advisoryBody).toContain("phase-2-worktree-lease.md");
-    expect(advisoryBody).toContain("observation, not a dispatch");
+    expect(noticeText?.match(/is completed/g) ?? []).toHaveLength(1);
+    expect(advisoryText).toContain("observation, not a dispatch");
   });
 });

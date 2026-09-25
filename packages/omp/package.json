@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/omp",
   "version": "3.11.2",
-  "description": "Morning Star harness omp (Oh My Pi) plugin — engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
+  "description": "Morning Star harness omp (Oh My Pi) plugin \u2014 engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -73,7 +73,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": "18.2.1"
+    "@oh-my-pi/pi-coding-agent": "^18.3.0"
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-coding-agent": {
@@ -82,6 +82,6 @@
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
-    "@oh-my-pi/pi-coding-agent": "18.2.1"
+    "@oh-my-pi/pi-coding-agent": "18.3.0"
   }
 }

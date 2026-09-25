@@ -34,7 +34,7 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 | `commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review` |
 | `agents/` | Subagent role shells (`fullstack-dev`, `qc-specialist`, …) — no PM shell; the `mode: primary` project-manager seat is OpenCode-only |
 
-The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The host package is the reverse: `extensions/model-handoff.js` keeps its one `@oh-my-pi/pi-coding-agent` import external and resolves it against the running host (the host provides that module for extensions), declared as an **optional peer** and developed against the host version pinned in `peerDependencies`.
+The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The host package is the reverse: `extensions/model-handoff.js` keeps its one `@oh-my-pi/pi-coding-agent` import external and resolves it against the running host (the host provides that module for extensions), declared as an **optional peer** `^18.3.0` (any 18.x host) and developed against the host version pinned in `devDependencies`.
 
 ## Model handoff (opt-in)
 
