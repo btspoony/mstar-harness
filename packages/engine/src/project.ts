@@ -53,7 +53,7 @@ import {
   type ResidualEntry,
 } from "./status.js";
 
-/** Roadmap file name inside `projects/<id>/` ( — writer contract). */
+/** Roadmap file name inside `projects/<id>/`: legacy layout reference and transport candidate, never a live writer target. */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
 
 /** Theme-scoped research directory name inside `projects/<id>/`. */
