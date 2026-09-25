@@ -3272,11 +3272,11 @@ function cleanupPrintDiagnostics(diagnostics: readonly ValidationResult[]): void
 }
 
 /**
- * Porcelain worktree records + per-worktree safety. Cleanliness includes
- * ignored files because `worktree remove` would otherwise irretrievably
- * delete content that Git cannot restore. A probe that cannot run (missing
- * worktree dir, broken git) throws — a probe failure aborts the command with
- * exit 1; it is never an empty-safe fact.
+ * Porcelain worktree records + per-worktree cleanliness. Cleanliness uses
+ * ordinary `git status --porcelain` INSIDE each worktree: tracked modifications
+ * and untracked non-ignored files count as dirty; ignored-only content does not.
+ * A probe that cannot run (missing worktree dir, broken git) throws — a probe
+ * failure aborts the command with exit 1; it is never an empty-safe fact.
  */
 function cleanupProbeWorktrees(mainRoot: string): CleanupProbeWorktree[] {
   const raw = gitSync(["worktree", "list", "--porcelain"], mainRoot);
@@ -3303,7 +3303,7 @@ function cleanupProbeWorktrees(mainRoot: string): CleanupProbeWorktree[] {
   flush();
   records.forEach((record, index) => {
     record.isMain = index === 0; // porcelain lists the main worktree first
-    record.clean = gitSync(["status", "--porcelain", "--ignored", "--untracked-files=all"], record.path).trim() === "";
+    record.clean = gitSync(["status", "--porcelain"], record.path).trim() === "";
   });
   return records;
 }
