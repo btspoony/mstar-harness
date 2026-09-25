@@ -44,7 +44,7 @@
  * before it drifts.
  * 7. repo text face — dated plan/iteration ids and dated harness deep
  * paths on the tracked text face fail (engine findProvenanceCitations
- * over the repo tree, intersected with `git ls-files` so untracked local
+ * over the repo tree, intersected with `git ls-files -z` so untracked local
  * files never fail the guard): `.md` files are scanned full text, `.ts`
  * files at comment lines only (leading comment lines plus trailing `//`
  * comments; `://` URL sequences are not comment fragments);
@@ -56,6 +56,9 @@
  * Face note: `.mstar|agents/sdd/…` deeplinks stay attributed to the
  * ephemeral check (item 3, skills corpus) by the finder contract, so
  * that subclass is policed there, not on the repo face.
+ * 8. tracked Markdown links and anchors resolve within the checkout using
+ * the canonical tracked-file set; each real diagnostic is reported as a
+ * drift row.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -65,11 +68,10 @@
  * executable while every subcommand path still validated.
  *
  * Engine symbols are imported from the source entry (../packages/engine/
- * src/index.ts), NOT the "@mstar-harness/engine" package specifier: the CI
- * drift-lint job runs `bun run validation:drift` in a fresh checkout with
- * no `bun install`, and the package exports map resolves to the gitignored
- * dist build. The engine source has zero runtime deps, so bun executes it
- * directly.
+ * src/index.ts), NOT the "@mstar-harness/engine" package specifier:
+ * its package export resolves to the gitignored dist build, which is not
+ * available in a fresh checkout until dependencies are installed and
+ * built. The engine source is loaded directly.
  *
  * Usage: bun run scripts/drift-lint.ts
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
@@ -78,6 +80,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { commentMask } from "./ascii-literal-utils.ts";
+import { checkMarkdownLinks } from "./markdown-links.ts";
 import {
   AUDIT_CATEGORIES,
   classifySkillLint,
@@ -1169,25 +1172,19 @@ function tsCommentLines(text: string): string {
   return out.join("\n");
 }
 
-/** Tracked-file set at `repoRoot` (`git ls-files` with cwd = `repoRoot`, the
- * repo root — the script's existing git access pattern is plain
- * `execFileSync("git", …)` from the process cwd, which the main block runs
- * at the repo root). Entries are kept verbatim — git emits exact paths one
- * per line, and git permits leading/trailing spaces in filenames, so
- * trimming entries would drop a legitimately-named tracked file that the
- * fs-relative walk still reports under its real name. Guard-or-clear-error
- * (same idiom as `readDeclaredBins`): a git failure returns one explicit
- * failure row and an empty set, so the caller skips the scan with a loud
- * named row instead of crashing or silently passing. Exported as a test
- * seam. */
+/** Tracked-file set at `repoRoot` (`git ls-files -z` with cwd = `repoRoot`).
+ * NUL-delimited output preserves every legal Git path, including embedded
+ * newlines. Guard-or-clear-error: a git failure returns one explicit failure
+ * row and an empty set, so callers skip tracked-file scans with a loud named
+ * row instead of crashing or silently passing. Exported as a test seam. */
 export function readTrackedFiles(repoRoot: string): {
   tracked: Set<string>;
   failures: string[];
 } {
   try {
-    const out = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: repoRoot });
+    const out = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8", cwd: repoRoot });
     return {
-      tracked: new Set(out.split("\n").filter(Boolean)),
+      tracked: new Set(out.split("\0").filter(Boolean)),
       failures: [],
     };
   } catch (error) {
@@ -1587,9 +1584,8 @@ if (import.meta.main) {
 
   const tracked = readTrackedFiles(root);
   for (const row of tracked.failures) fail(row);
- // A git failure skips the scan behind its loud named row (guard-or-clear
- // error): scanning unfiltered would re-expose the untracked-file failures
- // the tracked-set intersection exists to prevent.
+ // A git failure skips both tracked-file scans behind its loud named row:
+ // neither an unfiltered walk nor an empty-success scan is permitted.
   const provenanceCollection =
     tracked.failures.length === 0
       ? collectProvenanceScanFiles(root, tracked.tracked)
@@ -1597,6 +1593,20 @@ if (import.meta.main) {
   for (const row of provenanceCollection.readFailures) fail(row);
   const provenance = checkProvenanceScan(provenanceCollection.entries);
   for (const row of provenance.failures) fail(row);
+
+ /* ------------------------------------------------------------------ */
+ /* Guard 8: tracked Markdown links and anchors */
+ /* ------------------------------------------------------------------ */
+
+  const markdownLinks =
+    tracked.failures.length === 0
+      ? checkMarkdownLinks(root, tracked.tracked)
+      : { filesScanned: 0, linksChecked: 0, anchorsChecked: 0, skipped: {}, diagnostics: [] };
+  for (const diagnostic of markdownLinks.diagnostics) {
+    fail(
+      `${diagnostic.source}:${diagnostic.line} markdown link ${diagnostic.kind} "${diagnostic.rawTarget}"`,
+    );
+  }
 
  /* ------------------------------------------------------------------ */
 
@@ -1610,16 +1620,18 @@ if (import.meta.main) {
     roles.mappingViolations === 0 ? "OK" : `FAIL (${roles.mappingViolations} violation${roles.mappingViolations === 1 ? "" : "s"})`
   }`;
 
+  const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
+
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
   );
 }
