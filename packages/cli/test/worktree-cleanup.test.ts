@@ -136,6 +136,7 @@ appendFileSync(process.env.MSTAR_GIT_LOG, JSON.stringify({ cwd: process.cwd(), a
 const text = argv.join(" ");
 const fault = process.env.MSTAR_GIT_FAULT || "";
 if (fault === "positive" && text.includes("--merged") && text.includes("refs/remotes/origin")) process.exit(128);
+if (fault === "negative" && text.includes("--no-merged")) process.exit(128);
 const isSweep = argv[0] === "for-each-ref" && (text.includes("--merged") || text.includes("--no-merged"));
 const vanish = process.env.MSTAR_GIT_VANISH_REF || "";
 if (vanish !== "" && isSweep && !existsSync(process.env.MSTAR_GIT_LOG + ".vanished")) {
