@@ -23,11 +23,40 @@ import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
-import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
+import {
+  captureIssue,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+} from '@mstar-harness/engine'
+import type { CaptureInput } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import type { SubagentsServiceView, ContinuableStartSpecView } from '../src/gates/role-persona.ts'
 import * as plugin from '../src/index.ts'
+
+/**
+ * Local structural types for the fake jobs service. rc.2 removed the
+ * `@deepseek-ai/dsh-jobs` `JobSnapshot`/`JobDoneListener` type exports this
+ * harness was typed against; the plugin consumes the terminal snapshot
+ * structurally (`JobDoneSnapshot`, `src/gates/agent-flow.ts`) and keeps no
+ * upstream type import, so the fake declares the SAME contract locally. The
+ * fields beyond the plugin's structural read (`kind`, `label`, `reported`)
+ * are what the spec fixtures pass; the `status`/`startedAt`/`finishedAt`
+ * semantics are the contract the settle pairing verifies.
+ */
+type JobDoneListener = (snapshot: JobDoneSnapshot, owner: Agent | undefined) => void | PromiseLike<void>
+
+/** Terminal snapshot fixture shape driven through {@link FakeJobRegistry.fireDone}. */
+export interface FakeJobSnapshot extends JobDoneSnapshot {
+  /** The producer kind the job was registered with. */
+  kind: string
+  /** The producer-supplied one-line label. */
+  label: string
+  /** True once a completion reporter has committed the terminal notice. */
+  reported: boolean
+}
 
 /**
  * Bun (JavaScriptCore) compatibility shim for the REAL dsh seam packages.
@@ -84,9 +113,9 @@ export class FakeLoaderRegistry extends Service {
  * so the plugin's REAL `ctx.inject(['jobs'])` wiring registers against it —
  * the full Loader → apply → inject → onJobDone composition under test,
  * without the heavy real registry (dsh-jobs-local + dsh-agent + a live
- * registered agent). The upstream snapshot contract (terminal statuses,
- * startedAt/finishedAt) is verified in the spec fixtures against the
- * `@deepseek-ai/dsh-jobs` types.
+ * registered agent). The snapshot contract (terminal statuses,
+ * startedAt/finishedAt) is verified in the spec fixtures against
+ * {@link FakeJobSnapshot}.
  */
 export class FakeJobRegistry extends Service {
   private listener: JobDoneListener | undefined
@@ -103,7 +132,7 @@ export class FakeJobRegistry extends Service {
   }
 
   /** Test driver: fire a terminal snapshot through the registered listener. */
-  fireDone(snapshot: JobSnapshot, owner?: Agent): void {
+  fireDone(snapshot: FakeJobSnapshot, owner?: Agent): void {
     const listener = this.listener
     if (listener !== undefined) void listener(snapshot, owner)
   }
@@ -356,8 +385,10 @@ export class FakeAgentRegistry extends Service {
  * pushes an envelope into the session's `log` and emits it on the
  * `session/event` firehose (the real store's append+emit contract). The
  * sessions are STRUCTURAL FAKES (plain objects): the consumer reads only
- * `header.id` / `header.cwd` / `header.delegationDepth` / `seq` /
- * `eventAt(seq)` structurally, and `@deepseek-ai/dsh-session` cannot
+ * `header.id` / `header.cwd` / `header.delegationDepth` / `header.createdAt`
+ * (the required `SessionHeader` creation stamp that carries the native log
+ * incarnation) / `seq` / `eventAt(seq)` structurally, and
+ * `@deepseek-ai/dsh-session` cannot
  * construct under Bun/JSC. Mounted as the `@deepseek-ai/dsh-session-fake`
  * module row (`bootApp({ sessionsService: 'fake' })`) so the plugin's REAL
  * `registerWorkflowLedger` wiring registers against it — the gate → session
@@ -809,6 +840,83 @@ export const INVALID_STATUS = {
   metadata: {},
 }
 
+/* ===========================================================================
+ * Issue / catalog store fixtures (the authority the host readers consult)
+ *
+ * These build the REAL store through the engine's own domain verbs — the
+ * actual `node:sqlite` database, real migrations, real catalog/issue rows —
+ * so a spec proves host behaviour against the authority instead of a mock.
+ * ========================================================================== */
+
+/** Initialize an ACTIVE empty issue/catalog store at `harnessDir` (the real engine initializer). */
+export async function seedStore(harnessDir: string): Promise<void> {
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+}
+
+/**
+ * Capture ONE open issue through the engine's authorized capture verb and,
+ * when `planId` is given, link it to that plan (the provenance the findings
+ * cleanup gate reads). `actor` is the capture seat the contract reserves.
+ * @returns the DB-allocated issue id (`I-000001`).
+ */
+export async function seedOpenIssue(
+  harnessDir: string,
+  options: { title: string; severity: CaptureInput['severity']; planId?: string; projectId?: string; operationId: string },
+): Promise<string> {
+  const input: CaptureInput = {
+    projectId: options.projectId ?? '_default',
+    title: options.title,
+    kind: 'bug',
+    severity: options.severity,
+    impact: `${options.title} (fixture)`,
+    acceptance: `${options.title} is verified fixed (fixture)`,
+    sourceIdentity: `fixture/${options.operationId}`,
+    rootCauseKey: `fixture/${options.operationId}`,
+    acceptanceKey: `fixture/${options.operationId}`,
+    occurrenceKey: `fixture/${options.operationId}`,
+    sourceKind: 'spec',
+    location: 'tests/harness.ts',
+    observedBehavior: options.title,
+    evidence: [`fixture:${options.operationId}`],
+    discoveredAt: '2026-09-18T00:00:00Z',
+  }
+  const receipt = await captureIssue({ harnessDir }, input, {
+    operationId: options.operationId,
+    actor: 'project-manager',
+  })
+  if (options.planId !== undefined) {
+    // The provenance row is seeded directly, exactly as the scoped writer
+    // would leave it: the `linkIssue` verb re-verifies a live engine-issued
+    // session envelope (issue contract §4), which a fixture cannot mint. The
+    // read gate this helper feeds is what the plan-link fixture is for.
+    const handle = await openStore({ harnessDir }, 'write')
+    try {
+      handle.db
+        .prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)")
+        .run(receipt.issueId, options.planId, `fixture:${options.planId}`)
+    } finally {
+      handle.close()
+    }
+  }
+  return receipt.issueId
+}
+
+/** Register one knowledge DOCUMENT row in the DB catalog (the retired README-index replacement). */
+export async function seedKnowledgeDoc(
+  harnessDir: string,
+  options: { id: string; relativePath: string; title: string; operationId: string },
+): Promise<void> {
+  await registerCatalogEntity({ harnessDir }, {
+    kind: 'document',
+    id: options.id,
+    title: options.title,
+    rootKind: 'knowledge',
+    relativePath: options.relativePath,
+    documentKind: 'knowledge',
+  }, { operationId: options.operationId, actor: 'project-manager' })
+}
+
 /**
  * Seed files under the harness dir (the gate reads the on-disk document at
  * intent time, so seeding may happen any time before the intent dispatch).
@@ -835,6 +943,18 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
+  // The workspace DECLARES its harness layout: this fixture's dir is
+  // `harness/`, which is not one of the engine's probe names (`.mstar` /
+  // `.agents` / `.plans` / `plans`), so engine-side resolution from this
+  // workspace finds it only through the highest-authority `.mstarc`
+  // declaration (`packages/engine/src/path.ts`: `.mstarc` `[config]
+  // harness_dir` → `.mstar/` → `.agents/` → …). Without it the plugin's own
+  // CONFIGURED harness dir and the engine's filesystem resolution disagree,
+  // and every engine-side lookup from this workspace answers null (e.g. the
+  // workflow-ledger target resolver in `workflow-selection.ts`, which only
+  // receives the session workspace). Same idiom as the engine's own fixtures
+  // (`packages/engine/src/gates.test.ts`: `[config]\nharness_dir=…`).
+  await writeFile(join(root, '.mstarc'), '[config]\nharness_dir=harness\n')
   // v3 write-path precondition:
   // the agent-flow writer / workflow-ledger consumer append only to an
   // ACTIVE workflow — tests that exercise the ledger opt in to the seeded

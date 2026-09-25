@@ -24,8 +24,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { bootApp, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -101,11 +101,22 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
 const RICH_REGISTER = JSON.stringify({
   entries: {
     'plan-b': [
-      { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-08' },
-      { id: 'R2', title: 'style nit', severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' },
+      { id: 'R9', title: 'legacy register row (must stay invisible)', severity: 'critical', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-08' },
     ],
   },
 })
+
+/** The RICH fixture's open issues — the authority the digest reads. */
+const RICH_ISSUES = [
+  { title: 'deferred blocker', severity: 'high' as const, operationId: 'op-rich-1' },
+  { title: 'style nit', severity: 'info' as const, operationId: 'op-rich-2' },
+]
+
+/** The RICH fixture's registered knowledge documents (categories in path order). */
+const RICH_DOCS = [
+  { id: 'doc-shape', relativePath: 'architecture-patterns/dsh-plugin-shape.md', title: 'Plugin shape' },
+  { id: 'doc-context', relativePath: 'conventions/harness-context.md', title: 'Harness context' },
+]
 
 /** A steering compass with a `## Direction lock` problem statement. */
 const RICH_COMPASS = [
@@ -157,6 +168,14 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
       'knowledge/README.md': KNOWLEDGE_README,
     })
     booted = await bootApp({ root })
+    // The issue/catalog authority: a real store holding the fixture's open
+    // issues and its registered knowledge rows. The seeded README index and
+    // register above stay on disk to prove neither is read.
+    await seedStore(harnessDir)
+    for (const issue of RICH_ISSUES) await seedOpenIssue(harnessDir, { ...issue })
+    for (const doc of RICH_DOCS) {
+      await seedKnowledgeDoc(harnessDir, { ...doc, operationId: `op-doc-${doc.id}` })
+    }
     const inbox = [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] })]
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -171,7 +190,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     if (row?.source.kind !== 'plugin') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
 
     // Iteration gate section (steering compass + selected workflow snapshot resolve).
     expect(payload.iteration).toMatchObject({
@@ -189,11 +208,11 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
       ],
       residuals: [
         { severity: 'high', count: 1 },
-        { severity: 'nit', count: 1 },
+        { severity: 'info', count: 1 },
       ],
       residualFindings: [
-        { planId: 'plan-b', id: 'R1', severity: 'high', title: 'deferred blocker' },
-        { planId: 'plan-b', id: 'R2', severity: 'nit', title: 'style nit' },
+        { planId: '', id: 'I-000001', severity: 'high', title: 'deferred blocker' },
+        { planId: '', id: 'I-000002', severity: 'info', title: 'style nit' },
       ],
       iterationBaseBranch: 'dev-dsh',
       targetBranch: 'dev-dsh',
@@ -202,7 +221,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
       worktreeMode: 'feature-worktree',
       integrationWorktreePath: '/integration/worktree',
       leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
-      knowledge: { docCount: 3, categories: ['architecture-patterns', 'conventions'] },
+      knowledge: { docCount: 2, categories: ['architecture-patterns', 'conventions'] },
     })
     const text = textOf(row)
     expect(text).toContain('<mstar_engine_status>')
@@ -212,11 +231,11 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(text).toContain('gate: PASS')
     expect(text).toContain(`workflow: ${RICH_WORKFLOW} (active)`)
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('residuals: high 1, nit 1')
+    expect(text).toContain('residuals: high 1, info 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
-    expect(text).toContain('knowledge: 3 docs (architecture-patterns, conventions)')
+    expect(text).toContain('knowledge: 2 docs (architecture-patterns, conventions)')
     expect(text).toContain('direction: The dsh host plugin needs richer in-session harness context for operators.')
     expect(text).toContain('</mstar_engine_status>')
   })
@@ -244,20 +263,19 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     if (row?.source.kind !== 'plugin') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ iterationBaseBranch: 'dev-dsh', targetBranch: 'dev-dsh' })
     expect(textOf(row)).toContain('branch: dev-dsh → dev-dsh')
   })
 })
 
 /* ===========================================================================
- * 1b. residualFindings register semantics (spec §6, v3 home): no project
- *     register files → null (advisory — same pattern as `knowledge`);
- *     register(s) present, no open entries → []
+ * 1b. open-issue semantics: the digest reads store.db, and an unreadable
+ *     authority is disclosed instead of reported as "no open issues".
  * ========================================================================== */
 
-describe('mstar-engine-status — residualFindings register semantics (spec §6)', () => {
-  it('no project register files → residualFindings null (residuals rollup stays [])', async () => {
+describe('mstar-engine-status — open-issue facts come from the store', () => {
+  it('no store at all → residualFindings null + an explicit unavailable disclosure', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noroot-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -271,168 +289,101 @@ describe('mstar-engine-status — residualFindings register semantics (spec §6)
 
     const row = lastMessage(decision)
     if (row?.source.kind !== 'plugin') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ residuals: [], residualFindings: null })
+    expect(payload.state?.storeFacts?.kind).toBe('unavailable')
+    expect(payload.state?.storeFacts?.diagnostic).toContain('store.not-initialized')
+    // The model-facing row says so rather than claiming "none open".
+    expect(textOf(row)).toContain('residuals: unavailable')
   })
 
-  it('register present with no open entries → residualFindings [] (closed lifecycles only)', async () => {
+  it('an active store with no open issue → residualFindings [] (an authoritative empty answer)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noopen-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
       'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-      'projects/_default/residuals.json': JSON.stringify({
-        entries: {
-          'plan-a': [
-            { id: 'R1', title: 'already fixed', severity: 'high', lifecycle: 'resolved', source_plan: 'plan-a', registered_at: '2026-08-08' },
-            { id: 'R2', title: 'wontfix', severity: 'low', lifecycle: 'waived', source_plan: 'plan-a', registered_at: '2026-08-08' },
-          ],
-        },
-      }),
     })
     booted = await bootApp({ root })
+    await seedStore(harnessDir)
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
     if (row?.source.kind !== 'plugin') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
-    // Closed entries must NOT count toward the severity
-    // rollup either — the workspace shows no open residuals at all.
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ residualFindings: [], residuals: [] })
+    expect(textOf(row)).toContain('residuals: none open')
   })
 })
 
 /* ===========================================================================
- * 1c. residualFindings open-filter branches + severity order + cap 10 +
- *     doneAt passthrough (spec §6): the open filter is engine `isOpenResidual`
- *     parity — missing / null / false / 'open' → open, anything else (incl.
- *     `true` and non-'open' strings) → closed; severity ordered critical→nit
- *     with unknown severities skipped; capped at 10; `done_at` trimmed, with
- *     empty / whitespace / non-string → null.
+ * 1c. The detail rows carry the AUTHORITY's own order and fields: severity
+ *     rank desc → last activity desc → id asc, severity verbatim, capped 10.
  * ========================================================================== */
 
-describe('mstar-engine-status — residualFindings open-filter branches + severity order + cap (spec §6)', () => {
-  /** Seed a v2 tree whose project register carries the given entries; returns its resolved harness dir. */
-  async function seedWithRegister(entries: Record<string, unknown[]>): Promise<string> {
+describe('mstar-engine-status — open-issue detail order, fields and cap', () => {
+  /** Seed a v2 tree plus a store holding one open issue per severity; returns the harness dir. */
+  async function seedWithIssues(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-register-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
       'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-      'projects/_default/residuals.json': JSON.stringify({ entries }),
     })
     booted = await bootApp({ root })
+    await seedStore(harnessDir)
     return harnessDir
   }
 
-  it('open filter parity: missing / null / false lifecycle → open; strict "open" string → open; true and non-"open" strings → closed', async () => {
-    const harnessDir = await seedWithRegister({
-      'plan-a': [
-        { id: 'R-missing', title: 'no lifecycle key', severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-null', title: 'null lifecycle', severity: 'high', lifecycle: null, source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-false', title: 'false lifecycle', severity: 'medium', lifecycle: false, source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-open', title: 'string open', severity: 'low', lifecycle: 'open', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-true', title: 'truthy non-string lifecycle', severity: 'critical', lifecycle: true, source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-resolved', title: 'resolved', severity: 'high', lifecycle: 'resolved', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-superseded', title: 'superseded', severity: 'nit', lifecycle: 'superseded', source_plan: 'plan-a', registered_at: '2026-08-08' },
-      ],
-    })
+  it('severity is the issue vocabulary verbatim, and the buckets read critical→info', async () => {
+    const harnessDir = await seedWithIssues()
+    await seedOpenIssue(harnessDir, { title: 'info issue', severity: 'info', operationId: 'op-i' })
+    await seedOpenIssue(harnessDir, { title: 'critical issue', severity: 'critical', operationId: 'op-c' })
+    await seedOpenIssue(harnessDir, { title: 'medium issue', severity: 'medium', operationId: 'op-m' })
 
-    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
-    const state = payload.state
-    expect(payload.state).not.toBeNull()
-    if (state === null) return
-    expect(state.residualFindings).toEqual([
-      { planId: 'plan-a', id: 'R-missing', severity: 'critical', title: 'no lifecycle key' },
-      { planId: 'plan-a', id: 'R-null', severity: 'high', title: 'null lifecycle' },
-      { planId: 'plan-a', id: 'R-false', severity: 'medium', title: 'false lifecycle' },
-      { planId: 'plan-a', id: 'R-open', severity: 'low', title: 'string open' },
-    ])
-    // The severity ROLLUP applies the same open parity — the
-    // closed entries (R-true critical, R-resolved high, R-superseded nit)
-    // never count; only the four open entries do.
-    expect(state.residuals).toEqual([
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
+    expect(payload.state?.residuals).toEqual([
       { severity: 'critical', count: 1 },
-      { severity: 'high', count: 1 },
       { severity: 'medium', count: 1 },
-      { severity: 'low', count: 1 },
+      { severity: 'info', count: 1 },
+    ])
+    // Severity rank desc first: the critical leads regardless of capture order.
+    expect(payload.state?.residualFindings?.map((finding) => [finding.severity, finding.title])).toEqual([
+      ['critical', 'critical issue'],
+      ['medium', 'medium issue'],
+      ['info', 'info issue'],
     ])
   })
 
-  it('severity order critical→nit regardless of source order; unknown severities skipped; missing id/title → ""', async () => {
-    const harnessDir = await seedWithRegister({
-      'plan-a': [
-        { id: 'R-nit', title: 'nit first in source', severity: 'nit', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-unknown', title: 'unknown severity must be skipped', severity: 'urgent', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { severity: 'critical', title: '', source_plan: 'plan-a', registered_at: '2026-08-08' }, // no id → '' (never thrown)
-        { id: 'R-medium', title: 'medium', severity: 'medium', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-low', title: 'low', severity: 'low', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-high', title: 'high', severity: 'high', source_plan: 'plan-a', registered_at: '2026-08-08' },
-        { id: 'R-no-title', severity: 'nit', source_plan: 'plan-a', registered_at: '2026-08-08' }, // no title → ''
-      ],
-    })
+  it('twelve open issues → the detail view is capped at 10 while the buckets count all twelve', async () => {
+    const harnessDir = await seedWithIssues()
+    for (let index = 1; index <= 4; index++) {
+      await seedOpenIssue(harnessDir, { title: `critical ${index}`, severity: 'critical', operationId: `op-c${index}` })
+    }
+    for (let index = 1; index <= 8; index++) {
+      await seedOpenIssue(harnessDir, { title: `info ${index}`, severity: 'info', operationId: `op-n${index}` })
+    }
 
-    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
-    const state = payload.state
-    expect(payload.state).not.toBeNull()
-    if (state === null) return
-    expect(state.residualFindings).toEqual([
-      { planId: 'plan-a', id: '', severity: 'critical', title: '' },
-      { planId: 'plan-a', id: 'R-high', severity: 'high', title: 'high' },
-      { planId: 'plan-a', id: 'R-medium', severity: 'medium', title: 'medium' },
-      { planId: 'plan-a', id: 'R-low', severity: 'low', title: 'low' },
-      { planId: 'plan-a', id: 'R-nit', severity: 'nit', title: 'nit first in source' },
-      { planId: 'plan-a', id: 'R-no-title', severity: 'nit', title: '' },
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
+    expect(payload.state?.residuals).toEqual([
+      { severity: 'critical', count: 4 },
+      { severity: 'info', count: 8 },
     ])
-  })
-
-  it('cap 10: more than 10 open findings (across plans) → the first 10 by severity order, planId preserved', async () => {
-    const criticals = Array.from({ length: 4 }, (_, i) => ({ id: `C${i + 1}`, title: `critical ${i + 1}`, severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' }))
-    const nits = Array.from({ length: 8 }, (_, i) => ({ id: `N${i + 1}`, title: `nit ${i + 1}`, severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' }))
-    const harnessDir = await seedWithRegister({
-      'plan-a': criticals.slice(0, 2),
-      'plan-b': [...criticals.slice(2), ...nits],
-    })
-
-    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
-    const state = payload.state
-    expect(payload.state).not.toBeNull()
-    if (state === null) return
-    const findings = state.residualFindings
-    if (findings === null) return
-    // 12 open total → capped at 10: the 4 criticals (stable source order:
-    // plan-a C1..C2, then plan-b C3..C4) + the first 6 nits.
+    const findings = payload.state?.residualFindings
     expect(findings).toHaveLength(10)
-    expect(findings.map((f) => f.id)).toEqual(['C1', 'C2', 'C3', 'C4', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6'])
-    // planId preserved: C1..C2 from plan-a, C3..C4 from plan-b, nits from plan-b.
-    expect(findings.slice(0, 2).every((f) => f.planId === 'plan-a' && f.severity === 'critical')).toBe(true)
-    expect(findings.slice(2, 4).every((f) => f.planId === 'plan-b' && f.severity === 'critical')).toBe(true)
-    expect(findings.slice(4).every((f) => f.planId === 'plan-b' && f.severity === 'nit')).toBe(true)
+    // The four criticals lead; the six info rows shown are whichever the
+    // authority's own order ranked highest WITHIN that severity (rank desc →
+    // last real activity desc → id asc — the info rows were captured at
+    // different instants, so their activity order, not their id order,
+    // decides). What the display must never do is invent a rank or an id.
+    const criticalIds = new Set(['I-000001', 'I-000002', 'I-000003', 'I-000004'])
+    expect(findings?.slice(0, 4).every((finding) => finding.severity === 'critical' && criticalIds.has(finding.id))).toBe(true)
+    expect(findings?.slice(4).every((finding) => finding.severity === 'info')).toBe(true)
+    const infoIds = new Set(Array.from({ length: 8 }, (_, index) => `I-${String(index + 5).padStart(6, '0')}`))
+    expect(findings?.slice(4).every((finding) => infoIds.has(finding.id))).toBe(true)
   })
 })
 
@@ -467,7 +418,7 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
     if (row?.source.kind !== 'plugin') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     const state = payload.state
     expect(payload.state).not.toBeNull()
     if (state === null) return
@@ -501,7 +452,7 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     if (row?.source.kind !== 'plugin') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(booted!.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toBeNull()
     expect(payload.iteration).toBeUndefined()
     const text = textOf(row)
@@ -541,6 +492,7 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
       'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
     })
+    await seedStore(harnessDir)
     // 50ms refresh interval: proves both the cache hit (immediate reuse)
     // and the bounded re-read (after the interval).
     booted = await bootApp({ root, catalogTtlMs: 50 })
@@ -557,14 +509,12 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
     if (sameTurn.kind !== 'enter') return
     expect(sameTurn.messages).toHaveLength(0)
 
-    // Same turn, TTL-refreshed change (snapshot plan status + register
-    // residual changed): the row re-appears with the new state.
+    // Same turn, TTL-refreshed change (snapshot plan status + a new store
+    // issue): the row re-appears with the new state.
     await seedHarness(harnessDir, {
       'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Done' }] }),
-      'projects/_default/residuals.json': JSON.stringify({
-        entries: { 'plan-a': [{ severity: 'critical', description: 'new finding', source_plan: 'plan-a', registered_at: '2026-08-08' }] },
-      }),
     })
+    await seedOpenIssue(harnessDir, { title: 'new finding', severity: 'critical', operationId: 'op-ttl' })
     await new Promise((resolve) => setTimeout(resolve, 80))
     const changed = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 1, agentId), defaultEnter([]))
     const changedText = textOf(lastMessage(changed))

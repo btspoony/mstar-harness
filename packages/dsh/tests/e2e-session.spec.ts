@@ -487,7 +487,9 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(text).toContain('transition: phase-2-execute')
     expect(text).toContain('gate: PASS')
     expect(text).toContain('plans: fixture-plan-1(Todo)')
-    expect(text).toContain('residuals: none open')
+    // No issue/catalog authority exists in this workspace: the row discloses
+    // the refusal instead of claiming there are no open issues.
+    expect(text).toContain('residuals: unavailable — [store.not-initialized]')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
     expect(text).toContain('leases: none active')
   })

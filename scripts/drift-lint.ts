@@ -458,12 +458,85 @@ export function buildCliCommandInventory(cliSrc: string): {
     varPaths.set(detached[1]!, detached[2]!);
     cliCommands.add(detached[2]!);
   }
+  // Group-lookup bindings (pre-pass): `const X = <target>.commands.find(
+  // (command) => command.name() === "p")` resolves the group `p` at call time
+  // and throws when it is absent, so the var aliases a group that exists —
+  // verbs chained on `X` register under `p` (index.ts joins `catalog
+  // reconcile` to the group another module owns this way).
+  for (const lookup of cliSrc.matchAll(
+    /const\s+(\w+)\s*=\s*\w+\.commands\.find\(\s*\(\s*\w+\s*\)\s*=>\s*\w+\.name\(\)\s*===\s*"([a-z-]+)"\s*\)/g,
+  )) {
+    varPaths.set(lookup[1]!, lookup[2]!);
+    cliCommands.add(lookup[2]!);
+  }
+  // Chained group bindings (pre-pass): `const X = <boundVar>.command("p")`
+  // binds X to the path of a command that hangs off an already-bound var —
+  // verbs chained on `X` register under `p` (execution-migrate.ts joins `store
+  // execution` to the group store-migrate.ts owns this way). A receiver whose
+  // own binding is unknown is left unbound: the chain pass then reports it as
+  // an unknown command var rather than inventing a path.
+  for (const chained of cliSrc.matchAll(
+    /const\s+(\w+)\s*=\s*(\w+)\s*\.\s*command\(\s*"([a-z-]+)"\s*\)/g,
+  )) {
+    const parent = varPaths.get(chained[2]!);
+    if (parent === undefined) continue;
+    const path = `${parent} ${chained[3]!}`;
+    varPaths.set(chained[1]!, path);
+    cliCommands.add(path);
+  }
+  // Dynamic verb factories (pre-pass): a local function whose first parameter
+  // is a string-literal union (`(verb: "close" | "waive", …) => …`) registers
+  // one subcommand per literal through `.command(param)`. Bind the parameter
+  // to its literal set so the chain pass can expand that call shape.
+  const literalUnionVars = new Map<string, string[]>();
+  for (const union of cliSrc.matchAll(/\(\s*(\w+)\s*:\s*((?:"[a-z-]+"\s*\|\s*)+"[a-z-]+")\s*[,)]/g)) {
+    literalUnionVars.set(union[1]!, [...union[2]!.matchAll(/"([a-z-]+)"/g)].map((v) => v[1]!));
+  }
+  // Loop-bound verb sets (pre-pass): the two shapes that iterate a literal verb
+  // set instead of taking a literal-union parameter. Both bind the loop's key
+  // into the SAME map, so the chain pass expands their `.command(<key>)` calls
+  // through the shape it already knows — no second path builder in this file.
+  //  - `for (const [verb, …] of Object.entries(TABLE))` over a module-local
+  //    `Record<string, …>` whose keys are the verbs: plan-coordination.ts
+  //    ISSUE_VERB_NAMES (retired verbs → `plan residual-add | residual-close`)
+  //    and index.ts RETIRED_BACKLOG_COMMANDS (`status backlog-register |
+  //    backlog-close`).
+  //  - `for (const { verb, … } of factory())` over a local helper that returns
+  //    its verb records: execution-workflow.ts `workflowTransitions()` (the
+  //    active `workflow phase | lifecycle | execution-policy |
+  //    integration-worktree`).
+  // A set that cannot be read leaves its key unbound and stays silent: these
+  // shapes were invisible before this pass, and a missed verb is still loud at
+  // the citation site (an unknown-command failure), never silently accepted.
+  const loopVerbSets: Array<readonly [string, string[]]> = [];
+  for (const loop of cliSrc.matchAll(
+    /for\s*\(\s*const\s*\[\s*(\w+)\s*,[^\]]*\]\s+of\s+Object\.entries\(\s*(\w+)\s*\)\s*\)/g,
+  )) {
+    const body = new RegExp(`const\\s+${loop[2]!}\\s*:\\s*Record<[^>]+>\\s*=\\s*\\{([^}]*)\\}`).exec(cliSrc)?.[1];
+    if (body === undefined) continue;
+    const keys = stripLineCommentsFromVerbTableBody(body);
+    loopVerbSets.push([loop[1]!, [...keys.matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:/g)].map((m) => m[1] ?? m[2]!)]);
+  }
+  for (const loop of cliSrc.matchAll(/for\s*\(\s*const\s*\{\s*(\w+)[^}]*\}\s+of\s+(\w+)\s*\(\s*\)\s*\)/g)) {
+    // The helper's text runs to the closing brace alone on its line: its
+    // signature may open a braced return type whose own last line starts with
+    // `}` too (`(): ReadonlyArray<{ … }> {`), so the column-0 `}` alone on the
+    // line is the end of the declaration.
+    const factory = new RegExp(`function\\s+${loop[2]!}\\s*\\([\\s\\S]*?^}[ \\t]*$`, "m").exec(cliSrc)?.[0];
+    if (factory === undefined) continue;
+    const verbs = [...factory.matchAll(new RegExp(`${loop[1]!}\\s*:\\s*"([a-z][a-z0-9-]*)"`, "g"))].map((m) => m[1]!);
+    loopVerbSets.push([loop[1]!, verbs]);
+  }
+  for (const [key, verbs] of loopVerbSets) {
+    if (verbs.length === 0) continue;
+    literalUnionVars.set(key, [...new Set([...(literalUnionVars.get(key) ?? []), ...verbs])]);
+  }
  // One pass keeps document order: `.command` advances the current chain
  // path (`const X = program.command("p")` or `X.command("sub")`), a
  // receiver-less `.command`/`.argument` hangs off that chain, and `.action`
  // closes it (a fresh statement re-resolves parents from varPaths).
   const chainRe =
-    /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)?\.(?:command\(\s*"([a-z-]+)"\s*\)|argument\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)|action\(\s*(?:async\s*)?)/g;
+    /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)?\.(?:command\(\s*"([a-z-]+)"\s*\)|command\(\s*(\w+)\s*\)|argument\(\s*"([^"]+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)|action\(\s*(?:async\s*)?)/g;
  // Enumerated argument descriptions: an all-lowercase `a-z-`-token list.
   const enumRe = /^[a-z-]+(?:\s*\|\s*[a-z-]+)+$/;
  // Current chain: the command path a receiver-less call hangs off.
@@ -474,8 +547,22 @@ export function buildCliCommandInventory(cliSrc: string): {
     const declared = m[1];
     const receiver = m[2];
     const commandName = m[3];
-    const argName = m[4];
-    const argDesc = m[5];
+    const commandVar = m[4];
+    const argName = m[5];
+    const argDesc = m[6];
+    const parent = parentPathOf(receiver, chainVar, chainPath, varPaths);
+    if (commandVar !== undefined) {
+      // Dynamic verb registration: expand `<group>.command(param)` to one
+      // subcommand per literal. An unknown parent chain or an unresolvable
+      // parameter (a loop-bound verb, e.g. `Object.entries(...)`) contributes
+      // nothing and is not a failure — this call shape was invisible to the
+      // parser before the dynamic pass, so it must stay silent, never loud.
+      const verbs = literalUnionVars.get(commandVar);
+      if (parent != null && verbs !== undefined) {
+        for (const verb of verbs) cliCommands.add(`${parent} ${verb}`);
+      }
+      continue;
+    }
     if (commandName !== undefined) {
       if (declared) {
         varPaths.set(declared, commandName);
@@ -490,12 +577,6 @@ export function buildCliCommandInventory(cliSrc: string): {
         chainPath = commandName;
         continue;
       }
-      const parent =
-        receiver === undefined
-          ? chainPath
-          : chainVar === receiver && chainPath !== null
-            ? chainPath
-            : varPaths.get(receiver);
       if (parent === undefined) {
         failures.push(
           receiver === undefined
@@ -509,10 +590,6 @@ export function buildCliCommandInventory(cliSrc: string): {
       if (receiver !== undefined) chainVar = receiver;
       chainPath = path;
     } else if (argName !== undefined) {
-      const parent =
-        receiver !== undefined && (chainVar !== receiver || chainPath === null)
-          ? varPaths.get(receiver)
-          : chainPath;
       if (parent === undefined) {
         failures.push(
           receiver !== undefined
@@ -533,6 +610,21 @@ export function buildCliCommandInventory(cliSrc: string): {
     }
   }
   return { cliCommands, failures };
+}
+
+/** Parent command path for a `.command(...)` / `.argument(...)` receiver: the
+ * current chain path when the receiver continues the chain, else the
+ * receiver's declared path. `null` = a top-level command, `undefined` = an
+ * unknown receiver (the caller decides whether that is a failure). */
+function parentPathOf(
+  receiver: string | undefined,
+  chainVar: string | null,
+  chainPath: string | null,
+  varPaths: Map<string, string>,
+): string | null | undefined {
+  if (receiver === undefined) return chainPath;
+  if (chainVar === receiver && chainPath !== null) return chainPath;
+  return varPaths.get(receiver);
 }
 
 /** Audit `<category>` keyword-table row — owned by the `mstar-use-cli` skill. */
@@ -602,10 +694,29 @@ function validateCliCommandTokens(cliCommands: Set<string>, tokens: string[]): s
 }
 
 /**
+ * CLI modules whose top-level group registrars register commands outside
+ * `packages/cli/src/index.ts` (`index.ts` calls each one). Parsed with the same
+ * command-chain builder used for index.ts; the scoped verb tables in
+ * plan-coordination.ts are read separately below.
+ */
+export const CLI_INVENTORY_REGISTRAR_MODULES = [
+  "packages/cli/src/plan-coordination.ts",
+  "packages/cli/src/execution-session.ts",
+  "packages/cli/src/execution-workflow.ts",
+  "packages/cli/src/execution-migrate.ts",
+  "packages/cli/src/store-migrate.ts",
+  "packages/cli/src/issue.ts",
+  "packages/cli/src/catalog.ts",
+] as const;
+
+/**
  * Supplement the index.ts inventory with commands registered outside that
  * file: PLAN_VERBS / WORKFLOW_VERBS tables in plan-coordination.ts (SSOT
- * for scoped verbs) and the `sdd evidence` subtree in sdd-evidence.ts
- * (parsed from registerSddEvidenceCommands `.command(...)` calls).
+ * for scoped verbs), the `sdd evidence` subtree in sdd-evidence.ts
+ * (parsed from registerSddEvidenceCommands `.command(...)` calls), and every
+ * registrar in `CLI_INVENTORY_REGISTRAR_MODULES` — each a group registrar that
+ * index.ts calls and that is parsed here with the same command-chain builder
+ * used for index.ts.
  */
 export function supplementCliCommandInventory(
   cliCommands: Set<string>,
@@ -636,6 +747,19 @@ export function supplementCliCommandInventory(
     for (const vm of tableBody.matchAll(/(?:"([^"]+)"|([a-z][a-z0-9-]*))\s*:\s*true/g)) {
       cliCommands.add(`${family} ${vm[1] ?? vm[2]}`);
     }
+  }
+
+  for (const module of CLI_INVENTORY_REGISTRAR_MODULES) {
+    let moduleSrc: string;
+    try {
+      moduleSrc = readFileSync(join(repoRoot, module), "utf8");
+    } catch {
+      failures.push(`drift: could not read ${module} for CLI command inventory`);
+      continue;
+    }
+    const moduleInventory = buildCliCommandInventory(moduleSrc);
+    for (const name of moduleInventory.cliCommands) cliCommands.add(name);
+    for (const row of moduleInventory.failures) failures.push(`${module}: ${row}`);
   }
 
   const sddPath = join(repoRoot, "packages/cli/src/sdd-evidence.ts");

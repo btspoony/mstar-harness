@@ -7,13 +7,15 @@
  * `validateStatusDoc` are the module's wiring exports for the adapter).
  * Enforcement is the status-gate repair-escape contract: the intent waterfall
  * carries no incoming content, so hard mode with an ALREADY-invalid document
- * allows the write as a repair (loud error log + `repair: true` advisory).
+ * allows the write as a repair (loud error log + `repair: true` advisory) —
+ * EXCEPT the store-authority refusal class, which no write can repair and
+ * which is therefore vetoed (throw; {@link StatusVetoError}).
  *
  * Module boundary: no barrel — the entry and the adapter import by explicit
  * relative path; public exports (`StatusGateAdvisory`) are re-exported
  * verbatim by the entry.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
@@ -37,6 +39,7 @@ import type {
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
+import { storeAuthorityRefusals } from './store-authority.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
 // status-gate core and is constructed by the entry `apply`; the listener
 // signatures type their adapter parameter through the adapter module.
@@ -51,11 +54,13 @@ const LOGGER_NAME = 'mstar/status-gate'
  * would violate the seam contract. Consumers (later tasks, catalogs) observe
  * this event for model-visible/session-log surfacing.
  *
- * The status gate NEVER throws: the fs intent waterfall
- * carries no incoming content, so the only hard-mode decision this seam can
- * make about an ALREADY-invalid document is to allow the write as a repair
- * escape. Every decision surfaces through this advisory; unexpected internal
- * errors degrade to an allow with `degraded: true`.
+ * The status gate throws only the typed store-authority veto
+ * ({@link StatusVetoError}) — the one refusal this content-blind seam CAN
+ * make, because no write to the document can repair an unreadable issue
+ * authority. Every other decision surfaces through this advisory: the intent
+ * waterfall carries no incoming content, so the only hard-mode decision about
+ * an ALREADY-invalid document is to allow the write as a repair escape.
+ * Unexpected internal errors degrade to an allow with `degraded: true`.
  */
 export interface StatusGateAdvisory {
   /** Which intent slot passed the gate. */
@@ -115,7 +120,13 @@ export type HarnessDocKind = 'status' | 'snapshot' | 'register'
 export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): HarnessDocKind | null {
   const resolved = resolve(targetPath)
   const name = basename(resolved)
-  if (name !== STATUS_FILE && name !== WORKFLOW_SNAPSHOT_FILE && name !== PROJECT_REGISTER_FILE) return null
+  // The register name matches CASE-INSENSITIVELY (plan QC fix wave FW-3): on
+  // a case-insensitive volume (Darwin/APFS) a case-variant basename
+  // (`RESIDUALS.json`) IS the register file, and the document gate must see
+  // what the store-authority route sees (omp/ZCode parity). The status and
+  // snapshot names keep their exact match.
+  const isRegisterName = name.toLowerCase() === PROJECT_REGISTER_FILE
+  if (name !== STATUS_FILE && name !== WORKFLOW_SNAPSHOT_FILE && !isRegisterName) return null
   const rel = relative(harnessDir, resolved)
   if (name === STATUS_FILE && rel === STATUS_FILE) return 'status'
   let workflowDir: string
@@ -128,7 +139,7 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
     projectDir = join(harnessDir, 'projects')
   }
   if (name === WORKFLOW_SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative(workflowDir, resolved))) return 'snapshot'
-  if (name === PROJECT_REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative(projectDir, resolved))) return 'register'
+  if (isRegisterName && /^[^/]+\/residuals\.json$/i.test(relative(projectDir, resolved))) return 'register'
   return null
 }
 
@@ -144,32 +155,88 @@ function resolveHard(harnessDir: string, config: Config): boolean {
 }
 
 /**
+ * The violation code the snapshot cleanup extension raises when the issue
+ * authority cannot be consulted at all — missing (`store.not-initialized`),
+ * staged (`store.not-active`), corrupt (`store.corrupt`), below-floor /
+ * capability-less (`store.runtime-unsupported`), drifted (`store.schema-*`) or
+ * busy store. The store-authority refusal class: the cleanup gate's VERDICT is
+ * unknown, as opposed to a cleanup violation the authority actually reported.
+ *
+ * The fs-intent repair escape is unsound for this class: the violation says the
+ * authority could not be READ, so the write that would "repair" it is a store
+ * command (`mstar store init|upgrade|migrate`), never a write to the document —
+ * every document write admissible under the escape is instead an evasion of the
+ * very plan row the closure gate is asking about (dropping its
+ * `metadata.findings_cleanup` mode while no authority can re-derive the
+ * violation).
+ */
+const CLEANUP_AUTHORITY_UNAVAILABLE_CODE = 'findings.cleanup-authority-unavailable'
+
+/**
+ * Typed hard-mode veto for the status gate's store-authority refusal class
+ * (the dsh fs-policy veto channel: "veto = throw"; the fs tool turns the throw
+ * into an isError tool result carrying `{ name, code }`). Two decision
+ * classes throw it:
+ *
+ * - the UNCONDITIONAL store-authority refusals (G4b, plan QC fix wave FW-1):
+ *   a hand write of `{HARNESS_DIR}/store.db` (`store.direct-write-refused`) or
+ *   of a retired/unreadable-authority register (`project.register.retired` /
+ *   `store.authority-unavailable`) — an authority invariant, vetoed in BOTH
+ *   enforcement modes;
+ * - the hard-mode cleanup-authority class (see
+ *   {@link CLEANUP_AUTHORITY_UNAVAILABLE_CODE}) — the repair escape every
+ *   other violation class still gets is unavailable there.
+ *
+ * The content-blind listener has no incoming content to lint, but it does not
+ * need any for THESE decisions: they are about the authority itself, which no
+ * content can change.
+ */
+export class StatusVetoError extends Error {
+  /** Stable code for tool-result serialization (the `{ name, code }` convention). */
+  readonly code = 'status.veto' as const
+  /** The violations that caused the veto (the store-authority refusal included). */
+  readonly violations: readonly ValidationResult[]
+
+  constructor(target: string, violations: readonly ValidationResult[], header: string) {
+    super(
+      `${target} write vetoed — ${header}:\n${violations.map(formatViolation).join('\n')}`,
+    )
+    this.name = 'StatusVetoError'
+    this.violations = violations
+  }
+}
+
+/**
  * Validate a PARSED harness coordination document through the
  * kind-matched engine validator (v2 root / workflow snapshot / project
  * register — the P2-fixed "one validator per kind" shape) plus the
  * snapshot-only `findingsCleanupGate` extension per plan row that
  * CONFIGURES a mode (the v1 per-plan-row cleanup gate relocated: plan rows
- * live on the snapshot, residuals on the project registers). Shared by
- * {@link validateStatusDoc} (the on-disk single-read path) and the host
- * adapter's `beforeStatusWrite` (the incoming document) — the fs-intent
- * gate, the adapter hook and the repair escape all surface the SAME
- * violation codes.
+ * live on the snapshot, the plan's linked OPEN issues live in the issue
+ * store). Shared by {@link validateStatusDoc} (the on-disk single-read path)
+ * and the host adapter's `beforeStatusWrite` (the incoming document) — the
+ * fs-intent gate, the adapter hook and the repair escape all surface the
+ * SAME violation codes.
+ *
+ * ASYNC because the cleanup extension reads the issue authority
+ * (`{HARNESS_DIR}/store.db`), the engine's async domain boundary. The
+ * register kind stays SYNCHRONOUS shape validation: a project register is
+ * migration history, and validating a document about to be written to that
+ * retired path is not a lookup.
  * @param kind - the target's {@link HarnessDocKind} (matching engine validator).
  * @param harnessDir - the resolved `{HARNESS_DIR}`; required for the
- * snapshot kind's cleanup extension (the registers it reads live under it),
- * otherwise unused.
+ * snapshot kind's cleanup extension (it is the store context), otherwise
+ * unused.
  */
-export function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessDir?: string | null): GateResult {
-  if (kind === 'snapshot') {
-    const base = validateWorkflowSnapshot(doc)
-    if (!base.ok) return base
-    if (harnessDir === null || harnessDir === undefined) return base
-    const violations = snapshotFindingsCleanupViolations(doc, harnessDir)
-    if (violations.length === 0) return base
-    return { ok: false, violations }
-  }
+export async function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessDir?: string | null): Promise<GateResult> {
   if (kind === 'register') return validateProjectRegister(doc)
-  return validateStatus(doc as StatusV2Doc)
+  if (kind !== 'snapshot') return validateStatus(doc as StatusV2Doc)
+  const base = validateWorkflowSnapshot(doc)
+  if (!base.ok) return base
+  if (harnessDir === null || harnessDir === undefined) return base
+  const violations = await snapshotFindingsCleanupViolations(doc, harnessDir)
+  if (violations.length === 0) return base
+  return { ok: false, violations }
 }
 
 /**
@@ -177,20 +244,23 @@ export function validateStatusValue(doc: unknown, kind: HarnessDocKind, harnessD
  * `metadata.findings_cleanup` CONFIGURES a mode (zero-residual /
  * allow-residual — the P2 mode-resolution contract: explicit mode wins,
  * the v1 `plans[].metadata.findings_cleanup` mirror is deleted, no
- * dual-track), run the engine `findingsCleanupGate(register, planId, …)`
- * against the project registers (`projects/<id>/residuals.json` entries
- * keyed by plan id — the snapshot plan linkage). The plan's register is
- * located across ALL project registers (workspace-level, same aggregation
- * as the catalog's residual rollup — the snapshot carries no project id);
- * no register entries for the plan → no open residuals → the gate passes.
- * Unreadable registers / a missing projects dir are skipped (advisory —
- * a broken register read must not brick the snapshot write gate).
+ * dual-track), run the engine `findingsCleanupGate(context, planId, …)`
+ * against the issue store: the plan's OPEN issues linked through
+ * `provenance(kind='plan', target=<plan-id>)`, the single findings authority
+ * (issue contract §4). A plan with no linked open issue passes.
+ *
+ * FAIL-CLOSED: the authority must be readable AND active. A missing
+ * (`store.not-initialized`), staged (`store.not-active`), corrupt
+ * (`store.corrupt`), below-floor or capability-less
+ * (`store.runtime-unsupported`), drifted (`store.schema-*`) or busy store is
+ * reported as a HIGH violation carrying the engine's own refusal message —
+ * NEVER as "no findings". The store is never replaced by a JSON fallback:
+ * the retired registers are migration history, not a second authority.
  */
-function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): ValidationResult[] {
+async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): Promise<ValidationResult[]> {
   const record = asRecord(doc)
   if (record === undefined) return []
   const violations: ValidationResult[] = []
-  const registers = projectRegisterDocs(harnessDir)
   for (const row of Array.isArray(record.plans) ? record.plans : []) {
     const planRow = asRecord(row)
     const metadata = planRow === undefined ? undefined : asRecord(planRow.metadata)
@@ -198,35 +268,23 @@ function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): Va
     if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
     const planId = typeof planRow?.id === 'string' ? planRow.id : typeof planRow?.plan_id === 'string' ? planRow.plan_id : undefined
     if (planId === undefined) continue
-    for (const register of registers) {
-      violations.push(...findingsCleanupGate(register.doc as Parameters<typeof findingsCleanupGate>[0], planId, { mode }).violations)
+    try {
+      const gate = await findingsCleanupGate({ harnessDir }, planId, { mode })
+      violations.push(...gate.violations)
+    } catch (error) {
+      const code = (error as { code?: unknown } | null | undefined)?.code
+      violations.push({
+        ok: false,
+        severity: 'high',
+        code: CLEANUP_AUTHORITY_UNAVAILABLE_CODE,
+        message:
+          `the findings cleanup gate for plan ${planId} cannot be evaluated: ` +
+          `${typeof code === 'string' && code !== '' ? `[${code}] ` : ''}${(error as Error).message}`,
+        fix: 'restore the issue store (mstar store init|upgrade|migrate) — an unreadable findings authority is never treated as no findings',
+      })
     }
   }
   return violations
-}
-
-/** Every readable project register doc under `projects/<id>/` (unreadable
- * registers skipped — advisory). */
-function projectRegisterDocs(harnessDir: string): Array<{ projectId: string; doc: unknown }> {
-  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
-  let entries
-  try {
-    entries = readdirSync(projectsDir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const registers: Array<{ projectId: string; doc: unknown }> = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const registerPath = join(projectsDir, entry.name, PROJECT_REGISTER_FILE)
-    if (!existsSync(registerPath)) continue
-    try {
-      registers.push({ projectId: entry.name, doc: readJson(registerPath) })
-    } catch {
-      continue // unreadable register — skip (advisory)
-    }
-  }
-  return registers
 }
 
 /**
@@ -250,10 +308,10 @@ function projectRegisterDocs(harnessDir: string): Array<{ projectId: string; doc
  * @param path - the canonical coordination-document path (root status.json
  * / workflow snapshot / project register — the caller classifies it).
  * @param kind - the target's {@link HarnessDocKind}.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (the snapshot kind's
- * cleanup extension needs it to locate the project registers).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (the store context of the
+ * snapshot kind's cleanup extension).
  */
-export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir?: string | null): GateResult {
+export async function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir?: string | null): Promise<GateResult> {
   let doc: unknown
   try {
     doc = readJson(path)
@@ -268,20 +326,25 @@ export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir
       }],
     }
   }
-  return validateStatusValue(doc, kind, harnessDir)
+  return await validateStatusValue(doc, kind, harnessDir)
 }
 
 /**
  * Gate one fs intent on a canonical `{HARNESS_DIR}` coordination document
  * (root `status.json` / `workflows/<id>/snapshot.json` /
  * `projects/<id>/residuals.json` — the v3 write-intent target set). The gate
- * never throws. Warn mode logs + advisory emit + delegates; hard
+ * throws only {@link StatusVetoError} (the store-authority refusal veto); it
+ * never throws anything else. Warn mode logs + advisory emit + delegates; hard
  * mode with an ALREADY-invalid document logs an error-level REPAIR advisory
  * and delegates — the intent waterfall carries no incoming content, so a
  * hard veto here would deadlock the very write that repairs the document.
- * The coherent content-blind policy: invalid on-disk → allow-as-repair;
- * valid on-disk → normal validation path (pass). Non-coordination targets
- * and absent documents are pure pass-through.
+ * The coherent content-blind policy: invalid on-disk → allow-as-repair; valid
+ * on-disk → normal validation path (pass). EXCEPTION (narrowed repair
+ * escape): a store-authority refusal is vetoed instead — no write to the
+ * document can repair an unreadable issue authority, so admitting the write
+ * could only serve to remove the plan row the closure gate asks about while no
+ * authority can re-derive the violation. Non-coordination targets and absent
+ * documents are pure pass-through.
  *
  * Error-containment envelope: any unexpected error (TOCTOU race, backend
  * contract violation on `displayPath`, throwing advisory consumer) degrades
@@ -289,25 +352,77 @@ export function validateStatusDoc(path: string, kind: HarnessDocKind, harnessDir
  * untyped throw from the gate would spuriously block legitimate writes (the
  * fs waterfall has no error containment of its own).
  */
-function gateStatusIntent(
+async function gateStatusIntent(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
   adapter: DshHostAdapter,
   operation: 'write' | 'edit',
   target: FsTarget,
-): void {
+): Promise<void> {
   try {
     if (harnessDir === null) return
     const kind = harnessDocKindOfTarget(harnessDir, target.displayPath)
+    // FW-1/G4b: the store-authority refusal class is decided BEFORE any
+    // document validation and vetoes in BOTH enforcement modes — a hand write
+    // of the store database, or of a retired/unreadable-authority register,
+    // is an authority invariant no enforcement flag governs (the dsh
+    // `catalogRegistrationVeto` precedent). The pre-activation legacy register
+    // route returns no refusals and keeps the document path below.
+    const authorityRefusals = await storeAuthorityRefusals({
+      resolvedHarnessDir: harnessDir,
+      directKind: kind,
+      rawPath: target.displayPath,
+    })
+    if (authorityRefusals.length > 0) {
+      const hard = resolveHard(harnessDir, config)
+      ctx.logger(LOGGER_NAME).error(
+        `${target.displayPath} ${operation} VETOED (store-authority refusal class; unconditional — an authority invariant, not the enforcement flag):\n${authorityRefusals.map(formatViolation).join('\n')}`,
+      )
+      // The advisory is contained: a throwing consumer must not hand the
+      // catch below an error it would contain as a degrade-to-allow (the
+      // throw at the end of this branch IS the decision).
+      try {
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: false, violations: authorityRefusals }, hard })
+      } catch (emitError) {
+        ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
+      }
+      throw new StatusVetoError(
+        target.displayPath,
+        authorityRefusals,
+        'the issue/catalog authority is not hand-writable (store-authority refusal class; unconditional — an authority invariant, not the enforcement flag)',
+      )
+    }
     if (kind === null) return
     // The adapter owns the shared status-gate core (missing file = first
     // create = pass); this listener adds enforcement + observability.
-    const result = adapter.statusGate(target.displayPath, kind, harnessDir)
+    const result = await adapter.statusGate(target.displayPath, kind, harnessDir)
     const hard = resolveHard(harnessDir, config)
     const verdict = applyEnforcement(result, { hard })
     if (!verdict.ok) {
       if (verdict.hardBlocked) {
+        // The one refusal this seam CAN make: the store-authority class (see
+        // CLEANUP_AUTHORITY_UNAVAILABLE_CODE). Thrown past the error-containment
+        // envelope below, which contains UNEXPECTED errors only — the veto is a
+        // decision, and the fs-policy channel turns it into an isError write.
+        if (verdict.violations.some((violation) => violation.code === CLEANUP_AUTHORITY_UNAVAILABLE_CODE)) {
+          ctx.logger(LOGGER_NAME).error(
+            `status.json ${operation} VETOED (Enforcement: hard; the issue authority is unavailable, so the findings cleanup gate has no verdict — no filesystem write can repair that):\n${verdict.violations.map(formatViolation).join('\n')}`,
+          )
+          // The advisory is contained: a throwing consumer must not hand the
+          // catch below an error it would contain as a degrade-to-allow (the
+          // throw at the end of this branch IS the decision).
+          try {
+            ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
+          } catch (emitError) {
+            ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
+          }
+          throw new StatusVetoError(
+            target.displayPath,
+            verdict.violations,
+            'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
+          )
+        }
         // Repair escape: the current document is already invalid; this write
         // may BE the repair, so allow it — but make the degraded control
         // loud (error-level log + repair advisory, `hard: true`).
@@ -321,6 +436,8 @@ function gateStatusIntent(
       }
     }
   } catch (error) {
+    // The typed veto is rethrown untouched (the only throw this gate makes).
+    if (error instanceof StatusVetoError) throw error
     ctx.logger(LOGGER_NAME).error(`status gate degraded to allow: ${(error as Error).message}`)
     try {
       // f9: the degraded advisory reflects ACTUAL enforcement mode — under
@@ -350,12 +467,15 @@ function gateStatusIntent(
  * `fs/write-intent` listener. Registered with `prepend` so this decider runs
  * BEFORE dsh-fs-policy regardless of mount order: the slot is first-wins by
  * registration order (dsh-fs-policy README), so without prepend a policy
- * plugin mounted earlier would make this gate unreachable. Every gate
+ * plugin mounted earlier would make this gate unreachable. Every NON-VETO gate
  * decision (warn advisory, repair escape, degraded allow) calls `next()` —
  * delegating the observed-state intent decision to the remaining chain
  * (fs-policy when mounted; the bare `undefined` default otherwise) rather
  * than terminating the slot with `undefined` (which would silently disable
- * fs-policy's CAS for status.json in composed deployments).
+ * fs-policy's CAS for status.json in composed deployments). The store-authority
+ * veto ({@link StatusVetoError}) is the single decision that does NOT delegate:
+ * it rejects the waterfall so the write cannot land (dsh fs-policy "veto =
+ * throw").
  */
 export async function writeIntentListener(
   ctx: Context,
@@ -366,7 +486,7 @@ export async function writeIntentListener(
   actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
+  await gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
   return await next()
 }
 
@@ -380,6 +500,6 @@ export async function editIntentListener(
   actor: object | undefined,
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
+  await gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
   return await next()
 }

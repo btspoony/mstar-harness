@@ -27,10 +27,20 @@
  *   `AgentSession.getAsyncJobSnapshot` projects them (owner-filtered, five recent
  *   rows, delivery state), so "running", "settled" and "delivery pending" are
  *   real manager states rather than hand-written snapshot literals.
- * - Every engine fact (workflow snapshot, coordinator binding, prepared plan,
- *   plan session and lease) is created through the **real engine verbs**
- *   (`bindPlanSession`, `mutatePlanCoordination`) or the canonical snapshot
- *   writer, never by hand-writing an accepted lease/binding.
+ * - Every engine fact is created through the **real engine verbs**, never by
+ *   hand-writing an accepted lease/binding — on whichever authority the arm
+ *   addresses. The migration leaves two arms by design, and this suite pins
+ *   both: the ACTIVE arm (`buildActiveFixture`) provisions the DB execution
+ *   authority (`initializeStore` → `initializeExecutionAuthority` →
+ *   `registerCatalogEntity` → `createExecutionWorkflow` → `mutateExecutionPlan`
+ *   → `bindExecutionSession`, all engine-produced) and observes through the
+ *   session's own v2 `ExecutionBinding`; the LEGACY arm (`buildLegacyFixture`)
+ *   keeps the pre-activation file route (`bindPlanSession`,
+ *   `mutatePlanCoordination`, the canonical snapshot writer) and observes
+ *   through the v1 envelope record. Launch and journal cases run on the ACTIVE
+ *   arm because the launch journal is adopted under the DB authority; the
+ *   envelope-drift, retired-document and terminal cases run on the LEGACY arm
+ *   because their semantics are exactly what the file route preserves.
  * - Native settings come from the host's own project override surface
  *   (`<cwd>/.omp/plugin-overrides.json`), read through the real
  *   `getPluginSettings` helper — no user settings are read or written.
@@ -51,7 +61,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -73,24 +83,42 @@ import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-s
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
+  bindExecutionSession,
   bindPlanSession,
+  createExecutionWorkflow,
   createFsStore,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionPlan,
   mutatePlanCoordination,
+  readExecutionAuthority,
   readPlanCoordination,
   readWorkflowSnapshot,
+  registerCatalogEntity,
   setArtifactStore,
   writeWorkflowSnapshot,
+  type ExecutionCaller,
+  type ExecutionContext,
+  type ExecutionSessionRef,
+  type ExecutionToken,
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import phase2OrchestrationFactory, {
   PHASE2_ADVISORY_CUSTOM_TYPE,
   PHASE2_CUSTOM_TYPE,
   PHASE2_NOTICE_CUSTOM_TYPE,
+  PHASE2_PHASE,
   derivePhase2State,
   phase2Seams,
   readPhase2Records,
   type Phase2Record,
 } from "../src/extensions/phase2-orchestration";
+import {
+  exportExecutionHostInventory,
+  historyExportDigest,
+  inventoryDigest,
+  type ExecutionHostInventory,
+} from "../src/execution-host-inventory";
 
 const WORKFLOW_ID = "wf-phase2";
 const PROJECT_ID = "proj-phase2";
@@ -199,20 +227,29 @@ type Fixture = {
   snapshotPath: string;
   journalPath: string;
   integrationPath: string;
+  /** The legacy arm's coordinator envelope path; `""` on the ACTIVE arm (no file binding). */
   coordinatorSession: string;
+  /** The ACTIVE arm's DB coordinator session reference; `null` on the legacy arm. */
+  coordinator: ExecutionSessionRef | null;
   planPaths: Record<string, string>;
   assignments: Record<string, string>;
   sddDirs: Record<string, string>;
   worktrees: Record<string, string>;
 };
 
+/** The ACTIVE arm's fixture: the DB coordinator reference is present by construction. */
+type ActiveFixture = Fixture & { coordinator: ExecutionSessionRef };
+
+const ACTIVE_TS = "2026-09-16T00:00:00Z";
+
 /**
- * A real repository with one running Phase-2 workflow, two prepared independent
- * plans (each on its own linked worktree/branch), a bound coordinator session
- * and a real integration checkout. Every coordination fact the adapter asserts
- * against is engine-produced.
+ * The real repository every arm starts from: one Git main checkout, one real
+ * integration checkout, two plan worktrees on their own branches with a real
+ * slice commit each, and their Assignment files. No coordination document is
+ * written here — an ACTIVE execution authority is initialized only for an EMPTY
+ * execution workspace, so the legacy arm adds its retired file sources on top.
  */
-function makeFixture(): Fixture {
+function makeRepo(): Fixture {
   const root = makeScratch("omp-phase2-ext-");
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
@@ -227,7 +264,6 @@ function makeFixture(): Fixture {
   const assignments: Record<string, string> = {};
   const sddDirs: Record<string, string> = {};
   const worktrees: Record<string, string> = {};
-  const rows: Array<Record<string, unknown>> = [];
   for (const planId of PLAN_IDS) {
     const planPath = join(harness, "plans", `${planId}.md`);
     const sddDir = join(harness, "sdd", planId);
@@ -244,35 +280,7 @@ function makeFixture(): Fixture {
     sddDirs[planId] = sddDir;
     assignments[planId] = join(sddDir, "assignment.md");
     writeText(assignments[planId]!, assignmentText({ harness, planId, planPath, worktreePath, sddDir, branch }));
-    rows.push({
-      id: planId,
-      plan_id: planId,
-      title: `Plan ${planId}`,
-      file: `.mstar/plans/${planId}.md`,
-      status: "Todo",
-      metadata: { project_id: PROJECT_ID },
-    });
   }
-
-  writeJson(join(harness, "status.json"), {
-    version: 2,
-    updated_at: "2026-09-16",
-    workflows: [
-      { id: WORKFLOW_ID, status: "running", type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` },
-    ],
-  });
-  writeJson(snapshotPath, {
-    schema_version: 1,
-    id: WORKFLOW_ID,
-    type: "iteration",
-    status: "running",
-    started_at: "2026-09-16T00:00:00Z",
-    updated_at: "2026-09-16T00:00:00Z",
-    phase: "phase-2-execute",
-    branch: { base: "main", integration: "integration/wf" },
-    integration_worktree_path: integrationPath,
-    plans: rows,
-  });
   setArtifactStore(createFsStore(harness));
 
   return {
@@ -283,6 +291,7 @@ function makeFixture(): Fixture {
     journalPath: join(workflowDir, JOURNAL_FILE),
     integrationPath,
     coordinatorSession: "",
+    coordinator: null,
     planPaths,
     assignments,
     sddDirs,
@@ -290,10 +299,48 @@ function makeFixture(): Fixture {
   };
 }
 
+/**
+ * The LEGACY arm (pre-activation file route): the same repository plus the
+ * retired root register and workflow snapshot the file transport reads. Its
+ * coordinator envelope and prepared plans are written by the real file verbs in
+ * `buildLegacyFixture`, so every coordination fact is engine-produced too.
+ */
+function makeFixture(): Fixture {
+  const fixture = makeRepo();
+  const rows = PLAN_IDS.map((planId) => ({
+    id: planId,
+    plan_id: planId,
+    title: `Plan ${planId}`,
+    file: `.mstar/plans/${planId}.md`,
+    status: "Todo",
+    metadata: { project_id: PROJECT_ID },
+  }));
+  writeJson(join(fixture.harness, "status.json"), {
+    version: 2,
+    updated_at: "2026-09-16",
+    workflows: [
+      { id: WORKFLOW_ID, status: "running", type: "iteration", started_at: ACTIVE_TS, dir: `workflows/${WORKFLOW_ID}` },
+    ],
+  });
+  writeJson(fixture.snapshotPath, {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "iteration",
+    status: "running",
+    started_at: ACTIVE_TS,
+    updated_at: ACTIVE_TS,
+    phase: PHASE2_PHASE,
+    branch: { base: "main", integration: "integration/wf" },
+    integration_worktree_path: fixture.integrationPath,
+    plans: rows,
+  });
+  return fixture;
+}
+
 /** Bind the lifecycle coordinator (real engine verb) and prepare both plans. */
-async function buildFixture(): Promise<Fixture> {
+async function buildLegacyFixture(): Promise<Fixture> {
   const fixture = makeFixture();
-  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root, sessionId: "fixture-coordinator" });
   expect(bound.outcome).toBe("bound");
   fixture.coordinatorSession = bound.session_file;
   for (const planId of PLAN_IDS) {
@@ -307,6 +354,114 @@ async function buildFixture(): Promise<Fixture> {
     expect(prepared.outcome).toBe("prepared");
   }
   return fixture;
+}
+
+/** The trusted caller this fixture's DB verbs run as (the workflow's creator). */
+function activeCoordinatorContext(fixture: Fixture, sessionId: string): ExecutionContext {
+  return {
+    harnessDir: fixture.harness,
+    caller: { sessionId, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+  };
+}
+
+/** The plan-pm caller of one plan's own DB session (its address is the plan). */
+function activePlanContext(fixture: Fixture, planId: PlanId, sessionId: string): ExecutionContext {
+  return {
+    harnessDir: fixture.harness,
+    caller: { sessionId, role: "plan-pm", workflowId: WORKFLOW_ID, planId } satisfies ExecutionCaller,
+  };
+}
+
+/** One plan's own CAS token, read fresh from the authority at call time. */
+async function planTokenOf(fixture: Fixture, planId: PlanId): Promise<ExecutionToken> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId });
+  return read.token;
+}
+
+/**
+ * The workflow's own CAS token. A `{workflowId}` read returns the WORKFLOW token,
+ * while `createExecutionWorkflow`'s receipt carries the ROOT token its creation
+ * CAS used — the two are not interchangeable, and a workflow-scoped verb refuses
+ * a root token (`execution.token-kind`) instead of coercing it.
+ */
+async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
+  return read.token;
+}
+
+/**
+ * REAL ACTIVE execution authority (the phase2-launches recipe): the issue store
+ * upgraded to an execution authority, both plans registered in the catalog, one
+ * workflow created in `phase-2-execute` holding them with its integration
+ * checkout, both plans PREPARED from their real Assignment files through the DB
+ * verb, and the DB coordinator bound under the native session id the observation
+ * uses. Nothing is planted as file state on this route.
+ */
+async function seedActiveAuthority(fixture: Fixture, sessionId: string): Promise<ExecutionSessionRef> {
+  const handle = await initializeStore({ harnessDir: fixture.harness });
+  handle.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
+  for (const planId of PLAN_IDS) {
+    await registerCatalogEntity(
+      { harnessDir: fixture.harness },
+      { kind: "plan", id: planId, title: `Plan ${planId}`, rootKind: "plans", relativePath: `plans/${planId}.md` },
+      { operationId: `register-${planId}`, actor: "phase2-orchestration-extension.test" },
+    );
+  }
+  const context = activeCoordinatorContext(fixture, sessionId);
+  const created = await createExecutionWorkflow(context, {
+    entry: { id: WORKFLOW_ID, type: "iteration", started_at: ACTIVE_TS, dir: `workflows/${WORKFLOW_ID}` },
+    snapshot: {
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "iteration",
+      status: "running",
+      phase: PHASE2_PHASE,
+      started_at: ACTIVE_TS,
+      updated_at: ACTIVE_TS,
+      branch: { base: "main", integration: "integration/wf" },
+      integration_worktree_path: fixture.integrationPath,
+      plans: PLAN_IDS.map((planId) => ({ id: planId, title: `Plan ${planId}`, file: `plans/${planId}.md`, status: "Todo" })),
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${WORKFLOW_ID}`,
+  });
+  expect(created.data.workflows[0]?.state.id).toBe(WORKFLOW_ID);
+  // Creation is a ROOT-scoped CAS: the receipt's own token is a root token and
+  // must never be handed to a workflow-scoped verb.
+  const bound = await bindExecutionSession(context, {
+    workflowId: WORKFLOW_ID,
+    planId: null,
+    role: "coordinator",
+    expected: await workflowTokenOf(fixture),
+    operationId: `bind-${WORKFLOW_ID}`,
+  });
+  // The journal (and the lock the launcher takes) lives in the canonical
+  // workflow directory, so it must exist on disk — the authority never writes it.
+  mkdirSync(fixture.workflowDir, { recursive: true });
+  for (const planId of PLAN_IDS) {
+    await mutateExecutionPlan(context, {
+      operationId: `prepare-${planId}`,
+      session: bound.data,
+      expected: await planTokenOf(fixture, planId),
+      planId,
+      operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! } as never,
+    });
+  }
+  return bound.data;
+}
+
+/**
+ * The ACTIVE arm's fixture: the DB authority plus the native host session whose
+ * id the coordinator binding carries. The session is minted first because the
+ * observation resolves its own identity from the host manager, and the DB binding
+ * must name exactly that session — the caller can never choose it.
+ */
+async function buildActiveFixture(): Promise<{ fixture: ActiveFixture; session: SessionManager }> {
+  const base = makeRepo();
+  const session = newSession(base.root);
+  const coordinator = await seedActiveAuthority(base, session.getSessionId());
+  return { fixture: { ...base, coordinator }, session };
 }
 
 function snapshotOf(fixture: Fixture): WorkflowSnapshot {
@@ -606,8 +761,11 @@ function intentOf(result: ToolResult): Record<string, unknown> {
   return (result.details.mstarPhase2?.intent ?? {}) as Record<string, unknown>;
 }
 
-function bindParams(fixture: Fixture, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { operation: "bind", workflowId: WORKFLOW_ID, coordinatorSessionPath: fixture.coordinatorSession, ...overrides };
+function bindParams(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  // The caller names only the workflow. The route is read from the addressed
+  // control root and the identity is host-derived, so there is no session path
+  // (or any other identity field) for the call to supply.
+  return { operation: "bind", workflowId: WORKFLOW_ID, ...overrides };
 }
 
 function newSession(cwd: string): SessionManager {
@@ -629,10 +787,10 @@ function journalIntents(fixture: Fixture): Array<Record<string, unknown>> {
 /* ----------------------------------------------------------------- tests --- */
 
 describe("phase2 host adapter", () => {
-  test("explicit phase2 coordinator bind records the identity pointer from the real session", async () => {
-    const fixture = await buildFixture();
+  test("explicit phase2 coordinator bind records the active execution binding from the real session", async () => {
+    const { fixture, session } = await buildActiveFixture();
     const harness = await createHarness({
-      sessionManager: newSession(fixture.root),
+      sessionManager: session,
       jobs: new AsyncJobManager({}),
       cwd: fixture.root,
     });
@@ -649,59 +807,59 @@ describe("phase2 host adapter", () => {
     });
 
     // The host's own schema is the tool contract: strict per operation.
-    expect(harness.validate(bindParams(fixture))).toEqual({ success: true });
-    expect(harness.validate({ operation: "bind", workflowId: WORKFLOW_ID })).toMatchObject({ success: false });
-    expect(harness.validate({ ...bindParams(fixture), extra: 1 })).toMatchObject({ success: false });
+    expect(harness.validate(bindParams())).toEqual({ success: true });
+    expect(harness.validate({ operation: "bind" })).toMatchObject({ success: false });
+    expect(harness.validate({ ...bindParams(), extra: 1 })).toMatchObject({ success: false });
     expect(harness.validate({ operation: "checkpoint", reason: "before-wait" })).toMatchObject({ success: false });
     expect(harness.validate({ operation: "record-launch", intentId: "i", observation: "created", evidencePath: "/tmp/e" })).toMatchObject({
       success: false,
     });
 
-    const snapshotBefore = sha256OfFile(fixture.snapshotPath);
-    const bound = await harness.runTool(bindParams(fixture));
+    // The ACTIVE route writes no retired document: the bind adopts the DB
+    // coordinator binding instead of planting a snapshot beside it.
+    expect(existsSync(fixture.snapshotPath)).toBe(false);
+    const bound = await harness.runTool(bindParams());
     expect(bound.isError).toBe(false);
     expect(codeOf(bound)).toBe("bound");
     expect(bound.details.mstarPhase2).toMatchObject({
       applied: true,
       workflowId: WORKFLOW_ID,
       hostSessionId: harness.sessionManager.getSessionId(),
-      coordinatorSessionPath: fixture.coordinatorSession,
-      harnessRoot: fixture.harness,
-      phase: "phase-2-execute",
+      storeId: fixture.coordinator.storeId,
+      epoch: fixture.coordinator.epoch,
+      phase: PHASE2_PHASE,
     });
 
-    // The identity pointer is the only durable record, and it is exact-session
+    // The durable record is the §3.1 v2 binding, and it is exact-session
     // filtered: a record for another session id is not this session's binding.
     const records = harness.records();
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
+      version: 2,
       kind: "bind",
       workflowId: WORKFLOW_ID,
       hostSessionId: harness.sessionManager.getSessionId(),
-      coordinatorSessionPath: fixture.coordinatorSession,
     });
+    const state = derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId());
+    expect(state.binding?.executionBinding).toEqual({ version: 1, harnessRoot: fixture.harness, session: fixture.coordinator });
+    expect(state.legacy).toBeNull();
     expect(readPhase2Records(harness.ledger(), "some-other-session")).toEqual([]);
-    expect(derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId()).binding).toMatchObject({
-      workflowId: WORKFLOW_ID,
-    });
 
     // Idempotent: a second identical bind writes nothing and authorizes nothing.
-    const again = await harness.runTool(bindParams(fixture));
+    const again = await harness.runTool(bindParams());
     expect(codeOf(again)).toBe("already-bound");
     expect(again.details.mstarPhase2).toMatchObject({ applied: false });
     expect(harness.records()).toHaveLength(1);
 
-    // Refusals write nothing: a different workflow and an unreadable envelope.
-    const foreignWorkflow = await harness.runTool(bindParams(fixture, { workflowId: "wf-other" }));
+    // Refusals write nothing: a workflow the authority does not hold.
+    const foreignWorkflow = await harness.runTool(bindParams({ workflowId: "wf-other" }));
     expect(foreignWorkflow.isError).toBe(true);
-    expect(codeOf(foreignWorkflow)).toBe("phase2.workflow-mismatch");
-    const missingEnvelope = await harness.runTool(bindParams(fixture, { coordinatorSessionPath: join(fixture.root, "absent.json") }));
-    expect(codeOf(missingEnvelope)).toBe("phase2.envelope-unreadable");
+    expect(codeOf(foreignWorkflow)).toBe("coordination.workflow-not-found");
     expect(harness.records()).toHaveLength(1);
 
-    // Nothing engine-visible changed: no journal, no snapshot bytes, no notice.
+    // Nothing engine-visible changed: no journal, no retired snapshot, no notice.
     expect(existsSync(fixture.journalPath)).toBe(false);
-    expect(sha256OfFile(fixture.snapshotPath)).toBe(snapshotBefore);
+    expect(existsSync(fixture.snapshotPath)).toBe(false);
     expect(harness.noticeTexts()).toEqual([]);
 
     // Bound but no opportunity: `agent_end` stays silent (an idle first sample
@@ -712,13 +870,13 @@ describe("phase2 host adapter", () => {
   });
 
   test("opt-in off still permits bounded reminder", async () => {
-    const fixture = await buildFixture();
+    const { fixture, session } = await buildActiveFixture();
     // The saved preference is explicitly off — and it gates launches only.
     writeSettings(fixture, { enabled: false, cap: 2 });
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
+    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
 
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // Launch admission is refused while the opt-in is off (settings gate first).
     const refused = await harness.runTool({
@@ -759,11 +917,11 @@ describe("phase2 host adapter", () => {
   });
 
   test("one followup per changed observation", async () => {
-    const fixture = await buildFixture();
+    const { fixture, session } = await buildActiveFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // A: running job 1.
     const settleOne = startJob(jobs, "job-1", "slice one");
@@ -858,9 +1016,10 @@ describe("phase2 host adapter", () => {
     // A rebind starts a fresh latch. Blocked/acknowledged state recorded before
     // the newest binding must not suppress the new binding's opportunities.
     // (The rebind record is appended through the host's own ledger writer —
-    // `appendCustomEntry`, the same call `pi.appendEntry` makes — because the
-    // engine refuses to bind a coordinated lifecycle to a second envelope; the
-    // sequence is exactly what a coordinator's second `bind` writes.)
+    // `appendCustomEntry`, the same call `pi.appendEntry` makes — because a
+    // second `bind` for an already-adopted lifecycle is idempotent; the sequence
+    // is exactly what a coordinator's second `bind` writes: the §3.1 v2 record
+    // carrying the same adopted execution binding.)
     const blockedAgain = await harness.runTool({
       operation: "checkpoint",
       reason: "dependency-changed",
@@ -872,17 +1031,15 @@ describe("phase2 host adapter", () => {
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(3);
 
-    const envelopeSessionId = String(readJson(fixture.coordinatorSession).session_id);
     harness.sessionManager.appendCustomEntry(PHASE2_CUSTOM_TYPE, {
-      version: 1,
+      version: 2,
       kind: "bind",
       workflowId: WORKFLOW_ID,
       hostSessionId: harness.sessionManager.getSessionId(),
-      coordinatorSessionPath: fixture.coordinatorSession,
-      coordinatorSessionId: envelopeSessionId,
-      harnessRoot: fixture.harness,
+      executionBinding: { version: 1, harnessRoot: fixture.harness, session: fixture.coordinator },
     });
     const rebound = derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId());
+    expect(rebound.binding?.executionBinding.session).toEqual(fixture.coordinator);
     expect(rebound.reminder).toEqual({ acknowledgedKey: null, remindedKeys: [], blocked: false });
 
     // The observation that the old block suppressed is now eligible again…
@@ -897,11 +1054,11 @@ describe("phase2 host adapter", () => {
   });
 
   test("native completion does not duplicate", async () => {
-    const fixture = await buildFixture();
+    const { fixture, session } = await buildActiveFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // Baseline: a running job is reminded about exactly once.
     const settle = startJob(jobs, "job-1", "background compile");
@@ -989,8 +1146,130 @@ describe("phase2 host adapter", () => {
     }
   });
 
-  test("task scoped and foreign sessions inert", async () => {
-    const fixture = await buildFixture();
+  test("a scoped-plan PM session never claims the active observation", async () => {
+    const { fixture } = await buildActiveFixture();
+    // A REAL engine plan binding, under the plan session's own native id: the DB
+    // coordinator seat still belongs to the fixture's coordinator session, so a
+    // plan-pm identity can hold its plan's lease without ever becoming the
+    // observation owner.
+    const planSession = newSession(fixture.root);
+    const planBound = await bindExecutionSession(activePlanContext(fixture, "plan-a", planSession.getSessionId()), {
+      workflowId: WORKFLOW_ID,
+      planId: "plan-a",
+      role: "plan-pm",
+      expected: await planTokenOf(fixture, "plan-a"),
+      operationId: "bind-plan-a-observation",
+    });
+    expect(planBound.data).toMatchObject({ role: "plan-pm", planId: "plan-a", workflowId: WORKFLOW_ID });
+
+    const jobs = new AsyncJobManager({});
+    const planHarness = await createHarness({ sessionManager: planSession, jobs, cwd: fixture.root });
+    const refusal = await planHarness.runTool(bindParams());
+    expect(refusal.isError).toBe(true);
+    expect(codeOf(refusal)).toBe("phase2.coordinator-mismatch");
+    expect(planHarness.records()).toEqual([]);
+    await planHarness.emitAgentEnd();
+    expect(planHarness.advisories()).toEqual([]);
+  });
+
+  test("a legacy envelope binding on an ACTIVE root refuses as not-ready and never reads the retired documents", async () => {
+    const { fixture, session } = await buildActiveFixture();
+    // Only the pre-activation record exists: it is history, so the §5 readiness
+    // check refuses it and neither the envelope nor the snapshot is opened.
+    session.appendCustomEntry(PHASE2_CUSTOM_TYPE, {
+      version: 1,
+      kind: "bind",
+      workflowId: WORKFLOW_ID,
+      hostSessionId: session.getSessionId(),
+      coordinatorSessionPath: join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", "coordinator-absent.json"),
+      coordinatorSessionId: "fixture-coordinator",
+      harnessRoot: fixture.harness,
+    });
+    const harness = await createHarness({ sessionManager: session, jobs: new AsyncJobManager({}), cwd: fixture.root });
+    const state = derivePhase2State(harness.ledger(), session.getSessionId());
+    expect(state.binding).toBeNull();
+    expect(state.legacy).toMatchObject({ coordinatorSessionId: "fixture-coordinator" });
+
+    const refused = await harness.runTool({
+      operation: "checkpoint",
+      reason: "before-wait",
+      decision: "wait",
+      note: "probe",
+    });
+    expect(refused.isError).toBe(true);
+    expect(codeOf(refused)).toBe("execution.consumer-not-ready");
+    expect(String(refused.content[0]!.text)).toContain("checkpoint was not recorded");
+
+    // The event path is the same answer, bounded to one notice per generation.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toEqual([]);
+    expect(harness.noticeTexts()).toHaveLength(1);
+    expect(harness.noticeTexts()[0]).toContain("execution.consumer-not-ready");
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+  });
+
+  test("export-history returns this session's canonical inventory bytes with both digests", async () => {
+    const { fixture, session } = await buildActiveFixture();
+    const harness = await createHarness({ sessionManager: session, jobs: new AsyncJobManager({}), cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
+
+    // The host's own schema is strict per operation.
+    expect(harness.validate({ operation: "export-history", workflowId: WORKFLOW_ID })).toEqual({ success: true });
+    expect(harness.validate({ operation: "export-history" })).toMatchObject({ success: false });
+
+    const exported = await harness.runTool({ operation: "export-history", workflowId: WORKFLOW_ID });
+    expect(exported.isError).toBe(false);
+    expect(codeOf(exported)).toBe("exported");
+
+    // The tool text IS the canonical envelope bytes, not a summary of them: the
+    // coordinator saves exactly these bytes through the existing file-write
+    // channel.
+    const text = String(exported.content[0]!.text);
+    expect(text.endsWith("\n")).toBe(true);
+    const inventory = JSON.parse(text) as ExecutionHostInventory;
+    expect(text).toBe(exportExecutionHostInventory(inventory));
+    expect(inventory.version).toBe(1);
+    expect(inventory.protocol).toBe("host-hidden-inventory-v1");
+    expect(inventory.host).toBe("omp");
+    expect(inventory.workflowId).toBe(WORKFLOW_ID);
+    expect(inventory.hostSessionId).toBe(session.getSessionId());
+    // The v2 bind record this session wrote is carried by H1's own reader.
+    expect(inventory.export.document.records.some((record) => record.type === PHASE2_CUSTOM_TYPE)).toBe(true);
+
+    // Both digests are in the details, and each names its own exact bytes: the
+    // inner H1 export digest and the outer canonical envelope digest.
+    expect(exported.details.mstarPhase2).toMatchObject({
+      code: "exported",
+      workflowId: WORKFLOW_ID,
+      hostSessionId: session.getSessionId(),
+      exportSha256: historyExportDigest(inventory.export.document),
+      evidenceSha256: inventoryDigest(inventory),
+      records: inventory.export.document.records.length,
+      diagnostics: inventory.export.document.diagnostics.length,
+    });
+    expect(createHash("sha256").update(text, "utf8").digest("hex")).toBe(exported.details.mstarPhase2!.evidenceSha256);
+
+    // A decoded record that declares another workflow refuses the whole
+    // document: the history is kept whole, never filtered to fit the assignment.
+    harness.sessionManager.appendCustomEntry(PHASE2_CUSTOM_TYPE, {
+      version: 1,
+      kind: "checkpoint",
+      hostSessionId: session.getSessionId(),
+      workflowId: "wf-foreign",
+      reason: "before-wait",
+      decision: "wait",
+      note: "an observation of another workflow",
+      observationKey: "obs-foreign",
+    });
+    const refused = await harness.runTool({ operation: "export-history", workflowId: WORKFLOW_ID });
+    expect(refused.isError).toBe(true);
+    expect(codeOf(refused)).toBe("inventory.workflow-mismatch");
+    expect(String(refused.content[0]!.text)).toContain("declares workflow");
+  });
+
+  test("task scoped, foreign, retired-document and terminal states stay inert on the pre-activation file route", async () => {
+    const fixture = await buildLegacyFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
     startJob(jobs, "job-1", "running work");
@@ -999,45 +1278,46 @@ describe("phase2 host adapter", () => {
     const taskSession = newSession(fixture.root);
     taskSession.appendSessionInit({ systemPrompt: "task", task: "scout the repo", tools: ["read"], agent: "scout" });
     const taskHarness = await createHarness({ sessionManager: taskSession, jobs, cwd: fixture.root });
-    const taskRefusal = await taskHarness.runTool(bindParams(fixture));
+    const taskRefusal = await taskHarness.runTool(bindParams());
     expect(taskRefusal.isError).toBe(true);
     expect(codeOf(taskRefusal)).toBe("phase2.task-session");
     expect(taskHarness.records()).toEqual([]);
     await taskHarness.emitAgentEnd();
     expect(taskHarness.advisories()).toEqual([]);
 
-    // (b) A scoped-plan PM session (real engine plan binding): it never binds
-    // the coordinator observation.
-    const planBound = await bindPlanSession({
-      scope: { workflowId: WORKFLOW_ID, planId: "plan-a", harnessDir: fixture.harness },
-      cwd: fixture.root,
-    });
-    expect(planBound.outcome).toBe("claimed");
-    const planHarness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    const planRefusal = await planHarness.runTool(bindParams(fixture, { coordinatorSessionPath: planBound.session_file }));
-    expect(codeOf(planRefusal)).toBe("phase2.plan-pm-session");
-    expect(planHarness.records()).toEqual([]);
-    await planHarness.emitAgentEnd();
-    expect(planHarness.advisories()).toEqual([]);
-
-    // (c) A session sitting in an extra primary's feature checkout is outside
+    // (b) A session sitting in an extra primary's feature checkout is outside
     // the engine's coordinator residency, so it cannot claim the observation.
+    // The foreign checkout must still RESOLVE the control harness: a linked
+    // worktree is its own git top-level, so the upward probe from it never
+    // reaches the main checkout's `.mstar`. The pointer below keeps this case on
+    // the residency rule (a foreign cwd), not on harness discovery — the
+    // refusal asserted is the scope verdict, never "no harness here".
+    const foreignCheckout = fixture.worktrees["plan-b"]!;
+    symlinkSync(join(fixture.root, ".mstar"), join(foreignCheckout, ".mstar"));
     const foreign = await createHarness({
-      sessionManager: newSession(fixture.worktrees["plan-b"]!),
+      sessionManager: newSession(foreignCheckout),
       jobs,
-      cwd: fixture.worktrees["plan-b"]!,
+      cwd: foreignCheckout,
     });
-    const foreignRefusal = await foreign.runTool(bindParams(fixture));
+    const foreignRefusal = await foreign.runTool(bindParams());
     expect(codeOf(foreignRefusal)).toBe("phase2.scope-mismatch");
     expect(foreign.records()).toEqual([]);
     await foreign.emitAgentEnd();
     expect(foreign.advisories()).toEqual([]);
 
-    // (d) A non-Phase-2 lifecycle is inert, not fatal: the identity pointer
-    // stands, nothing is emitted, and the diagnostic is bounded to one notice
-    // per generation.
+    // (c) A non-Phase-2 lifecycle is inert, not fatal: the binding stands,
+    // nothing is emitted, and the diagnostic is bounded to one notice per
+    // generation. The record this route writes is the v1 envelope generation —
+    // history, never an active binding.
     const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
+    const boundState = derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId());
+    expect(boundState.binding).toBeNull();
+    expect(boundState.legacy).toMatchObject({
+      workflowId: WORKFLOW_ID,
+      coordinatorSessionPath: fixture.coordinatorSession,
+      harnessRoot: fixture.harness,
+    });
     await writeSnapshot(fixture, { phase: "phase-1-prepare" });
     await harness.emitAgentEnd();
     expect(harness.advisories()).toEqual([]);
@@ -1055,7 +1335,7 @@ describe("phase2 host adapter", () => {
     expect(checkpoint.isError).toBe(true);
     expect(codeOf(checkpoint)).toBe("phase2.phase-inactive");
 
-    // (e) The bound envelope is re-read on every probe: a same-path replacement
+    // (d) The bound envelope is re-read on every probe: a same-path replacement
     // (a new engine session id) makes the binding not-current — the checkpoint
     // refuses, the reminder stays silent, and nothing is written as a handoff.
     const originalEnvelope = readFileSync(fixture.coordinatorSession, "utf8");
@@ -1089,15 +1369,15 @@ describe("phase2 host adapter", () => {
     });
     expect(codeOf(restored)).toBe("recorded");
 
-    // (f) The named snapshot going away disables the observation too: no
+    // (e) The named snapshot going away disables the observation too: no
     // guessed key, no advisory, one bounded diagnostic — and the tool says so.
     rmSync(fixture.snapshotPath);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toEqual([]);
     expect(harness.noticeTexts().at(-1)).toContain("phase2.snapshot-unreadable");
-    expect(await harness.runTool(bindParams(fixture))).toMatchObject({ isError: true });
+    expect(await harness.runTool(bindParams())).toMatchObject({ isError: true });
 
-    // (g) A missing envelope is the other half of the same rule.
+    // (f) A missing envelope is the other half of the same rule.
     writeFileSync(fixture.snapshotPath, originalSnapshot);
     rmSync(fixture.coordinatorSession);
     await harness.emitAgentEnd();
@@ -1112,24 +1392,21 @@ describe("phase2 host adapter", () => {
     expect(codeOf(unreadable)).toBe("phase2.envelope-unreadable");
     writeFileSync(fixture.coordinatorSession, originalEnvelope);
 
-    // (h) A terminal lifecycle is refused outright, before ownership is even
-    // consulted, and records nothing.
-    const closedEnvelope = makeClosedWorkflow(fixture);
-    const terminal = await harness.runTool({
-      operation: "bind",
-      workflowId: "wf-closed",
-      coordinatorSessionPath: closedEnvelope,
-    });
+    // (g) A terminal lifecycle is refused outright, before ownership is even
+    // consulted, and records nothing. The host resolves the workflow's own
+    // recorded coordinator; the terminal verdict precedes it.
+    makeClosedWorkflow(fixture);
+    const terminal = await harness.runTool({ operation: "bind", workflowId: "wf-closed" });
     expect(terminal.isError).toBe(true);
     expect(codeOf(terminal)).toBe("phase2.workflow-terminal");
     expect(harness.records().filter((record) => record.kind === "bind")).toHaveLength(1);
   });
 
   test("terminal diagnostic uses the shared status title, not a fixed prefix", async () => {
-    const fixture = await buildFixture();
+    const fixture = await buildLegacyFixture();
     const jobs = new AsyncJobManager({});
     const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // The bound workflow goes terminal on disk: the probe read the snapshot
     // successfully, so the notice carries its id and status as evidence.
@@ -1157,14 +1434,14 @@ describe("phase2 host adapter", () => {
   });
 
   test("journal replay preserves uncertain launch", async () => {
-    const fixture = await buildFixture();
+    const { fixture, session } = await buildActiveFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
     // The caller is inside the matching managed environment (the real gate the
     // journal checks; the CLI itself is never executed here).
     process.env.HERDR_ENV = "1";
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams(fixture)))).toBe("bound");
+    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     const reserved = await harness.runTool({
       operation: "reserve-launch",
@@ -1194,7 +1471,10 @@ describe("phase2 host adapter", () => {
 
     for (const observation of ["starting", "created", "submitting"]) {
       const step = await record(observation, observation === "created" ? { target: "pane-42" } : {});
-      expect(step.isError).toBe(false);
+      // The step's own outcome code is asserted, not only `isError`: a step this
+      // transport refused reports WHICH refusal it was (e.g. `phase2.journal-failed`
+      // for a failure inside the journal) instead of an anonymous boolean.
+      expect({ code: codeOf(step), isError: step.isError }).toEqual({ code: "recorded", isError: false });
       expect(step.details.mstarPhase2).toMatchObject({ applied: true });
     }
     // A stalled prompt is uncertainty, not a retryable failure.
@@ -1230,7 +1510,7 @@ describe("phase2 host adapter", () => {
     // disk: the uncertain intent still occupies its slot, the other plan can
     // still take the remaining one.
     const reloaded = await createHarness({ sessionManager: harness.sessionManager, jobs, cwd: fixture.root });
-    const rebound = await reloaded.runTool(bindParams(fixture));
+    const rebound = await reloaded.runTool(bindParams());
     expect(codeOf(rebound)).toBe("already-bound");
     expect(rebound.details.mstarPhase2).toMatchObject({ applied: false });
     const second = await reloaded.runTool({
@@ -1260,5 +1540,100 @@ describe("phase2 host adapter", () => {
       "workflowId",
       "worktreePath",
     ]);
+
+    // The document is the v2 generation, owned by exactly this store, epoch and
+    // native session: the journal records its own DB writer, never a file
+    // envelope, and adoption of the legacy generation is provenance only.
+    const journal = readJson(fixture.journalPath);
+    expect(journal.version).toBe(2);
+    expect(journal.workflow_id).toBe(WORKFLOW_ID);
+    expect(journal.owner).toEqual({
+      storeId: fixture.coordinator.storeId,
+      epoch: fixture.coordinator.epoch,
+      sessionId: session.getSessionId(),
+      workflowId: WORKFLOW_ID,
+    });
+    expect(journal.legacy).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------- coordinator bar titles --- */
+
+/**
+ * The extension's own visible output for a captured `custom_message` entry is
+ * the `formatNotice` string — the `<title>: <detail>` line the host bar mounts
+ * under the entry's `customType` label. Asserting that string keeps the
+ * observation on the extension's output contract instead of on the host's
+ * private UI components, which the 18.3.0 host package stopped shipping.
+ */
+function customMessageTexts(entries: readonly SessionEntry[]): readonly string[] {
+  return entries
+    .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
+    .map((entry) => String(entry.content));
+}
+
+describe("coordinator notice bar titles", () => {
+  test("notice-bar-title: the bar carries the shared visible types, the header states no workflow status, the body states its status sentence once, and dedup, continuation and hidden ledger identities stay unchanged", async () => {
+    const fixture = await buildLegacyFixture();
+    const jobs = new AsyncJobManager({});
+    const harness = await createHarness({ sessionManager: newSession(fixture.root), jobs, cwd: fixture.root });
+    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
+
+    // (a) Advisory: one real running job is a changed observation.
+    startJob(jobs, "job-1", "bar-title slice");
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
+    expect(harness.advisories()[0]!.options).toMatchObject({ triggerTurn: true, deliverAs: "followUp" });
+    // …and the durable latch keeps the continuation bounded.
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
+
+    // (b) Refusal diagnostic: the bound workflow goes terminal on disk, so the
+    // probe read its snapshot and the notice is status-bearing.
+    writeJson(fixture.snapshotPath, {
+      ...readJson(fixture.snapshotPath),
+      status: "completed",
+      ended_at: new Date().toISOString(),
+    });
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+
+    // Only the two shared visible types are emitted, and nothing else is.
+    expect(harness.ledger().filter((entry) => entry.type === "custom_message").map((entry) => entry.customType)).toEqual([
+      "mstar:advisory",
+      "mstar:notice",
+    ]);
+
+    // Per-code dedup is unchanged: a repeated identical refusal stays silent.
+    await harness.emitAgentEnd();
+    expect(harness.noticeTexts()).toHaveLength(1);
+    expect(harness.advisories()).toHaveLength(1);
+
+    // The hidden durable identity is untouched, and the ledger still replays.
+    const durableTypes = harness
+      .ledger()
+      .filter((entry) => entry.type === "custom")
+      .map((entry) => entry.customType);
+    expect(durableTypes.length).toBeGreaterThan(0);
+    expect(durableTypes.every((type) => type === "mstar:phase2")).toBe(true);
+    // This describe runs the pre-activation file route: its record is the v1
+    // envelope generation, so the state's binding is the legacy arm's.
+    const state = derivePhase2State(harness.ledger(), harness.sessionManager.getSessionId());
+    expect(state.binding).toBeNull();
+    expect(state.legacy).toMatchObject({ workflowId: WORKFLOW_ID });
+
+    // (c) The bar labels are the entries' customTypes (asserted above); the
+    // status sentence, the refusal code and the advisory's doc pointer live in
+    // the single formatNotice lines, the status stated exactly once.
+    const texts = customMessageTexts(harness.ledger());
+    const noticeText = texts.find((text) => text.includes("phase2.workflow-terminal"));
+    const advisoryText = texts.find((text) => text.includes("phase-2-worktree-lease.md"));
+    expect(noticeText).toBeDefined();
+    expect(advisoryText).toBeDefined();
+    expect(noticeText).toContain(WORKFLOW_ID);
+    expect(noticeText).toContain("completed");
+    // Title and detail never state the same status sentence twice.
+    expect(noticeText?.match(/is completed/g) ?? []).toHaveLength(1);
+    expect(advisoryText).toContain("observation, not a dispatch");
   });
 });

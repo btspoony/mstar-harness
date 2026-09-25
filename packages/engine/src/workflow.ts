@@ -43,11 +43,16 @@ import {
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
+import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
 import { registerWorkflowEntryLocked, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
+import {
+  assertExecutionFileReadAllowed,
+  assertExecutionFileWriteAllowed,
+} from "./store-db.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( — writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -217,21 +222,110 @@ export function isStandaloneDevelopmentWorkflow(snapshot: WorkflowSnapshot): boo
   );
 }
 
-/** Classify row coordination validation: standalone development vs integration delivery. */
+/** True exactly for a single-row verification/report-only plan workflow (spec A1). */
+export function isStandaloneReportOnlyWorkflow(snapshot: WorkflowSnapshot): boolean {
+  return (
+    snapshot.type === "plan" &&
+    snapshot.delivery_kind === "verification/report-only" &&
+    Array.isArray(snapshot.plans) &&
+    snapshot.plans.length === 1
+  );
+}
+
+/** Classify row coordination validation: standalone delivery vs integration delivery. */
 export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
   }
   return "integration";
 }
 
 function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
   const violations: ValidationResult[] = [];
-  if (!isStandaloneDevelopmentWorkflow(snapshot) || row.id !== snapshot.plans[0]?.id) return violations;
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
   const coordination = row.coordination;
-  if (!isPlainObject(coordination) || !isPlainObject(coordination.handoff)) return violations;
+  // A Done standalone row that carries a coordination block must carry the
+  // handoff that block exists to record. The coordination block's own presence
+  // is the durable marker that this row entered the coordination lifecycle, and
+  // no authorized writer produces a coordinated row without a handoff: `accept`
+  // moves it to `accepted` and `complete` writes it `completed` in the SAME
+  // update as `status: "Done"` (`completeStandaloneRow` / `completeRow`,
+  // coordination.ts) — so a Done coordinated row whose handoff block is missing
+  // is only reachable by deleting it, and the deleted block is exactly the
+  // accepted/QC/QA record the completion was authorized against. The reverse
+  // boundary is deliberate: a Done standalone row with NO coordination block at
+  // all is a legitimate legacy shape — the v1 lift mints it verbatim
+  // (`buildStandaloneSnapshot`, migrate.ts:466-511) — and stays accepted.
+  if (!isPlainObject(coordination)) return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff \u2014 a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`,
+        ),
+      );
+    }
+    return violations;
+  }
   const handoff = coordination.handoff as Record<string, unknown>;
-  if (handoff.state !== "completed" || handoff.integration !== undefined) return violations;
+  const completed = handoff.state === "completed";
+  // The state is a POSITIVE requirement, never an early return: a Done
+  // standalone row IS the closed shape, so its stored handoff must be
+  // `completed` — the requirement the DB route's completed replay states
+  // outright (`requireHandoffState(handoff, ["completed"], ...)`,
+  // execution-coordination.ts). The early return this replaces evaluated every
+  // check below — integration contamination, the `integration_worktree_path` /
+  // `branch.integration` refusals and the no-lease requirement — only for a
+  // shape an adversary had already stored correctly, so flipping one word of
+  // stored state disabled all of them and a handoff rewritten back to
+  // `accepted` reached the terminal close. An in-progress standalone row (not
+  // Done) is not this validator's subject and stays untouched: `accepted` is
+  // the state `accept` writes.
+  if (row.status !== "Done" && !completed) return violations;
+  if (!completed) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} \u2014 a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`,
+      ),
+    );
+  }
+  if (handoff.integration !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "coordination.row.handoff-field",
+        `standalone completed handoff must not carry integration for row ${String(row.id)}`,
+      ),
+    );
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    if (snapshot.integration_worktree_path !== undefined) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry integration_worktree_path",
+        ),
+      );
+    }
+    if (isNonEmptyString(snapshot.branch?.integration)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "report-only completed handoff must not carry branch.integration",
+        ),
+      );
+    }
+  }
   if (row.status !== "Done") {
     violations.push(
       violation(
@@ -259,18 +353,18 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
       ),
     );
   }
-  const source = snapshot.branch?.source;
-  const target = snapshot.branch?.target;
-  if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        "standalone completed handoff requires nonblank branch.source and branch.target",
-      ),
-    );
-  } else {
-    if (handoff.source_branch !== source) {
+  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+    const source = snapshot.branch?.source;
+    const target = snapshot.branch?.target;
+    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+      violations.push(
+        violation(
+          "high",
+          "coordination.row.handoff-field",
+          "standalone completed handoff requires nonblank branch.source and branch.target",
+        ),
+      );
+    } else if (handoff.source_branch !== source) {
       violations.push(
         violation(
           "high",
@@ -282,6 +376,7 @@ function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: P
   }
   return violations;
 }
+
 
 /** Stable JSON for change detection (sorted keys, recursive). */
 export function stableJson(value: unknown): string {
@@ -337,8 +432,13 @@ function validateWorktreePathValue(violations: ValidationResult[], value: unknow
  * delivery kind requires is the consultation's rule
  * (`consultDeliveryEvidence`), so a partially filled block stays writable
  * while it is being collected.
+ *
+ * Exported (pure, read-only) for the DB transport's workflow-level `delivery`
+ * transition: recording evidence on the execution authority runs the SAME
+ * structural rule as the file route's `recordWorkflowDelivery`, so the two
+ * writers cannot drift into accepting different evidence shapes.
  */
-function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
+export function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
   const violations: ValidationResult[] = [];
   const invalid = (message: string): void => {
     violations.push(violation("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -389,6 +489,11 @@ function deliveryEvidenceViolations(value: unknown, what: string): ValidationRes
     }
   }
   return violations;
+}
+
+/** The delivery-evidence members one declared kind records (contract §1/§4c/§4d/§4f). */
+export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly string[] {
+  return kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
 }
 
 /**
@@ -687,6 +792,13 @@ export class WorkflowSnapshotValidationError extends Error {
 }
 
 export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
+  // Canonical authority discrimination precedes the existence/parse/validation
+  // work below (spec §4.3): with an ACTIVE execution authority the snapshot is
+  // retired as an authority source, so this reader refuses instead of handing
+  // leftover JSON to a consumer as validated state. `storeDbPath` normalizes
+  // the target to the CONTROL harness root, so a worktree-local file reader
+  // cannot dodge the veto.
+  assertExecutionFileReadAllowed({ harnessDir: dir });
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
     throw new Error(`workflow snapshot not found: ${snapshotPath}`);
@@ -772,6 +884,12 @@ export async function writeWorkflowSnapshot(
   dir: string,
   opts: WriteWorkflowSnapshotOptions = {},
 ): Promise<void> {
+  // Canonical authority discrimination precedes payload validation and the
+  // lock (spec §4.3): with an ACTIVE execution authority the snapshot is
+  // retired as a persistence route, so this refuses whatever store the caller
+  // injected and before any CAS token is inspected. The context is the target
+  // dir; `storeDbPath` normalizes it to the CONTROL harness root.
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => v.message).join("; ");
@@ -826,11 +944,39 @@ export async function writeWorkflowSnapshot(
       );
     }
     const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
+    if (current === undefined) assertNoRecoveryHistoryOnCreate(payload, snapshotPath);
     assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
     await withProtectedWrite(snapshotPath, "put", () =>
       store.put({ kind: "snapshot", key: snapshot.id, payload }),
     );
   });
+}
+
+/**
+ * Provenance boundary for the recovery audit (prerequisite contract §3.3).
+ *
+ * `coordination.identity_recoveries` is written ONLY by
+ * `recoverPrepareCoordinator`, which appends one entry under the snapshot write
+ * lock after authenticating the prior binding. The ordinary writer pins an
+ * EXISTING audit to disk (a replacement cannot drop or rewrite it), but a
+ * create-only write has no disk document to pin against: without this boundary
+ * a caller could CREATE a snapshot carrying an arbitrary, schema-valid —
+ * entirely forged — recovery history that never passed through the recovery
+ * transition. Shape validation is not provenance, so the history is refused
+ * outright, whatever its shape, and the only door that establishes it is the
+ * authorized recovery.
+ */
+function assertNoRecoveryHistoryOnCreate(payload: unknown, snapshotPath: string): void {
+  const coordination = isPlainObject(payload) ? payload.coordination : undefined;
+  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
+  if (!Array.isArray(recoveries) || recoveries.length === 0) return;
+  throw new CoordinationError(
+    "coordination.direct-write-refused",
+    `refusing to create snapshot ${snapshotPath} carrying ${recoveries.length} coordination.identity_recoveries ` +
+      `entr${recoveries.length === 1 ? "y" : "ies"} \u2014 recovery history is established only by the coordinator ` +
+      `recovery transition, and this create-only write proves no such provenance`,
+    { path: snapshotPath, recoveries: recoveries.length },
+  );
 }
 
 /**
@@ -1119,6 +1265,9 @@ function isCloseTimestamp(value: string): boolean {
  * never releases leases.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
+  // Canonical authority discrimination precedes every payload check below and
+  // the unchanged-snapshot shortcut (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   if (!isCloseTimestamp(opts.endedAt)) {
     throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
@@ -1207,12 +1356,19 @@ export type RecordWorkflowDeliveryResult = {
  * - an empty patch or a malformed member: nothing is silently dropped;
  * - compound / PR identity / verified-merge record while any owned plan row
  *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` — contract §3: the delivery
- *   tail runs after every row is Done; write-time only, see below).
+ *   tail runs after every row is Done; write-time only, see below);
+ * - a `completion` fulfilment that would CHANGE once an owned plan row is
+ *   `Done` (`coordination.invalid-transition` — contract §1 the mirror rule:
+ *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
+ *   and the same stable code refuses the same state on the DB route's
+ *   `applyDeliveryEvidence`).
  *
  * Grandfathering: the row-Done gate is write-time only. Snapshots that
  * already carry delivery evidence while rows are not `Done` are never
  * retro-invalidated; idempotent re-records return without consulting row
- * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
+ * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged. The same
+ * grandfathering covers the completion freeze: an identical re-record is the
+ * idempotent return above, never a refusal.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1225,6 +1381,8 @@ export async function recordWorkflowDelivery(
   dir: string,
   opts: RecordWorkflowDeliveryOptions,
 ): Promise<RecordWorkflowDeliveryResult> {
+  // Canonical authority discrimination precedes payload validation (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const evidence: unknown = opts.evidence;
   if (!isPlainObject(evidence)) {
     throw new Error("recordWorkflowDelivery: options.evidence must be an object naming at least one delivery-evidence member");
@@ -1276,7 +1434,7 @@ export async function recordWorkflowDelivery(
         `refusing to record delivery evidence for workflow ${JSON.stringify(workflowId)}: only a type: plan lifecycle with a registered delivery_kind carries delivery evidence (got type ${JSON.stringify(snapshot.type)} / delivery_kind ${JSON.stringify(kind)}) \u2014 the kind is declared at registration and never inferred (\u00a71)`,
       );
     }
-    const allowed = kind === "development" ? ["compound", "pr", "merge"] : ["completion"];
+    const allowed = deliveryEvidenceMembers(kind);
     const unused = members.filter((member) => !allowed.includes(member));
     if (unused.length > 0) {
       throw new Error(
@@ -1323,6 +1481,25 @@ export async function recordWorkflowDelivery(
           `refusing to record delivery evidence: ${detail.code}: ${detail.message}${detail.fix !== undefined ? ` (fix: ${detail.fix})` : ""}`,
         );
       }
+    }
+    // Post-Done immutability of the completion fulfilment (contract §1: for a
+    // `verification/report-only` kind "the fulfilment is recorded before the
+    // row is marked Done"). The tail gate above orders compound / PR / merge
+    // AFTER every owned row is Done; `completion` is its mirror — the ONE
+    // member recorded BEFORE — so once an owned row is Done the recorded
+    // fulfilment is FROZEN: it is the basis that row's `Done` was authorized
+    // against (§4d freezes the PR identity the same way), and re-pointing it
+    // afterwards would leave the `Done` fact standing on evidence it was never
+    // accepted with. An identical re-record never reaches this point (the
+    // idempotent return above), so a retried recording stays a no-op; the
+    // refusal carries the same stable code the DB route's `applyDeliveryEvidence`
+    // uses for the same state (`coordination.invalid-transition`).
+    if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `refusing to record delivery evidence: coordination.invalid-transition: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
+        { workflow_id: workflowId },
+      );
     }
     const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
     await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
@@ -1384,6 +1561,8 @@ export async function declareWorkflowDeliveryKind(
   dir: string,
   opts: DeclareWorkflowDeliveryKindOptions,
 ): Promise<WorkflowSnapshot> {
+  // Canonical authority discrimination precedes payload validation (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const kind = opts.deliveryKind;
   if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
     throw new Error(
@@ -1511,8 +1690,14 @@ export type RegisterPlanWorkflowResult = {
  * must not duplicate identity). Timestamps (`started_at`/`updated_at`/`bound_at`)
  * are excluded by design — the orphaned snapshot's timestamps are preserved,
  * not rewritten, and a retry does not fail merely because the clock moved.
+ *
+ * Shared with the catalog registration journal (`catalog-registration.ts`),
+ * which re-verifies the on-disk registration identity before it publishes the
+ * catalog delta (contract §3 step 3) — one definition of "which registration
+ * this is", never a second one. Audit promotions are `type: plan` snapshots
+ * and compare through this same subset.
  */
-function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
   const coordinator = snapshot.coordination?.coordinator;
   return stableJson({
     type: snapshot.type,
@@ -1524,6 +1709,53 @@ function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
     plans: snapshot.plans,
     coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
   });
+}
+
+/**
+ * The create-only `type: plan` snapshot `registerPlanWorkflow` writes: the
+ * owned plan as its single `Todo` row, plus the declared delivery fields.
+ * Extracted so the catalog registration journal
+ * (`catalog-registration.ts`) recomputes the SAME registration identity for
+ * the reviewed request before it publishes a catalog delta — one snapshot
+ * definition, no second "which registration is this" source. Timestamps are
+ * outside the compared identity, so the clock a caller passes never affects
+ * the comparison.
+ */
+export function planWorkflowSnapshot(
+  workflowId: string,
+  options: RegisterPlanWorkflowOptions,
+  startedAt: string,
+): WorkflowSnapshot {
+  const planRow: PlanRow = { id: options.plan.id, title: options.plan.title, file: options.plan.file, status: "Todo" };
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    plans: [planRow],
+    delivery_kind: options.deliveryKind,
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
+  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
+    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
+    // main-residency fallback) treat it as a protected base anchor: writing a
+    // feature branch there made the ref undeletable and pointed L1's
+    // residency expectation at the feature branch.
+    snapshot.branch = {
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
+    };
+  }
+  if (options.coordinator !== undefined) {
+    snapshot.coordination = {
+      coordinator: { session_id: options.coordinator.session_id, session_file: options.coordinator.session_file, bound_at: startedAt },
+    };
+  }
+  return snapshot;
 }
 
 /**
@@ -1570,6 +1802,11 @@ export async function registerPlanWorkflow(
   if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
     throw new Error("registerPlanWorkflow: options.harnessDir is required (must contain status.json + workflows/)");
   }
+  // Canonical authority discrimination precedes every other check (spec §4.3):
+  // the registration writes a snapshot AND a root entry, so with an ACTIVE
+  // execution authority it refuses whatever store is active.
+  const harnessDir = resolve(options.harnessDir);
+  assertExecutionFileWriteAllowed({ harnessDir });
   assertSafePathComponent(workflowId, "workflow id");
   const { plan, deliveryKind } = options;
   if (!isPlainObject(plan)) {
@@ -1609,41 +1846,12 @@ export async function registerPlanWorkflow(
     throw new Error("registerPlanWorkflow: options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
 
-  const harnessDir = resolve(options.harnessDir);
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "plan",
-    status: "running",
-    started_at: startedAt,
-    updated_at: startedAt.slice(0, 10),
-    plans: [planRow],
-    delivery_kind: deliveryKind,
-  };
-  if (options.project !== undefined) snapshot.project = options.project;
-  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
-    // `branchSource` is the plan's DELIVERY branch (`branch.source`) — never
-    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
-    // main-residency fallback) treat it as a protected base anchor: writing a
-    // feature branch there made the ref undeletable and pointed L1's
-    // residency expectation at the feature branch.
-    snapshot.branch = {
-      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
-      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
-    };
-  }
-  if (options.coordinator !== undefined) {
-    snapshot.coordination = {
-      coordinator: { session_id: options.coordinator.session_id, session_file: options.coordinator.session_file, bound_at: startedAt },
-    };
-  }
+  const snapshot = planWorkflowSnapshot(workflowId, options, startedAt);
   const entry: WorkflowEntry = {
     id: workflowId,
     type: "plan",
@@ -1768,8 +1976,12 @@ export type RegisterIterationWorkflowResult = {
  * carries a coordinator, so an already-bound orphan refuses rather than
  * silently attaching another owner's workflow. Timestamps stay excluded —
  * the orphan's timestamps are preserved, not rewritten.
+ *
+ * Exported for the catalog registration journal
+ * (`catalog-registration.ts`), which re-verifies this exact identity before
+ * publishing a catalog delta (contract §3 step 3).
  */
-function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
+export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
   const coordinator = snapshot.coordination?.coordinator;
   return stableJson({
     id: snapshot.id,
@@ -1781,6 +1993,43 @@ function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): stri
     plans: snapshot.plans,
     coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
   });
+}
+
+/**
+ * The create-only `type: iteration` snapshot `registerIterationWorkflow`
+ * writes: compass ref, the three branch anchors and one `Todo` row per
+ * declared plan. Extracted for the same reason as
+ * `planWorkflowSnapshot` — the catalog registration journal re-verifies this
+ * exact registration identity before it publishes the catalog delta.
+ */
+export function iterationWorkflowSnapshot(
+  workflowId: string,
+  options: RegisterIterationWorkflowOptions,
+  startedAt: string,
+): WorkflowSnapshot {
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    compass_ref: options.compassRef,
+    branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
+    plans: options.rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      file: r.file,
+      status: "Todo",
+      metadata: {
+        iteration_refs: [options.compassRef],
+        spec_integration_branch: options.branch.integration,
+        merge_target: options.branch.integration,
+      },
+    })),
+  };
+  if (options.project !== undefined) snapshot.project = options.project;
+  return snapshot;
 }
 
 /**
@@ -1804,7 +2053,10 @@ function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): stri
  * requested state transition is never treated as successful registration);
  * `startedAt` must be a valid YYYY-MM-DD / RFC3339 timestamp. Rows are
  * constructed from the declared fields — untrusted row objects are never
- * spread.
+ * spread. Every row `file` is resolved through the one registered-plan path
+ * contract (§4): only a canonical absolute or a normalized harness-relative
+ * pointer to the configured `{PLAN_DIR}/<id>.md` is accepted, and the snapshot
+ * persists that canonical absolute path.
  *
  * Already-registered refusals: inside the root lock, an existing entry for
  * the requested id refuses BEFORE either branch — including a stale entry
@@ -1836,6 +2088,9 @@ export async function registerIterationWorkflow(
   if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
     throw refuse("options.harnessDir is required (must contain status.json + workflows/)");
   }
+  // Canonical authority discrimination precedes every other check (spec §4.3).
+  const harnessDir = resolve(options.harnessDir);
+  assertExecutionFileWriteAllowed({ harnessDir });
   assertSafePathComponent(workflowId, "workflow id");
   if (typeof options.compassRef !== "string" || options.compassRef.trim() === "") {
     throw refuse("options.compassRef must be a non-empty string");
@@ -1881,35 +2136,24 @@ export async function registerIterationWorkflow(
   if (!isCloseTimestamp(startedAt)) {
     throw refuse("options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
+  // One registered-plan path contract (prerequisite contract §4): the snapshot
+  // persists the canonical absolute pointer the shared resolver returns, never
+  // the caller's spelling. A repository-relative `.mstar/plans/<id>.md` input
+  // therefore refuses here — before any write — instead of being stored and
+  // later reinterpreted against another base. Run AFTER the field refusals so
+  // a malformed row still reports its own domain refusal first.
+  const resolvedRows = rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    file: resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: row.id, file: row.file }).planPath,
+  }));
 
-  const harnessDir = resolve(options.harnessDir);
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "iteration",
-    status: "running",
-    started_at: startedAt,
-    updated_at: startedAt.slice(0, 10),
-    compass_ref: options.compassRef,
-    branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
-    plans: rows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      file: r.file,
-      status: "Todo",
-      metadata: {
-        iteration_refs: [options.compassRef],
-        spec_integration_branch: options.branch.integration,
-        merge_target: options.branch.integration,
-      },
-    })),
-  };
-  if (options.project !== undefined) snapshot.project = options.project;
+  const snapshot = iterationWorkflowSnapshot(workflowId, { ...options, rows: resolvedRows }, startedAt);
 
   const entry: WorkflowEntry = {
     id: workflowId,

@@ -13,37 +13,73 @@
  * operation, 1 = runtime refusal, 2 = usage/invalid input shape.
  *
  * Identity is never a *looked-up* CLI input: no flag here names a holder, role
- * or coordinator — the engine reads the session envelope named by `--session`
- * and re-checks it against the snapshot inside the lock. The one exception is
- * the fresh-bind identity (`--session-id`, else `MSTAR_HOST_SESSION_ID`): the
- * caller states what the new session is called, never what an existing one owns.
+ * or coordinator. Two transports exist and never mix:
+ *
+ * - the pre-activation file route reads the session envelope named by
+ *   `--session` (and the fresh-bind identity `--session-id`, or the injected
+ *   `MSTAR_HOST_SESSION_ID` for a plan/assignment bind) and re-checks it against
+ *   the snapshot inside the lock;
+ * - the ACTIVE DB route acquires its caller identity from
+ *   `MSTAR_EXECUTION_IDENTITY` (minted by `mstar session run`, or overwritten by
+ *   a host launcher) and carries the engine's canonical session reference in
+ *   `--session-ref`, with the scope's FULL execution token in `--expect` and the
+ *   caller's own replay key in `--operation`. It writes no session file at all.
+ *
+ * A mixed invocation is a usage refusal (exit 2) before any IO, and neither
+ * route is guessed from the other.
  */
 import { Command } from "commander";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import pc from "picocolors";
 import {
+  CoordinationError,
   SddScriptError,
   amendPrepareWorkflow,
+  assertSafeSessionId,
+  bindExecutionSession,
   bindPlanSession,
   createFsStore,
+  executionContextFor,
+  mutateExecutionPlan,
   mutatePlanCoordination,
   readCoordinatedArtifact,
+  readExecutionPlan,
+  readExecutionSource,
   readPlanCoordination,
   readSessionEnvelope,
+  recoverPrepareCoordinator,
   resolveProcessHarnessDir,
+  resumeExecutionSession,
   setArtifactStore,
   showPrepareWorkflow,
   type BindPlanSessionInput,
+  type ClosureEvidence,
+  type CoordinationOperation,
   type CoordinationResult,
+  type ExecutionPlanView,
+  type ExecutionSessionRef,
+  type ExecutionToken,
   type HandoffEvidence,
   type PlanCoordinationOperation,
   type PlanCoordinationView,
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
   type ProgressCoordinationRequest,
-  type ResidualAddCoordinationRequest,
+  type RecoverPrepareCoordinatorResult,
+  type ResidualInput,
+  type TerminalDisposition,
 } from "@mstar-harness/engine";
+import {
+  assertLegacyExecutionFormAvailable,
+  printExecutionRead,
+  printExecutionSuccess,
+  requireExecutionIdentity,
+  requireExecutionRoot,
+  requireExecutionToken,
+  requireSessionRef,
+} from "./execution-session";
+import { payloadFileHelp, validatePayload } from "./issue";
 
 /** Detail keys the A2 failure shape may carry, in spec order. */
 const FAILURE_DETAIL_KEYS = ["holder", "path", "expected", "actual"] as const;
@@ -58,7 +94,8 @@ const WORKFLOW_FAILURE_DETAIL_KEYS = [...FAILURE_DETAIL_KEYS, "workflow_id"] as 
 
 /** JSON payload types owned by the exported engine request shapes. */
 type ProgressPayload = ProgressCoordinationRequest["progress"];
-type ResidualEntriesPayload = ResidualAddCoordinationRequest["entries"];
+/** One finding as `plan issue-add` takes it: the core capture input minus the plan's project. */
+type IssueEntryPayload = ResidualInput;
 
 interface PlanFailureContext {
   workflow_id?: string;
@@ -77,12 +114,24 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * The engine's documented consumer contract is the `code` (+ `details`)
  * pair; the error class itself is not part of the CLI's import surface, so
- * classification keys off the stable prefix instead of `instanceof`.
+ * classification keys off the stable prefix instead of `instanceof`. The
+ * scoped verbs reach five engine refusal families: the coordination surface
+ * (`coordination.*`), the frozen-input pin (`catalog.execution-pin-conflict`,
+ * contract §1), the store boundary (`store.*`) the pin and catalog reads
+ * use, the core issue domain (`issue.*`: the DB mutation's revision/scope
+ * refusals), and — since the authoritative read adapter (plan S2, primary spec
+ * §5) — the execution domain (`execution.*`: `execution.consumer-not-ready` for
+ * a read that would need retired file authority, `execution.not-active` for a
+ * DB read below activation, `execution.direct-write-refused` for a write the
+ * file route may no longer perform). All five are runtime refusals (exit 1),
+ * never internal errors: a caller must be able to branch on the code.
  */
+const ENGINE_REFUSAL_PREFIXES = ["coordination.", "catalog.", "store.", "issue.", "execution."] as const;
+
 function coordinationFailureOf(error: unknown): { code: string; details: Record<string, unknown> } | null {
   const record = asRecord(error);
   const code = record?.code;
-  if (typeof code !== "string" || !code.startsWith("coordination.")) return null;
+  if (typeof code !== "string" || !ENGINE_REFUSAL_PREFIXES.some((prefix) => code.startsWith(prefix))) return null;
   return { code, details: asRecord(record?.details) ?? {} };
 }
 
@@ -112,8 +161,8 @@ const PLAN_VERBS: Record<string, true> = {
   show: true,
   prepare: true,
   progress: true,
-  "residual-add": true,
-  "residual-close": true,
+  "issue-add": true,
+  "issue-close": true,
   handoff: true,
   accept: true,
   return: true,
@@ -124,10 +173,38 @@ const PLAN_VERBS: Record<string, true> = {
   reconcile: true,
 };
 
+/**
+ * The issue-cutover rename (G2b), as one table used on both sides of the
+ * boundary:
+ *
+ * - the engine's scoped operation kinds are still `residual-*` (G2a's
+ *   `coordination.ts` is outside this cutover's files) — the mutation request
+ *   and the view's `allowed_operations` go through this map so a reader is
+ *   never advertised a verb this family does not register;
+ * - the retired CLI verbs are the same tokens, and each one refuses by naming
+ *   the `issue-*` verb in this table — no write-through alias exists.
+ */
+const ISSUE_VERB_NAMES: Record<string, string> = {
+  "residual-add": "issue-add",
+  "residual-close": "issue-close",
+};
+
+/**
+ * The CLI outcome tokens for the engine's scoped issue outcomes. The CLI's
+ * success envelope is its own contract (spec §A2) and this family no longer
+ * registers a `residual-*` verb, so the envelope reports the issue vocabulary
+ * while the engine keeps its operation kinds.
+ */
+const OPERATION_OUTCOME_NAMES: Record<string, string> = {
+  "residual-added": "issue-added",
+  "residual-closed": "issue-closed",
+};
+
 /** Every verb of the workflow Prepare family (spec § New API and CLI — no aliases). */
 const WORKFLOW_VERBS: Record<string, true> = {
   "show-prepare": true,
   "amend-prepare": true,
+  "recover-coordinator": true,
 };
 
 /** The scoped coordination families this module registers, with their verbs. */
@@ -216,34 +293,58 @@ function requireFlag(raw: string | undefined, flag: string, verb: string, what: 
 function requireAbsolutePath(raw: string | undefined, flag: string, verb: string, what: string): string {
   const value = requireFlag(raw, flag, verb, what);
   if (!isAbsolute(value)) {
-    throw new SddScriptError(`${flag} must be an absolute path \u2014 got ${JSON.stringify(value)}`, 2);
+    // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+    // rejected value is never repeated in it: the message states the rule, as
+    // `--stopped` already does. A caller-supplied address — a credential path
+    // as readily as a plan file — never becomes a public diagnostic.
+    throw new SddScriptError(
+      `${flag} must be an absolute path for ${what} \u2014 the received value is not absolute and is not echoed in this diagnostic`,
+      2,
+    );
   }
   return value;
 }
 
-/** `--expect` is the nonnegative row `coordination.revision` from `show`. */
-function parseExpect(raw: string | undefined, verb: string): number {
+/**
+ * A revision precondition flag (`--expect` for the row, `--expect-issue` for
+ * the issue the DB mutation guards) is a nonnegative integer, never a token
+ * that would silently degrade into a different precondition.
+ */
+function parseExpect(raw: string | undefined, flag: string, verb: string): number {
   if (raw === undefined) {
     throw new SddScriptError(
-      `usage: plan ${verb} requires --expect <revision> (the row coordination.revision from \`mstar plan show\`; 0 when the row is not yet coordinated)`,
+      `usage: plan ${verb} requires ${flag} <revision> (the row coordination.revision from \`mstar plan show\`; 0 when the row is not yet coordinated)`,
       2,
     );
   }
   if (!/^\d+$/.test(raw)) {
-    throw new SddScriptError(`--expect must be a nonnegative integer revision \u2014 got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`${flag} must be a nonnegative integer revision \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   const revision = Number(raw);
   if (!Number.isSafeInteger(revision)) {
-    throw new SddScriptError(`--expect is out of range \u2014 got ${JSON.stringify(raw)}`, 2);
+    throw new SddScriptError(`${flag} is out of range \u2014 got ${JSON.stringify(raw)}`, 2);
   }
   return revision;
 }
 
-/** `absent` or the exact artifact version token, never an alias of either. */
-function parseExpectedVersion(raw: string | undefined, flag: string, verb: string): string {
-  const value = requireFlag(raw, flag, verb, "version");
-  if (value === "absent" || /^sha256:[0-9a-f]{64}$/.test(value)) return value;
-  throw new SddScriptError(`${flag} must be "absent" or sha256:<64 lowercase hex> \u2014 got ${JSON.stringify(value)}`, 2);
+/** The terminal dispositions `issue-close` may name (issue contract §4). */
+const TERMINAL_DISPOSITIONS: Record<string, TerminalDisposition> = {
+  resolved: "resolved",
+  waived: "waived",
+  duplicate: "duplicate",
+  superseded: "superseded",
+};
+
+function parseDisposition(raw: string | undefined, verb: string): TerminalDisposition {
+  const value = requireFlag(raw, "--disposition", verb, "disposition");
+  const disposition = TERMINAL_DISPOSITIONS[value];
+  if (disposition === undefined) {
+    throw new SddScriptError(
+      `--disposition must be resolved | waived | duplicate | superseded \u2014 got ${JSON.stringify(value)}`,
+      2,
+    );
+  }
+  return disposition;
 }
 
 /** JSON payload input is strict: absolute, present, parseable. */
@@ -263,6 +364,19 @@ function readJsonPayload(raw: string | undefined, flag: string, verb: string): u
   } catch (error) {
     throw new SddScriptError(`${flag} payload is not valid JSON: ${(error as Error).message}`, 2);
   }
+}
+function readSchemaPayload(
+  raw: string | undefined,
+  flag: string,
+  verb: string,
+  typeName: "PlanProgress" | "ClosureEvidence" | "HandoffEvidence",
+  condition?: string,
+): unknown {
+  const payload = readJsonPayload(raw, flag, verb);
+  const record = asRecord(payload);
+  if (!record) throw new SddScriptError(`${flag} must be a JSON object`, 2);
+  validatePayload(typeName, record, condition);
+  return payload;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -286,8 +400,103 @@ function pinProcessRoot(harnessDir: string | undefined): void {
   pinArtifactStoreRoot(resolveProcessHarnessDir(process.cwd(), harnessDir));
 }
 
-function pinSessionRoot(sessionPath: string): void {
-  pinArtifactStoreRoot(readSessionEnvelope(sessionPath).harness_root);
+/**
+ * Pin the ArtifactStore to the root the addressed session envelope names, and
+ * return that root: the pre-activation forms read/write through the envelope's
+ * own harness root, and the Prepare-amendment refusal needs the same root.
+ */
+function pinSessionRoot(sessionPath: string): string {
+  const root = readSessionEnvelope(sessionPath).harness_root;
+  pinArtifactStoreRoot(root);
+  return root;
+}
+
+/* ------------------------------------------------------------------------ *
+ * § The DB-route read (primary spec §5)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The `show` verb's DB-route form: an explicit `--workflow`/`--plan` address
+ * answered by the authoritative read adapter.
+ *
+ * The address is the caller's own — never a lookup. In particular the legacy
+ * `--session` envelope is NOT an address here: it is a file credential, and
+ * deriving a DB selection from it would be exactly the session-file conversion
+ * §5 forbids (and would report `execution.consumer-not-ready` from the file
+ * reader it actually reached).
+ *
+ * The route is asked first, so this form never becomes a silent file fallback:
+ * on a harness whose execution authority is `legacy`/`staged`/absent, the file
+ * route is still authoritative and the caller must use `--session` — a usage
+ * refusal (exit 2), not an empty view and not a silent switch of routes. A
+ * store that EXISTS and cannot answer (corrupt, drifted, busy) is the engine's
+ * own refusal and passes through as a domain failure (exit 1).
+ *
+ * The payload is the typed execution DTO: no `session_file`, no
+ * `snapshot_version` and no `allowed_operations` — a DB read has no file
+ * envelope and no scope authorization to advertise, and inventing either would
+ * be the fake-snapshot shape §5 rejects.
+ */
+async function printAuthorityView(
+  workflowId: string,
+  planId: string,
+  harnessArg: string | undefined,
+  json: boolean,
+): Promise<void> {
+  if (harnessArg !== undefined && !isAbsolute(harnessArg)) {
+    // Same non-echoing shape as every absolute-path usage refusal here: a
+    // caller-supplied address never becomes a public diagnostic.
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
+  }
+  const harnessDir = resolveProcessHarnessDir(process.cwd(), harnessArg);
+  if (harnessDir === null) {
+    throw new SddScriptError(
+      `no control harness was resolved from ${process.cwd()} \u2014 pass --harness <absolute-path> for the DB-route form`,
+      2,
+    );
+  }
+  const served = await readExecutionSource({ harnessDir }, { workflowId, planId });
+  if (served.route === "files") {
+    throw new SddScriptError(
+      `plan show: the execution authority of ${harnessDir} is not active, so it holds no DB row for ` +
+        `${workflowId}/${planId}; the file route is authoritative there and reads a row through its session ` +
+        `envelope \u2014 run \`mstar plan show --session <absolute-session-json>\``,
+      2,
+    );
+  }
+  const read = served.read;
+  const view = read.data as ExecutionPlanView;
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        operation: "show",
+        route: "execution",
+        workflow_id: workflowId,
+        plan_id: planId,
+        store_id: read.storeId,
+        epoch: read.epoch,
+        token: read.token,
+        plan: view.plan,
+        coordination: view.coordination,
+        execution_lease: view.executionLease,
+        integration_lease: view.integrationLease,
+        frozen_input: view.frozenInput,
+      }),
+    );
+    return;
+  }
+  // Human mode keeps stdout machine-only: the readable summary is diagnostic.
+  console.error(
+    pc.green(`plan show: execution authority ${read.storeId} (epoch ${read.epoch}) \u2014 row ${workflowId}/${planId}`),
+  );
+  console.error(`plan show: token ${read.token}`);
+  console.error(`plan show: status ${String(view.plan.status)}`);
+  const holder = asRecord(view.executionLease)?.holder;
+  console.error(`plan show: execution_lease ${holder === undefined ? "(none)" : String(holder)}`);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -346,7 +555,11 @@ async function successPayload(verb: string, result: CoordinationResult): Promise
   if (handoffId !== undefined) payload.handoff_id = handoffId;
   const state = handoffStateOf(view);
   if (state !== undefined) payload.state = state;
-  if (result.outcome !== undefined) payload.outcome = result.outcome;
+  if (result.outcome !== undefined) payload.outcome = OPERATION_OUTCOME_NAMES[result.outcome] ?? result.outcome;
+  // The scoped issue operations learn their DB-allocated ids here: `issue-add`
+  // reports what it captured (`revision` is the value `issue-close` must echo
+  // back as `--expect-issue`), and `issue-close` reports the closed issue.
+  if (result.issues !== undefined) payload.issues = result.issues;
   return payload;
 }
 
@@ -360,17 +573,24 @@ async function printSuccess(verb: string, result: CoordinationResult, json: bool
   const work =
     typeof payload.plan_id === "string" ? `${payload.workflow_id}/${payload.plan_id}` : String(payload.workflow_id);
   const revision = payload.revision === undefined ? "" : `; revision ${payload.revision}`;
-  const outcome = result.outcome === undefined ? "" : `; ${result.outcome}`;
+  const outcome = payload.outcome === undefined ? "" : `; ${String(payload.outcome)}`;
   console.error(
     pc.green(`plan ${verb}: ${result.session.role} session ${result.session.session_id} on ${work}${revision}${outcome}`),
   );
   console.error(`plan ${verb}: session file ${result.session_file}`);
   if (payload.state !== undefined) console.error(`plan ${verb}: handoff state ${payload.state}`);
+  for (const issue of result.issues ?? []) {
+    console.error(
+      `plan ${verb}: issue ${issue.issue_id} (revision ${issue.revision}${issue.created ? ", captured" : ", existing"})`,
+    );
+  }
 }
 
 /**
- * `show` prints the view itself (spec §A2: selected row, scoped paths,
- * allowed operations and both byte versions — never an editable snapshot).
+ * `show` prints the view itself (spec §A2: selected row, scoped paths, allowed
+ * operations and the snapshot byte version — never an editable snapshot). The
+ * engine's operation kinds keep their `residual-*` names; the advertised verbs
+ * are the CLI's own, so a reader is never told to run a verb that would refuse.
  */
 function printView(verb: string, view: PlanCoordinationView, json: boolean): void {
   const state = handoffStateOf(view);
@@ -382,17 +602,21 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
       workflow_id: view.session.workflow_id,
       revision: view.revision,
       snapshot_version: view.snapshot_version,
-      register_version: view.register_version,
       session_file: view.session_file,
       session_id: view.session.session_id,
       role: view.session.role,
       scope: view.scope,
       row: { id: view.row.id, status: view.row.status },
-      allowed_operations: view.allowed_operations,
+      allowed_operations: view.allowed_operations.map((operation) => ISSUE_VERB_NAMES[operation] ?? operation),
     };
     if (view.session.plan_id !== undefined) payload.plan_id = view.session.plan_id;
     if (liveHandoff !== undefined) payload.handoff_id = liveHandoff;
     if (state !== undefined) payload.state = state;
+    // The frozen-input pin state (contract §1) is disclosed verbatim: a caller
+    // observes that the catalog moved, that a plan is unpinned, or that the
+    // pinned input and the frozen row disagree — the engine never repairs a
+    // discrepancy here, and neither may the reader.
+    if (view.catalog_pin !== undefined) payload.catalog_pin = view.catalog_pin;
     console.log(JSON.stringify(payload));
     return;
   }
@@ -404,7 +628,7 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   );
   console.error(`plan ${verb}: session file ${view.session_file}`);
   console.error(`plan ${verb}: row ${String(view.row.id)} status ${String(view.row.status)}, revision ${view.revision}`);
-  console.error(`plan ${verb}: snapshot ${view.snapshot_version}, register ${view.register_version}`);
+  console.error(`plan ${verb}: snapshot ${view.snapshot_version}`);
   if (state !== undefined) console.error(`plan ${verb}: handoff state ${state}`);
   if (liveHandoff !== undefined) console.error(`plan ${verb}: handoff id ${liveHandoff}`);
   if (scope === null) {
@@ -414,6 +638,16 @@ function printView(verb: string, view: PlanCoordinationView, json: boolean): voi
   } else {
     console.error(`plan ${verb}: worktree ${scope.worktreePath} (branch ${scope.workingBranch})`);
     console.error(`plan ${verb}: sdd ${scope.sddDir}`);
+  }
+  const pin = view.catalog_pin;
+  if (pin !== undefined && pin.conflict !== null) {
+    console.error(pc.red(`plan ${verb}: catalog pin conflict \u2014 ${pin.conflict}`));
+  } else if (pin?.pin != null) {
+    console.error(
+      `plan ${verb}: catalog pin ${pin.source} (revision ${pin.pin.entity_revision}${pin.catalog_moved ? ", catalog moved" : ""})`,
+    );
+  } else if (pin !== undefined) {
+    console.error(`plan ${verb}: catalog pin ${pin.absence ?? "unbound"}`);
   }
   console.error(`plan ${verb}: allowed operations: ${view.allowed_operations.join(", ") || "(none)"}`);
 }
@@ -437,10 +671,102 @@ async function runVerb(
   }
 }
 
+/** The active flags of one plan call: the session reference plus its §3.1 envelope. */
+type ActivePlanFlags = { ref: ExecutionSessionRef; expected: ExecutionToken; operationId: string };
+
 /**
- * One row mutation: the request carries the session file, the selected plan
- * (coordinator sessions only), the caller's revision precondition and the
- * discriminated operation — never a snapshot, row or arbitrary field.
+ * The CLI's row-operation union is the FILE route's (it still registers
+ * `repair-delivery-source`), while the DB authority publishes the closed union
+ * minus that legacy-only member. This guard is the narrowing between them: it
+ * excludes exactly that member, so no cast is needed at the DB call site and
+ * the engine's own union stays untouched.
+ */
+function isExecutionPlanOperation(operation: PlanCoordinationOperation): operation is CoordinationOperation {
+  return operation.kind !== "repair-delivery-source";
+}
+
+/**
+ * The refusal of a row operation the DB authority does not implement. It is the
+ * engine's own shape for that verdict (`coordination.unknown-operation`), raised
+ * before any store work, so the active route reports the same code and exit
+ * class it would if the call had reached the published dispatcher.
+ */
+function unsupportedActiveOperation(operation: PlanCoordinationOperation): CoordinationError {
+  return new CoordinationError(
+    "coordination.unknown-operation",
+    `${operation.kind} is not a coordination operation`,
+    { operation: operation.kind },
+  );
+}
+
+/**
+ * Read the active flags of one plan verb (contract §3.2). Exactly one
+ * transport may be addressed: the pre-activation `--session` file, or the active
+ * `--session-ref` + full-execution `--expect` + `--operation`. A missing
+ * address, a partial active set and a mix of both transports are usage refusals
+ * decided before any IO — this family never guesses, and it never converts a
+ * revision integer into a token.
+ */
+function activePlanFlagsOf(options: PlanCliOptions, verb: string): ActivePlanFlags | null {
+  const sessionRef = options.sessionRef as string | undefined;
+  const legacySession = options.session as string | undefined;
+  if (sessionRef === undefined && legacySession === undefined) {
+    throw new SddScriptError(
+      `usage: plan ${verb} requires --session <absolute-session-json-path> (pre-activation) or ` +
+        "`--session-ref <wire> --expect <full-execution-token> --operation <id>` (active DB route)",
+      2,
+    );
+  }
+  if (sessionRef === undefined) {
+    if (options.operation !== undefined) {
+      throw new SddScriptError(
+        `plan ${verb}: --operation belongs to the active transport \u2014 pass --session-ref and a full --expect token with it, ` +
+          "never a pre-activation --session file",
+        2,
+      );
+    }
+    return null;
+  }
+  if (legacySession !== undefined) {
+    throw new SddScriptError(
+      `plan ${verb}: --session (a pre-activation session file) and --session-ref (the active session reference) are disjoint ` +
+        "transports \u2014 pass one of them, never both",
+      2,
+    );
+  }
+  // Cheap flag-shape checks first (operation id, full token), then the codec:
+  // a malformed flag is a usage refusal, never a wire-decoding domain refusal.
+  return {
+    operationId: requireFlag(options.operation as string | undefined, "--operation", verb, "operation-id"),
+    expected: requireExecutionToken(options.expect as string | undefined, "--expect", verb),
+    ref: requireSessionRef(sessionRef, "--session-ref", verb),
+  };
+}
+
+/**
+ * The plan one active call addresses: the reference's own plan for a plan-pm
+ * session, and the explicitly named plan for a coordinator session (whose
+ * reference carries none). A `--plan` that contradicts the reference is a usage
+ * refusal, never a re-scoping.
+ */
+function activePlanIdOf(options: PlanCliOptions, ref: ExecutionSessionRef, verb: string): string {
+  const named = options.plan as string | undefined;
+  if (ref.planId === null) return requireFlag(named, "--plan", verb, "plan-id");
+  if (named !== undefined && named !== ref.planId) {
+    throw new SddScriptError(
+      `plan ${verb}: --plan names ${named}, but the session reference addresses plan ${ref.planId} \u2014 a reference is ` +
+        "never re-scoped to another plan",
+      2,
+    );
+  }
+  return ref.planId;
+}
+
+/**
+ * One row mutation. The two transports are disjoint: `--session` runs the
+ * pre-activation file call unchanged, while `--session-ref` runs the landed DB
+ * verb under an independently acquired identity — with the plan's own execution
+ * token as the CAS and no session file anywhere in the call.
  */
 async function mutate(
   verb: string,
@@ -449,28 +775,55 @@ async function mutate(
   coordinator: boolean,
   operation: (options: PlanCliOptions) => PlanCoordinationOperation,
 ): Promise<void> {
-  // Argument shape is decided before any I/O (exit 2), so a malformed flag
-  // never surfaces as a store/session refusal (exit 1).
-  const sessionPath = requireAbsolutePath(options.session as string | undefined, "--session", verb, "session-json-path");
-  const planId = coordinator ? requireFlag(options.plan as string | undefined, "--plan", verb, "plan-id") : undefined;
-  const expectedRevision = parseExpect(options.expect as string | undefined, verb);
-  const handoffId = options.handoff as string | undefined;
-  const concrete = operation(options);
-  // The store pin comes first: the pre-check below reads the row through the
-  // ArtifactStore, so an unpinned read resolves the cwd-derived root and
-  // refuses a linked checkout whose session envelope names the control root.
-  pinSessionRoot(sessionPath);
-  if (handoffId !== undefined && planId !== undefined) {
-    const live = handoffIdOf(await readPlanCoordination(sessionPath, planId));
-    if (live !== undefined && live !== handoffId) throw handoffMismatch(verb, planId, live, handoffId);
+  // Argument shape (both transports) is decided before any I/O (exit 2), so a
+  // malformed flag never surfaces as a store or session refusal (exit 1).
+  const active = activePlanFlagsOf(options, verb);
+  if (active === null) {
+    const sessionPath = requireAbsolutePath(options.session as string | undefined, "--session", verb, "session-json-path");
+    const planId = coordinator ? requireFlag(options.plan as string | undefined, "--plan", verb, "plan-id") : undefined;
+    const expectedRevision = parseExpect(options.expect as string | undefined, "--expect", verb);
+    const handoffId = options.handoff as string | undefined;
+    const concrete = operation(options);
+    // The store pin comes first: the pre-check below reads the row through the
+    // ArtifactStore, so an unpinned read resolves the cwd-derived root and
+    // refuses a linked checkout whose session envelope names the control root.
+    pinSessionRoot(sessionPath);
+    if (handoffId !== undefined && planId !== undefined) {
+      const live = handoffIdOf(await readPlanCoordination(sessionPath, planId));
+      if (live !== undefined && live !== handoffId) throw handoffMismatch(verb, planId, live, handoffId);
+    }
+    const result = await mutatePlanCoordination({
+      sessionPath,
+      ...(planId !== undefined ? { planId } : {}),
+      expectedRevision,
+      operation: concrete,
+    });
+    await printSuccess(verb, result, json);
+    return;
   }
-  const result = await mutatePlanCoordination({
-    sessionPath,
-    ...(planId !== undefined ? { planId } : {}),
-    expectedRevision,
+  const planId = activePlanIdOf(options, active.ref, verb);
+  const workflowId = active.ref.workflowId;
+  const concrete = operation(options);
+  if (!isExecutionPlanOperation(concrete)) throw unsupportedActiveOperation(concrete);
+  const identity = requireExecutionIdentity(
+    { workflowId, role: active.ref.role, planId: active.ref.planId },
+    `plan ${verb}`,
+  );
+  const root = requireExecutionRoot(options.harness as string | undefined, `plan ${verb}`);
+  setArtifactStore(createFsStore(root));
+  const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
+    operationId: active.operationId,
+    session: active.ref,
+    expected: active.expected,
+    planId,
     operation: concrete,
   });
-  await printSuccess(verb, result, json);
+  printExecutionSuccess(
+    verb,
+    receipt,
+    json,
+    `plan ${verb}: ${active.ref.role} session ${active.ref.sessionId} on ${workflowId}/${planId}`,
+  );
 }
 
 /** The coordinator transition verbs registered by one shared flag surface. */
@@ -508,23 +861,130 @@ function handoffMismatch(verb: string, planId: string, live: string, named: stri
   });
 }
 
-/** The host-injected session identity channel (plan D1/D2); `plan bind` only. */
+/** The host-injected session identity channel; a plan/assignment bind only. */
 const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
 /**
- * The fresh-bind identity (plan D2): the `--session-id` flag wins, otherwise the
- * host-injected `MSTAR_HOST_SESSION_ID` (trimmed; empty and whitespace-only count
- * as absent), otherwise `undefined` and the engine generates the id. The value
- * itself is the engine's contract — it validates the id and refuses an unusable
- * one with `coordination.invalid-session-id`, so the flag is never silently
- * rewritten here.
+ * The fresh-bind identity. The `--session-id` flag is the explicit input and
+ * always wins. The injected `MSTAR_HOST_SESSION_ID` remains a declared local
+ * input form for a **plan/assignment** bind, but it no longer authorizes a
+ * **coordinator** bootstrap (prerequisite contract §3.2): a managed coordinator
+ * identity comes from the host-owned `mstar_coordinator` tool, and a plain local
+ * operator states `--session-id`. A missing value returns `undefined` and the
+ * engine owns the refusal — it is never silently replaced here.
  */
-function sessionIdOf(options: PlanCliOptions): string | undefined {
+function sessionIdOf(options: PlanCliOptions, family: "coordinator" | "plan"): string | undefined {
   const flag = options.sessionId as string | undefined;
   if (flag !== undefined) return flag;
+  if (family === "coordinator") return undefined;
   const injected = process.env[SESSION_ID_ENV];
   if (injected === undefined || injected.trim() === "") return undefined;
   return injected.trim();
+}
+
+/**
+ * `plan bind --execution` — the ACTIVE bind (contract §3.2).
+ *
+ * The caller identity is acquired from the channel and validated against the
+ * address; the engine binds the session row from that identity, so a
+ * `--session-id` (a caller-stated id) is not an input here at all and a
+ * `--session` file is neither written nor read. `--resume-ref` is the read-only
+ * resume of an existing session under the same acquired identity: it revalidates
+ * the caller, the root, the epoch and the active row, binds nothing and changes
+ * no revision.
+ */
+async function runActiveBind(options: PlanCliOptions, json: boolean): Promise<void> {
+  if (options.sessionId !== undefined) {
+    throw new SddScriptError(
+      "plan bind --execution takes no --session-id \u2014 the active identity is independently acquired in " +
+        "MSTAR_EXECUTION_IDENTITY and is never stated by a flag or generated here",
+      2,
+    );
+  }
+  if (options.session !== undefined) {
+    throw new SddScriptError(
+      "plan bind --execution takes no --session \u2014 the active transport writes no session envelope and reads none",
+      2,
+    );
+  }
+  const resumeRefRaw = options.resumeRef as string | undefined;
+  if (resumeRefRaw !== undefined) {
+    const extras = (
+      [
+        ["--harness", options.harness],
+        ["--workflow", options.workflow],
+        ["--plan", options.plan],
+        ["--coordinator", options.coordinator === true ? "true" : undefined],
+        ["--assignment", options.assignment],
+        ["--resume", options.resume],
+        ["--expect", options.expect],
+        ["--operation", options.operation],
+      ] as ReadonlyArray<[string, unknown]>
+    )
+      .filter(([, value]) => value !== undefined)
+      .map(([flag]) => flag);
+    if (extras.length > 0) {
+      throw new SddScriptError(
+        `plan bind --execution --resume-ref accepts only --json \u2014 got ${extras.join(", ")} (the reference carries its own ` +
+          "whole scope, and a resume is read-only)",
+        2,
+      );
+    }
+    const ref = requireSessionRef(resumeRefRaw, "--resume-ref", "bind");
+    const root = requireExecutionRoot(undefined, "bind");
+    const identity = requireExecutionIdentity(
+      { workflowId: ref.workflowId, role: ref.role, planId: ref.planId },
+      "plan bind --resume-ref",
+    );
+    setArtifactStore(createFsStore(root));
+    const read = await resumeExecutionSession(executionContextFor({ harnessDir: root }, identity), ref);
+    printExecutionRead(
+      "bind",
+      read,
+      json,
+      `plan bind: resumed ${ref.role} session ${ref.sessionId} on ${ref.workflowId}` +
+        `${ref.planId === null ? "" : `/${ref.planId}`}`,
+    );
+    return;
+  }
+  const coordinator = options.coordinator === true;
+  if (options.assignment !== undefined || options.resume !== undefined) {
+    throw new SddScriptError(
+      "plan bind --execution binds a workflow/plan address \u2014 --assignment and --resume are pre-activation forms; the " +
+        "active identity is acquired, never read from a prepared Assignment or an existing envelope",
+      2,
+    );
+  }
+  const workflowId = requireFlag(options.workflow as string | undefined, "--workflow", "bind", "workflow-id");
+  if (coordinator && options.plan !== undefined) {
+    throw new SddScriptError("plan bind --execution --coordinator binds the workflow seat and takes no --plan", 2);
+  }
+  if (!coordinator && options.plan === undefined) {
+    throw new SddScriptError(
+      "plan bind --execution requires --coordinator (the workflow seat) or --plan <id> (the plan seat)",
+      2,
+    );
+  }
+  const planId = coordinator ? null : requireFlag(options.plan as string | undefined, "--plan", "bind", "plan-id");
+  const role = coordinator ? "coordinator" : "plan-pm";
+  const expected = requireExecutionToken(options.expect as string | undefined, "--expect", "bind");
+  const operationId = requireFlag(options.operation as string | undefined, "--operation", "bind", "operation-id");
+  const root = requireExecutionRoot(options.harness as string | undefined, "bind");
+  const identity = requireExecutionIdentity({ workflowId, role, planId }, "plan bind");
+  setArtifactStore(createFsStore(root));
+  const receipt = await bindExecutionSession(executionContextFor({ harnessDir: root }, identity), {
+    workflowId,
+    planId,
+    role,
+    expected,
+    operationId,
+  });
+  printExecutionSuccess(
+    "bind",
+    receipt,
+    json,
+    `plan bind: ${role} session ${receipt.data.sessionId} on ${workflowId}${planId === null ? "" : `/${planId}`}`,
+  );
 }
 
 /**
@@ -532,6 +992,13 @@ function sessionIdOf(options: PlanCliOptions): string | undefined {
  * given, and each form rejects the flags that belong to another.
  */
 function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
+  if (options.operation !== undefined || options.resumeRef !== undefined) {
+    throw new SddScriptError(
+      "usage: plan bind --operation/--resume-ref belong to the ACTIVE route \u2014 pass --execution with them; the " +
+        "pre-activation forms take --coordinator/--workflow/--plan/--assignment/--resume",
+      2,
+    );
+  }
   const coordinator = options.coordinator === true;
   const workflow = options.workflow as string | undefined;
   const plan = options.plan as string | undefined;
@@ -539,7 +1006,10 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   const resume = options.resume as string | undefined;
   const harness = options.harness as string | undefined;
   if (harness !== undefined && !isAbsolute(harness)) {
-    throw new SddScriptError(`--harness must be an absolute path \u2014 got ${JSON.stringify(harness)}`, 2);
+    throw new SddScriptError(
+      "--harness must be an absolute path \u2014 the received value is not absolute and is not echoed in this diagnostic",
+      2,
+    );
   }
   const families = [
     coordinator,
@@ -564,10 +1034,13 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "coordinator");
     return {
       coordinator: true,
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
+      // This form is a plain local operator bootstrap, so the adapter states
+      // `local` provenance rather than leaving it to be inferred.
+      source: "local",
       ...(harness !== undefined ? { harnessDir: harness } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       cwd,
@@ -580,7 +1053,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
         2,
       );
     }
-    const sessionId = sessionIdOf(options);
+    const sessionId = sessionIdOf(options, "plan");
     return {
       scope: { assignmentPath: requireAbsolutePath(assignment, "--assignment", "bind", "md-path") },
       ...(sessionId !== undefined ? { sessionId } : {}),
@@ -602,7 +1075,7 @@ function bindInputOf(options: PlanCliOptions): BindPlanSessionInput {
   if (workflow === undefined || plan === undefined) {
     throw new SddScriptError("plan bind --workflow requires --plan <id> (the workflow+plan address form)", 2);
   }
-  const sessionId = sessionIdOf(options);
+  const sessionId = sessionIdOf(options, "plan");
   return {
     scope: {
       workflowId: requireFlag(workflow, "--workflow", "bind", "workflow-id"),
@@ -642,18 +1115,26 @@ export function registerPlanCommands(program: Command): void {
   plan
     .command("bind")
     .description(
-      "Bind the scoped session for one plan \u2014 fresh `--workflow/--plan` or `--assignment` claim (both addresses resolve " +
-        "the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing session file " +
-        "(read-only: no ownership change, no takeover). A fresh bind adopts `--session-id`, else the injected " +
-        "MSTAR_HOST_SESSION_ID, else a generated id; `--resume` takes none",
+      "Bind the scoped session for one plan. Pre-activation: fresh `--workflow/--plan` or `--assignment` claim (both " +
+        "addresses resolve the same prepared row), fresh `--coordinator` bootstrap, or explicit `--resume` of an existing " +
+        "session file (read-only). Active DB route (`--execution`): `--workflow W --coordinator` or `--workflow W --plan P` " +
+        "with `--expect <full-execution-token> --operation <id>`, or the read-only `--resume-ref <wire>` \u2014 the caller " +
+        "identity is independently acquired in MSTAR_EXECUTION_IDENTITY, and no session file is written or read",
     )
-    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow; one per workflow)")
+    .option("--execution", "Active DB route: bind through the execution authority under an independently acquired identity")
+    .option("--coordinator", "Trusted local coordinator bootstrap (requires --workflow and --session-id; one per workflow)")
     .option("--workflow <id>", "Workflow id")
     .option("--plan <id>", "Plan id (workflow+plan address form)")
-    .option("--assignment <path>", "Absolute path of the pinned prepared Assignment")
-    .option("--resume <path>", "Absolute path of an existing session JSON envelope")
+    .option("--assignment <path>", "Absolute path of the pinned prepared Assignment (pre-activation form)")
+    .option("--resume <path>", "Absolute path of an existing session JSON envelope (pre-activation form)")
+    .option("--resume-ref <wire>", "Active read-only resume of an existing session reference (exec-session-v1:<base64url>)")
     .option("--harness <path>", "Absolute harness dir override (default: resolved control root)")
-    .option("--session-id <id>", `Session id the fresh bind adopts (default: $${SESSION_ID_ENV}, else generated)`)
+    .option("--expect <token>", "Active form: the addressed scope's full execution token (the bind's CAS)")
+    .option("--operation <id>", "Active form: caller-supplied id of this one bind operation (the replay key)")
+    .option(
+      "--session-id <id>",
+      `Session id the fresh bind adopts (required for --coordinator; else $${SESSION_ID_ENV}, else generated)`,
+    )
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb(
@@ -661,6 +1142,10 @@ export function registerPlanCommands(program: Command): void {
         options,
         { workflow_id: options.workflow as string | undefined, plan_id: options.plan as string | undefined },
         async (json) => {
+          if (options.execution === true || options.resumeRef !== undefined) {
+            await runActiveBind(options, json);
+            return;
+          }
           const input = bindInputOf(options);
           pinProcessRoot(harnessOverrideOf(input));
           await printSuccess("bind", await bindPlanSession(input), json);
@@ -672,26 +1157,100 @@ export function registerPlanCommands(program: Command): void {
     .command("show")
     .description(
       "Read the selected row's coordination view: revision, both byte versions, scoped paths and the operations this " +
-        "session may run now (plan sessions accept no --plan; a coordinator session requires one)",
+        "session may run now (plan sessions accept no --plan; a coordinator session requires one). `--workflow`+`--plan` " +
+        "instead of `--session` reads the row from an ACTIVE execution authority (primary spec \u00A75), and `--session-ref` " +
+        "gives the session-authorized view of an active binding",
     )
-    .option("--session <path>", "Absolute session JSON envelope path")
-    .option("--plan <id>", "Plan id (required for a coordinator session)")
+    .option("--session <path>", "Absolute session JSON envelope path (file route)")
+    .option("--session-ref <wire>", "Active session-authorized view (exec-session-v1:<base64url>)")
+    .option("--workflow <id>", "Workflow id (DB-route form: with --plan, instead of --session)")
+    .option("--plan <id>", "Plan id (required for a coordinator session; required with --workflow)")
+    .option("--harness <path>", "Absolute control-harness override for the DB-route form (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
-      runVerb("show", options, { plan_id: options.plan as string | undefined }, async (json) => {
-        const sessionPath = requireAbsolutePath(options.session as string | undefined, "--session", "show", "session-json-path");
-        pinSessionRoot(sessionPath);
-        printView("show", await readPlanCoordination(sessionPath, options.plan as string | undefined), json);
-      }),
+      runVerb(
+        "show",
+        options,
+        { workflow_id: options.workflow as string | undefined, plan_id: options.plan as string | undefined },
+        async (json) => {
+          const session = options.session as string | undefined;
+          const sessionRefRaw = options.sessionRef as string | undefined;
+          const workflowId = options.workflow as string | undefined;
+          const planId = options.plan as string | undefined;
+          if (sessionRefRaw !== undefined) {
+            if (session !== undefined) {
+              throw new SddScriptError(
+                "plan show: --session (a pre-activation session file) and --session-ref (the active reference) are disjoint " +
+                  "transports \u2014 pass one of them, never both",
+                2,
+              );
+            }
+            if (workflowId !== undefined) {
+              throw new SddScriptError(
+                "plan show --session-ref accepts no --workflow (the reference carries the workflow it authorizes)",
+                2,
+              );
+            }
+            const ref = requireSessionRef(sessionRefRaw, "--session-ref", "show");
+            const addressedPlan = activePlanIdOf(options, ref, "show");
+            const identity = requireExecutionIdentity(
+              { workflowId: ref.workflowId, role: ref.role, planId: ref.planId },
+              "plan show",
+            );
+            const root = requireExecutionRoot(options.harness as string | undefined, "show");
+            setArtifactStore(createFsStore(root));
+            const read = await readExecutionPlan(executionContextFor({ harnessDir: root }, identity), ref, addressedPlan);
+            printExecutionRead(
+              "show",
+              read,
+              json,
+              `plan show: ${ref.role} session ${ref.sessionId} \u2014 row ${ref.workflowId}/${addressedPlan}`,
+            );
+            return;
+          }
+          if (session === undefined) {
+            // The DB-route form. Both ids are mandatory: §3.1's plan key is
+            // (workflow, plan), so a lone --plan could only be resolved by
+            // guessing a parent.
+            if (workflowId === undefined || planId === undefined) {
+              throw new SddScriptError(
+                "usage: plan show --session <absolute-json-path> [--plan <plan-id>]\n" +
+                  "       plan show --workflow <id> --plan <id> [--harness <absolute-path>] [--json]",
+                2,
+              );
+            }
+            await printAuthorityView(
+              requireFlag(workflowId, "--workflow", "show", "workflow-id"),
+              requireFlag(planId, "--plan", "show", "plan-id"),
+              options.harness as string | undefined,
+              json,
+            );
+            return;
+          }
+          if (workflowId !== undefined || options.harness !== undefined) {
+            throw new SddScriptError(
+              "plan show --session accepts no --workflow/--harness (the session envelope pins the workflow and the " +
+                "harness root)",
+              2,
+            );
+          }
+          const sessionPath = requireAbsolutePath(session, "--session", "show", "session-json-path");
+          pinSessionRoot(sessionPath);
+          printView("show", await readPlanCoordination(sessionPath, planId), json);
+        },
+      ),
     );
 
   plan
     .command("prepare")
     .description("Register the reviewed Assignment for one plan and release its dependencies (coordinator session)")
     .option("--session <path>", "Absolute coordinator session JSON envelope path")
+    .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
     .option("--plan <id>", "Plan id")
     .option("--assignment <path>", "Absolute path of the prepared Assignment markdown")
-    .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
+    .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+    .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+    .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb("prepare", options, { plan_id: options.plan as string | undefined }, (json) =>
@@ -706,63 +1265,83 @@ export function registerPlanCommands(program: Command): void {
     .command("progress")
     .description("Replace this plan's progress summary and status (active plan session)")
     .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--file <path>", "Absolute path of the PlanProgress JSON payload")
-    .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
+    .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+    .option("--file <path>", payloadFileHelp("PlanProgress"))
+    .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+    .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+    .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb("progress", options, {}, (json) =>
         mutate("progress", options, json, false, (opts) => ({
           kind: "progress",
-          progress: readJsonPayload(opts.file as string | undefined, "--file", "progress") as ProgressPayload,
+          progress: readSchemaPayload(opts.file as string | undefined, "--file", "progress", "PlanProgress") as ProgressPayload,
         })),
       ),
     );
 
   plan
-    .command("residual-add")
-    .description("Append residuals to this plan's own register bucket (active plan session)")
+    .command("issue-add")
+    .description(
+      "Capture findings on this plan as issues in {HARNESS_DIR}/store.db and link them to the plan (active plan session). " +
+        "Each entry is a capture input without projectId; the report names the DB-assigned issue ids and revisions",
+    )
     .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--file <path>", "Absolute path of the residual entries JSON payload (array)")
-    .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
-    .option("--expect-register <version>", 'Register byte version from `show` ("absent" or sha256:<64 hex>)')
+    .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+    .option("--file <path>", "Absolute path of the issue entries JSON payload (array)")
+    .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+    .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+    .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
-      runVerb("residual-add", options, {}, (json) =>
-        mutate("residual-add", options, json, false, (opts) => {
+      runVerb("issue-add", options, {}, (json) =>
+        mutate("issue-add", options, json, false, (opts) => ({
+          kind: "residual-add",
+          entries: readJsonPayload(opts.file as string | undefined, "--file", "issue-add") as IssueEntryPayload[],
+        })),
+      ),
+    );
+
+  plan
+    .command("issue-close")
+    .description(
+      "Close one issue linked to this plan with the named disposition and its closure evidence (active plan session). " +
+        "`--expect-issue` is the issue revision from `plan issue-add` or `mstar issue show`",
+    )
+    .option("--session <path>", "Absolute plan session JSON envelope path")
+    .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+    .option("--issue <id>", "Issue id linked to this plan")
+    .option("--disposition <disposition>", "Terminal disposition: resolved | waived | duplicate | superseded")
+    .option("--file <path>", payloadFileHelp("ClosureEvidence"))
+    .option("--expect-issue <revision>", "Current issue revision (the DB mutation's CAS value; always an integer)")
+    .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+    .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+    .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("issue-close", options, {}, (json) =>
+        mutate("issue-close", options, json, false, (opts) => {
           // Every flag is validated before any file I/O: a malformed
-          // `--expect-register` must reject as usage without reading --file.
-          const expectedRegisterVersion = parseExpectedVersion(
-            opts.expectRegister as string | undefined,
-            "--expect-register",
-            "residual-add",
+          // `--expect-issue`/`--disposition` must reject as usage without
+          // reading --file.
+          const issueId = requireFlag(opts.issue as string | undefined, "--issue", "issue-close", "issue-id");
+          const disposition = parseDisposition(opts.disposition as string | undefined, "issue-close");
+          const expectedIssueRevision = parseExpect(
+            opts.expectIssue as string | undefined,
+            "--expect-issue",
+            "issue-close",
           );
-          const entries = readJsonPayload(opts.file as string | undefined, "--file", "residual-add") as ResidualEntriesPayload;
-          return { kind: "residual-add", entries, expectedRegisterVersion };
+          const closureCondition =
+            disposition === "resolved" ? "close" : disposition === "waived" ? "waive" : disposition === "duplicate" ? "duplicate" : "supersede";
+          const evidence = readSchemaPayload(
+            opts.file as string | undefined,
+            "--file",
+            "issue-close",
+            "ClosureEvidence",
+            closureCondition,
+          ) as ClosureEvidence;
+          return { kind: "residual-close", issueId, disposition, evidence, expectedIssueRevision };
         }),
-      ),
-    );
-
-  plan
-    .command("residual-close")
-    .description("Close one residual in this plan's own bucket with an evidence-bearing note (active plan session)")
-    .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--entry <id>", "Residual entry id")
-    .option("--note <text>", "Closure note carrying the evidence")
-    .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
-    .option("--expect-register <version>", 'Register byte version from `show` ("absent" or sha256:<64 hex>)')
-    .option("--json", "Machine-readable JSON on stdout")
-    .action(async (options: PlanCliOptions) =>
-      runVerb("residual-close", options, {}, (json) =>
-        mutate("residual-close", options, json, false, (opts) => ({
-          kind: "residual-close",
-          entryId: requireFlag(opts.entry as string | undefined, "--entry", "residual-close", "entry-id"),
-          note: requireFlag(opts.note as string | undefined, "--note", "residual-close", "text"),
-          expectedRegisterVersion: parseExpectedVersion(
-            opts.expectRegister as string | undefined,
-            "--expect-register",
-            "residual-close",
-          ),
-        })),
       ),
     );
 
@@ -770,14 +1349,17 @@ export function registerPlanCommands(program: Command): void {
     .command("handoff")
     .description("Submit the immutable, pinned handoff for this plan and keep it InReview (plan session)")
     .option("--session <path>", "Absolute plan session JSON envelope path")
-    .option("--file <path>", "Absolute path of the HandoffEvidence JSON payload")
-    .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
+    .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+    .option("--file <path>", payloadFileHelp("HandoffEvidence"))
+    .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+    .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+    .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
     .option("--json", "Machine-readable JSON on stdout")
     .action(async (options: PlanCliOptions) =>
       runVerb("handoff", options, {}, (json) =>
         mutate("handoff", options, json, false, (opts) => ({
           kind: "handoff",
-          evidence: readJsonPayload(opts.file as string | undefined, "--file", "handoff") as HandoffEvidence,
+          evidence: readSchemaPayload(opts.file as string | undefined, "--file", "handoff", "HandoffEvidence") as HandoffEvidence,
         })),
       ),
     );
@@ -812,17 +1394,44 @@ export function registerPlanCommands(program: Command): void {
       .command(kind)
       .description(`${description} (coordinator session)`)
       .option("--session <path>", "Absolute coordinator session JSON envelope path")
+      .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
       .option("--plan <id>", "Plan id")
       .option("--handoff <id>", "Handoff id this call acts on (must be the row's live handoff; `plan show --json` reports it)");
     if (kind === "return") command.option("--reason <text>", "Return reason");
     command
-      .option("--expect <revision>", "Row coordination.revision from `mstar plan show`")
+      .option("--expect <expectation>", "Pre-activation: the row revision; active: the plan's full execution token")
+      .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+      .option("--harness <path>", "Active DB route: absolute control-harness override (default: resolved root)")
       .option("--json", "Machine-readable JSON on stdout")
       .action(async (options: PlanCliOptions) =>
         runVerb(kind, options, { plan_id: options.plan as string | undefined }, (json) =>
           mutate(kind, options, json, true, (opts) => handoffOperation(opts, kind)),
         ),
       );
+  }
+
+  // The retired issue verbs are registered so the old names refuse with the
+  // migration path. They accept any flag shape (a caller's old invocation must
+  // reach the guidance, not a commander unknown-option error) and write
+  // nothing — there is no alias that performs the old register write.
+  for (const [verb, replacement] of Object.entries(ISSUE_VERB_NAMES)) {
+    plan
+      .command(verb)
+      .description(`Retired \u2014 ${replacement} replaces it; this verb refuses and writes nothing`)
+      .allowUnknownOption()
+      .allowExcessArguments()
+      .option("--json", "Machine-readable JSON on stdout")
+      .action((options: PlanCliOptions) => {
+        const message =
+          `plan ${verb}: retired \u2014 the scoped findings operations are \`mstar plan ${replacement}\` ` +
+          "(issues in {HARNESS_DIR}/store.db); this verb writes nothing";
+        if (options.json === true) {
+          console.log(JSON.stringify({ ok: false, operation: verb, code: "plan.verb-retired", message }));
+        } else {
+          console.error(pc.red(message));
+        }
+        process.exitCode = 1;
+      });
   }
 
   // Usage-class commander errors (unknown option, excess argument) exit 2 for
@@ -890,6 +1499,84 @@ function printWorkflowView(verb: string, result: PrepareWorkflowResult, json: bo
 }
 
 /**
+ * The `recover-coordinator` stop assertion (prerequisite contract §3.3): at
+ * least one prior session id, each a PUBLIC session id under the one shared
+ * rule (single safe path component, bounded length) — the same rule the
+ * acquired identity obeys. An absent, empty or malformed `--stopped` is a
+ * usage refusal (exit 2), never a request the engine answers with
+ * `unauthorized` or persists into the immutable audit — the operator states
+ * the attestation up front.
+ */
+function requireStopAssertion(raw: string | string[] | undefined): string[] {
+  const values = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  const stopped: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes session ids naming the recorded coordinator " +
+          "(and any other prior holder) attested stopped or reloaded",
+        2,
+      );
+    }
+    try {
+      assertSafeSessionId(entry, "--stopped entry");
+    } catch {
+      // The usage failure is printed (JSON on stdout, otherwise stderr), so the
+      // rejected value is never repeated in it: the message states the rule.
+      throw new SddScriptError(
+        "usage: workflow recover-coordinator --stopped takes public session ids \u2014 a single safe path " +
+          "component ([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed",
+        2,
+      );
+    }
+    stopped.push(entry);
+  }
+  if (stopped.length === 0) {
+    throw new SddScriptError(
+      "usage: workflow recover-coordinator requires --stopped <session-id...> naming the recorded coordinator " +
+        "(and any other prior holder) attested stopped or reloaded",
+      2,
+    );
+  }
+  return stopped;
+}
+
+/**
+ * The recovery success payload (prerequisite contract §3.3): the two public
+ * session ids, the replay identity, the versions and the time. The coordinator
+ * envelope path is NOT part of this projection — §3.3 keeps it in
+ * coordinator-owned transport, and this operator CLI's stdout/stderr is a
+ * public diagnostic surface, not that transport. No envelope body, credential,
+ * reason text or path is echoed.
+ */
+function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): void {
+  const receipt = result.recovery;
+  if (json) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        operation: "recover-coordinator",
+        workflow_id: receipt.workflowId,
+        prior_session_id: receipt.priorSessionId,
+        session_id: receipt.sessionId,
+        operation_id: receipt.operationId,
+        replay: receipt.replay,
+        snapshot_version: receipt.snapshotVersion,
+        compass_version: receipt.compassVersion,
+      }),
+    );
+    return;
+  }
+  console.error(
+    pc.green(
+      `workflow recover-coordinator: coordinator of ${receipt.workflowId} is now session ${receipt.sessionId}` +
+        ` (was ${receipt.priorSessionId}, operation ${receipt.operationId}${receipt.replay ? ", replayed" : ""})`,
+    ),
+  );
+  console.error(`workflow recover-coordinator: snapshot ${receipt.snapshotVersion}, compass ${receipt.compassVersion}`);
+}
+
+/**
  * `mstar workflow` — the workflow-level Prepare amendment verbs (spec § New API
  * and CLI). They live in this module because they are the same scoped
  * coordination transport: one coordinator envelope, one engine call, the same
@@ -900,9 +1587,11 @@ export function registerWorkflowCommands(program: Command): void {
   const workflow = program
     .command("workflow")
     .description(
-      "Workflow-level Prepare amendment: read the current snapshot/compass byte versions and the admission view " +
-        "(`show-prepare`), then apply one approved structural delta (`amend-prepare`) (engine-backed; JSON on stdout " +
-        "with --json, diagnostics on stderr; exit 0 ok, 1 refusal, 2 usage)",
+      "Workflow-level Prepare amendment and coordinator recovery: read the current snapshot/compass byte versions " +
+        "and the admission view (`show-prepare`), apply one approved structural delta (`amend-prepare`), or replace " +
+        "a recorded coordinator binding with an explicitly acquired session under the audited recovery guards " +
+        "(`recover-coordinator`) (engine-backed; JSON on stdout with --json, diagnostics on stderr; exit 0 ok, " +
+        "1 refusal, 2 usage)",
     )
     .exitOverride();
 
@@ -930,8 +1619,9 @@ export function registerWorkflowCommands(program: Command): void {
   workflow
     .command("amend-prepare")
     .description(
-      "Append approved Todo plan rows, record the reviewed integration checkout and the approved plan parallelism " +
-        "(coordinator session; both byte versions from `workflow show-prepare` are required)",
+      "Append approved Todo plan rows, correct existing rows' malformed plan-file pointers, record the reviewed " +
+        "integration checkout and the approved plan parallelism (coordinator session; both byte versions from " +
+        "`workflow show-prepare` are required)",
     )
     .option("--session <path>", "Absolute coordinator session JSON envelope path")
     .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
@@ -959,7 +1649,11 @@ export function registerWorkflowCommands(program: Command): void {
           "amend-prepare",
         );
         const patch = readJsonPayload(options.input as string | undefined, "--input", "amend-prepare") as PrepareWorkflowPatch;
-        pinSessionRoot(sessionPath);
+        const root = pinSessionRoot(sessionPath);
+        // A structural Prepare amendment is a pre-activation file patch: the DB
+        // authority has no header-patch operation, so an active authority
+        // refuses this form visibly instead of letting it write retired bytes.
+        await assertLegacyExecutionFormAvailable({ harnessDir: root }, "workflow amend-prepare");
         printWorkflowView(
           "amend-prepare",
           await amendPrepareWorkflow({
@@ -971,6 +1665,85 @@ export function registerWorkflowCommands(program: Command): void {
           }),
           json,
         );
+      }),
+    );
+
+  // `mstar workflow recover-coordinator` — the JSON Prepare coordinator
+  // recovery (prerequisite contract §3.3). A NEW verb, never an alias for the
+  // existing active-store recovery (`execution-workflow.ts`, which needs a full
+  // execution token and a stop attestation): this one is file/JSON only,
+  // Prepare-only, and narrows the effect to the top-level coordinator binding
+  // plus one audit record. The prior envelope is named EXPLICITLY here (the
+  // operator route), while the host resolves it from the engine's own view; the
+  // replacement identity is stated just as explicitly (`--session-id`) because
+  // the engine never generates one.
+  workflow
+    .command("recover-coordinator")
+    .description(
+      "Replace the recorded coordinator binding of one Prepare workflow with an explicitly acquired session " +
+        "(audited, JSON/Prepare-only): the prior envelope must still authenticate the recorded binding, the prior " +
+        "holder must be named as stopped, and both byte versions from `workflow show-prepare` are required. No " +
+        "lease transfer, no prepared-plan takeover, no force flag",
+    )
+    .option("--prior-session <path>", "Absolute path of the coordinator envelope the workflow records now")
+    .option("--session-id <id>", "Explicitly acquired id of the replacement coordinator session (never generated)")
+    .option("--expect-snapshot <sha256>", "Current snapshot byte version from `workflow show-prepare`")
+    .option("--expect-compass <sha256>", "Current compass byte version from `workflow show-prepare`")
+    .option("--operation-id <id>", "Caller-supplied id of this one recovery operation (the replay key)")
+    .option("--reason <text>", "Why the prior coordinator can no longer authenticate")
+    .option("--authorization-ref <ref>", "The operator's authorization reference for this replacement")
+    .option("--stopped <session-id...>", "Stopped/reloaded prior holder(s); must name the recorded coordinator")
+    .option("--json", "Machine-readable JSON on stdout")
+    .action(async (options: PlanCliOptions) =>
+      runVerb("recover-coordinator", options, {}, async (json) => {
+        // Every flag is validated before any engine I/O (exit 2): a malformed
+        // token, payload or missing stop assertion must never surface as a
+        // store refusal (exit 1).
+        const priorSessionPath = requireAbsolutePath(
+          options.priorSession as string | undefined,
+          "--prior-session",
+          "recover-coordinator",
+          "session-json-path",
+        );
+        const sessionId = requireFlag(options.sessionId as string | undefined, "--session-id", "recover-coordinator", "session-id");
+        const expectedSnapshotVersion = parsePrepareVersion(
+          options.expectSnapshot as string | undefined,
+          "--expect-snapshot",
+          "recover-coordinator",
+        );
+        const expectedCompassVersion = parsePrepareVersion(
+          options.expectCompass as string | undefined,
+          "--expect-compass",
+          "recover-coordinator",
+        );
+        const operationId = requireFlag(options.operationId as string | undefined, "--operation-id", "recover-coordinator", "operation-id");
+        const reason = requireFlag(options.reason as string | undefined, "--reason", "recover-coordinator", "reason");
+        const authorizationRef = requireFlag(
+          options.authorizationRef as string | undefined,
+          "--authorization-ref",
+          "recover-coordinator",
+          "authorization-reference",
+        );
+        const stoppedSessionIds = requireStopAssertion(options.stopped as unknown as string[] | undefined);
+        // The prior envelope is the address (its own root and workflow id), not
+        // a looked-up credential: every guard on it is the engine's, inside the
+        // lock, and it must still be the recorded binding.
+        const prior = readSessionEnvelope(priorSessionPath);
+        pinArtifactStoreRoot(prior.harness_root);
+        const result = await recoverPrepareCoordinator({
+          cwd: process.cwd(),
+          harnessDir: prior.harness_root,
+          identity: { source: "local", sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          priorSessionPath,
+          priorSessionId: prior.session_id,
+          expectedSnapshotVersion,
+          expectedCompassVersion,
+          operationId,
+          reason,
+          authorizationRef,
+          stoppedSessionIds,
+        });
+        printRecovery(result, json);
       }),
     );
 

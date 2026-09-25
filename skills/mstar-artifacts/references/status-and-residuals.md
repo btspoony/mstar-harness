@@ -6,15 +6,24 @@ v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual
 
 - **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。PM-facing unregister caller：post-merge close `mstar status workflow-close --workflow <id>`（ordering 固定：terminal snapshot → unregister；细序 → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2）。
 - **`{WORKFLOW_DIR}/<id>/snapshot.json`** — 每 lifecycle 的运行态快照（`schema_version: 1`）：**`plans[]` 行（legacy PlanRow 形状逐字保留）**、per-row **`execution_lease`**、顶层 **`integration_merge_lease`** / **`execution_policy`** / **`branch` anchors** / **`integration_worktree_path`** / `compass_ref`。`<id>` = plan id 或 iteration id。
-- **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）。无项目的流程回落到 `_default` 项目。
+- **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）——**迁移历史**；open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue（→ § Issue capture above）。无归属的流程落到 `_default` 项目。
 
-`status.json`（根）、workflow snapshot 与 project register 都是 **SSOT**：plan 行状态与 lease 在 snapshot，open residual 在 register。  
+`status.json`（根）与 workflow snapshot 是**执行态 SSOT**：plan 行状态与 lease 在 snapshot。**open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture above）；project register 是**迁移历史**。  
 Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`status.json`, workflow snapshots, and open residual (summary)"）；本文件 covers **fields, severity, lifecycle, v2 地址与 engine-check 命令**。  
-**Closed** residuals close **in place** in the register（`lifecycle` / `closed_at` / `closure_note`）— v1 的 `archived/residuals/<plan-id>.json` 归档路径与 `archive-residuals` 已移除（`mstar status archive-residuals` 在 v3 仅报错并指向 register 状态变更）。
+Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifecycle` / `closed_at` / `closure_note`；v1 的 `archived/residuals/<plan-id>.json` 归档路径与 `archive-residuals` 已移除（`mstar status archive-residuals` 报错并指向 issue 动词：`mstar plan issue-close` 或 `mstar issue close|waive|duplicate|supersede`）。
 
-**Why this matters:** Within a working copy, the workflow snapshot and project registers are the **local session SSOT** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
+**Why this matters:** Within a working copy, the workflow snapshot and the issue store are the **local session SSOT** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should capture trackable open items as issues soon after review closure; close after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist) — capture and closure per **`mstar-project-governance`「Issue capture」**.
 
 **Cross-clone handoff** (default git policy): tracked `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and root `CONCEPTS.md` / `STRATEGY.md` when used. Residuals that must survive clone must be **promoted** (compound) or written into those tracked results — do not treat `status.json` / `workflows/` / `projects/` / `plans/` as the default clone handoff surface.
+
+## Issue capture and open items（capture duty pointer）
+
+**Canonical capture duty（唯一权威，逐字文本）→ `mstar-project-governance`「Issue capture」（issue-store contract §6）。** 本文件不复述该契约；下面是 artifacts 侧的**落点应用**。
+
+- **谁捕获**：确认该结论的席位 —— PM 席位（dispatch/consolidation、QC tri、iteration close）与 PR-review 轮次 Stage 3 的 main agent。Leaf audit/QC/QA 席位**只回证据，不写 store**。
+- **open 侧映射**：residual **open** 登记 → issue capture（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；同一 finding 再次出现 → `mstar issue occurrence` 追加 occurrence，**不**新开第二个 issue。本文 § Residual findings 的 `severity` 枚举就是 issue 的 `severity` 枚举。
+- **close 侧映射**：residual 关闭（`resolved` / `waived` / `duplicate` / `superseded`）→ issue 终态处置，由契约 §4 的关闭权威执行；`findings cleanup` 的 open 项是该 plan 的 **linked open issues**（`mstar status findings-cleanup <plan-id>`）。
+- **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以 issue-store contract §7 的 activation 完成为准（staged 时 `store.not-active`）；live 切换归 cutover plan 的授权 ops 任务。register 是迁移历史，不再作为写入目标。
 
 ## Basic structure
 
@@ -94,16 +103,16 @@ Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`
 - The example above depicts the **held** state (both leases populated, illustrative placeholder values) and passes `validateWorkflowSnapshot`; the released state is **key absence** (delete-key-on-release below), never `null` or `{}`, and enum scalars (`type` / `status` / plan-row `status`) are always single values — the full enum sets are `type`: `plan | iteration`, snapshot `status`: `running | paused | completed | failed | stopped`, plan-row `status`: `Todo | InProgress | InReview | Blocked | Done`.
 
 - `plans[]` rows are the **legacy PlanRow shape verbatim** (unknown row fields preserved, never re-bucketed). Per-row `execution_lease` stays on the row; `integration_merge_lease` is **top-level** (the v1 root-`metadata` home is gone).
-- **Scoped coordination (optional):** top-level `coordination.coordinator` plus per-row `coordination` (`revision` / `prepared` / `session` / `progress` / `handoff`) appear only on the scoped route — field table, session envelopes and version rules → § Plan-scoped coordination below.
+- **Scoped coordination (optional):** top-level `coordination.coordinator` plus per-row `coordination` (`revision` / `prepared` / `session` / `progress` / `handoff`) are the **pre-activation** route's fields — field table, session envelopes and version rules → § Plan-scoped coordination below; the active route keeps the same facts as store rows and full execution tokens (§ Active execution rows and tokens).
 - Terminal statuses (`completed` / `failed` / `stopped`) require `ended_at` and no dangling leases.
-- **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>]`: engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
-- **Delivery-evidence consultation before the close (seam S3):** a `type: plan` snapshot's registered delivery kind is consulted **before** the terminal write (`completed` closes only — a `failed`/`stopped` close is never demanded delivery evidence, §5) — an incomplete `development` delivery (no compound disposition / PR identity / PM-recorded verified-merge evidence, or a PR whose `head`/`target` are not the registered `branch.source`/`branch.target`), or an unfulfilled `verification/report-only` completion policy, refuses with the `PHASE6_DELIVERY_*` codes, leaving the snapshot `running` and the root entry registered (bytes unchanged, workflow resumable). Record the missing evidence with `mstar workflow evidence --workflow <id> --file <payload.json> [--session <path>]` — the same coordinator-session gate as the close, idempotent (identical evidence rewrites nothing) and stage-by-stage mergeable; the PR identity (§4d) is recorded **once** (a different pair is refused), the compound disposition and the merge record stay updatable. It refuses an already-terminal lifecycle plus a non-`plan` snapshot without a registered kind. The read-only `mstar iteration gate --phase 6` shares this same consultation, so gate and close never disagree.
-- **Delivery kind is declared at registration by every producer** (§1/§4a): `mstar workflow register` (normal entry), `mstar audit promote --delivery-kind <kind>` (required flag) and `mstar migrate --delivery-kind <kind>` (a lift that would create an ACTIVE kind-less plan snapshot is refused as usage, exit 2; the declaration is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused the same way with the plan ids — migrate in batches of one declared plan) all declare it explicitly — never inferred, never defaulted in code — and one shared rule pairs `development` with `--branch-source`/`--branch-target` and `verification/report-only` with `--completion-policy`. An **ACTIVE** `type: plan` snapshot that predates this (the historical audit-promotion / v1-lift population) is repaired once with `mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]`: the declaration is one-time (a second one, even with the same kind, is refused) and refuses a terminal snapshot — a supplied anchor fills a MISSING delivery anchor or restates the registered one, while a value conflicting with an anchor the snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten); a legacy **terminal** kind-less snapshot keeps its documented owner-amendment path.
+- **Completed close (Phase 6)** runs the close verb — active: `mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> --operation <id> --reason <text> [--harness <absolute-path>] [--json]`; pre-activation: `mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]`. Engine `closeWorkflow` rereads the latest snapshot under the snapshot write lock, refuses any dangling lease / non-`Done` row (fail-loud, bytes unchanged), writes `completed` + `ended_at`, then unregisters the root entry. Unregister failure after the snapshot write is a reported **partial close** — retry finishes unregister without rewriting `ended_at`; a fully closed retry rewrites neither file. An already-terminal `failed` / `stopped` snapshot keeps its actual status (close never fabricates `completed`).
+- **Delivery-evidence consultation before the close (seam S3):** a `type: plan` snapshot's registered delivery kind is consulted **before** the terminal write (`completed` closes only — a `failed`/`stopped` close is never demanded delivery evidence, §5) — an incomplete `development` delivery (no compound disposition / PR identity / PM-recorded verified-merge evidence, or a PR whose `head`/`target` are not the registered `branch.source`/`branch.target`), or an unfulfilled `verification/report-only` completion policy, refuses with the `PHASE6_DELIVERY_*` codes, leaving the snapshot `running` and the root entry registered (bytes unchanged, workflow resumable). Record the missing evidence with `mstar workflow evidence --workflow <id> --file <payload.json>` — active: plus `--session-ref <wire> --expect <full-execution-token> --operation <id>` under an independently acquired coordinator identity; pre-activation: plus `--session <path>`. It is the same authority gate as the close, idempotent (identical evidence rewrites nothing) and stage-by-stage mergeable; the PR identity (§4d) is recorded **once** (a different pair is refused), the compound disposition and the merge record stay updatable. It refuses an already-terminal lifecycle plus a non-`plan` snapshot without a registered kind. The read-only `mstar iteration gate --phase 6` shares this same consultation, so gate and close never disagree.
+- **Delivery kind is declared at registration by every producer** (§1/§4a): `mstar workflow register` (normal entry), `mstar audit promote --delivery-kind <kind>` (required flag) and `mstar migrate --delivery-kind <kind>` (a lift that would create an ACTIVE kind-less plan snapshot is refused as usage, exit 2; the declaration is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused the same way with the plan ids — migrate in batches of one declared plan) all declare it explicitly — never inferred, never defaulted in code — and one shared rule pairs `development` with `--branch-source`/`--branch-target` and `verification/report-only` with `--completion-policy`. An **ACTIVE** `type: plan` snapshot that predates this (the historical audit-promotion / v1-lift population) is repaired once with `mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]` (a **pre-activation** snapshot rewrite: the DB creation route declares its kind at registration, so no active operation exists for a declaration and it is never disguised as one): the declaration is one-time (a second one, even with the same kind, is refused) and refuses a terminal snapshot — a supplied anchor fills a MISSING delivery anchor or restates the registered one, while a value conflicting with an anchor the snapshot already carries is refused (the registered anchor is the delivery identity, never overwritten); a legacy **terminal** kind-less snapshot keeps its documented owner-amendment path.
 - **Physical cleanup is out of close's scope**: it is the separate `mstar worktree cleanup --workflow <id> …` verb (dry-run default), run in its own timing lane — same-round after a plan's integration merge (Phase 2) or after §6.1–§6.3 + PR merged (Phase 6). Close and cleanup never release leases — on the scoped route the plan row's lease is moved/deleted by `mstar plan accept | return | complete` (never by close or cleanup, and never by a standalone release verb); on the whole-iteration route the owner releases before either. Guard/decision codes (`cleanup.keep.*`, `cleanup.refuse.*`, `cleanup.remove.merged`) → **`mstar-branch-worktree`**「Worktree / branch cleanup」.
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
 
-**`projects/<id>/residuals.json`** — project register (entries keyed by plan id, each an ARRAY):
+**`projects/<id>/residuals.json`** — project register (**migration history**; entries keyed by plan id, each an ARRAY):
 
 ```json
 {
@@ -162,7 +171,9 @@ Body conventions (`## Direction` + goal items as `- [ ]` / `- [x]` markdown task
 
 ## Fail-loud handoff contract
 
-Findings must pass engine validation **before** registration into the project register: `validateResidual(entry)` per entry, `validateProjectRegister(doc)` for the whole register, `validateWorkflowSnapshot(doc)` for the snapshot, `validateStatus` for the v2 root (`mstar status validate <path>` / engine import). Malformed entries — **non-object**, missing any of the nine required fields (`id`, `title`, `severity`, `source`, `scope`, `decision`, `owner`, `target`, `tracking` — mirroring engine `RESIDUAL_REQUIRED_FIELDS` in `packages/engine/src/status.ts`), or **`severity`** / **`decision`** outside their enums (`status.residual.invalid-severity` / `status.residual.invalid-decision`) — are **rejected** (`ok:false` + violation): fix and rewrite — never silent pass-through, downgrade-write, or “write then patch”. A *lifecycle* value such as `"resolved"` in `decision` leaves the **whole register unwritable** — `validateProjectRegister(doc)` then fails the document, so the engine refuses every subsequent write to that register, not just that entry.
+Findings must pass engine validation **before** they are captured: the capture path (`mstar issue add` / `mstar plan issue-add`) validates the capture input at the domain boundary and refuses a malformed submission (exit 1, nothing written) — a capture never degrades into a silent partial write.
+
+The **migrated register documents** keep their document validators: `validateResidual(entry)` per entry, `validateProjectRegister(doc)` for the whole register, `validateWorkflowSnapshot(doc)` for the snapshot, `validateStatus` for the v2 root (`mstar status validate <path>` / engine import). Malformed entries — **non-object**, missing any of the nine required fields (`id`, `title`, `severity`, `source`, `scope`, `decision`, `owner`, `target`, `tracking` — mirroring engine `RESIDUAL_REQUIRED_FIELDS` in `packages/engine/src/status.ts`), or **`severity`** / **`decision`** outside their enums (`status.residual.invalid-severity` / `status.residual.invalid-decision`) — are **rejected** (`ok:false` + violation): fix and rewrite — never silent pass-through, downgrade-write, or “write then patch”. A *lifecycle* value such as `"resolved"` in `decision` leaves the **whole register unwritable** — `validateProjectRegister(doc)` then fails the document, so the engine refuses every subsequent write to that register, not just that entry. The register itself is **replacement-retired** as a writer target (engine refuses it with `coordination.store`, naming `store.db` as the only findings authority).
 
 dsh-derived findings map their keys per the engine-residual validation verification spec §5; dsh keys never enter the schema.
 
@@ -170,7 +181,7 @@ dsh-derived findings map their keys per the engine-residual validation verificat
 
 ## Residual findings: `severity` (SSOT, machine field)
 
-Each register entry (`projects/<id>/residuals.json` → `entries[<plan-id>][]`)’s **`severity`** must be from this enum. QC report Markdown **Critical / Warning / Suggestion** are **section titles** — **do not** copy them verbatim into JSON `severity`.
+Each captured issue's — and each migrated register entry's — **`severity`** must be from this enum. QC report Markdown **Critical / Warning / Suggestion** are **section titles** — **do not** copy them verbatim into JSON `severity`.
 
 ### 1. Allowed values
 
@@ -233,7 +244,7 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 
 ## Findings cleanup modes
 
-Plan-level policy for whether non-blocking QC/QA findings may remain as open residual entries or must be cleared in the current plan session.
+Plan-level policy for whether non-blocking QC/QA findings may remain as **open issues linked to the plan** or must be cleared in the current plan session.
 
 ### Assignment (SSOT)
 
@@ -241,7 +252,7 @@ Plan-level policy for whether non-blocking QC/QA findings may remain as open res
 | ------- | ------ |
 | Assignment **`Findings cleanup`** | `zero-residual` \| `allow-residual` |
 
-The v1 `plans[].metadata.findings_cleanup` mirror is **deleted** in v3 — no dual-track. Assignment wins; the register is the only residual store.
+The v1 `plans[].metadata.findings_cleanup` mirror is **deleted** in v3 — no dual-track. Assignment wins; the issue store is the only findings store.
 
 **Defaults**
 
@@ -252,26 +263,26 @@ The v1 `plans[].metadata.findings_cleanup` mirror is **deleted** in v3 — no du
 
 ### `zero-residual` (clean-session)
 
-Intent: clear findings in the current plan session whenever possible. Open residuals only for **true blocker-defers**.
+Intent: clear findings in the current plan session whenever possible. Open items only for **true blocker-defers**.
 
 1. After QC: default path is **fix-now + targeted re-review**, not `Approve with residuals`.
-2. Do **not** register open R# for items that can be fixed in this session.
-3. **`nit`**: fix in-session **or** drop with no R# (existing “no tracking needed”); **never** open residual for style-only nits.
-4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (`decision: defer`, `target` = next iteration/milestone, Durable Roadmap Gate written) — **except `critical`** (unsafe outcome reachable on this merge, §3): a `critical` is fixed now, or the risk is explicitly accepted and the entry is **closed** per item 6, never left open as the approval's remaining item.
+2. Do **not** capture an open issue for items that can be fixed in this session.
+3. **`nit`**: fix in-session **or** drop with no capture (existing “no tracking needed”); **never** capture style-only nits.
+4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (Durable Roadmap Gate written) — **except `critical`** (unsafe outcome reachable on this merge, §3): a `critical` is fixed now, or the risk is explicitly accepted and the issue is **closed** per item 6, never left open as the approval's remaining item.
 5. **True defer** only: external dependency; product/scope decision for a later iteration; or explicit **current-turn** user defer — plus Durable Roadmap Gate.
-6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close in the register** (do not leave open). Prefer a cheap fix over waive-as-shortcut.
-7. Plan **Done**: prefer an empty `entries[<plan_id>]` in the register. If any open entries remain, **every** one must be blocker-defer + roadmap and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
+6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close the issue** (do not leave it open). Prefer a cheap fix over waive-as-shortcut.
+7. Plan **Done**: prefer **no open issue linked to the plan**. If any open issues remain, **every** one must be blocker-defer + roadmap and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
 
 ### `allow-residual`
 
-Non-blocking register entries — `severity` below `critical` on the §3 axis — may ship with open entries and `Approve with residuals` when no unresolved `critical` remains (existing residual lifecycle unchanged). This is the default mode (see Defaults above; `zero-residual` is the explicit opt-in). Registration and disclosure are hard duties under `allow-residual` — they replace the speed-vs-discipline tradeoff, not the audit trail:
+Non-blocking open issues — `severity` below `critical` on the §3 axis — may ship with open items and `Approve with residuals` when no unresolved `critical` remains. This is the default mode (see Defaults above; `zero-residual` is the explicit opt-in). Capture and disclosure are hard duties under `allow-residual` — they replace the speed-vs-discipline tradeoff, not the audit trail:
 
-1. **Register before InReview exit**: every open R# is entered in the project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]` with machine-enum `severity` before the plan leaves InReview.
-2. **Disclose on every decision surface**: every consolidated QC decision, Completion Report, and Status Update states the residual situation — the list, each entry's `severity`, and its tracking location. Silence about open residuals is a gate violation, not a style issue; when nothing is open, say `N/A — none open`.
-3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be registered and carried (fix-now remains preferred when cheap).
-4. **Close-time disclosure**: close-time artifacts carry the same residual list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or register lifecycle rules: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
+1. **Capture before InReview exit**: every remaining open finding is captured as an issue **linked to this plan** with machine-enum `severity` before the plan leaves InReview (→ § Issue capture above).
+2. **Disclose on every decision surface**: every consolidated QC decision, Completion Report, and Status Update states the open-item situation — the list, each issue's `severity`, and its tracking location (issue id). Silence about open findings is a gate violation, not a style issue; when nothing is open, say `N/A — none open`.
+3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be captured and carried (fix-now remains preferred when cheap).
+4. **Close-time disclosure**: close-time artifacts carry the same open-item list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or the §4 closure authority: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
 
-> **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the plan's register entries. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ---
 
@@ -350,7 +361,7 @@ Leases live in the **workflow snapshot** `{WORKFLOW_DIR}/<id>/snapshot.json` (`p
 
 **Protocol home (single canonical copy):** the full lease protocol prose — same-host exclusive write lock, hard gate, claim-before-`InProgress`, hold/release/override, integration merge protocol, orphan recovery, lease prohibitions — lives in **`mstar-engine-legacy`** `references/lease-protocol.md` (engine-absent fallback). The Phase 2 iteration-command **execution checklist** → **`mstar-iteration`** `references/phase-2-worktree-lease.md`. This file carries the **field semantics** only (tables below + the lockdir location summary).
 
-**Same-host exclusive write lock (snapshot / root):** all control-path lease mutations (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release) **MUST** run inside a same-host exclusive write lock for the full read-check-replace-verify sequence. Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file — for snapshots the lockdir lands inside `workflows/<id>/`). The lock protects only callers that **actually acquire it**: scoped verbs run their whole read-check-replace-verify inside the same lockdir, whereas a hand-written update that bypasses `writeWorkflowSnapshot` is both unprotected and unauthorized (`coordination.direct-write-refused`). Prefer the engine-check commands below over hand-rolled `flock` snippets; the atomic-mkdir alternative (`.status-write.lockdir/` in the same directory as the file) remains the documented fallback when no engine writer exists. On the **scoped route** that fallback does not reopen a manual path: the verbs own the lock (`mstar plan bind | progress | residual-add | residual-close | handoff | accept | return | integration-start | integration-accept | complete | reconcile`), a missing CLI **fails closed** instead of degrading to hand-written flock/atomic-mkdir, and read-only validators stay checks — never mutation substitutes. Hard gate, cross-host exception and pre-dispatch re-verify → `mstar-engine-legacy/references/lease-protocol.md`.
+**Same-host exclusive write lock (snapshot / root):** all control-path lease mutations (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release) **MUST** run inside a same-host exclusive write lock for the full read-check-replace-verify sequence. Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file — for snapshots the lockdir lands inside `workflows/<id>/`). The lock protects only callers that **actually acquire it**: scoped verbs run their whole read-check-replace-verify inside the same lockdir, whereas a hand-written update that bypasses `writeWorkflowSnapshot` is both unprotected and unauthorized (`coordination.direct-write-refused`). Prefer the engine-check commands below over hand-rolled `flock` snippets; the atomic-mkdir alternative (`.status-write.lockdir/` in the same directory as the file) remains the documented fallback when no engine writer exists. On the **scoped route** that fallback does not reopen a manual path: the verbs own the lock (`mstar plan bind | progress | issue-add | issue-close | handoff | accept | return | integration-start | integration-accept | complete | reconcile`), a missing CLI **fails closed** instead of degrading to hand-written flock/atomic-mkdir, and read-only validators stay checks — never mutation substitutes. Hard gate, cross-host exception and pre-dispatch re-verify → `mstar-engine-legacy/references/lease-protocol.md`.
 
 > **Lease Engine-check:** single canonical callout in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— pointer only, do not re-vendor.
 
@@ -377,30 +388,53 @@ These are **full-protocol prose** — the single canonical copy lives in **`msta
 
 The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> | --resume <session.json>` → `mstar plan …`）keeps **one process authority**: the same workflow snapshot (`workflows/<id>/snapshot.json`) and the same root `status.json` — no per-plan snapshot clone, database, daemon or second status copy. This section is the **single runtime home** for the coordination / session / handoff / revision fields; command flags and exit codes → **`mstar-use-cli`**; route semantics → **`mstar-iteration`** `references/plan-scoped-pm.md`; engine API shapes → `packages/engine/src/coordination.ts`.
 
-### Snapshot fields
+**Which transport owns a write is decided by the harness's execution authority, and the two never mix** （→ `mstar-use-cli` `references/plan-and-workflow.md` § Transports）:
+
+- **Active** — the coordination verbs write through the execution authority under an **independently acquired** caller identity, carrying a session **reference** (`exec-session-v1:<base64url>`), the scope's **full execution token** as `--expect`, and the caller's own `--operation` id as the replay key. The reference is a **lookup, not a bearer credential**: it names a stored session row and grants nothing without the caller the engine compares inside its own transaction. The snapshot fields below are then **not** the authority — the execution store is — and the pre-activation forms refuse.
+- **Pre-activation** — only while that authority is not active: the per-row `coordination` block below plus the role-scoped **session envelope files**, with a row `revision` as the CAS.
+
+### Active execution rows and tokens（single runtime home）
+
+| Level | Item | Semantics |
+|---|---|---|
+| store | root execution token | The CAS of a root-scoped creation (`workflow register`, `iteration register`) and the token `mstar status validate` prints for the store. |
+| workflow | workflow execution token | The CAS of every workflow-scoped write (bind, the named workflow transitions, delivery evidence, the terminal close, coordinator recovery). `mstar status validate` prints one per registered workflow. |
+| plan | plan execution token | The CAS of every plan-row write (`prepare` … `complete`, and the row's issue capture/close). A read returns it for the addressed row. |
+| session | session reference | The stored session row a write addresses: role, workflow, plan and session id. Encoded as `exec-session-v1:<base64url>`; **a lookup, never a credential**. |
+| operation | operation id | Caller-supplied per call. An exact retry replays the recorded receipt (`replayed: true`); a changed request against the same id refuses. |
+| row | active session binding | The coordinator and plan-pm seats are rows in the store, not files: `plan bind --execution` claims one, `plan bind --execution --resume-ref` reads it back read-only, and `mstar session recover` replaces a stopped coordinator under a stop attestation. |
+
+Every active write revalidates the caller, the canonical root, the store id, the epoch and the row inside the engine's own transaction, so a copied or stale reference refuses without writing. No credential is a lookup key here, and no active form writes a session file.
+
+### Snapshot fields (pre-activation scoped route)
+
+These fields are the **pre-activation** home of the scoped route's state — the transport that is only lawful while the harness's execution authority is not active. On the active route the equivalent facts live in the execution store (→ § Active execution rows and tokens) and the snapshot's `coordination` block is not the authority.
 
 | Level | Field | Type | Semantics |
 | --- | --- | --- | --- |
-| top | `coordination.coordinator` | object | `{ session_id, session_file, bound_at }` — one coordinator per workflow; a second fresh coordinator bind fails exactly like a duplicate plan holder. Created only from the verified main worktree or the recorded integration worktree, with a registered running iteration. |
-| row | `coordination.revision` | nonnegative integer | Optimistic-concurrency token; absent `coordination` = `0`. **`--expect <revision>` always means this row value** — never snapshot `schema_version` or a date. |
+| top | `coordination.coordinator` | object | `{ session_id, session_file, bound_at }` — one coordinator per workflow; a second fresh coordinator bind fails exactly like a duplicate plan holder. Created only from the verified main worktree or the recorded integration worktree, with a registered running iteration and a committed catalog registration, and from an **explicitly acquired** identity — the engine never generates a coordinator id. |
+| top | `coordination.identity_recoveries` | array | Append-only audit of JSON Prepare coordinator recoveries: one immutable record per accepted operation (`operation_id`, `request_hash`, `workflow_id`, `prior_session_id`, `session_id`, `authorization_ref`, `reason`, `stopped_session_ids`, `snapshot_version_before`, `compass_version`, `recovered_at`). It holds no credential and no envelope body; the live owner stays `coordination.coordinator`, and ordinary writers may neither remove nor rewrite an entry. |
+| row | `coordination.revision` | nonnegative integer | Pre-activation optimistic-concurrency token; absent `coordination` = `0`. **A row `--expect <revision>` always means this value** — never snapshot `schema_version` or a date. On the active route the same write takes the plan's **full execution token** instead, and a revision integer there is a usage refusal, never coerced. |
 | row | `coordination.prepared` | object | `{ assignment_path, assignment_sha256, plan_sha256, qa_gate, findings_cleanup, prepared_by, prepared_at }` — the reviewed-Assignment authorization. Hashes are SHA-256 of the exact UTF-8 bytes; after claim the Assignment is immutable and every show/resume/mutation rechecks its hash — a changed file fails `coordination.assignment-stale` without changing state. |
 | row | `coordination.session` | object | `{ session_id, session_file, bound_at }` — the bound plan-PM session; the UUID is engine-allocated, never derived from plan, assignment path, PID or terminal label. |
 | row | `coordination.progress` | object | `{ status, summary, evidence_paths[], track_branches? }`; `status` ∈ `InProgress` / `InReview` / `Blocked` only; nonblank `summary`; evidence paths must be existing canonical absolute artifacts inside this plan's resolved plan/SDD area; `track_branches` must belong to its recorded L2 Assignments/worktrees. |
 | row | `coordination.handoff` | object | Immutable submitted handoff record: engine-generated UUID / attempt / timestamps plus Git pins and evidence hashes. Input can never set state, holder or target. |
 
-### Session envelopes and credentials
+### Session reference, session envelope and the credential boundary
 
-- Session JSON lives at `<resolved-workflow-dir>/<workflow-id>/sessions/<role>-<session-id>.json` (`<role>` ∈ `coordinator` / `plan-pm`), created exclusively, mode `0600`. The role prefixes only the file name, so one host session may hold the coordinator envelope and a plan-pm envelope under one shared `session_id`; the payload identity is untouched.
-- It is a **credential / pointer**, not a second process-SSOT copy: session identity, resolved harness root and pointers — never copied snapshot state, never a portable handoff address. Cross-primary handoff references are readable absolute **control-root filesystem paths**; `local://` is not portable.
-- Session paths and `--expect` revisions stay with the dispatching PM/coordinator and are **never** handed to a leaf implementer/reviewer (`mstar-dispatch-gates` § Plan 作用域与 credential 不下发).
+- **The active reference is a lookup, not a credential.** `exec-session-v1:<base64url>` names a stored session row; it authorizes nothing by itself, and the engine compares the independently acquired caller inside its own transaction. Do not treat a reference, a token or an operation id as a secret that grants access — and do not treat possession of one as authorization to use it.
+- **Pre-activation only:** session JSON lives at `<resolved-workflow-dir>/<workflow-id>/sessions/<role>-<session-id>.json` (`<role>` ∈ `coordinator` / `plan-pm`), created exclusively, mode `0600`. The role prefixes only the file name, so one host session may hold the coordinator envelope and a plan-pm envelope under one shared `session_id`; the payload identity is untouched. It is a pointer + proof for the file route, not a second process-SSOT copy: session identity, resolved harness root and pointers — never copied snapshot state, never a portable handoff address. Cross-primary handoff references are readable absolute **control-root filesystem paths**; `local://` is not portable.
+- The recovery projection is limited to public facts — the workflow id, the old/new public session ids, the operation id, the replay status and, per transport, the byte versions or the fresh token. An envelope **path** is coordinator-owned transport, never part of a public diagnostic, a leaf assignment or an audit record.
+- **Nothing on this boundary travels into a child.** A session path, a session reference, `--expect` (revision or full execution token) and an operation id stay with the dispatching PM/coordinator and are **never** handed to a leaf implementer/reviewer (`mstar-dispatch-gates` § Plan 作用域与 credential 不下发).
+- **Resume is never recovery**, on either transport: a read-only resume reports context and re-identifies nobody, while a stopped owner is replaced only by the recovery verb that owns the current authority.
 - Supported writers are cooperative same-machine interfaces, not a filesystem sandbox: copying a session file or editing protected files by hand is not prevented, and is not an authorized path.
 
 ### Revision and version protocol
 
-- `--expect <revision>` (row) and `--expect-register <version>` (register; artifact version = `sha256:<64 lowercase hex>`, missing = `absent`) are required by every mutating verb. `bind` is the only exception: it checks and claims atomically against current ownership without a caller snapshot, and `--resume` returns context without changing ownership or revision.
-- Every row operation **except residual-only writes** increments only that row's revision. A sibling plan's mutation leaves this row's revision untouched; a stale same-row expectation fails `coordination.version-conflict`.
-- Global coordinator binding takes the snapshot lock but increments no row revision — it changes only top `coordination.coordinator` and `updated_at`.
-- No automatic retry / rebase exists for caller replacements: missing version = `coordination.expected-version-required`, mismatch = version conflict, and no mtime / date / schema version is ever used as CAS.
+- **Active:** every mutating row/workflow verb requires `--session-ref <wire> --expect <full execution token> --operation <id>`; the token is read from the addressed scope immediately before the call (`mstar status validate` prints the root and per-workflow tokens). **Pre-activation:** `--expect <revision>` (row) and `--expect-register <version>` (register; artifact version = `sha256:<64 lowercase hex>`, missing = `absent`) are required by every mutating verb. A fresh `bind` is the only operation with no external token on either transport: it checks and claims atomically against current ownership, and a resume returns context without changing ownership or revision.
+- Every row operation **except residual-only writes** advances only that row's state. A sibling plan's mutation leaves this row untouched; a stale same-row token fails `coordination.version-conflict`.
+- Global coordinator binding takes the lock but increments no row revision — it changes only top `coordination.coordinator` and `updated_at`. The audited JSON Prepare recovery replaces that same binding, refreshes `updated_at` and appends its own immutable `coordination.identity_recoveries` record (→ § Prepare coordinator recovery below). The active recovery is a different verb against a different authority (→ § Active execution rows and tokens).
+- No automatic retry / rebase exists for caller replacements: a missing token = `coordination.expected-version-required` (pre-activation) or a usage refusal (active), a mismatch = version conflict, and no mtime / date / schema version is ever used as CAS.
 - Residual writes touch only `entries[<planId>]` and bump no snapshot revision, so there is no two-document commit pretending to be atomic.
 
 ### Verbs and row / register ownership
@@ -408,37 +442,49 @@ The scoped route（`/iteration-drive --assignment | --workflow <id> --plan <id> 
 | Actor | May write |
 | --- | --- |
 | coordinator — `mstar plan prepare · accept · return · integration-start · integration-accept · complete · repair-delivery-source · reconcile` | selected row `coordination.prepared` and handoff transitions, `status`, coordination leases, `Done` (route-specific) |
-| plan session — `mstar plan progress · residual-add · residual-close · handoff` | its own row `status` + `coordination.progress`, `metadata.track_branches`, its `entries[<planId>]` register bucket, and the handoff record |
+| plan session — `mstar plan progress · issue-add · issue-close · handoff` | its own row `status` + `coordination.progress`, `metadata.track_branches`, the issues it captures (`issue-add` / `issue-close`), and the handoff record |
 | anyone else | nothing scoped — sibling rows, lifecycle anchors, root register, `execution_policy`, `compass_ref`, shared indexes, the iteration PR and Phase 3–6 stay on the coordinator / global route |
 
-- **State machine:** `Todo → InProgress` (bind) → `InReview` (handoff; lease kept) → `accepted` → (`integrating` → `merged` on the **iteration route only`) → `completed` ⇒ `Done`. `progress` allows only `InProgress → InProgress | InReview | Blocked`, `Blocked → Blocked | InProgress`, and `InReview → InReview | InProgress | Blocked` **before** handoff — never `Todo` / `Done` / lease removal. After handoff, all scoped progress/residual mutations are rejected until `return`.
+- **State machine:** `Todo → InProgress` (bind) → `InReview` (handoff; lease kept) → `accepted` → (`integrating` → `merged` on the **iteration route only`) → `completed` ⇒ `Done`. `progress` allows only `InProgress → InProgress | InReview | Blocked`, `Blocked → Blocked | InProgress`, and `InReview → InReview | InProgress | Blocked` **before** handoff — never `Todo` / `Done` / lease removal. After handoff, all scoped progress/issue mutations are rejected until `return`.
+- The verb → role boundary is transport-independent: each verb keeps its seat (`prepare` / the handoff transitions on the coordinator seat, `progress` / `issue-*` / `handoff` on the plan seat) whichever transport it runs on, and a seat may not be widened by owning a reference.
 - **Two completion routes (engine-selected):**
   - **Iteration** (`type: iteration`, or any workflow that is not standalone development): after `accept`, `integration-start` → coordinator merge → `integration-accept` → `complete`. `complete` is the one atomic write that sets `Done`, completes the handoff, and deletes the row `execution_lease` plus the coordinator's `integration_merge_lease`. `accept` is ownership transfer only — no merge, no `Done`; `integration-accept` keeps both leases and `InReview` until `complete`.
   - **Standalone development** (`type: plan`, `delivery_kind: development`, exactly one owned row): after `accept`, `complete` directly from the accepted handoff with no integration record or merge lease. `complete` sets `Done`, completes the handoff, retains cleanup metadata, deletes only the row `execution_lease`, and leaves the workflow `running` until ordinary delivery evidence and terminal close. Integration verbs refuse this route; missing integration anchors never select it.
   - **Legacy delivery-source repair:** `repair-delivery-source` is coordinator-only, not a normal lifecycle step, and applies only to the pre-fix legacy shape `branch.source === branch.target` with an accepted handoff naming a different source. Under the row revision lock it may replace only `branch.source` (derived from the sealed handoff), advance `coordination.revision`, and update snapshot `updated_at`. It never records `Done`, changes delivery/merge evidence, statuses, leases, or handoff pins, and refuses a second application once aligned. Future registrations must record the true delivery source; `workflow evidence --declare-kind --branch-source` cannot amend an already-registered anchor.
   - **Reconcile:** iteration route observes Git in the recorded integration checkout (`completed` / `retry-ready` / `already-completed`); standalone route only replays an already-completed row as byte-identical `already-completed` — it never manufactures `Done` from Git truth alone.
-- **Legacy helpers refuse coordinated keys:** `appendProjectRegisterEntries` / `closeProjectRegisterEntry` / backlog next-free-key and `persist` replacements reject an existing coordinated plan bucket with `coordination.scoped-writer-required` (directing the caller to `residual-add` / `residual-close`), and hand writes to protected snapshot / register / root targets are refused with `coordination.direct-write-refused`. Root and global lifecycle operations stay on the existing coordinator route and are never `mutatePlanCoordination` targets.
+- **Register writers are retired:** a replacement write to `projects/<id>/residuals.json` is refused with `coordination.store` (`residuals.json` is migration history; `store.db` is the only findings authority), and the former `appendProjectRegisterEntries` / `closeProjectRegisterEntry` / backlog next-free-key helpers no longer exist. Hand writes to protected snapshot / register / root targets are refused with `coordination.direct-write-refused`; a scoped replacement of a kind without a coordinated writer is refused with `coordination.scoped-writer-required`. Root and global lifecycle operations stay on the existing coordinator route and are never `mutatePlanCoordination` targets.
 - Read-only validators (`mstar lease verify`, `mstar lease verify-integration`, `mstar worktree check`, `mstar status validate`) remain **checks** — never mutation substitutes.
 
 ### Reconcile outcomes (crash recovery)
 
 Per-state `reconcile` outcome **and** the recovery action it requires are **route semantics, not fields**: single canonical copy → **`mstar-iteration`** `references/plan-scoped-pm.md` §6.7（outcome table）with §7（`show` refresh before a stale retry）. The `retry-ready` path therefore resumes `show` → `integration-start`（re-pin `base_sha`, re-acquire the merge lease）→ the coordinator's `git merge --no-ff` → `integration-accept` — **never a bare merge**.
 
-Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository and never trusts a caller's success flag, and never performs a second merge. A crash after `complete` but before CLI output is handled by `show` + `reconcile`; a crash before the session binding leaves only an inert envelope. `return` after a failed merge requires an explicit Git abort plus reconcile first — a merge lease is never discarded while Git may still be in flight. Lost credentials or an abandoned active owner need explicit human recovery outside the normal verbs; no automatic takeover flag is introduced.
+Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository and never trusts a caller's success flag, and never performs a second merge. A crash after `complete` but before CLI output is handled by `show` + `reconcile`; a crash before the session binding leaves only an inert record. `return` after a failed merge requires an explicit Git abort plus reconcile first — a merge lease is never discarded while Git may still be in flight. An abandoned or unreachable owner is never taken over implicitly: it is replaced only by the recovery verb that owns the current authority, under that verb's own token and stop evidence. No automatic takeover flag is introduced, and no hand edit is ever a substitute.
 
 ### Prepare workflow amendment (guarded Prepare-only structural delta)
 
-**Coordinator authority only.** The amendment is addressed by the workflow's **coordinator** session envelope (`mstar plan bind --coordinator --workflow <id>` → `top.coordination.coordinator`); identity is never a flag, and the envelope's own harness root / workflow id are the only address. A plan session, an unbound or foreign workflow, a mismatched envelope, or an unregistered / non-`running` root entry refuses before any mutation. The top-level coordinator binding is the sole permitted coordination state.
+**Coordinator authority only, and pre-activation only.** The amendment is addressed by the workflow's **coordinator** authority on the file route — bound with an explicitly acquired identity (`mstar plan bind --coordinator --workflow <id> --session-id <id>` for a plain local operator, or the host-owned entry on a managed host; → `mstar-host` and `mstar-use-cli/references/plan-and-workflow.md`) and recorded as `top.coordination.coordinator`. Identity is never a flag, and the envelope's own harness root / workflow id are the only address. An **ACTIVE execution authority refuses this writer** and names the DB recovery that owns that repair instead. A plan session, an unbound or foreign workflow, a mismatched envelope, or an unregistered / non-`running` root entry refuses before any mutation. The top-level coordinator binding is the sole permitted coordination state.
 
 **When it is lawful** (all of it, evaluated inside the snapshot write lock): `status: running` in `phase: phase-1-prepare`, the root register entry still **`running`** (`paused` is active in the register but not admissible here — the refusal reports the observed entry status), and **no execution ownership anywhere** — every row `Todo` with progress 0, no row `execution_lease`, no row `coordination` block (preparation, session binding, progress/QC evidence, handoff and reconcile state all live there), and no top-level `integration_merge_lease`. Resetting a row to `Todo` would erase nothing — it is exactly what this entry must not do, so an evidence-bearing row refuses instead.
 
-**What it may change** (minimum delta): append explicitly approved **unique Todo** plan rows — constructed by the engine, never supplied with runtime row state — and fill the reviewed `integration_worktree_path`; the sole editable policy key is `execution_policy.plan_parallelism` (`serial` | `parallel`). Every prior row, unknown field, timestamp, revision, history, root entry and other workflow survives **by value**; only the appended rows, those two requested projections and the snapshot `updated_at` are new. It creates and switches nothing, is not a scheduler, and is not a general snapshot replacement. **One engine-owned exception to that enumeration:** a stored legacy `control_worktree_path` is normalized in memory by the canonical snapshot reader, so this authorized write emits the canonical `integration_worktree_path` and drops the legacy key with the value preserved — the migration the engine's own `workflow.snapshot.legacy-control-worktree-path` diagnostic prescribes (writers emit only the canonical key).
+**What it may change** (minimum delta): append explicitly approved **unique Todo** plan rows — constructed by the engine, never supplied with runtime row state — correct the plan pointer of an existing row, and fill the reviewed `integration_worktree_path`; the sole editable policy key is `execution_policy.plan_parallelism` (`serial` | `parallel`). Every prior row, unknown field, timestamp, revision, history, root entry and other workflow survives **by value**; only the appended rows, the corrected rows' `file` (plus their ordinary `updated_at`), those two requested projections and the snapshot `updated_at` are new. It creates and switches nothing, is not a scheduler, and is not a general snapshot replacement. **One engine-owned exception to that enumeration:** a stored legacy `control_worktree_path` is normalized in memory by the canonical snapshot reader, so this authorized write emits the canonical `integration_worktree_path` and drops the legacy key with the value preserved — the migration the engine's own `workflow.snapshot.legacy-control-worktree-path` diagnostic prescribes (writers emit only the canonical key).
 
 **Both byte tokens, always.** The amendment carries the current raw-byte SHA-256 of the **snapshot bytes** and of the workflow's reviewed **compass Markdown bytes** (`sha256:<64 lowercase hex>`, read from the read-only `show-prepare`); both are required even on the first amendment, and neither is a per-plan `coordination.revision`. The compass token binds the reviewed declaration: the resulting plan-id **set** must equal the compass `plans:` list exactly, and its `spec_integration_branch` / `integration_worktree_path` declarations must agree with what the call would leave recorded. The compass is re-read immediately before the single atomic commit.
 
 **Refusals are mutation-free.** `coordination.prepare-amendment.{stale, invalid-patch, not-prepare, execution-started, duplicate-plan, invalid-plan, compass-mismatch, invalid-worktree}` (`coordination-write.ts`), plus the existing auth/scope errors; when each fires, the exact exit code and payload → **`mstar-use-cli`** `references/plan-and-workflow.md`. The protected snapshot, root register, other workflows and the compass stay byte-identical.
 
 **Prepare-only, no force.** Recovery from a `stale` token is re-read `show-prepare` → review again → retry with the fresh tokens. There is no force, no replacement snapshot, no reset and no hand-editing workaround for a workflow that has left Prepare or already owns execution.
+
+**Pointer correction (guarded exception).** `correctPlanFiles` entries are exactly `{id, expectedFile, file}` and `appendPlans` stays present — a correction-only call passes an empty append array. Each entry addresses exactly one existing row, and `expectedFile` must equal that row's current `file` byte-for-byte (the value is **not** normalized: a row that moved under the caller refuses) and must identify that same plan. The old pointer is accepted in only two forms: one the shared resolver accepts (canonical absolute or normalized harness-relative), or the exact repository-relative spelling derived from this control root's configured plan directory. The new `file` must resolve to that plan's own canonical `{PLAN_DIR}/<plan-id>.md` under the shared resolver used by registration and readiness — a canonical absolute or normalized harness-relative form, never fallback search. Duplicate ids, an id that is both appended and corrected, an unknown or ambiguous row, a no-op pointer, a foreign absolute path, a same-basename guess, an unrelated directory prefix and a copied document with a matching header all refuse. Registration and readiness accept only the canonical absolute or normalized harness-relative form — the repository-relative spelling is refused there; the derived-spelling acceptance above belongs to this repair alone.
+
+### Prepare coordinator recovery (audited JSON, Prepare-only)
+
+The JSON recovery replaces a workflow's recorded coordinator binding when the recorded owner can no longer authenticate — the state a cancelled host handoff leaves behind. It is deliberately **narrower** than the active-store session recovery, which keeps its full execution token and stop attestation.
+
+- **Admission** (inside the snapshot write lock): file authority (an **active execution authority** refuses with `execution.direct-write-refused` and names the existing DB recovery verb instead), a registered **running** workflow in this canonical root with a committed registration, a prior envelope that still authenticates the **exact** recorded coordinator, a freshly acquired identity addressing this workflow's coordinator seat, an explicit reason plus authorization reference plus a stop assertion **naming that holder**, both fresh byte versions, and the original whole-workflow no-execution admission over **every** row. No row coordination, lease, progress, handoff or integration lease is eligible, and a dead owner is never inferred from PID age, timeout or the current model.
+- **Effect**: one role-scoped envelope through existing exclusive creation, the top-level coordinator binding replaced, **one** immutable `coordination.identity_recoveries` record appended, `updated_at` refreshed. Rows, branch anchors, evidence, root membership and sibling workflows stay byte-identical; the prior envelope's bytes remain history and stop authorizing because the binding moved. No lease is transferred.
+- **Replay and failure**: an exact retry of an accepted operation returns the recorded receipt without version churn; a changed request, a stale version or a superseded binding refuses. A crash between the exclusive envelope creation and the snapshot commit reports **failure**, never a success receipt, and reclaims only the exact envelope that operation created (never an unrelated role or session file). Every semantic refusal happens before a file is created.
+- **Projection**: the workflow id, the old/new **public** session ids, the operation id, the replay status and both byte versions. Envelope bytes, an envelope path and credentials are never projected (→ § Session reference, session envelope and the credential boundary). Verb flags and exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md` § Prepare coordinator recovery. The active recovery of the same seat keeps its **own** projection — fresh token plus the new public session id — and neither verb ever runs on the other's authority.
 
 ---
 
@@ -470,19 +516,21 @@ Reconciliation observes **Git ancestry / HEAD facts** in the recorded repository
 
 | Action | Owner | When |
 | ------ | ----- | ---- |
-| Implement fix | `@fullstack-dev` / assignee | Completion Report cites R# + evidence |
-| Verify | `@qa-engineer` when **`QA gate: mandatory`**; else PM per acceptance checklist | Regression / acceptance; open R# close requires verify before close |
-| Write the register | **`@project-manager`** or **`@qa-engineer`** | After verification; waivers after PM + user/architect alignment. On the scoped route the write is the `residual-add` / `residual-close` verb, never a hand edit |
+| Implement fix | `@fullstack-dev` / assignee | Completion Report cites the issue id + evidence |
+| Verify | `@qa-engineer` when **`QA gate: mandatory`**; else PM per acceptance checklist | Regression / acceptance; an open item is closed only after verify |
+| Capture / close | **`@project-manager`** or **`@qa-engineer`** | Capture after the confirmed outcome, close after verification; waivers after PM + user/architect alignment. Live items go through the issue verbs (`mstar plan issue-add` / `issue-close`, or the unscoped `mstar issue …`), never a hand edit — the register is migration history |
 
-Do not claim “R3 fixed” in chat/plan only without SSOT update.
+Do not claim an issue “fixed” in chat/plan only without the store update.
 
-PM should register open items after **`Approve with residuals`**; QA should state each related R# (open / resolved this round / needs waiver).
+PM should capture open items as issues after **`Approve with residuals`**; QA should state each related issue id (open / resolved this round / needs waiver).
 
-### Close in place (the only close path)
+### Close in place (the only close path — migrated register records)
+
+Live items close through the issue verbs and the §4 closure authority (`mstar issue close | waive | duplicate | supersede`; plan-scoped `mstar plan issue-close`); the mechanics below describe the **migrated register record** shape.
 
 After **`closed_at`**, **`closure_note`**, and PM/QA confirm close:
 
-1. Close through the **domain call**: `mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version>` on the scoped route (legacy `closeProjectRegisterEntry` under lock elsewhere). It sets `lifecycle` / `closed_at` / `closure_note` **in place** in `entries[<plan-id>]`, requires a nonblank evidence-bearing note, and bumps no snapshot revision. A coordinated plan bucket rejects the legacy helper with `coordination.scoped-writer-required`; hand edits are not an authorized path.
+1. Close through the **domain call** on the scoped route — flags and exact payload shapes live in `--help` / the capture contract (→ § Issue capture above), not here. A closed register record carries `lifecycle` / `closed_at` / `closure_note` **in place** in `entries[<plan-id>]` and requires a nonblank evidence-bearing note; hand edits are not an authorized path, and the register itself is replacement-retired as a writer target (`coordination.store`).
 2. Optional: delete the entry from the register instead when the team prefers an empty open list — the closed record's `lifecycle` + `closed_at` is the durable record either way. (A coordinated bucket keeps its entries; close, do not delete.)
 3. Delete empty **`plan-id`** keys; update root `updated_at`; optional milestone entry in the workflow `notes.jsonl`.
 
@@ -490,7 +538,7 @@ Closed records live in the register + durable plan summaries; raw review bundles
 
 ### Short in-place close (transition only)
 
-May set `lifecycle` / `closed_*` in the register for one PR — through `mstar plan residual-close` (or `residual-add` with a new entry) when the plan is coordinated; same milestone close/delete as above.
+May set `lifecycle` / `closed_*` on a register record for one PR — same milestone close/delete as above; live items use the issue close verbs.
 
 ### Hard delete
 
@@ -501,19 +549,20 @@ May set `lifecycle` / `closed_*` in the register for one PR — through `mstar p
 ### Query open and closed (examples)
 
 ```bash
-# Engine-check (read-only): validate the register / rollup / cleanup gate
-mstar status validate <path-to-residuals-or-root.json>   # schema
-mstar status tech-debt <project-dir>                     # rollup over registers
-mstar status findings-cleanup <plan-id> --project <id>   # mode gate
+# Engine-check (read-only): open items in the store, migrated register docs, cleanup gate
+mstar issue list                              # open issues in {HARNESS_DIR}/store.db
+mstar status validate <path-to-residuals-or-root.json>   # migrated register / snapshot / root schema
+mstar status tech-debt                        # open-issue rollup
+mstar status findings-cleanup <plan-id>       # mode gate over the plan's linked open issues
 ```
 
-- The v1 read paths (root `residual_findings` / `metadata.residual_findings` / `archived/residuals/<plan-id>.json`) are **legacy read-only** — `mstar migrate` moved open entries into the register; old files may remain for history.
+- The v1 read paths (root `residual_findings` / `metadata.residual_findings` / `archived/residuals/<plan-id>.json`) are **legacy read-only** — `mstar migrate` moved open entries into the register; old files may remain for history. Register entries themselves are now superseded by store issues (`mstar issue list` / `mstar issue show`).
 
 ---
 
 ## `{WORKFLOW_DIR}/<id>/notes.jsonl` (per-workflow notes ledger)
 
-Append-only JSON-lines log for merge closure, batch close, register refreshes, etc. Does not compete with **snapshot `plans[].status`** / open residual SSOT.
+Append-only JSON-lines log for merge closure, batch close, register refreshes, etc. Does not compete with **snapshot `plans[].status`** / the issue store's open-item SSOT.
 
 ```jsonl
 {"kind": "note", "ts": "2026-04-08", "text": "Short milestone"}
@@ -524,32 +573,30 @@ Append-only JSON-lines log for merge closure, batch close, register refreshes, e
 
 ---
 
-## `mstar status tech-debt` (project-register rollup)
+## `mstar status tech-debt` (open-issue rollup)
 
-**Role:** Cross-plan aggregate over **open** register entries across every `{PROJECT_DIR}/<id>/residuals.json` register. Does **not** replace per-entry SSOT. The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a **v1 dead path** — the register is the source of truth, so `stored` is always null and the retained `checks`/`overall` fields report DRIFT (export-surface compatibility).
+**Role:** Cross-iteration aggregate over the **open issues** in `{HARNESS_DIR}/store.db`. Does **not** replace the store as the per-item SSOT. A missing, corrupt or staged store **refuses** (exit 1) — never an empty rollup.
 
-**Compute (canonical):** engine / CLI (do **not** hand-count):
+**Compute (canonical):** CLI / engine (do **not** hand-count):
 
-```ts
-// Engine check (when available) — pass the project dir (default: resolved {PROJECT_DIR})
-import { techDebtRollup } from "@mstar-harness/engine";
-const rollup = techDebtRollup("{HARNESS_DIR}/projects"); // { computed, stored: null, checks, overall }
-// CLI form (same output; informational exit 0): mstar status tech-debt <path> (default: {PROJECT_DIR})
+```bash
+# Engine-check (when available): the CLI prints total_open / by_severity / by_project (informational exit 0)
+mstar status tech-debt
 ```
 
-- Prints computed `total_open`, `by_severity`, `by_target`, `by_plan` (`by_plan` keyed by plan id — the snapshot/register plan linkage; legacy `"warning"` → `low`, `null`/`""` → `medium`; closed entries skipped; missing `target` groups under `"unspecified"`).
-- The engine call **does not write** anything.
+- The legacy register-walking rollup (`techDebtRollup` over `{PROJECT_DIR}/<id>/residuals.json`, with the register-era `by_target` / `by_plan` aggregates) is **removed** (issue-governance cutover) — the engine no longer exports it. The rollup is computed from the **issue store** via the CLI (`readIssueRollup`): `total_open` / `by_severity` / `by_project`. The migrated register documents are mapping history only. The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a **v1 dead path**.
+- The rollup **does not write** anything.
 
 ---
 
-## Pre-merge: snapshot + register should match reality
+## Pre-merge: snapshot + store should match reality
 
-Before merge/PR, **`@project-manager`** (or delegate) should verify: snapshot `plans[].status`, `metadata.gates`, project register (no accidental leftovers), vs review/CI.
+Before merge/PR, **`@project-manager`** (or delegate) should verify: snapshot `plans[].status`, `metadata.gates`, the plan's linked open issues in the store (no accidental leftovers), vs review/CI.
 
 **Common gaps:**
 
-- R# added/closed but the register was not updated.
-- Finding only in `plans[].notes` or chat, not in the register `entries[<plan-id>]`.
+- An issue was opened/closed but the review surfaces still show the old state.
+- Finding only in `plans[].notes` or chat, not captured as an issue.
 - Major milestone with no `notes.jsonl` entry when team uses the workflow ledger.
 
 ## Compatibility: plan key names
@@ -561,9 +608,9 @@ Before merge/PR, **`@project-manager`** (or delegate) should verify: snapshot `p
 ## Common queries
 
 ```bash
-# Engine-check (recommended): validate any v2 artifact
+# Engine-check (recommended): validate any v2 artifact / read the store rollup
 mstar status validate .mstar/status.json                  # root v2
 mstar status validate .mstar/workflows/<id>/snapshot.json # snapshot
-mstar status tech-debt .mstar/projects                     # register rollup
+mstar status tech-debt                                    # open-issue rollup
 ```
 v1 trees (root `plans[]` / `residual_findings`) are migrated first: `mstar migrate [--dry-run] [--path <root>]`.

@@ -17,9 +17,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { encodeExecutionSessionRef, serializeExecutionValue } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -147,12 +148,21 @@ interface Fixture {
   assignmentPath: string;
   peerAssignmentPath: string;
   snapshotPath: string;
-  registerPath: string;
+  /** The retired register path — a command must never create it (G2b). */
+  projectRegisterPath: string;
   evidencePath: string;
 }
 
-/** Temporary Git fixture: main worktree + canonical harness + two prepared rows. */
-function makeFixture(): Fixture {
+/**
+ * Temporary Git fixture: main worktree + canonical harness + two prepared rows.
+ *
+ * The harness carries an initialized ACTIVE issue store (G2a made the store the
+ * findings authority: the handoff gate reads it, and the scoped issue verbs
+ * write it). `store: false` leaves the workspace store-less for the cases that
+ * assert the pre-store disclosure (the catalog-pin absence path); a store-less
+ * workspace is a legitimate pre-migration shape, not a broken one.
+ */
+function makeFixture(options: { store?: boolean } = {}): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-plan-cli-")));
   roots.push(root);
   git(["init", "-q", "-b", "main"], root);
@@ -161,7 +171,7 @@ function makeFixture(): Fixture {
   const harness = join(root, ".mstar");
   const workflowDir = join(harness, "workflows", WORKFLOW_ID);
   const snapshotPath = join(workflowDir, "snapshot.json");
-  const registerPath = join(harness, "projects", PROJECT_ID, "residuals.json");
+  const projectRegisterPath = join(harness, "projects", PROJECT_ID, "residuals.json");
   const planPath = join(harness, "plans", `${PLAN_ID}.md`);
   const peerPlanPath = join(harness, "plans", `${PEER_PLAN_ID}.md`);
   const sddDir = join(harness, "sdd", PLAN_ID);
@@ -173,6 +183,13 @@ function makeFixture(): Fixture {
   writeText(peerPlanPath, "# plan b\n");
   writeText(evidencePath, "# evidence\n");
   for (const dir of [peerWorktreePath, worktreePath]) mkdirSync(dir, { recursive: true });
+
+  // The store first: `store init` is create-only for a genuinely empty
+  // workspace, so it must run before status.json registers a workflow.
+  if (options.store !== false) {
+    const init = runCli(["store", "init", "--harness", harness, "--json"], root);
+    expect(init.exitCode).toBe(0);
+  }
 
   writeJson(join(harness, "status.json"), {
     version: 2,
@@ -225,14 +242,29 @@ function makeFixture(): Fixture {
     assignmentPath,
     peerAssignmentPath,
     snapshotPath,
-    registerPath,
+    projectRegisterPath,
     evidencePath,
   };
 }
 
+/** The explicit local coordinator identity every CLI fixture acquires. */
+const FIXTURE_COORDINATOR_ID = "fixture-coordinator";
+
 /** Bind the workflow coordinator through the CLI and return its session file. */
 function bindCoordinator(fixture: Fixture): string {
-  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"], fixture.root);
+  const bound = runCli(
+    [
+      "plan",
+      "bind",
+      "--coordinator",
+      "--workflow",
+      WORKFLOW_ID,
+      "--session-id",
+      FIXTURE_COORDINATOR_ID,
+      "--json",
+    ],
+    fixture.root,
+  );
   expect(bound.exitCode).toBe(0);
   const payload = jsonOf(bound);
   expect(payload.ok).toBe(true);
@@ -289,6 +321,58 @@ function snapshotBytes(fixture: Fixture): string {
   return readText(fixture.snapshotPath);
 }
 
+/** One capture entry as `plan issue-add` takes it (the core input minus projectId). */
+function issueEntryOf(occurrenceKey: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: `Finding ${occurrenceKey}`,
+    kind: "bug",
+    severity: "medium",
+    impact: "the plan's acceptance is not met",
+    acceptance: "the finding is fixed and verified",
+    sourceIdentity: `cli-tests/${occurrenceKey}`,
+    rootCauseKey: "cli-tests-root-cause",
+    acceptanceKey: "cli-tests-acceptance",
+    occurrenceKey,
+    sourceKind: "qc",
+    location: "packages/cli/src/index.ts",
+    observedBehavior: "observed in the CLI cutover fixture",
+    evidence: ["fixture evidence"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** Narrow an unknown value to a plain record (the test-side boundary for CLI JSON envelopes). */
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  // Checked immediately above: a non-null, non-array object.
+  return value as Record<string, unknown>;
+}
+
+/** The plan's issues as the CLI's own `mstar issue list` reports them (DB truth, no CLI claim). */
+function listedIssues(fixture: Fixture, extraArgs: string[] = []): Array<Record<string, unknown>> {
+  const result = runCli(["issue", "list", "--harness", fixture.harness, "--json", ...extraArgs], fixture.root);
+  expect(result.exitCode).toBe(0);
+  const items = plainRecord(jsonOf(result).data)?.items;
+  if (!Array.isArray(items)) throw new Error(`issue list returned no items: ${result.stdout}`);
+  return items.filter((item): item is Record<string, unknown> => plainRecord(item) !== null);
+}
+
+/** The `issues[]` receipts of a `plan issue-add|issue-close --json` success envelope. */
+function issueReceiptsOf(result: RunResult): Array<Record<string, unknown>> {
+  const issues = jsonOf(result).issues;
+  if (!Array.isArray(issues)) throw new Error(`expected issue receipts, got ${result.stdout}`);
+  return issues.filter((item): item is Record<string, unknown> => plainRecord(item) !== null);
+}
+
+/** Run `plan issue-add` for one entry payload and return its parsed success envelope. */
+function issueAdd(fixture: Fixture, session: string, payloadPath: string): RunResult {
+  return runCli(
+    ["plan", "issue-add", "--session", session, "--file", payloadPath, "--expect", String(rowRevision(fixture, session)), "--json"],
+    fixture.root,
+  );
+}
+
 describe("mstar plan — entry-forms", () => {
   test("both fresh addresses claim the same prepared row with distinct sessions", () => {
     const fixture = makeFixture();
@@ -333,7 +417,10 @@ describe("mstar plan — entry-forms", () => {
   test("a second fresh coordinator bind is refused like a duplicate holder", () => {
     const fixture = makeFixture();
     bindCoordinator(fixture);
-    const again = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"], fixture.root);
+    const again = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "second-coordinator", "--json"],
+      fixture.root,
+    );
     expect(again.exitCode).toBe(1);
     expect(jsonOf(again).code).toBe("coordination.duplicate-holder");
   });
@@ -419,42 +506,73 @@ describe("mstar plan — session identity", () => {
     expect(readJson(String(payload.session_file)).session_id).toBe(supplied);
   });
 
-  test("MSTAR_HOST_SESSION_ID supplies the identity when the flag is absent, and the flag wins", () => {
-    const fromEnv = makeFixture();
-    const envBound = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"],
-      fromEnv.root,
-      { MSTAR_HOST_SESSION_ID: "host-session-env" },
-    );
-    expect(envBound.exitCode).toBe(0);
-    expect(jsonOf(envBound).session_id).toBe("host-session-env");
-
-    // The flag is the explicit input: it outranks the injected env.
-    const both = makeFixture();
-    const flagged = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "host-session-flag", "--json"],
-      both.root,
-      { MSTAR_HOST_SESSION_ID: "host-session-env" },
-    );
-    expect(flagged.exitCode).toBe(0);
-    expect(jsonOf(flagged).session_id).toBe("host-session-flag");
-  });
-
-  test("an empty or whitespace-only env value is absent, not an identity", () => {
-    for (const blank of ["", "   "]) {
+  test("prerequisite identity — MSTAR_HOST_SESSION_ID no longer authorizes a coordinator bootstrap, and an omitted id writes nothing", () => {
+    for (const injected of ["host-session-env", "", "   "]) {
       const fixture = makeFixture();
+      const sessionsDir = join(fixture.harness, "workflows", WORKFLOW_ID, "sessions");
+      const before = readFileSync(fixture.snapshotPath, "utf8");
       const bound = runCli(
         ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"],
         fixture.root,
-        { MSTAR_HOST_SESSION_ID: blank },
+        { MSTAR_HOST_SESSION_ID: injected },
       );
-      expect({ blank, exitCode: bound.exitCode }).toEqual({ blank, exitCode: 0 });
-      const generated = jsonOf(bound).session_id;
-      expect({ blank, uuid: typeof generated === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(generated) }).toEqual({
-        blank,
-        uuid: true,
-      });
+      expect({ injected, exitCode: bound.exitCode }).toEqual({ injected, exitCode: 1 });
+      expect({ injected, code: jsonOf(bound).code }).toEqual({ injected, code: "coordination.identity-missing" });
+      // Refused before any write: no envelope, no sessions dir, snapshot bytes intact.
+      expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+      expect(existsSync(sessionsDir)).toBe(false);
     }
+  });
+
+  test("prerequisite identity — the explicit --session-id is the coordinator identity, and an env value cannot substitute for or displace it", () => {
+    const fixture = makeFixture();
+    const flagged = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "host-session-flag", "--json"],
+      fixture.root,
+      { MSTAR_HOST_SESSION_ID: "host-session-spoof" },
+    );
+    expect(flagged.exitCode).toBe(0);
+    const payload = jsonOf(flagged);
+    expect(payload.session_id).toBe("host-session-flag");
+    // The env value never reaches the engine binding.
+    const coordination = readJson(fixture.snapshotPath).coordination as { coordinator?: { session_id?: string } };
+    expect(coordination.coordinator?.session_id).toBe("host-session-flag");
+  });
+
+  test("prerequisite identity — a rejected address and a rejected session id are never echoed into the bind diagnostic", () => {
+    const fixture = makeFixture();
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    // A path-like address the caller typed (credential-adjacent by shape, and
+    // relative so the CLI's own absolute-path rule refuses it) plus a
+    // credential-like session id: the usage refusal (exit 2) and the engine's
+    // own session-id refusal (exit 1) each report the rule and a
+    // non-identifying fact, never the rejected value (§5 diagnostics).
+    const pathLike = "../creds/coordinator-secret.json";
+    const credentialLike = `ghp_${"a".repeat(140)}`;
+    for (const args of [
+      ["plan", "bind", "--resume", pathLike, "--json"],
+      ["plan", "bind", "--assignment", pathLike, "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", pathLike, "--json"],
+    ]) {
+      const refused = runCli(args, fixture.root);
+      expect({ args, exitCode: refused.exitCode }).toEqual({ args, exitCode: 2 });
+      expect(jsonOf(refused).code).toBe("usage");
+      expect(refused.stdout).not.toContain(pathLike);
+      expect(refused.stderr).not.toContain(pathLike);
+    }
+    for (const rejected of [credentialLike, pathLike]) {
+      const refused = runCli(
+        ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", rejected, "--json"],
+        fixture.root,
+      );
+      expect({ rejected, exitCode: refused.exitCode }).toEqual({ rejected, exitCode: 1 });
+      expect(jsonOf(refused).code).toBe("coordination.invalid-session-id");
+      expect(refused.stdout).not.toContain(rejected);
+      expect(refused.stderr).not.toContain(rejected);
+    }
+    // Every refusal above is pre-write.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions"))).toBe(false);
   });
 
   test("--resume accepts no identity input (exit 2) and stays resumable", () => {
@@ -605,81 +723,100 @@ describe("mstar plan — strict-input", () => {
     expect(unparseable.stderr).toContain("not valid JSON");
   });
 
-  test("--expect-register accepts only absent or the exact version token (exit 2)", () => {
+  test("issue authority: --expect-issue accepts only a nonnegative revision, before any payload is read (exit 2)", () => {
     const fixture = makeFixture();
     // A real, parseable payload file. The flag is validated before any payload
     // is read, so a malformed token never degrades into a payload-read failure
     // and the payload bytes are never consumed.
-    const entriesPath = join(fixture.root, "entries.json");
-    const payload = `${JSON.stringify(
-      [
-        {
-          id: "R1",
-          title: "residual one",
-          severity: "low",
-          source: "cli-tests",
-          scope: "cli",
-          decision: "defer",
-          owner: "pm",
-          target: "later",
-          tracking: "plan",
-        },
-      ],
-      null,
-      2,
-    )}\n`;
-    writeText(entriesPath, payload);
+    const evidencePath = join(fixture.root, "evidence.json");
+    const payload = `${JSON.stringify({ reason: "fixed", references: ["packages/cli/src/index.ts"], alignmentRef: "PM acceptance" }, null, 2)}\n`;
+    writeText(evidencePath, payload);
     // Two payload states: the existing file above, and a missing one. The
     // missing leg is the one that pins the ordering — with the payload read
     // first it reports "payload file not found" (still exit 2) and this case
     // fails, so the refusal must come from the flag in both states.
     for (const [state, file] of [
-      ["existing", entriesPath],
+      ["existing", evidencePath],
       ["missing", join(fixture.root, "absent.json")],
     ] as const) {
-      for (const value of ["latest", "sha256:ABC", "sha256:0"]) {
+      for (const value of ["latest", "-1", "1.5"]) {
         const result = runCli(
           [
             "plan",
-            "residual-add",
+            "issue-close",
             "--session",
             "/tmp/nope.json",
+            "--issue",
+            "I-000001",
+            "--disposition",
+            "resolved",
             "--file",
             file,
             "--expect",
             "0",
-            "--expect-register",
+            "--expect-issue",
             value,
           ],
           fixture.root,
         );
         expect(`${state} ${value} -> ${result.exitCode}`).toBe(`${state} ${value} -> 2`);
-        expect(result.stderr).toContain('--expect-register must be "absent" or sha256:<64 lowercase hex>');
+        expect(result.stderr).toContain("--expect-issue must be a nonnegative integer revision");
         expect(result.stderr).not.toContain("payload file not found");
       }
     }
-    expect(readText(entriesPath)).toBe(payload);
-    // Positive control: with a valid token the same invocation gets past the
+    expect(readText(evidencePath)).toBe(payload);
+    // Positive control: with a valid revision the same invocation gets past the
     // flag AND the payload read (the file above is genuinely parseable) and
     // fails later on the missing session — so the refusals above came from the
     // flag, never from the payload file.
     const accepted = runCli(
       [
         "plan",
-        "residual-add",
+        "issue-close",
         "--session",
         "/tmp/nope.json",
+        "--issue",
+        "I-000001",
+        "--disposition",
+        "resolved",
         "--file",
-        entriesPath,
+        evidencePath,
         "--expect",
         "0",
-        "--expect-register",
-        "absent",
+        "--expect-issue",
+        "1",
       ],
       fixture.root,
     );
     expect(accepted.exitCode).toBe(1);
     expect(accepted.stderr).toContain("session envelope not found");
+  });
+
+  test("issue authority: --disposition names only the four terminal dispositions (exit 2)", () => {
+    const fixture = makeFixture();
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeText(evidencePath, `${JSON.stringify({ reason: "fixed", references: ["a"] })}\n`);
+    const result = runCli(
+      [
+        "plan",
+        "issue-close",
+        "--session",
+        "/tmp/nope.json",
+        "--issue",
+        "I-000001",
+        "--disposition",
+        "open",
+        "--file",
+        evidencePath,
+        "--expect",
+        "0",
+        "--expect-issue",
+        "1",
+      ],
+      fixture.root,
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--disposition must be resolved | waived | duplicate | superseded");
   });
 
   test("--json failures are parseable on stdout and exit 1 differs from usage exit 2", () => {
@@ -699,7 +836,10 @@ describe("mstar plan — strict-input", () => {
 
   test("human mode keeps stdout machine-only and writes diagnostics to stderr", () => {
     const fixture = makeFixture();
-    const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID], fixture.root);
+    const bound = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", FIXTURE_COORDINATOR_ID],
+      fixture.root,
+    );
     expect(bound.exitCode).toBe(0);
     expect(bound.stdout).toBe("");
     expect(bound.stderr).toContain("session file");
@@ -726,7 +866,10 @@ describe("mstar plan — linked-control-root", () => {
     expect(String(payload.session_file)).toContain(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions"));
 
     // Coordinator residency is main-or-recorded-integration only.
-    const refused = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--json"], linked);
+    const refused = runCli(
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", FIXTURE_COORDINATOR_ID, "--json"],
+      linked,
+    );
     expect(refused.exitCode).toBe(1);
     expect(jsonOf(refused).ok).toBe(false);
   });
@@ -836,6 +979,32 @@ describe("mstar plan — scoped-operations", () => {
     expect(rows[1]!.status).toBe("Todo");
     expect((rows[1] as Record<string, unknown>).coordination).toBeUndefined();
   });
+  test("schema-required handoff fields pass the engine route", () => {
+    const fixture = makeIntegrationFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    toInReview(fixture, planSession, "schema parity handoff");
+
+    const result = runCli(["schema", "HandoffEvidence"], fixture.root);
+    expect(result.exitCode).toBe(0);
+    const schema = JSON.parse(result.stdout) as {
+      fields: Array<{ name: string; required: boolean; properties?: Record<string, { required: boolean }> }>;
+    };
+    const requiredNames = (fields: Array<{ name: string; required: boolean }>) =>
+      fields.filter((field) => field.required).map((field) => field.name);
+    expect(requiredNames(schema.fields)).toEqual(["source_sha", "review_head", "review_base", "qc", "qa"]);
+    expect(requiredNames(Object.entries(schema.fields.find((field) => field.name === "qc")!.properties!).map(([name, field]) => ({
+      name,
+      required: field.required,
+    })))).toEqual(["decision", "reports", "consolidated"]);
+    expect(requiredNames(Object.entries(schema.fields.find((field) => field.name === "qa")!.properties!).map(([name, field]) => ({
+      name,
+      required: field.required,
+    })))).toEqual(["gate", "decision", "report"]);
+
+    submitHandoff(fixture, planSession);
+  });
 
   test("a stale row revision is refused and the authoritative bytes do not change", () => {
     const fixture = makeFixture();
@@ -887,140 +1056,229 @@ describe("mstar plan — scoped-operations", () => {
     expect(snapshotBytes(fixture)).toBe(before);
   });
 
-  test("residual writes target the plan's own bucket with a register byte-version CAS", () => {
+  test("issue authority: plan issue-add captures into the store, links the plan, and never writes a register", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const planSession = bindPlan(fixture, PLAN_ID);
+    const before = snapshotBytes(fixture);
 
-    const view = runCli(["plan", "show", "--session", planSession, "--json"], fixture.root);
-    const registerVersion = String(jsonOf(view).register_version);
-    expect(registerVersion).toBe("absent");
+    // No store-less register version is readable any more: the view carries
+    // the snapshot version only, and the issues themselves are the CAS inputs.
+    const view = jsonOf(runCli(["plan", "show", "--session", planSession, "--json"], fixture.root));
+    expect(view.register_version).toBeUndefined();
+    expect(view.allowed_operations).toEqual(["progress", "issue-add", "issue-close", "handoff"]);
 
     const entriesPath = join(fixture.root, "entries.json");
-    writeJson(entriesPath, [
-      {
-        id: "R1",
-        title: "residual one",
-        severity: "low",
-        source: "cli-tests",
-        scope: "cli",
-        decision: "defer",
-        owner: "pm",
-        target: "later",
-        tracking: "plan",
-      },
-    ]);
-    const added = runCli(
-      [
-        "plan",
-        "residual-add",
-        "--session",
-        planSession,
-        "--file",
-        entriesPath,
-        "--expect",
-        String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        registerVersion,
-        "--json",
-      ],
-      fixture.root,
-    );
+    writeJson(entriesPath, [issueEntryOf("occ-1", { severity: "critical" })]);
+    const added = issueAdd(fixture, planSession, entriesPath);
     expect(added.exitCode).toBe(0);
-    expect(jsonOf(added).outcome).toBe("residual-added");
+    const addPayload = jsonOf(added);
+    expect(addPayload.outcome).toBe("issue-added");
+    expect(addPayload.issues).toHaveLength(1);
 
-    const register = readJson(fixture.registerPath);
-    const entries = register.entries as Record<string, unknown[]>;
-    expect(entries[PLAN_ID]).toHaveLength(1);
-    expect(Object.keys(entries)).toEqual([PLAN_ID]);
-
-    // Stale register version: refused, sibling buckets and own bytes preserved.
-    const afterAdd = readText(fixture.registerPath);
-    const staleAdd = runCli(
-      [
-        "plan",
-        "residual-add",
-        "--session",
-        planSession,
-        "--file",
-        entriesPath,
-        "--expect",
-        String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        registerVersion,
-        "--json",
-      ],
-      fixture.root,
-    );
-    expect(staleAdd.exitCode).toBe(1);
-    expect(jsonOf(staleAdd).ok).toBe(false);
-    expect(readText(fixture.registerPath)).toBe(afterAdd);
+    // The DB is the only target: the CLI's own `issue list` reads it back, and
+    // no project register appeared anywhere under the harness.
+    const listed = listedIssues(fixture);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.title).toBe("Finding occ-1");
+    expect(listed[0]!.severity).toBe("critical");
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+    expect(existsSync(join(fixture.harness, "projects"))).toBe(false);
+    // An issue-only mutation never touches the execution input.
+    expect(snapshotBytes(fixture)).toBe(before);
   });
 
-  test("residual-close resolves only the named entry with an evidence-bearing note", () => {
+  test("issue authority: an exact issue-add replay converges instead of duplicating the finding", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const planSession = bindPlan(fixture, PLAN_ID);
 
     const entriesPath = join(fixture.root, "entries.json");
-    writeJson(entriesPath, [
-      {
-        id: "R1",
-        title: "residual one",
-        severity: "low",
-        source: "cli-tests",
-        scope: "cli",
-        decision: "defer",
-        owner: "pm",
-        target: "later",
-        tracking: "plan",
-      },
-    ]);
-    const added = runCli(
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const first = issueAdd(fixture, planSession, entriesPath);
+    expect(first.exitCode).toBe(0);
+    const firstReceipt = issueReceiptsOf(first)[0]!;
+
+    // Same session, same occurrence key: the core operation replays its own
+    // receipt (the original outcome, `created: true`), so the second call
+    // converges on the SAME issue instead of opening a second one.
+    const replay = issueAdd(fixture, planSession, entriesPath);
+    expect(replay.exitCode).toBe(0);
+    expect(issueReceiptsOf(replay)[0]!.issue_id).toBe(firstReceipt.issue_id);
+    expect(listedIssues(fixture)).toHaveLength(1);
+
+    // A different observation of the same root cause is a second finding, not
+    // a silent merge: identity is source identity + root cause, never a title.
+    writeJson(entriesPath, [issueEntryOf("occ-2")]);
+    const second = issueAdd(fixture, planSession, entriesPath);
+    expect(second.exitCode).toBe(0);
+    expect(issueReceiptsOf(second)[0]!.issue_id).not.toBe(firstReceipt.issue_id);
+    expect(listedIssues(fixture)).toHaveLength(2);
+  });
+
+  test("issue authority: plan issue-close closes the named issue under the issue revision CAS", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const added = issueAdd(fixture, planSession, entriesPath);
+    expect(added.exitCode).toBe(0);
+    const receipt = issueReceiptsOf(added)[0]!;
+    const issueId = String(receipt.issue_id);
+    const issueRevision = Number(receipt.revision);
+
+    // The engine's findings gate sees the open issue; closing it releases the
+    // gate — the exact authority path the handoff uses.
+    const blocked = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"], fixture.root);
+    expect(blocked.exitCode).toBe(1);
+    expect(blocked.stderr).toContain(issueId);
+
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeJson(evidencePath, {
+      reason: "fixed by the reviewer round",
+      references: ["packages/cli/src/index.ts"],
+      alignmentRef: "QA gate acceptance 2026-09-19",
+    });
+
+    // A stale issue revision is refused and nothing is written.
+    const stale = runCli(
       [
         "plan",
-        "residual-add",
+        "issue-close",
         "--session",
         planSession,
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
         "--file",
-        entriesPath,
+        evidencePath,
+        "--expect-issue",
+        String(issueRevision + 5),
         "--expect",
         String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        "absent",
         "--json",
       ],
       fixture.root,
     );
-    expect(added.exitCode).toBe(0);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale).code).toBe("issue.revision-conflict");
+    expect(listedIssues(fixture)[0]!.disposition).toBe("open");
 
-    const version = String(jsonOf(runCli(["plan", "show", "--session", planSession, "--json"], fixture.root)).register_version);
     const closed = runCli(
       [
         "plan",
-        "residual-close",
+        "issue-close",
         "--session",
         planSession,
-        "--entry",
-        "R1",
-        "--note",
-        "fixed by the reviewer round",
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
+        "--file",
+        evidencePath,
+        "--expect-issue",
+        String(issueRevision),
         "--expect",
         String(rowRevision(fixture, planSession)),
-        "--expect-register",
-        version,
         "--json",
       ],
       fixture.root,
     );
     expect(closed.exitCode).toBe(0);
-    expect(jsonOf(closed).outcome).toBe("residual-closed");
+    expect(jsonOf(closed).outcome).toBe("issue-closed");
+    // `issue list` defaults to the open disposition, so the closed issue is read
+    // back through its own filter — the disposition moved, the row did not vanish.
+    expect(listedIssues(fixture)).toHaveLength(0);
+    const resolved = listedIssues(fixture, ["--disposition", "resolved"]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.id).toBe(issueId);
 
-    const bucket = (readJson(fixture.registerPath).entries as Record<string, Array<Record<string, unknown>>>)[PLAN_ID]!;
-    expect(bucket[0]!.lifecycle).toBe("resolved");
-    expect(bucket[0]!.closure_note).toBe("fixed by the reviewer round");
+    const released = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"], fixture.root);
+    expect(released.exitCode).toBe(0);
+    expect(released.stdout).toContain("findings-cleanup plan-a: OK");
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+  });
+
+  test("issue authority: a plan session cannot close an issue linked to another plan", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    preparePlan(fixture, coordinator, PEER_PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    const peerSession = bindPlan(fixture, PEER_PLAN_ID);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+    const added = issueAdd(fixture, peerSession, entriesPath);
+    expect(added.exitCode).toBe(0);
+    const issueId = String(issueReceiptsOf(added)[0]!.issue_id);
+
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeJson(evidencePath, {
+      reason: "not this plan's finding",
+      references: ["packages/cli/src/index.ts"],
+      alignmentRef: "QA gate acceptance 2026-09-19",
+    });
+    const foreign = runCli(
+      [
+        "plan",
+        "issue-close",
+        "--session",
+        planSession,
+        "--issue",
+        issueId,
+        "--disposition",
+        "resolved",
+        "--file",
+        evidencePath,
+        "--expect-issue",
+        "1",
+        "--expect",
+        String(rowRevision(fixture, planSession)),
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(foreign.exitCode).toBe(1);
+    expect(jsonOf(foreign).code).toBe("issue.scope-refused");
+    expect(listedIssues(fixture)[0]!.disposition).toBe("open");
+  });
+
+  test("issue authority: the retired residual verbs refuse with the migration path and write nothing", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const planSession = bindPlan(fixture, PLAN_ID);
+    const before = snapshotBytes(fixture);
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf("occ-1")]);
+
+    for (const [verb, replacement] of [
+      ["residual-add", "issue-add"],
+      ["residual-close", "issue-close"],
+    ] as const) {
+      const refused = runCli(
+        ["plan", verb, "--session", planSession, "--file", entriesPath, "--expect", "0", "--json"],
+        fixture.root,
+      );
+      expect(`${verb} -> ${refused.exitCode}`).toBe(`${verb} -> 1`);
+      const payload = jsonOf(refused);
+      expect(payload.ok).toBe(false);
+      expect(payload.code).toBe("plan.verb-retired");
+      expect(String(payload.message)).toContain(`\`mstar plan ${replacement}\``);
+    }
+
+    // A retired verb is not a write-through alias: no issue and no register.
+    expect(listedIssues(fixture)).toHaveLength(0);
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+    expect(snapshotBytes(fixture)).toBe(before);
   });
 
   test("a coordinator session cannot execute plan operations and no bytes change", () => {
@@ -1149,8 +1407,24 @@ function toInReview(fixture: Fixture, planSession: string, summary: string): voi
   }
 }
 
+/**
+ * The handoff input the shared submitter actually reads: the fixture root, the
+ * pinned review range and the three evidence reports. Deliberately not the
+ * integration fixture — a standalone attempt (development or report-only) has
+ * no integration path to offer, and naming one at a standalone call site would
+ * have to be invented.
+ */
+interface HandoffFixture {
+  root: string;
+  baseSha: string;
+  sourceSha: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
 /** Submit the pinned handoff and return the engine's own handoff id. */
-function submitHandoff(fixture: IntegrationFixture, planSession: string): string {
+function submitHandoff(fixture: HandoffFixture, planSession: string): string {
   const payload = join(fixture.root, "handoff.json");
   writeJson(payload, {
     // Spec §D: the plan session supplies revisions and evidence paths only —
@@ -1474,7 +1748,10 @@ function makePrepareFixture(): PrepareFixture {
   });
   writeJson(patchPath, preparePatchOf({ planDir, specPath, compassPath, integrationPath }));
 
-  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", PREPARE_WORKFLOW, "--json"], root);
+  const bound = runCli(
+    ["plan", "bind", "--coordinator", "--workflow", PREPARE_WORKFLOW, "--session-id", FIXTURE_COORDINATOR_ID, "--json"],
+    root,
+  );
   expect(bound.exitCode).toBe(0);
   const coordinator = String(jsonOf(bound).session_file);
 
@@ -1617,7 +1894,7 @@ function makeStandaloneRepairFixture(withPr = false): StandaloneRepairFixture {
   const planSession = bindPlan(fixture, PLAN_ID);
   toInReview(fixture, planSession, "standalone ready");
   const handoffId = submitHandoff(
-    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
     planSession,
   );
   const accepted = transition(fixture, "accept", coordinator, handoffId);
@@ -1690,7 +1967,7 @@ function makeStandaloneCompletionFixture(): StandaloneCompletionFixture {
   const planSession = bindPlan(fixture, PLAN_ID);
   toInReview(fixture, planSession, "standalone ready for completion");
   const handoffId = submitHandoff(
-    { ...fixture, baseSha, sourceSha, integrationPath: "", qcReport, qcConsolidated, qaReport } as IntegrationFixture,
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
     planSession,
   );
   const accepted = transition(fixture, "accept", coordinator, handoffId);
@@ -1734,6 +2011,392 @@ describe("standalone-development-completion", () => {
     expect(replay.exitCode).toBe(0);
     expect(jsonOf(replay).outcome).toBe("already-completed");
     expect(snapshotBytes(fixture)).toBe(afterComplete);
+  }, RECOVERY_TIMEOUT);
+});
+
+/* ------------------------------------------------------------------ *
+ * Report-only completion — the CLI transport of the standalone
+ * `verification/report-only` route (contract §1/§3, seams S1/S3). Real
+ * subprocesses against a temporary Git repository: the whole chain is the
+ * registration producer's own snapshot (`workflow register`), then bind →
+ * prepare → progress → handoff → accept → policy completion evidence →
+ * complete → close → the phase-6 projection. No merge and no integration
+ * branch exist anywhere on this route; the accepted handoff plus the
+ * fulfilment of the registered completion policy are the only evidence the
+ * completion and the close consult. Each refusal case reads the
+ * authoritative bytes back from disk.
+ * ------------------------------------------------------------------ */
+
+/** The completion policy the report-only fixture registers, and its fulfilment. */
+const REPORT_ONLY_POLICY = "acceptance report at sdd/plan-a/report.md";
+const REPORT_ONLY_EVIDENCE = "sdd/plan-a/report.md";
+
+interface ReportOnlyFixture extends Fixture {
+  /** The recorded base the fixture branched its feature checkout from. */
+  baseSha: string;
+  /** The pinned source commit of the feature checkout. */
+  sourceSha: string;
+  coordinator: string;
+  planSession: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+  /** The row's live handoff id, minted by `plan handoff`. */
+  handoffId: string;
+}
+
+/**
+ * The accepted report-only attempt, driven through the real CLI: the
+ * registration producer writes the lifecycle, the coordinator prepares and
+ * accepts, and nothing else. No delivery evidence is recorded yet, so each
+ * case decides what the completion step is allowed to read.
+ */
+function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
+  const fixture = makeFixture();
+  const baseSha = gitOut(["rev-parse", "HEAD"], fixture.root);
+
+  // Registration is create-only and produces BOTH documents itself, so the
+  // shared fixture's placeholder snapshot and root entry are removed first —
+  // the root entry the chain later unregisters is the producer's own.
+  rmSync(fixture.snapshotPath, { force: true });
+  rmSync(join(fixture.harness, "status.json"), { force: true });
+
+  // A real feature checkout: `handoff` and `accept` read the pinned source
+  // commit and the branch it was made on. A report-only workflow owns no
+  // delivery branch, so this commit is the inspected source, never a merge
+  // candidate and never an integration target.
+  rmSync(fixture.worktreePath, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  writeText(join(fixture.worktreePath, "report-only.txt"), "report-only slice\n");
+  git(["add", "report-only.txt"], fixture.worktreePath);
+  gitCommit(fixture.worktreePath, "plan a: report-only slice");
+  const sourceSha = gitOut(["rev-parse", "HEAD"], fixture.worktreePath);
+
+  const registered = runCli(
+    [
+      "workflow",
+      "register",
+      "--workflow",
+      WORKFLOW_ID,
+      "--plan-id",
+      PLAN_ID,
+      "--plan-title",
+      `Plan ${PLAN_ID}`,
+      // The CLI-boundary spelling for a plan pointer is harness-relative
+      // (`plans/<id>.md`), exactly as `workflow-register.test.ts` and
+      // `iteration-register.test.ts` pass it: the register producer records
+      // this string on the row AND as the catalog entity's `relativePath`,
+      // whose root is `{PLAN_DIR}` — an absolute value is refused there
+      // (`catalog.path-refused`, `packages/engine/src/catalog.ts:296`).
+      "--plan-file",
+      join("plans", `${PLAN_ID}.md`),
+      "--delivery-kind",
+      "verification/report-only",
+      "--completion-policy",
+      REPORT_ONLY_POLICY,
+      "--project",
+      PROJECT_ID,
+      "--started-at",
+      "2026-09-22T00:00:00Z",
+      "--harness",
+      fixture.harness,
+    ],
+    fixture.root,
+  );
+  // The refusal text is carried in the expectation, so a failed run reports the
+  // engine's own code instead of only an exit code.
+  expect(`workflow register: exit ${registered.exitCode} (${registered.stderr.trim()})`).toBe(
+    "workflow register: exit 0 ()",
+  );
+  expect(registered.stdout).toContain(`workflow register: OK \u2014 ${WORKFLOW_ID} registered`);
+  const registeredDoc = readJson(fixture.snapshotPath);
+  expect(registeredDoc.delivery_kind).toBe("verification/report-only");
+  expect(registeredDoc.completion_policy).toBe(REPORT_ONLY_POLICY);
+  // The declared kind owns its own registration evidence: no branch anchors.
+  expect(registeredDoc.branch).toBeUndefined();
+
+  const sdd = join(fixture.harness, "sdd", PLAN_ID);
+  const qcReport = join(sdd, "review", "qc1.md");
+  const qcConsolidated = join(sdd, "review", "qc.md");
+  const qaReport = join(sdd, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+
+  const coordinator = bindCoordinator(fixture);
+  preparePlan(fixture, coordinator, PLAN_ID);
+  const planSession = bindPlan(fixture, PLAN_ID);
+  toInReview(fixture, planSession, "report-only ready for completion");
+  const handoffId = submitHandoff(
+    { root: fixture.root, baseSha, sourceSha, qcReport, qcConsolidated, qaReport },
+    planSession,
+  );
+  const accepted = transition(fixture, "accept", coordinator, handoffId);
+  expect(accepted.exitCode).toBe(0);
+  expect(jsonOf(accepted).state).toBe("accepted");
+
+  return { ...fixture, baseSha, sourceSha, coordinator, planSession, qcReport, qcConsolidated, qaReport, handoffId };
+}
+
+/** The stored `delivery` block (the recorded-evidence witness). */
+function deliveryOf(fixture: Fixture): Record<string, unknown> {
+  const delivery = readJson(fixture.snapshotPath).delivery;
+  return typeof delivery === "object" && delivery !== null && !Array.isArray(delivery)
+    ? (delivery as Record<string, unknown>)
+    : {};
+}
+
+/** Record one `delivery.completion` fulfilment through the authorized evidence verb. */
+function recordCompletionEvidence(
+  fixture: ReportOnlyFixture,
+  policy: string,
+  evidence = REPORT_ONLY_EVIDENCE,
+): RunResult {
+  const payload = join(fixture.root, "completion-evidence.json");
+  writeJson(payload, { completion: { policy, evidence } });
+  return runCli(
+    [
+      "workflow",
+      "evidence",
+      "--workflow",
+      WORKFLOW_ID,
+      "--file",
+      payload,
+      "--session",
+      fixture.coordinator,
+      "--at",
+      "2026-09-22T01:00:00Z",
+      "--harness",
+      fixture.harness,
+    ],
+    fixture.root,
+  );
+}
+
+/** The terminal close of the coordinated report-only lifecycle. */
+function closeReportOnly(fixture: ReportOnlyFixture, endedAt = "2026-09-22"): RunResult {
+  return runCli(
+    [
+      "status",
+      "workflow-close",
+      "--workflow",
+      WORKFLOW_ID,
+      "--ended-at",
+      endedAt,
+      "--session",
+      fixture.coordinator,
+      "--harness",
+      fixture.harness,
+    ],
+    fixture.root,
+  );
+}
+
+/** The read-only phase-6 projection over the same lifecycle state as the close. */
+function phase6Gate(fixture: ReportOnlyFixture): RunResult {
+  return runCli(
+    ["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", fixture.harness],
+    fixture.root,
+  );
+}
+
+describe("report-only completion", () => {
+  test("register → accept → completion evidence → complete → close → phase 6 with no merge or integration", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    const acceptedBytes = snapshotBytes(fixture);
+
+    // There is no integration route to take on this kind: the verb refuses
+    // before it writes anything, because the snapshot names no integration
+    // target for it.
+    const refusedStart = transition(fixture, "integration-start", fixture.coordinator, fixture.handoffId);
+    expect(refusedStart.exitCode).toBe(1);
+    expect(jsonOf(refusedStart).code).toBe("coordination.integration-unresolved");
+    expect(snapshotBytes(fixture)).toBe(acceptedBytes);
+
+    // Record the fulfilment of the registered policy, then complete from the
+    // accepted handoff — evidence first, Done second, no merge in between.
+    const recorded = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY);
+    expect(recorded.exitCode).toBe(0);
+    expect(recorded.stdout).toContain("delivery evidence recorded");
+    expect(deliveryOf(fixture)).toEqual({ completion: { policy: REPORT_ONLY_POLICY, evidence: REPORT_ONLY_EVIDENCE } });
+    expect(rowOf(fixture).status).toBe("InReview");
+
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(jsonOf(completed).outcome).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
+    expect(recordedHandoffState(fixture)).toBe("completed");
+    expect(rowOf(fixture).execution_lease).toBeUndefined();
+
+    // The row is Done while the delivery tail is still ahead: the workflow
+    // stays running, and no fabricated merge or integration anchor appears.
+    const afterComplete = readJson(fixture.snapshotPath);
+    expect(afterComplete.status).toBe("running");
+    expect(afterComplete.integration_merge_lease).toBeUndefined();
+    expect(afterComplete.integration_worktree_path).toBeUndefined();
+    const branch = afterComplete.branch as Record<string, unknown> | undefined;
+    expect(branch?.integration).toBeUndefined();
+    const handoff = (rowOf(fixture).coordination as Record<string, unknown>).handoff as Record<string, unknown>;
+    expect(handoff.integration).toBeUndefined();
+
+    // Recovery replays the completed row without rewriting the terminal bytes.
+    const completeBytes = snapshotBytes(fixture);
+    const replay = transition(fixture, "reconcile", fixture.coordinator, fixture.handoffId);
+    expect(replay.exitCode).toBe(0);
+    expect(jsonOf(replay).outcome).toBe("already-completed");
+    expect(snapshotBytes(fixture)).toBe(completeBytes);
+
+    // The close writes `completed` from the evidence it already consults, then
+    // unregisters the producer's own root entry.
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(0);
+    const terminal = readJson(fixture.snapshotPath);
+    expect(terminal.status).toBe("completed");
+    expect(terminal.ended_at).toBe("2026-09-22");
+    expect(readJson(join(fixture.harness, "status.json")).workflows).toEqual([]);
+
+    // The phase-6 projection passes on the same lifecycle state.
+    const gate = phase6Gate(fixture);
+    expect(gate.exitCode).toBe(0);
+    expect(gate.stdout).toContain("phase 6 (post-merge close): OK");
+
+    // And the fixture never created the integration branch a merge would have
+    // needed — "no merge" is observed here, not claimed.
+    expect(gitOut(["branch", "--format=%(refname:short)"], fixture.root).split("\n")).not.toContain(INTEGRATION_BRANCH);
+  }, RECOVERY_TIMEOUT);
+
+  test("missing policy evidence refuses complete and close, and only the record unblocks it", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    const before = snapshotBytes(fixture);
+
+    const refused = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(refused.exitCode).toBe(1);
+    const failure = jsonOf(refused);
+    expect(failure.ok).toBe(false);
+    expect(failure.code).toBe("coordination.invalid-transition");
+    expect(String(failure.message)).toContain("requires matching report-only completion evidence");
+    expect(String(failure.message)).toContain("delivery.completion");
+    expect(rowOf(fixture).status).toBe("InReview");
+    expect(recordedHandoffState(fixture)).toBe("accepted");
+    expect(snapshotBytes(fixture)).toBe(before);
+
+    // No fabricated Done state: the close refuses the unfinished row too.
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(1);
+    expect(closed.stderr).toContain("every plan row must be Done");
+    expect(readJson(fixture.snapshotPath).status).toBe("running");
+    expect(snapshotBytes(fixture)).toBe(before);
+
+    // The very same accepted handoff completes once its evidence is recorded.
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+    expect(closeReportOnly(fixture).exitCode).toBe(0);
+    expect(readJson(fixture.snapshotPath).status).toBe("completed");
+  }, RECOVERY_TIMEOUT);
+
+  test("mismatched completion policy refuses complete and preserves the recorded evidence", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    expect(recordCompletionEvidence(fixture, "a different completion policy").exitCode).toBe(0);
+    const before = snapshotBytes(fixture);
+
+    const refused = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(refused.exitCode).toBe(1);
+    const failure = jsonOf(refused);
+    expect(failure.code).toBe("coordination.invalid-transition");
+    expect(String(failure.message)).toContain("delivery.completion.policy");
+    expect(rowOf(fixture).status).toBe("InReview");
+    expect(snapshotBytes(fixture)).toBe(before);
+    // The mismatched fulfilment is still the stored evidence: nothing repaired
+    // it silently, and the registered policy was never overwritten.
+    expect(deliveryOf(fixture)).toEqual({
+      completion: { policy: "a different completion policy", evidence: REPORT_ONLY_EVIDENCE },
+    });
+    expect(readJson(fixture.snapshotPath).completion_policy).toBe(REPORT_ONLY_POLICY);
+
+    // A matching fulfilment replaces it, and the same handoff then completes
+    // and closes through the same evidence consultation.
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY, "sdd/plan-a/report-v2.md").exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+    expect(closeReportOnly(fixture).exitCode).toBe(0);
+    expect(readJson(fixture.snapshotPath).status).toBe("completed");
+  }, RECOVERY_TIMEOUT);
+
+  // QC seat 2 F-2: the recorded fulfilment is the BASIS of the row's `Done`
+  // (contract §1 records it before the row is marked Done), so the row's `Done`
+  // must not be left standing on evidence re-pointed afterwards. Real
+  // subprocesses; every assertion reads the authoritative bytes back.
+  test("the recorded completion fulfilment is frozen once the row is Done (post-Done re-record refused, F-2)", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+    const frozen = snapshotBytes(fixture);
+
+    // A different reference is a re-pointed completion, not an evidence update.
+    const refused = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY, "sdd/plan-a/forged.md");
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("coordination.invalid-transition");
+    expect(deliveryOf(fixture)).toEqual({ completion: { policy: REPORT_ONLY_POLICY, evidence: REPORT_ONLY_EVIDENCE } });
+    expect(snapshotBytes(fixture)).toBe(frozen);
+
+    // The exact retry stays the idempotent no-op it always was: the freeze
+    // refuses a re-point, never a re-send.
+    const retried = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY);
+    expect(retried.exitCode).toBe(0);
+    expect(retried.stdout).toContain("already carries");
+    expect(snapshotBytes(fixture)).toBe(frozen);
+
+    // The close still reads and accepts the fulfilment it never verified.
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(0);
+    expect(readJson(fixture.snapshotPath).status).toBe("completed");
+  }, RECOVERY_TIMEOUT);
+
+  // QC seat 2 F-1: the close authority must not be bypassable by rewriting the
+  // STORED handoff out of the completed shape. Only the stored state moves (one
+  // word), plus the integration record N1's contamination refusal exists for —
+  // the row stays Done, so the close's row-Done precondition is satisfied.
+  test("a stored handoff rewritten to accepted on a Done row refuses the close (F-1)", () => {
+    const fixture = makeAcceptedReportOnlyFixture();
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
+    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
+    expect(completed.exitCode).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
+
+    const snapshot = readJson(fixture.snapshotPath);
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const coordination = plan.coordination as Record<string, unknown>;
+    const handoff = coordination.handoff as Record<string, unknown>;
+    handoff.state = "accepted";
+    delete handoff.completed_at;
+    handoff.integration = {
+      target_branch: INTEGRATION_BRANCH,
+      worktree_path: fixture.root,
+      base_sha: "a".repeat(40),
+      started_at: "2026-09-22T01:30:00Z",
+    };
+    snapshot.integration_worktree_path = fixture.root;
+    writeJson(fixture.snapshotPath, snapshot);
+    const rewritten = snapshotBytes(fixture);
+
+    const closed = closeReportOnly(fixture);
+    expect(closed.exitCode).toBe(1);
+    expect(closed.stderr).toContain("coordination.row.handoff-field");
+    // Zero writes: the workflow stays running, registered and byte-identical.
+    expect(readJson(fixture.snapshotPath).status).toBe("running");
+    expect(snapshotBytes(fixture)).toBe(rewritten);
+    expect((readJson(join(fixture.harness, "status.json")).workflows as unknown[]).length).toBe(1);
+
+    // The read-only gate reaches the same refusal through the SAME validator:
+    // the rewritten document is an invalid snapshot, not merely non-terminal.
+    const gate = phase6Gate(fixture);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stderr).toContain("PHASE6_INVALID_SNAPSHOT");
   }, RECOVERY_TIMEOUT);
 });
 
@@ -2015,12 +2678,13 @@ describe("Prepare workflow amendment", () => {
     const fixture = makePrepareFixture();
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const before = readText(fixture.snapshotPath);
-    const appendPlan = join(fixture.planDir, `${PREPARE_APPEND}.md`);
-    // The append's plan markdown turns unreadable after the engine's own
-    // existence check, so the failure is not a coordination refusal: it exits
-    // through the unexpected-error path, which must still name the family the
-    // caller ran (and must not have written anything).
-    chmodSync(appendPlan, 0o000);
+    const snapshotDir = dirname(fixture.snapshotPath);
+    // The snapshot directory loses write permission after the read, so the
+    // write-lock mkdir next to snapshot.json throws a raw FS error (EACCES)
+    // rather than a typed coordination / plan-path refusal. That is still
+    // the unexpected-error path, which must name the family the caller ran
+    // and must not have written anything.
+    chmodSync(snapshotDir, 0o555);
     try {
       const failed = runCli(
         amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
@@ -2034,7 +2698,523 @@ describe("Prepare workflow amendment", () => {
       expect(payload.code).toBe("workflow.internal-error");
       expect(readText(fixture.snapshotPath)).toBe(before);
     } finally {
-      chmodSync(appendPlan, 0o644);
+      chmodSync(snapshotDir, 0o755);
     }
   }, 30000);
+
+  test("a plan-file correction travels through the CLI JSON payload and repairs a malformed pointer", () => {
+    const fixture = makePrepareFixture();
+    // The row holds the repository-relative pointer rows registered before the
+    // resolver landed; the correction names that same plan's canonical file and
+    // the exact pointer it replaces.
+    const doc = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    doc.plans[0]!.file = `.mstar/plans/${PREPARE_ROW}.md`;
+    writeJson(fixture.snapshotPath, doc);
+    const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
+    writeJson(fixture.patchPath, {
+      ...preparePatchOf(fixture),
+      correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: correctedPath }],
+    });
+    const statusBefore = readText(fixture.statusPath);
+
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const amended = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(view.snapshot_version), compass: String(view.compass_version) }),
+      fixture.root,
+    );
+
+    expect(amended.exitCode).toBe(0);
+    const payload = jsonOf(amended);
+    expect(payload.ok).toBe(true);
+    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.outcome).toBe("amended");
+    expect(payload.plan_ids).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+
+    const after = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    expect(after.plans[0]!.file).toBe(correctedPath);
+    // The correction is a delta: the root register never moves.
+    expect(readText(fixture.statusPath)).toBe(statusBefore);
+
+    // A correction whose old pointer names a foreign document refuses with exit
+    // 1 and leaves the snapshot byte-identical.
+    const before = readText(fixture.snapshotPath);
+    const freshView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    writeJson(fixture.patchPath, {
+      ...preparePatchOf(fixture),
+      appendPlans: [],
+      correctPlanFiles: [
+        { id: PREPARE_ROW, expectedFile: join(fixture.root, `${PREPARE_ROW}.md`), file: correctedPath },
+      ],
+    });
+    const refused = runCli(
+      amendPrepareArgs(fixture, { snapshot: String(freshView.snapshot_version), compass: String(freshView.compass_version) }),
+      fixture.root,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(readText(fixture.snapshotPath)).toBe(before);
+  }, 30000);
+});
+
+describe("mstar plan — catalog pin", () => {
+  test("catalog pin: a store-less prepare is disclosed as store-absent, and a planted pin refuses bind with the stable code", () => {
+    const fixture = makeFixture({ store: false });
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+
+    // No catalog store exists in this fixture. The reader discloses that
+    // explicitly instead of reading the missing store as an empty catalog.
+    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(view.exitCode).toBe(0);
+    expect(jsonOf(view).catalog_pin).toMatchObject({
+      source: null,
+      pin: null,
+      absence: "store-absent",
+      conflict: null,
+    });
+
+    // A generic snapshot metadata update plants a pin whose document hash does
+    // not match the frozen row: the engine neither repairs it nor follows it.
+    const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    const planted = { store_id: "store-x", entity_revision: 1, document_hash: "0".repeat(64), relation_hash: "0".repeat(64) };
+    writeJson(fixture.snapshotPath, {
+      ...snapshot,
+      plans: snapshot.plans.map((row) =>
+        row.id === PLAN_ID || row.plan_id === PLAN_ID
+          ? { ...row, metadata: { ...(row.metadata as Record<string, unknown>), catalog_pin: planted } }
+          : row,
+      ),
+    });
+
+    const shown = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(shown.exitCode).toBe(0);
+    const shownPayload = jsonOf(shown) as { catalog_pin: { conflict: string | null; pin: { entity_revision: number } } };
+    expect(shownPayload.catalog_pin.pin.entity_revision).toBe(1);
+    expect(shownPayload.catalog_pin.conflict).not.toBeNull();
+
+    // Execution start refuses with the engine's own code (exit 1, not an
+    // internal error), and writes no session.
+    const bound = runCli(["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], fixture.root);
+    expect(bound.exitCode).toBe(1);
+    const failure = jsonOf(bound);
+    expect(failure.ok).toBe(false);
+    expect(failure.code).toBe("catalog.execution-pin-conflict");
+    expect(failure.workflow_id).toBe(WORKFLOW_ID);
+
+    const human = runCli(["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID], fixture.root);
+    expect(human.exitCode).toBe(1);
+    expect(human.stderr).toContain("catalog.execution-pin-conflict");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * `mstar workflow recover-coordinator` — JSON Prepare coordinator recovery
+ * (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** The replacement coordinator identity the CLI cases state explicitly. */
+const CLI_RECOVERY_SESSION_ID = "recovered-cli-coordinator";
+
+/** The `workflow recover-coordinator` argv one case drives. */
+function recoverCoordinatorArgs(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string },
+  overrides: Record<string, unknown> = {},
+): string[] {
+  const flags: Array<[string, string | undefined]> = [
+    ["--prior-session", overrides.priorSession as string | undefined ?? fixture.coordinator],
+    ["--session-id", overrides.sessionId as string | undefined ?? CLI_RECOVERY_SESSION_ID],
+    ["--expect-snapshot", overrides.expectSnapshot as string | undefined ?? tokens.snapshot],
+    ["--expect-compass", overrides.expectCompass as string | undefined ?? tokens.compass],
+    ["--operation-id", overrides.operationId as string | undefined ?? "op-cli-recover-1"],
+  ];
+  if (overrides.omitReason !== true) {
+    flags.push(["--reason", (overrides.reason as string | undefined) ?? "the prior host session was cancelled"]);
+  }
+  flags.push(["--authorization-ref", (overrides.authorizationRef as string | undefined) ?? "PM-authorization-20260921"]);
+  const argv = ["workflow", "recover-coordinator"];
+  for (const [flag, value] of flags) {
+    if (value === undefined) continue;
+    argv.push(flag, value);
+  }
+  const stopped = overrides.stopped as string[] | undefined ?? ["fixture-coordinator"];
+  for (const id of stopped) argv.push("--stopped", id);
+  if (overrides.json !== false) argv.push("--json");
+  return argv;
+}
+
+/**
+ * The stored top-level `coordination` block of the CLI fixture's workflow,
+ * narrowed by `typeof` before any member is read (the snapshot JSON is
+ * `unknown` at this boundary).
+ */
+function cliCoordinationOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordination = readJson(fixture.snapshotPath).coordination;
+  // Narrowed above; the block is a plain object when present.
+  return typeof coordination === "object" && coordination !== null && !Array.isArray(coordination)
+    ? (coordination as Record<string, unknown>)
+    : {};
+}
+
+/** The stored coordinator binding of the CLI fixture's workflow. */
+function cliRecordedCoordinator(fixture: PrepareFixture): Record<string, unknown> {
+  const coordinator = cliCoordinationOf(fixture).coordinator;
+  return typeof coordinator === "object" && coordinator !== null && !Array.isArray(coordinator)
+    ? (coordinator as Record<string, unknown>)
+    : {};
+}
+
+/** The stored recovery audit of the CLI fixture's workflow. */
+function cliRecoveryAudit(fixture: PrepareFixture): Array<Record<string, unknown>> {
+  const recoveries = cliCoordinationOf(fixture).identity_recoveries;
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** The workflow's plan rows as stored on disk (the preservation witness). */
+function cliPlanRowsOf(fixture: PrepareFixture): unknown {
+  return readJson(fixture.snapshotPath).plans;
+}
+
+describe("prepare coordinator recovery — CLI transport", () => {
+  test("prepare coordinator recovery travels through `workflow recover-coordinator` and the old reference refuses", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const tokens = { snapshot: String(view.snapshot_version), compass: String(view.compass_version) };
+    const peerBefore = readText(fixture.peerSnapshotPath);
+    const rowsBefore = JSON.stringify(cliPlanRowsOf(fixture));
+
+    const recovered = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+
+    expect(recovered.exitCode).toBe(0);
+    const payload = jsonOf(recovered);
+    expect(payload.ok).toBe(true);
+    expect(payload.operation).toBe("recover-coordinator");
+    expect(payload.workflow_id).toBe(PREPARE_WORKFLOW);
+    expect(payload.prior_session_id).toBe(FIXTURE_COORDINATOR_ID);
+    expect(payload.session_id).toBe(CLI_RECOVERY_SESSION_ID);
+    expect(payload.operation_id).toBe("op-cli-recover-1");
+    expect(payload.replay).toBe(false);
+    // §3.3's public projection: the envelope/credential path is coordinator-owned
+    // transport and never a CLI (or diagnostic) output field.
+    const newEnvelope = join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`);
+    expect(payload.session_file).toBeUndefined();
+    expect(Object.keys(payload).sort()).toEqual([
+      "compass_version",
+      "ok",
+      "operation",
+      "operation_id",
+      "prior_session_id",
+      "replay",
+      "session_id",
+      "snapshot_version",
+      "workflow_id",
+    ]);
+    expect(recovered.stdout).not.toContain("sessions");
+    // Human mode keeps stdout machine-only and prints no envelope path either.
+    const human = runCli(recoverCoordinatorArgs(fixture, tokens, { json: false }), fixture.root);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).not.toContain(newEnvelope);
+    expect(human.stderr).toContain(CLI_RECOVERY_SESSION_ID);
+
+    // Authoritative state, read from disk — never from the CLI's claim.
+    expect(cliRecordedCoordinator(fixture)).toMatchObject({ session_id: CLI_RECOVERY_SESSION_ID });
+    const audit = cliRecoveryAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-cli-recover-1",
+      prior_session_id: FIXTURE_COORDINATOR_ID,
+      session_id: CLI_RECOVERY_SESSION_ID,
+      snapshot_version_before: tokens.snapshot,
+      compass_version: tokens.compass,
+    });
+    // Rows and the sibling workflow are untouched; the old envelope survives.
+    expect(JSON.stringify(cliPlanRowsOf(fixture))).toBe(rowsBefore);
+    expect(readText(fixture.peerSnapshotPath)).toBe(peerBefore);
+    expect(existsSync(fixture.coordinator)).toBe(true);
+
+    // The old reference is historical: the binding moved, so it refuses, while
+    // the replacement session is the live coordinator.
+    const oldRefused = runCli(showPrepareArgs(fixture), fixture.root);
+    expect(oldRefused.exitCode).toBe(1);
+    const oldPayload = jsonOf(oldRefused);
+    expect(oldPayload.operation).toBe("show-prepare");
+    expect(oldPayload.code).toBe("coordination.session-mismatch");
+    const live = runCli(
+      ["workflow", "show-prepare", "--session", newEnvelope, "--json"],
+      fixture.root,
+    );
+    expect(live.exitCode).toBe(0);
+    expect(jsonOf(live).allowed).toBe(true);
+
+    // An exact retry with the same reviewed tokens is a stable receipt.
+    const committedBytes = readText(fixture.snapshotPath);
+    const retry = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+    expect(retry.exitCode).toBe(0);
+    expect(jsonOf(retry).replay).toBe(true);
+    expect(readText(fixture.snapshotPath)).toBe(committedBytes);
+    expect(cliRecoveryAudit(fixture)).toHaveLength(1);
+
+    // A changed request and an incomplete stop assertion both refuse with their
+    // own engine codes, exit 1, and no mutation — each against the CURRENT
+    // reviewed tokens, so the refusal is the guard's own and not a stale token.
+    const liveView = jsonOf(runCli(["workflow", "show-prepare", "--session", newEnvelope, "--json"], fixture.root));
+    const liveTokens = { snapshot: String(liveView.snapshot_version), compass: String(liveView.compass_version) };
+    const changedReason = runCli(
+      recoverCoordinatorArgs(fixture, liveTokens, { operationId: "op-cli-recover-1", reason: "another reason" }),
+      fixture.root,
+    );
+    expect(changedReason.exitCode).toBe(1);
+    expect(jsonOf(changedReason)).toMatchObject({ ok: false, code: "coordination.identity-recovery.operation-conflict", workflow_id: PREPARE_WORKFLOW });
+    // The operator addresses the binding the workflow records NOW and names
+    // somebody else as stopped: the engine authenticates the owner and then
+    // refuses the incomplete attestation.
+    const unauthorized = runCli(
+      recoverCoordinatorArgs(fixture, liveTokens, {
+        operationId: "op-cli-recover-3",
+        priorSession: newEnvelope,
+        sessionId: "another-coordinator",
+        stopped: ["somebody-else"],
+      }),
+      fixture.root,
+    );
+    expect(unauthorized.exitCode).toBe(1);
+    expect(jsonOf(unauthorized).code).toBe("coordination.identity-recovery.unauthorized");
+    expect(readText(fixture.snapshotPath)).toBe(committedBytes);
+    expect(cliRecoveryAudit(fixture)).toHaveLength(1);
+  }, 60000);
+
+  test("prepare coordinator recovery usage failures exit 2 without touching the workflow", () => {
+    const fixture = makePrepareFixture();
+    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const tokens = { snapshot: String(view.snapshot_version), compass: String(view.compass_version) };
+    const before = readText(fixture.snapshotPath);
+
+    // No stop assertion, no reason, and a relative prior-session path are usage
+    // errors (exit 2) decided before any engine I/O.
+    const noStop = runCli(
+      [
+        "workflow",
+        "recover-coordinator",
+        "--prior-session",
+        fixture.coordinator,
+        "--session-id",
+        CLI_RECOVERY_SESSION_ID,
+        "--expect-snapshot",
+        tokens.snapshot,
+        "--expect-compass",
+        tokens.compass,
+        "--operation-id",
+        "op-cli-usage-1",
+        "--reason",
+        "cancelled",
+        "--authorization-ref",
+        "PM-1",
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(noStop.exitCode).toBe(2);
+    expect(jsonOf(noStop)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+
+    const noReason = runCli(recoverCoordinatorArgs(fixture, tokens, { omitReason: true }), fixture.root);
+    expect(noReason.exitCode).toBe(2);
+    expect(jsonOf(noReason)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+
+    const relative = runCli(
+      recoverCoordinatorArgs(fixture, tokens, { priorSession: ".mstar/workflows/x/sessions/coordinator-a.json" }),
+      fixture.root,
+    );
+    expect(relative.exitCode).toBe(2);
+    expect(jsonOf(relative).code).toBe("usage");
+    // The rejected address is stated as a rule, never repeated (§5).
+    expect(relative.stdout).not.toContain(".mstar/workflows/x/sessions/coordinator-a.json");
+    expect(relative.stderr).not.toContain(".mstar/workflows/x/sessions/coordinator-a.json");
+
+    // A credential-like replacement id is refused by the ENGINE (not by a CLI
+    // guard), and that refusal reaches the same public diagnostic: it must name
+    // the rule and the received length, never the value.
+    for (const rejected of [`ghp_${"a".repeat(140)}`, "../creds/secret.json"]) {
+      const badId = runCli(recoverCoordinatorArgs(fixture, tokens, { sessionId: rejected }), fixture.root);
+      expect({ rejected, exitCode: badId.exitCode }).toEqual({ rejected, exitCode: 1 });
+      expect(jsonOf(badId).code).toBe("coordination.invalid-session-id");
+      expect(badId.stdout).not.toContain(rejected);
+      expect(badId.stderr).not.toContain(rejected);
+    }
+
+    // A stop entry that is not a public session id (`a/b` would name another
+    // path component) is decided as usage before any engine I/O, so the value is
+    // never hashed into a request digest or persisted in the audit — and no
+    // output (JSON payload or stderr) repeats the rejected value itself.
+    for (const badStopped of ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"]) {
+      const malformed = runCli(recoverCoordinatorArgs(fixture, tokens, { stopped: [badStopped] }), fixture.root);
+      const label = `${badStopped.slice(0, 12)}:`;
+      expect(`${label} ${malformed.exitCode}`).toBe(`${label} 2`);
+      expect(jsonOf(malformed)).toMatchObject({ ok: false, operation: "recover-coordinator", code: "usage" });
+      expect(malformed.stdout).not.toContain(badStopped);
+      expect(malformed.stderr).not.toContain(badStopped);
+    }
+
+    // A nonexistent absolute envelope is a runtime refusal (exit 1), never a
+    // usage error, and it still writes nothing.
+    const missing = runCli(
+      recoverCoordinatorArgs(fixture, tokens, { priorSession: join(fixture.root, "no-such-session.json") }),
+      fixture.root,
+    );
+    expect(missing.exitCode).toBe(1);
+    expect(jsonOf(missing).code).toBe("coordination.session-not-found");
+
+    expect(readText(fixture.snapshotPath)).toBe(before);
+    expect(existsSync(join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${CLI_RECOVERY_SESSION_ID}.json`))).toBe(false);
+  }, 60000);
+});
+
+/**
+ * The ACTIVE transport (`--execution` / `--session-ref` / full-token `--expect`)
+ * as this family sees it: the two transports are disjoint BEFORE any IO, a
+ * malformed active invocation is usage (exit 2), and an active call against a
+ * pre-activation harness reaches the ENGINE's DB verb — which refuses
+ * `execution.not-active` (exit 1) — instead of falling back to the file route.
+ * Every case asserts the file-route bytes are untouched, so "cannot write" is
+ * observed, not claimed. The successful bind→resume→mutation chain lives in
+ * `execution-session.test.ts`, which owns the active DB fixture.
+ */
+describe("mstar plan \u2014 execution transport", () => {
+  /** A canonical, engine-produced reference the active flags can carry. */
+  function activeRefWire(): string {
+    return encodeExecutionSessionRef({
+      storeId: "stores/execution-test",
+      epoch: 1,
+      workflowId: WORKFLOW_ID,
+      role: "plan-pm",
+      sessionId: "execution-ref-session",
+      planId: PLAN_ID,
+    });
+  }
+
+  function activeIdentityEnv(): Record<string, string> {
+    return {
+      MSTAR_EXECUTION_IDENTITY: serializeExecutionValue({
+        source: "local",
+        sessionId: "execution-ref-session",
+        workflowId: WORKFLOW_ID,
+        role: "plan-pm",
+        planId: PLAN_ID,
+      }),
+    };
+  }
+
+  test("the active flags never mix with the pre-activation ones, and write nothing (exit 2)", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+
+    const mixedArgs = [
+      "plan",
+      "progress",
+      "--session",
+      join(fixture.harness, "sessions", "plan-a.json"),
+      "--session-ref",
+      activeRefWire(),
+      "--expect",
+      "exec-v1:plan:store:1:key:1",
+      "--operation",
+      "progress-mixed",
+      "--file",
+      join(fixture.root, "progress.json"),
+    ];
+    const mixed = runCli(mixedArgs, fixture.root);
+    expect(mixed.exitCode).toBe(2);
+    expect(mixed.stderr).toContain("disjoint transports");
+
+    // Under `--json` the SAME refusal is the A2 usage object on stdout — the
+    // one output path this family already uses for every usage failure
+    // ("a commander-level usage failure still carries the A2 failure object
+    // under --json", above in this file).
+    const mixedJson = runCli([...mixedArgs, "--json"], fixture.root);
+    expect(mixedJson.exitCode).toBe(2);
+    expect(jsonOf(mixedJson).code).toBe("usage");
+    expect(String(jsonOf(mixedJson).message)).toContain("disjoint transports");
+
+    const stated = runCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--session-id", "some-session"],
+      fixture.root,
+    );
+    expect(stated.exitCode).toBe(2);
+    expect(stated.stderr).toContain("--session-id");
+
+    expect(snapshotBytes(fixture)).toBe(before);
+    expect(existsSync(fixture.projectRegisterPath)).toBe(false);
+  });
+
+  test("a numeric execution expectation, a missing operation or a missing identity is usage (exit 2)", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+    const progressPath = join(fixture.root, "progress.json");
+    writeJson(progressPath, { status: "InReview", summary: "no write expected", evidence_paths: [fixture.evidencePath] });
+
+    const numeric = runCli(
+      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "3", "--operation", "progress-numeric", "--file", progressPath],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(numeric.exitCode).toBe(2);
+    expect(numeric.stderr).toContain("full execution token");
+
+    const noOperation = runCli(
+      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(noOperation.exitCode).toBe(2);
+    expect(noOperation.stderr).toContain("--operation");
+
+    const noIdentity = runCli(
+      [
+        "plan",
+        "show",
+        "--session-ref",
+        activeRefWire(),
+        "--plan",
+        PLAN_ID,
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(noIdentity.exitCode).toBe(2);
+    // `--json` usage failures of this family are the A2 object on STDOUT (the
+    // existing convention: "a commander-level usage failure still carries the
+    // A2 failure object under --json"), never a stderr line.
+    expect(jsonOf(noIdentity).code).toBe("usage");
+    expect(String(jsonOf(noIdentity).message)).toContain("MSTAR_EXECUTION_IDENTITY");
+
+    expect(snapshotBytes(fixture)).toBe(before);
+  });
+
+  test("an active call against a pre-activation harness is the engine's refusal, never a file-route write", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+    const progressPath = join(fixture.root, "progress.json");
+    writeJson(progressPath, { status: "InReview", summary: "no write expected", evidence_paths: [fixture.evidencePath] });
+
+    const refused = runCli(
+      [
+        "plan",
+        "progress",
+        "--session-ref",
+        activeRefWire(),
+        "--expect",
+        "exec-v1:plan:stores%2Fexecution-test:1:key64:1",
+        "--operation",
+        "progress-not-active",
+        "--file",
+        progressPath,
+        "--json",
+      ],
+      fixture.root,
+      activeIdentityEnv(),
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("execution.not-active");
+    expect(snapshotBytes(fixture)).toBe(before);
+  });
 });

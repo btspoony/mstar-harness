@@ -29,7 +29,7 @@
  * `session.header.parentSession === undefined`; conversation forks
  * conservatively excluded — plan mode is a session-level selection and the
  * root agent drives the harness workflow). Evaluation points: the
- * `agent/session-start` listener (root filter inside) plus the EXISTING
+ * `agent/created` listener (root filter inside) plus the EXISTING
  * `subagent/start` decision point (the shared `parentSession` root walk —
  * {@link rootAgentOf}): a mid-session Prepare flip
  * (plan row appears/advances past `Todo`) re-evaluates the root's flag
@@ -296,7 +296,7 @@ export function syncPlanMode(agent: unknown, input: PlanModeSyncInput): boolean 
 /* ---------------------------------- apply wiring ---------------------------------- */
 
 /**
- * Register the planMode bridge: an `agent/session-start` listener (root
+ * Register the planMode bridge: an `agent/created` listener (root
  * filter inside — root and children alike fire, `runtime-types.ts:217`) plus
  * the EXISTING `subagent/start` decision point,
  * resolving the delegating ROOT via the shared `parentSession` walk — the
@@ -320,13 +320,13 @@ export function registerPlanModeBridge(ctx: Context, resolver: HarnessResolver):
       log('warn', `planMode bridge sync failed (contained — the session/decision point proceeds): ${errorMessage(error)}`)
     }
   }
-  // Primary edge: `agent/session-start` fires per agent, root and children
+  // Primary edge: `agent/created` fires per agent, root and children
   // alike — the root filter lives inside the sync. Registered on the
   // untyped `ctx.events.on` (same registration path as the mixined
   // `ctx.on` and the goal bridge): the event is declared by
   // `@deepseek-ai/dsh-agent`, which this plugin does not type-depend on —
   // the payload is consumed structurally.
-  ctx.events.on('agent/session-start', (payload: { agent?: unknown }) => {
+  ctx.events.on('agent/created', (payload: { agent?: unknown }) => {
     if (payload.agent !== undefined) sync(payload.agent)
   })
   // Decision-point re-evaluation (idempotent — no churn when already in

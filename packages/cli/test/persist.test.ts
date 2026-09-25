@@ -110,7 +110,8 @@ const SNAPSHOT_PAYLOAD = {
   updated_at: "2026-08-27",
   plans: [],
 };
-const RESIDUALS_PAYLOAD = { entries: {} };
+/** Register-shaped payload: what the retired `residuals` kind used to accept. */
+const REGISTER_PAYLOAD = { entries: {} };
 /** Minimal valid `mstar.review/v1` envelope (shape; tally consistent
  * — {1 should-fix, 1 nit} ⇒ 100-15-3=82, needs fixes). */
 const REVIEW_PAYLOAD = {
@@ -171,13 +172,13 @@ function recordingStoreModuleSource(envVar: string): string {
 
 /**
  * `persist put` is the ArtifactStore persist port; the protected kinds
- * (`status` / `snapshot` / `residuals`) are coordination documents, so they
- * have exactly one writer: the engine's locked replacement behind
- * `--expect-version` (spec §C4). A bare put of such a kind is refused at the
- * CLI flag gate — usage exit 2, nothing written, existing bytes intact — and
- * an injected `--store` module is refused too, because the replacement needs
- * the default local FsStore's same-host CAS contract. Fixture cases that only
- * need existing bytes write the backing file directly.
+ * (`status` / `snapshot`) are coordination documents, so they have exactly one
+ * writer: the engine's locked replacement behind `--expect-version` (spec §C4).
+ * A bare put of such a kind is refused at the CLI flag gate — usage exit 2,
+ * nothing written, existing bytes intact — and an injected `--store` module is
+ * refused too, because the replacement needs the default local FsStore's
+ * same-host CAS contract. Fixture cases that only need existing bytes write the
+ * backing file directly.
  */
 describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARNESS_DIR)", () => {
   test("a protected snapshot put without --expect-version is a usage error and writes nothing", () => {
@@ -206,15 +207,47 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
     });
   });
 
-  test("a protected residuals put without --expect-version is refused and no register is created", () => {
+  test("issue authority: the retired residuals kind refuses with the migration path and writes no register", () => {
     withTempDir((dir) => {
-      const payloadFile = writePayload(dir, "payload.json", RESIDUALS_PAYLOAD);
+      const payloadFile = writePayload(dir, "payload.json", REGISTER_PAYLOAD);
       const put = runCli(["persist", "residuals", "--key", "proj-1", "--file", payloadFile], {
         env: harnessEnv(dir),
       });
-      expect(put.exitCode).toBe(2);
-      expect(put.stderr).toContain("--expect-version");
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("`persist residuals` is retired");
+      expect(put.stderr).toContain("mstar plan issue-add|issue-close");
       expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
+      expect(existsSync(join(dir, "projects"))).toBe(false);
+
+      // The read/delete faces refuse the same way — the kind has no authority.
+      const get = runCli(["persist", "get", "residuals", "--key", "proj-1"], { env: harnessEnv(dir) });
+      expect(get.exitCode).toBe(1);
+      expect(get.stderr).toContain("`persist residuals` is retired");
+    });
+  });
+
+  test("issue authority: a json alias to a project register is refused and no register file appears", () => {
+    withTempDir((dir) => {
+      const registerPath = join(dir, "projects", "proj-1", "residuals.json");
+      mkdirSync(join(dir, "projects", "proj-1"), { recursive: true });
+      const payloadFile = writePayload(dir, "payload.json", REGISTER_PAYLOAD);
+      const put = runCli(["persist", "json", "--key", registerPath, "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(put.exitCode).toBe(1);
+      expect(put.stderr).toContain("project registers are retired migration history");
+      expect(existsSync(registerPath)).toBe(false);
+
+      // The alias is not a read path either, and a same-named file outside the
+      // resolved project dir is not a register (the guard is boundary-scoped).
+      const get = runCli(["persist", "get", "json", "--key", registerPath], { env: harnessEnv(dir) });
+      expect(get.exitCode).toBe(1);
+      const outside = join(dir, "elsewhere", "residuals.json");
+      const allowed = runCli(["persist", "json", "--key", outside, "--file", payloadFile], {
+        env: harnessEnv(dir),
+      });
+      expect(allowed.exitCode).toBe(0);
+      expect(existsSync(outside)).toBe(true);
     });
   });
 
@@ -304,7 +337,7 @@ describe("mstar persist — validators run before put", () => {
     });
   });
 
-  test("residuals validator rejects a non-register document (exit 1, no write)", () => {
+  test("issue authority: the retired residuals kind is refused before any payload is read (exit 1)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "bad-residuals.json", { nope: 1 });
       const r = runCli(
@@ -312,8 +345,15 @@ describe("mstar persist — validators run before put", () => {
         { env: harnessEnv(dir) },
       );
       expect(r.exitCode).toBe(1);
-      expect(r.stderr).toContain("refusing to persist invalid residuals document");
+      expect(r.stderr).toContain("`persist residuals` is retired");
       expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
+      // Retirement precedes the payload read: a missing file changes nothing.
+      const missing = runCli(["persist", "residuals", "--key", "proj-1", "--file", join(dir, "absent.json")], {
+        env: harnessEnv(dir),
+      });
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain("`persist residuals` is retired");
+      expect(missing.stderr).not.toContain("payload file not found");
     });
   });
 
@@ -432,7 +472,7 @@ describe("mstar persist — usage errors", () => {
       const put = runCli(["persist", "bogus", "--key", "k", "--file", payloadFile], { env: harnessEnv(dir) });
       expect(put.exitCode).toBe(2);
       expect(put.stderr).toContain("unknown kind \"bogus\"");
-      expect(put.stderr).toContain("status | snapshot | residuals | review | json");
+      expect(put.stderr).toContain("status | snapshot | review | json");
 
       const get = runCli(["persist", "get", "bogus", "--key", "k"], { env: harnessEnv(dir) });
       expect(get.exitCode).toBe(2);

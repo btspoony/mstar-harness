@@ -1,6 +1,6 @@
 # @mstar-harness/omp
 
-Morning Star (启明星) harness plugin for [omp (Oh My Pi)](https://omp.sh).
+Morning Star harness plugin for [omp (Oh My Pi)](https://omp.sh).
 
 Install this package with `omp plugin install` — it bundles the engine **inline** (zero runtime `@mstar-harness/engine` dependency), plus `mstar-*` skills, role agents, iteration commands, and the omp runtime gates (status/dispatch/lease validation), so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the OpenCode, Cursor, and Codex plugins.
 
@@ -26,7 +26,7 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 
 | Path in package | Contents |
 |-----------------|----------|
-| `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches |
+| `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches. Its issue-authority refusals are **unconditional** in every enforcement mode: a direct write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm` included), a write to a retired project register while the store is the active authority, and an unreadable authority (below-floor runtime, missing `node:sqlite`, corrupt or busy store — fails closed) |
 | `extensions/model-handoff.js` | Coordinator model-handoff extension (native opt-in settings `modelHandoff` / `handoffTarget`, tool `mstar_model_handoff`) — off by default; see below |
 | `extensions/phase2-orchestration.js` | Phase-2 orchestration extension (native launch opt-in `phase2PlanInstances` / `maxPlanInstances`, tool `mstar_phase2`) — extras off by default; see below |
 | `tools/mstar_*.js` | Six model-callable validator tools (`mstar_status_validate`, `mstar_dispatch_validate`, `mstar_lease_verify`, `mstar_path_resolve`, `mstar_iteration_gate`, `mstar_worktree_check`) |
@@ -48,7 +48,7 @@ Coordinator sessions can run Prepare for every new Morning Star iteration on `@s
 
 **Scope limitation (host behaviour, not configurable here):** the native `/settings` → Plugins panel lists **user-scope** plugin installs. A `--scope project` install is used by omp but has no row in that panel; use the user-scope install above. The extension reads the saved preference through the host's exported settings helper, so a project-scoped runtime still honours the preference you saved there.
 
-Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and Bun `>=1.3.14`. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution.
+Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and **Bun `>=1.4.0`** for this plugin. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution. This is a Bun-hosted plugin; do not add a Node floor here just because the CLI also has an explicit `node` invocation.
 The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The Phase-2 extension follows the same host pattern as the model entry: its one runtime host dependency, `getPluginSettings` from `@oh-my-pi/pi-coding-agent/extensibility/plugins`, stays external and is resolved by the running host, declared as an **optional peer** and developed against the pinned host version.
 
 ## Phase-2 plan instances (opt-in)

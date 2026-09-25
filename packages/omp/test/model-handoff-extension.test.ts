@@ -35,7 +35,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionActions, ExtensionContext, ExtensionContextActions, ExtensionMode, SessionEntry } from "@oh-my-pi/pi-coding-agent";
@@ -60,6 +60,19 @@ import modelHandoffFactory, {
   readSessionRecords,
 } from "../src/extensions/model-handoff";
 import type { HandoffRecord } from "../src/extensions/model-handoff";
+import { COORDINATOR_TOOL_NAME } from "../src/coordinator-identity";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  createFsStore,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionPlan,
+  readExecutionAuthority,
+  registerCatalogEntity,
+  setArtifactStore,
+} from "@mstar-harness/engine";
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 
 /* --------------------------------------------------------------- scratch --- */
 
@@ -74,6 +87,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+  setArtifactStore(undefined);
   if (HARNESS_ENV !== undefined) process.env.MSTAR_HARNESS_DIR = HARNESS_ENV;
   for (const dir of SCRATCH) rmSync(dir, { recursive: true, force: true });
 });
@@ -161,9 +175,16 @@ type ControlRepo = Readonly<{
 /**
  * Disposable control repository: a main checkout (branch `main`, pushed to a
  * local bare remote), a linked integration worktree on its own pushed branch,
- * and a harness root with one registered sibling active iteration.
+ * and a harness root. `legacySources` (default `true`) also plants the
+ * pre-activation file state — one registered sibling active iteration with its
+ * own snapshot — which the FILE route derives from; the ACTIVE-route fixtures
+ * pass `false`, because an execution authority is initialized only over an
+ * empty execution workspace.
  */
-function buildControlRepo(siblingId = "fixture-sibling-iteration"): ControlRepo {
+function buildControlRepo(
+  siblingId = "fixture-sibling-iteration",
+  options: { legacySources?: boolean } = {},
+): ControlRepo {
   const root = scratchDir("omp-handoff-ext-");
   const bare = join(root, "remote.git");
   git(["init", "-q", "--bare", bare], root);
@@ -183,7 +204,9 @@ function buildControlRepo(siblingId = "fixture-sibling-iteration"): ControlRepo 
   git(["push", "-q", "-u", "origin", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
-  for (const dir of ["workflows", "iterations", "plans"]) mkdirSync(join(harness, dir), { recursive: true });
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  if (options.legacySources === false) return { root, main, harness, integration, integrationBranch, siblingId };
+  for (const dir of ["workflows", "iterations"]) mkdirSync(join(harness, dir), { recursive: true });
   mkdirSync(join(harness, "workflows", siblingId), { recursive: true });
   writeJson(join(harness, "workflows", siblingId, "snapshot.json"), {
     schema_version: 1,
@@ -233,7 +256,12 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
   });
   const planPaths = planIds.map((id) => join(repo.harness, "plans", `${id}.md`));
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
-  planPaths.forEach((path, index) => writeFileSync(path, `# ${planIds[index]}\n\nPlan body.\n`));
+  // The registered-plan path contract (§4): a registered plan markdown declares
+  // its own `plan_id`, and readiness resolves every row pointer through the
+  // shared resolver — so the fixture declares it like the real producer does.
+  planPaths.forEach((path, index) =>
+    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+  );
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
   reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
@@ -301,8 +329,6 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
 /* --------------------------------------------------------------- harness ---- */
 
 const TOOL_NAME = "mstar_model_handoff";
-/** The host→CLI session-identity channel the coordinator's bash calls must carry. */
-const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 
 type HostMode = ExtensionMode;
 
@@ -355,6 +381,12 @@ type Harness = Readonly<{
   emitBeforeAgentStart: (prompt: string) => Promise<unknown>;
   emitToolResult: (toolCallId: string, toolName: string, isError: boolean) => Promise<unknown>;
   runTool: (params: ToolParams) => Promise<ToolResult>;
+  /** The host's adapter for the `mstar_coordinator` tool (same machinery). */
+  runCoordinatorTool: (params: ToolParams) => Promise<ToolResult>;
+  /** The coordinator tool's own registered input schema. */
+  validateCoordinator: (params: ToolParams) => { success: boolean; message?: string };
+  /** The coordinator tool definition invoked directly, bypassing schema validation (forgery probe). */
+  runRawCoordinatorTool: (params: ToolParams) => Promise<ToolResult>;
   /** The tool definition invoked directly, bypassing schema validation (forgery probe). */
   runRawTool: (params: ToolParams) => Promise<ToolResult>;
   /** `safeParse` through the extension's own registered parameter schema. */
@@ -517,6 +549,9 @@ async function createHarness(options: {
   const registeredTool = extension.tools.get(TOOL_NAME);
   if (registeredTool === undefined) throw new Error("the host registered no model-handoff tool");
   const adapter = new RegisteredToolAdapter(registeredTool, runner);
+  const coordinatorTool = extension.tools.get(COORDINATOR_TOOL_NAME);
+  if (coordinatorTool === undefined) throw new Error("the host registered no coordinator-identity tool");
+  const coordinatorAdapter = new RegisteredToolAdapter(coordinatorTool, runner);
 
   const runToolCall = async (params: ToolParams): Promise<ToolResult> => {
     const parsed = registeredTool.definition.parameters.parse(params);
@@ -580,6 +615,22 @@ async function createHarness(options: {
     emitToolResult: (toolCallId: string, toolName: string, isError: boolean) =>
       runner.emitToolResult({ type: "tool_result", toolCallId, toolName, input: {}, content: [], isError } as never),
     runTool: runToolCall,
+    runCoordinatorTool: async (params: ToolParams) => {
+      const parsed = coordinatorTool.definition.parameters.parse(params);
+      return (await coordinatorAdapter.execute("fixture-coordinator-call", parsed, undefined, undefined)) as ToolResult;
+    },
+    validateCoordinator: (params: ToolParams) => {
+      const parsed = coordinatorTool.definition.parameters.safeParse(params);
+      return parsed.success ? { success: true } : { success: false, message: parsed.error?.message ?? "" };
+    },
+    runRawCoordinatorTool: async (params: ToolParams) =>
+      (await coordinatorTool.definition.execute(
+        "fixture-coordinator-raw-call",
+        params,
+        undefined,
+        undefined,
+        runner.createContext(),
+      )) as ToolResult,
     runRawTool: async (params: ToolParams) =>
       (await registeredTool.definition.execute(
         "fixture-raw-call",
@@ -741,7 +792,7 @@ describe("new coordinator start only", () => {
         "tool_call",
         "tool_result",
       ],
-      tools: [TOOL_NAME],
+      tools: [COORDINATOR_TOOL_NAME, TOOL_NAME],
       commands: 0,
       shortcuts: 0,
       flags: 0,
@@ -1971,140 +2022,1012 @@ describe("switch failure reports actual model", () => {
   }, 60_000);
 });
 
-describe("host session identity injection", () => {
-  test("bash calls carry the host session identity: injected, never caller-defined, confined to bash, and fail-safe on a malformed input shape", async () => {
+describe("prerequisite identity — managed coordinator bind transport", () => {
+  test("a bare or namespaced shell coordinator bind is blocked before execution, and unrelated shell calls are untouched", async () => {
     const repo = buildControlRepo();
     const harness = await createHarness({
       cwd: repo.main,
       sessionDir: scratchDir("unused-"),
       sessionManager: newSession(repo.main),
     });
-    const sessionId = harness.sessionManager.getSessionId();
-    expect(sessionId).not.toBe("");
 
-    // Every bash call this session issues is revised to carry the host identity,
-    // so the CLI's `plan bind` inherits it from the child shell environment and
-    // the engine session id equals the host session id. The identity travels as
-    // a shell prefix — NOT the input's `env` field, which omp 18.3.0 hosts
-    // refuse with "ready and env require a service name." when no service
-    // `name` accompanies it — and every other field the caller sent survives
-    // untouched.
-    const revised = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-bash",
-      toolName: "bash",
-      input: { command: "mstar plan bind --coordinator --workflow fixture-iteration", timeout: 5 },
-    });
-    expect(revised).toEqual({
-      input: {
-        command: `export ${SESSION_ID_ENV}='${sessionId}'; mstar plan bind --coordinator --workflow fixture-iteration`,
-        timeout: 5,
-      },
-    });
+    // The bounded classifier recognizes the two supported shell identities and
+    // one command shape, and returns an actionable redirect instead of letting
+    // the CLI trust an injected environment value.
+    const bindCommand = "mstar plan bind --coordinator --workflow fixture-iteration";
+    for (const toolName of ["bash", "functions.bash"]) {
+      const refused = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: `call-${toolName}`,
+        toolName,
+        input: { command: bindCommand },
+      });
+      expect(refused).toMatchObject({ block: true });
+      expect(String((refused as { reason?: string }).reason)).toContain(COORDINATOR_TOOL_NAME);
+    }
 
-    // Execution level: the prefix is a real POSIX shell line. The revised input
-    // must carry no `env` field (the omp 18.3.0 argument validation refuses any
-    // bash call whose input has `env` without a service `name`), the revised
-    // command must run as-is, and the identity must reach the child environment
-    // `mstar plan bind` inherits. An inherited variable from the outer test
-    // process would be overwritten by the prefix export, so the child output
-    // pins the prefix — not the ambient environment — as the source.
-    const echoRevised = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-bash-echo",
-      toolName: "bash",
-      input: { command: 'printf %s "$MSTAR_HOST_SESSION_ID"' },
-    });
-    // The prefix's exact text is asserted by the revised `toEqual` above; this
-    // narrowing only feeds the executed command to spawnSync.
-    const echoInput = echoRevised as { input: { command: string } };
-    expect(echoInput.input.env).toBeUndefined();
-    const child = Bun.spawnSync(["sh", "-c", echoInput.input.command]);
-    expect(child.exitCode).toBe(0);
-    expect(child.stdout.toString()).toBe(sessionId);
-
-    // A caller-supplied `env` field is left exactly as sent. The revision never
-    // touches the parameter surface — on omp 18.3.0 hosts the field-level env
-    // is the host's own argument validation to accept or refuse, and the
-    // identity reaches the child through the command prefix either way.
-    const forged = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-forged",
-      toolName: "bash",
-      input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: "model-supplied" } },
-    });
-    expect(forged).toEqual({
-      input: {
-        command: `export ${SESSION_ID_ENV}='${sessionId}'; true`,
-        env: { KEEP: "yes", [SESSION_ID_ENV]: "model-supplied" },
-      },
-    });
-
-    // The event fires before the host validates the arguments, so no input
-    // shape is assumed: without an object input carrying a string `command`
-    // there is nothing to prefix, and the revision is skipped instead of
-    // throwing into the host's fail-closed handler path (which would block the
-    // bash call).
-    const stringInput = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-input-string",
-      toolName: "bash",
-      input: "rm -rf",
-    });
-    expect(stringInput).toBeUndefined();
-
-    const nullInput = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-input-null",
-      toolName: "bash",
-      input: null,
-    });
-    expect(nullInput).toBeUndefined();
-
-    const stringEnv = await harness.emitToolCall({
-      type: "tool_call",
-      toolCallId: "call-env-string",
-      toolName: "bash",
-      input: { command: "true", env: "FOO=bar" },
-    });
-    expect(stringEnv).toEqual({
-      input: { command: `export ${SESSION_ID_ENV}='${sessionId}'; true`, env: "FOO=bar" },
-    });
-
-    // No other tool is revised — the identity channel is the bash tool only.
-    for (const toolName of ["read", "write", "edit", "glob", "grep", "task", TOOL_NAME]) {
+    // Unrelated shell calls — a plan bind *without* --coordinator included — are
+    // not blocked and not revised: no environment identity is injected any more,
+    // so an absent or unsupported `env` field cannot produce an invalid input.
+    for (const [toolName, input] of [
+      ["bash", { command: "git status" }],
+      ["bash", { command: "mstar plan bind --workflow wf-a --plan plan-a --session-id s" }],
+      ["bash", { command: "true", env: { KEEP: "yes" } }],
+      ["bash", { command: "true", env: "FOO=bar" }],
+      ["bash", { command: "true" }],
+      ["bash", "not-an-object"],
+      ["read", { command: bindCommand }],
+      [TOOL_NAME, { command: bindCommand }],
+    ] as const) {
       expect(
-        await harness.emitToolCall({
-          type: "tool_call",
-          toolCallId: `call-${toolName}`,
-          toolName,
-          input: { command: "true" },
-        }),
+        await harness.emitToolCall({ type: "tool_call", toolCallId: "call-other", toolName, input }),
       ).toBeUndefined();
     }
 
-    // A host session with no id has no identity to associate: nothing is injected.
-    const manager = harness.sessionManager as unknown as { getSessionId: () => string };
-    const sessionIdOfManager = manager.getSessionId;
-    manager.getSessionId = () => "";
-    try {
-      expect(
-        await harness.emitToolCall({
-          type: "tool_call",
-          toolCallId: "call-idless",
-          toolName: "bash",
-          input: { command: "true" },
-        }),
-      ).toBeUndefined();
-    } finally {
-      manager.getSessionId = sessionIdOfManager;
-    }
-    expect(harness.sessionManager.getSessionId()).toBe(sessionId);
-
-    // The revision is the extension's only effect on this path: no handoff
-    // record, no notice and no new ledger entry — a pure input revision.
+    // The transport has no side effect at all: no record, no notice, no ledger.
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
     expect(harness.ledger().filter((entry) => entry.type === "custom")).toHaveLength(0);
   }, 30_000);
+
+  test("the registered handoff tool forwards the checkpoint's typed diagnostic verbatim into a refusal", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    expect(codeOf(await harness.runTool(startParams("diagnostic-iteration")))).toBe("armed");
+    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "diagnostic-iteration");
+
+    // The checkpoint's own refusal, with the §5 typed refinement a real
+    // identity/path refusal carries. Replaced through the module's documented
+    // test seam: the tool must project it, not re-derive or drop it.
+    handoffSeams.inspectReadiness = async () => ({
+      ready: false,
+      codes: ["binding-invalid", "prepare-not-locked"],
+      diagnostics: [
+        {
+          code: "binding-invalid",
+          detail: "foreign-owner",
+          workflowId: "diagnostic-iteration",
+          source: "snapshot-coordinator",
+          expected: "prior-host-session",
+          current: harness.sessionManager.getSessionId(),
+          next: "call `mstar_coordinator` with {operation:\"recover\", …}",
+        },
+      ],
+    });
+    const refused = await harness.runTool(completionParams(artifacts));
+    handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+
+    expect(codeOf(refused)).toBe("not-ready");
+    expect(stateOf(refused)).toBe("pending");
+    const details = refused.details.mstarModelHandoff as Record<string, unknown>;
+    expect(details.codes).toEqual(["binding-invalid", "prepare-not-locked"]);
+    expect(details.diagnostics).toEqual([
+      expect.objectContaining({ detail: "foreign-owner", expected: "prior-host-session", source: "snapshot-coordinator" }),
+    ]);
+    // The refusal text names the typed reason and the next supported operation.
+    expect(String(refused.content[0]?.text)).toContain("foreign-owner");
+    expect(String(refused.content[0]?.text)).toContain("mstar_coordinator");
+    // Nothing was switched and the pending binding survives the refusal.
+    expect(harness.switched).toEqual(["probe/slow-model"]);
+  }, 60_000);
+});
+
+/* ------------------------------------------------ registered coordinator --- */
+
+/** A running, registered workflow with no coordinator binding yet. */
+function createBindableWorkflow(repo: ControlRepo, workflowId: string): void {
+  const workflowDir = join(repo.harness, "workflows", workflowId);
+  mkdirSync(workflowDir, { recursive: true });
+  writeJson(join(workflowDir, "snapshot.json"), {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16T00:00:00.000Z",
+    plans: [],
+  });
+  writeRegister(repo.harness, [repo.siblingId, workflowId]);
+}
+
+function coordinatorCodeOf(result: ToolResult): string {
+  return String(result.details.mstarCoordinator?.code ?? "");
+}
+
+function coordinatorSnapshotOf(repo: ControlRepo, workflowId: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+describe("prerequisite identity — registered coordinator tool handler", () => {
+  test("the real handler binds the current host identity and the workflow keeps exactly one owner", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-bind-iteration";
+    createBindableWorkflow(repo, workflowId);
+    // The real engine bind resolves a control harness root against the ACTIVE
+    // artifact store, and this suite's process cwd is a real checkout (so its
+    // own default store would win). Pin the store to the fixture harness: the
+    // fixture root is the only root these cases address.
+    setArtifactStore(createFsStore(repo.harness));
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const hostId = harness.sessionManager.getSessionId();
+    expect(hostId).not.toBe("");
+
+    const bound = await harness.runCoordinatorTool({ operation: "bind", workflowId });
+    expect(bound.isError).toBe(false);
+    expect(bound.details.mstarCoordinator).toMatchObject({ workflowId, sessionId: hostId, role: "coordinator" });
+    // §3.3: a model-visible tool result is NOT coordinator-owned transport, so
+    // the coordinator envelope path is in neither the text nor the details.
+    expect(JSON.stringify(bound.details.mstarCoordinator)).not.toContain("sessions/");
+    expect(String(bound.content[0]?.text)).not.toContain("sessions/");
+
+    // The native id reached the engine's own binding, and the envelope is the
+    // role-scoped one for that identity.
+    const snapshot = coordinatorSnapshotOf(repo, workflowId);
+    const coordination = snapshot.coordination as { coordinator?: { session_id?: string } } | undefined;
+    expect(coordination?.coordinator?.session_id).toBe(hostId);
+    const envelopePath = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`);
+    expect(existsSync(envelopePath)).toBe(true);
+    expect(JSON.parse(readFileSync(envelopePath, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
+
+    // Duplicate-holder refusal is preserved: the second bind mutates nothing.
+    const bytesBefore = readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8");
+    const again = await harness.runCoordinatorTool({ operation: "bind", workflowId });
+    expect(coordinatorCodeOf(again)).toBe("coordination.duplicate-holder");
+    expect(readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8")).toBe(bytesBefore);
+  }, 60_000);
+
+  test("leaf, scoped-plan, id-less and caller-forged calls cannot cross-bind", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-guard-iteration";
+    createBindableWorkflow(repo, workflowId);
+    setArtifactStore(createFsStore(repo.harness));
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const before = readFileSync(snapshotPath, "utf8");
+
+    // A leaf/subagent session never bootstraps a coordinator identity.
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout the repo", tools: ["read"], agent: "scout" });
+    const taskHarness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+      mode: "json",
+    });
+    expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool({ operation: "bind", workflowId }))).toBe(
+      "leaf-session",
+    );
+
+    // The scoped-plan route restores a binding; it never bootstraps one.
+    const scoped = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    await scoped.emitInput("/iteration-drive", "interactive");
+    expect(coordinatorCodeOf(await scoped.runCoordinatorTool({ operation: "bind", workflowId }))).toBe(
+      "scoped-plan-route",
+    );
+
+    // A host session with no native id has no identity to acquire.
+    const idless = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const manager = idless.sessionManager as unknown as { getSessionId: () => string };
+    const realGetSessionId = manager.getSessionId;
+    manager.getSessionId = () => "";
+    try {
+      expect(coordinatorCodeOf(await idless.runCoordinatorTool({ operation: "bind", workflowId }))).toBe(
+        "identity-missing",
+      );
+    } finally {
+      manager.getSessionId = realGetSessionId;
+    }
+
+    // The registered schema rejects an identity-shaped field, and the raw
+    // handler refuses it too: the adapter owns its own boundary.
+    const lawful = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    expect(lawful.validateCoordinator({ operation: "bind", workflowId }).success).toBe(true);
+    for (const forged of [
+      { operation: "bind", workflowId, sessionId: "attacker" },
+      { operation: "bind", workflowId, harnessRoot: "/elsewhere/.mstar" },
+      { operation: "bind", workflowId, role: "coordinator" },
+      { operation: "bind", workflowId, authority: true },
+      { operation: "bind", workflowId, credentialPath: "/tmp/creds.json" },
+    ]) {
+      expect({ forged, valid: lawful.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
+      const raw = await lawful.runRawCoordinatorTool(forged);
+      expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
+    }
+
+    // Every refusal above wrote nothing.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions"))).toBe(false);
+  }, 60_000);
+
+  test("two control projects stay isolated, and each keeps its own single owner", async () => {
+    const first = buildControlRepo();
+    const second = buildControlRepo();
+    const workflowId = "fixture-isolated-iteration";
+    createBindableWorkflow(first, workflowId);
+    createBindableWorkflow(second, workflowId);
+
+    const firstHarness = await createHarness({
+      cwd: first.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(first.main),
+    });
+    const secondHarness = await createHarness({
+      cwd: second.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(second.main),
+    });
+
+    // Each root is addressed through its own pinned store; a bind in one project
+    // can never adopt or write the other's root.
+    setArtifactStore(createFsStore(first.harness));
+    expect((await firstHarness.runCoordinatorTool({ operation: "bind", workflowId })).details.ok).toBe(true);
+    setArtifactStore(createFsStore(second.harness));
+    expect((await secondHarness.runCoordinatorTool({ operation: "bind", workflowId })).details.ok).toBe(true);
+
+    const firstCoordination = coordinatorSnapshotOf(first, workflowId).coordination as {
+      coordinator?: { session_id?: string };
+    };
+    const secondCoordination = coordinatorSnapshotOf(second, workflowId).coordination as {
+      coordinator?: { session_id?: string };
+    };
+    expect(firstCoordination.coordinator?.session_id).toBe(firstHarness.sessionManager.getSessionId());
+    expect(secondCoordination.coordinator?.session_id).toBe(secondHarness.sessionManager.getSessionId());
+    // Neither root carries the other project's identity.
+    expect(firstCoordination.coordinator?.session_id).not.toBe(secondHarness.sessionManager.getSessionId());
+    expect(
+      existsSync(
+        join(second.harness, "workflows", workflowId, "sessions", `coordinator-${firstHarness.sessionManager.getSessionId()}.json`),
+      ),
+    ).toBe(false);
+  }, 90_000);
+});
+
+/* ------------------------------------------------- coordinator bar titles --- */
+
+/**
+ * The extension's own visible output for a captured `custom_message` entry is
+ * the `formatNotice` string — the `<title>: <detail>` line the host bar mounts
+ * under the entry's `customType` label. Asserting that string keeps the
+ * observation on the extension's output contract instead of on the host's
+ * private UI components, which the 18.3.0 host package stopped shipping.
+ */
+function customMessageTexts(entries: readonly SessionEntry[]): readonly string[] {
+  return entries
+    .filter((entry): entry is Extract<SessionEntry, { type: "custom_message" }> => entry.type === "custom_message")
+    .map((entry) => String(entry.content));
+}
+
+describe("coordinator notice bar titles", () => {
+  test("notice-bar-title: a handoff notice renders the shared visible bar title, which states no workflow status, while the hidden durable type, its restore and the refusal codes stay unchanged", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+
+    expect(codeOf(await harness.runTool(startParams("bar-title-iteration")))).toBe("armed");
+    const artifacts = createWorkflowArtifacts(repo, harness.sessionManager.getSessionId(), "bar-title-iteration");
+    await harness.emitInput("next", "interactive");
+
+    // An unowned model change while pending cancels the handoff. The terminal
+    // notice is a bound site, so its title names the observed workflow and its
+    // actual status.
+    await harness.controls.setModel(asHostModel(PICKER_MODEL), "default");
+    await harness.emit({ type: "agent_end", messages: [] });
+
+    // The only visible type this extension emits is the shared bar title.
+    const visible = harness.ledger().filter((entry) => entry.type === "custom_message");
+    expect(visible.map((entry) => entry.customType)).toEqual(["mstar:notice"]);
+
+    // The hidden durable identity is untouched, and its restore still replays.
+    const durableTypes = harness
+      .ledger()
+      .filter((entry) => entry.type === "custom")
+      .map((entry) => entry.customType);
+    expect(durableTypes.length).toBeGreaterThan(0);
+    expect(durableTypes.every((type) => type === "mstar:model-handoff")).toBe(true);
+    expect(decideSessionState(harness.ledger(), harness.sessionManager.getSessionId()).kind).toBe("terminal");
+
+    // The bar label itself is the entry's customType (asserted above); the
+    // status sentence and the reason live in the single formatNotice line,
+    // each stated once.
+    const [content] = customMessageTexts(harness.ledger());
+    expect(content).toContain("Workflow bar-title-iteration is running");
+    expect(content).toContain("model handoff cancelled for this coordinator session");
+    expect(content?.match(/is running/g) ?? []).toHaveLength(1);
+
+    // The machine refusal code is unchanged.
+    expect(codeOf(await harness.runTool(completionParams(artifacts)))).toBe("not-pending");
+  }, 60_000);
+});
+
+/* ---------------------------------------------- prepare coordinator recovery --- */
+
+const RECOVERY_PRIOR_SESSION = "cancelled-host-session";
+
+/**
+ * A running Prepare iteration that RECORDS a coordinator the host can no longer
+ * authenticate — `phase-1-prepare`, an empty plan set, a reviewed locked compass
+ * and the prior coordinator's envelope on disk. This is the state the blocked
+ * iteration is in after its host handoff was cancelled: a binding exists, and the
+ * session that holds it can no longer pass authorization.
+ */
+function createRecoverableWorkflow(repo: ControlRepo, workflowId: string, priorSessionId: string): void {
+  const workflowDir = join(repo.harness, "workflows", workflowId);
+  const sessionsDir = join(workflowDir, "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
+  const priorEnvelope = join(sessionsDir, `coordinator-${priorSessionId}.json`);
+  writeJson(join(workflowDir, "snapshot.json"), {
+    schema_version: 1,
+    id: workflowId,
+    type: "iteration",
+    status: "running",
+    phase: "phase-1-prepare",
+    started_at: "2026-09-16",
+    updated_at: "2026-09-16T00:00:00.000Z",
+    compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+    branch: { base: "main", integration: repo.integrationBranch, target: "main" },
+    plans: [],
+    coordination: {
+      coordinator: { session_id: priorSessionId, session_file: priorEnvelope, bound_at: "2026-09-16T00:00:00.000Z" },
+    },
+  });
+  writeJson(priorEnvelope, {
+    schema_version: 1,
+    role: "coordinator",
+    session_id: priorSessionId,
+    workflow_id: workflowId,
+    harness_root: repo.harness,
+  });
+  mkdirSync(join(repo.harness, "iterations", workflowId), { recursive: true });
+  writeFileSync(
+    join(repo.harness, "iterations", workflowId, "delivery-compass.md"),
+    ["---", `iteration_id: ${workflowId}`, "status: locked", "plans:", "  - 20260921-recovery-fixture", "---", "", "# Compass", ""].join("\n"),
+  );
+  writeRegister(repo.harness, [repo.siblingId, workflowId]);
+}
+
+/** The recovery request body a reviewed caller sends (tokens filled per case). */
+function recoveryToolParams(
+  workflowId: string,
+  view: Record<string, unknown>,
+  priorSessionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    operation: "recover",
+    workflowId,
+    expectedSnapshotVersion: view.snapshotVersion,
+    expectedCompassVersion: view.compassVersion,
+    operationId: "op-host-recover-1",
+    reason: "the host handoff of the prior session was cancelled",
+    authorizationRef: "PM-authorization-20260921",
+    stoppedSessionIds: [priorSessionId],
+    ...overrides,
+  };
+}
+
+/** The recorded coordinator binding of one fixture workflow. */
+function recordedCoordinatorOfWorkflow(repo: ControlRepo, workflowId: string): Record<string, unknown> {
+  const snapshot = coordinatorSnapshotOf(repo, workflowId);
+  const coordination = snapshot.coordination;
+  const coordinator = isPlainFixtureRecord(coordination) ? coordination.coordinator : undefined;
+  return isPlainFixtureRecord(coordinator) ? coordinator : {};
+}
+
+/** The stored recovery audit of one fixture workflow. */
+function recoveryAuditOfWorkflow(repo: ControlRepo, workflowId: string): Array<Record<string, unknown>> {
+  const snapshot = coordinatorSnapshotOf(repo, workflowId);
+  const coordination = snapshot.coordination;
+  const recoveries = isPlainFixtureRecord(coordination) ? coordination.identity_recoveries : undefined;
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** Plain-object narrowing for the fixture JSON (no inline cast at member access). */
+function isPlainFixtureRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+describe("prerequisite identity — registered coordinator recovery tool handler", () => {
+  test("prepare coordinator recovery replaces a cancelled binding through the real tool handler", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const hostId = harness.sessionManager.getSessionId();
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
+    const priorBytes = readFileSync(priorEnvelope, "utf8");
+
+    // The host reads the view first: the recorded owner and both reviewed tokens.
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    expect(view.isError).toBe(false);
+    expect(view.details.ok).toBe(true);
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+    expect(details.priorSessionId).toBe(RECOVERY_PRIOR_SESSION);
+    expect(details.allowed).toBe(true);
+    expect(JSON.stringify(details)).not.toContain("sessions/");
+
+    const recovered = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(recovered.isError).toBe(false);
+    const receipt = recovered.details.mstarCoordinator as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      workflowId,
+      priorSessionId: RECOVERY_PRIOR_SESSION,
+      sessionId: hostId,
+      operationId: "op-host-recover-1",
+      replay: false,
+    });
+    // §3.3: the coordinator envelope path is coordinator-owned transport, and a
+    // model-visible tool result is not that transport — neither the details nor
+    // the text names the new or the prior envelope.
+    expect(receipt.sessionFile).toBeUndefined();
+    expect(JSON.stringify(receipt)).not.toContain("sessions/");
+    expect(String(recovered.content[0]?.text)).not.toContain("sessions/");
+
+    // The engine's own state: the binding moved to THIS host session, the new
+    // envelope is the role-scoped one, and the prior envelope is retained.
+    expect(recordedCoordinatorOfWorkflow(repo, workflowId).session_id).toBe(hostId);
+    const newEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`);
+    // The engine stores the CANONICAL path (macOS tmpdirs resolve through
+    // /private), so the assertion is on the path contract, not on the spelling.
+    const recordedFile = String(recordedCoordinatorOfWorkflow(repo, workflowId).session_file);
+    expect(recordedFile.endsWith(`/sessions/coordinator-${hostId}.json`)).toBe(true);
+    expect(existsSync(newEnvelope)).toBe(true);
+    expect(JSON.parse(readFileSync(newEnvelope, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
+    expect(readFileSync(priorEnvelope, "utf8")).toBe(priorBytes);
+
+    const audit = recoveryAuditOfWorkflow(repo, workflowId);
+    expect(audit).toHaveLength(1);
+    expect(Object.keys(audit[0]!).sort()).toEqual([
+      "authorization_ref",
+      "compass_version",
+      "operation_id",
+      "prior_session_id",
+      "reason",
+      "recovered_at",
+      "request_hash",
+      "session_id",
+      "snapshot_version_before",
+      "stopped_session_ids",
+      "workflow_id",
+    ]);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-host-recover-1",
+      prior_session_id: RECOVERY_PRIOR_SESSION,
+      session_id: hostId,
+      stopped_session_ids: [RECOVERY_PRIOR_SESSION],
+      snapshot_version_before: details.snapshotVersion,
+      compass_version: details.compassVersion,
+    });
+
+    // An exact retry is a stable receipt: the host learns it already holds the
+    // binding instead of re-running the write.
+    const committedBytes = readFileSync(snapshotPath, "utf8");
+    const retry = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(retry.isError).toBe(false);
+    expect((retry.details.mstarCoordinator as Record<string, unknown>).replay).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(committedBytes);
+    expect(recoveryAuditOfWorkflow(repo, workflowId)).toHaveLength(1);
+  }, 90000);
+
+  test("prepare coordinator recovery refuses forged, unstoppable and identity-less calls without writing", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-guard-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const hostId = harness.sessionManager.getSessionId();
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const before = readFileSync(snapshotPath, "utf8");
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+
+    // The registered schema owns the union: an identity-shaped field is refused
+    // by the schema AND by the raw handler's own boundary.
+    for (const forged of [
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), sessionId: hostId },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), harnessRoot: "/elsewhere/.mstar" },
+      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), force: true },
+    ]) {
+      expect({ forged, valid: harness.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
+      const raw = await harness.runRawCoordinatorTool(forged);
+      expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
+    }
+
+    // A request that omits a reviewed token is not recoverable at all: the
+    // registered schema refuses it and so does the raw handler.
+    const incomplete = {
+      operation: "recover",
+      workflowId,
+      operationId: "op-host-recover-x",
+      reason: "r",
+      authorizationRef: "a",
+      stoppedSessionIds: [RECOVERY_PRIOR_SESSION],
+    };
+    expect(harness.validateCoordinator(incomplete).success).toBe(false);
+    expect(coordinatorCodeOf(await harness.runRawCoordinatorTool(incomplete))).toBe("invalid-input");
+
+    // A stop assertion that does not name the recorded holder is not proof: the
+    // ENGINE refuses it (the host forwards the assertion verbatim, so the guard
+    // is the one evaluated against the binding under the snapshot lock).
+    const unstoppable = await harness.runCoordinatorTool(
+      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
+        operationId: "op-host-recover-2",
+        stoppedSessionIds: ["some-other-session"],
+      }),
+    );
+    expect(coordinatorCodeOf(unstoppable)).toBe("coordination.identity-recovery.unauthorized");
+
+    // A refusal through the engine keeps the engine's own code (a stale token is
+    // not a re-derivable identity and never becomes a success).
+    const stale = await harness.runCoordinatorTool(
+      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
+        operationId: "op-host-recover-3",
+        expectedSnapshotVersion: `sha256:${"0".repeat(64)}`,
+      }),
+    );
+    expect(coordinatorCodeOf(stale)).toBe("coordination.identity-recovery.stale");
+
+    // Leaf and identity-less host sessions cannot recover anything.
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["read"], agent: "scout" });
+    const taskHarness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+      mode: "json",
+    });
+    expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("leaf-session");
+
+    const idless = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: newSession(repo.main) });
+    const manager = idless.sessionManager as unknown as { getSessionId: () => string };
+    const realGetSessionId = manager.getSessionId;
+    manager.getSessionId = () => "";
+    try {
+      expect(coordinatorCodeOf(await idless.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("identity-missing");
+    } finally {
+      manager.getSessionId = realGetSessionId;
+    }
+
+    // Nothing above moved the workflow or created an envelope.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`))).toBe(false);
+    expect((await harness.runCoordinatorTool({ operation: "show-recovery", workflowId })).details.mstarCoordinator).toMatchObject({
+      priorSessionId: RECOVERY_PRIOR_SESSION,
+      allowed: true,
+    });
+  }, 120000);
+
+  test("a foreign-owner refusal never names the envelope path in the model-visible tool result", async () => {
+    const repo = buildControlRepo();
+    const workflowId = "fixture-recovery-foreign-iteration";
+    createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
+    setArtifactStore(createFsStore(repo.harness));
+    // The recorded holder's envelope is replaced by one that is not the
+    // coordinator seat. It still exists and still names the recorded session id,
+    // so the engine refuses it as `foreign-owner` rather than as a missing file —
+    // the refusal path whose message once interpolated both envelope paths.
+    const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
+    writeJson(priorEnvelope, {
+      schema_version: 1,
+      role: "plan-pm",
+      plan_id: "some-plan",
+      session_id: RECOVERY_PRIOR_SESSION,
+      workflow_id: workflowId,
+      harness_root: repo.harness,
+    });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
+    const before = readFileSync(snapshotPath, "utf8");
+    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    const details = view.details.mstarCoordinator as Record<string, unknown>;
+
+    const refused = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    expect(coordinatorCodeOf(refused)).toBe("coordination.identity-recovery.foreign-owner");
+    // §3.3: no envelope path — and no rejected caller value — in the tool text
+    // or the details. The already-public workflow and recorded session ids name
+    // the binding the caller failed to authenticate.
+    expect(String(refused.content[0]?.text)).not.toContain("sessions/");
+    expect(JSON.stringify(refused.details)).not.toContain("sessions/");
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+  }, 120000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * The ACTIVE route (§6): the host adapter takes its start authority from the
+ * DB workflow/coordinator view, carries the adopted binding in the durable
+ * handoff record, and keeps the pre-activation FILE arm distinct.
+ * ------------------------------------------------------------------------ */
+
+type ActiveHandoffState = Readonly<{
+  planId: string;
+  /** The DB's own coordinator seat of the seeded workflow. */
+  coordinator: ExecutionSessionRef;
+  workflowId: string;
+  reviews: readonly Readonly<{ role: string; agentId: string; resultRef: string; reportPath: string }>[];
+  plans: readonly Readonly<{ planId: string; planPath: string; prepareEvidencePath: string }>[];
+}>;
+
+/** The scoped Assignment header block `parseAssignmentFile` accepts. */
+function activeAssignmentText(input: {
+  harness: string;
+  workflowId: string;
+  planId: string;
+  planPath: string;
+  worktreePath: string;
+  sddDir: string;
+  branch: string;
+}): string {
+  return [
+    `# Assignment — ${input.planId} independent slice`,
+    "",
+    `**Control harness root**: ${input.harness}`,
+    `**Workflow id**: ${input.workflowId}`,
+    `**Plan id**: ${input.planId}`,
+    `**Plan Path**: ${input.planPath}`,
+    `**Worktree Path**: ${input.worktreePath}`,
+    `**Working branch**: ${input.branch}`,
+    `**SDD dir**: ${input.sddDir}`,
+    "**Execute as**: project-manager",
+    "**Execution scope**: plan",
+    "**Delegation**: allowed (plan-local subagents only)",
+    "**Prepare gate**: go",
+    "**QA gate**: mandatory",
+    "**Findings cleanup**: allow-residual",
+    "",
+    "Prepared plan for the ACTIVE-route handoff fixtures.",
+    "",
+  ].join("\n");
+}
+
+/** A canonical plain copy of an engine-returned session reference. */
+function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
+  return {
+    storeId: ref.storeId,
+    epoch: ref.epoch,
+    workflowId: ref.workflowId,
+    role: ref.role,
+    sessionId: ref.sessionId,
+    planId: ref.planId,
+  };
+}
+
+/**
+ * A REAL active execution authority on the fixture repo: the store upgraded to
+ * an execution authority, the plan registered in the catalog, one running
+ * workflow with its branch anchors, compass reference, integration checkout and
+ * plan row, the coordinator bound under `coordinatorSessionId`, the plan
+ * PREPARED from a real Assignment, and the real artifact/Git witnesses the
+ * readiness checkpoint samples. No root register and no workflow snapshot exist
+ * anywhere on this route.
+ */
+async function seedActiveHandoffAuthority(
+  repo: ControlRepo,
+  coordinatorSessionId: string,
+  workflowId = "active-iteration",
+): Promise<ActiveHandoffState> {
+  const planId = `${workflowId}-plan`;
+  const harness = repo.harness;
+  const plansDir = join(harness, "plans");
+  const sddDir = join(harness, "sdd", planId);
+  const iterationDir = join(harness, "iterations", workflowId);
+  const guidesDir = join(iterationDir, "guides");
+  for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
+  const planPath = join(plansDir, `${planId}.md`);
+  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
+  writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
+  const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
+  reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
+  const planWorktree = join(repo.root, `${workflowId}-plan-worktree`);
+  git(["worktree", "add", "-q", "-b", `feature/${planId}`, planWorktree], repo.main);
+  const assignmentPath = join(sddDir, "assignment.md");
+  writeFileSync(
+    assignmentPath,
+    activeAssignmentText({
+      harness,
+      workflowId,
+      planId,
+      planPath,
+      worktreePath: planWorktree,
+      sddDir,
+      branch: `feature/${planId}`,
+    }),
+  );
+  writeFileSync(
+    join(iterationDir, "delivery-compass.md"),
+    [
+      "---",
+      `iteration_id: ${workflowId}`,
+      "start_date: 2026-09-16",
+      "status: locked",
+      "iteration_base_branch: main",
+      `spec_integration_branch: ${repo.integrationBranch}`,
+      "target_branch: main",
+      `integration_worktree_path: ${repo.integration}`,
+      "plans:",
+      `  - ${planId}`,
+      "---",
+      "",
+      "# Fixture compass",
+      "",
+    ].join("\n"),
+  );
+
+  setArtifactStore(createFsStore(harness));
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `plans/${planId}.md` },
+    { operationId: `register-${planId}`, actor: "model-handoff-extension.test" },
+  );
+  const context: ExecutionContext = {
+    harnessDir: harness,
+    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+  };
+  await createExecutionWorkflow(context, {
+    entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      compass_ref: `iterations/${workflowId}/delivery-compass.md`,
+      branch: { base: "main", integration: repo.integrationBranch, target: "main" },
+      integration_worktree_path: repo.integration,
+      plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "Todo" }],
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${workflowId}`,
+  });
+  const bound = await bindExecutionSession(context, {
+    workflowId,
+    planId: null,
+    role: "coordinator",
+    expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token,
+    operationId: `bind-${coordinatorSessionId}`,
+  });
+  await mutateExecutionPlan(context, {
+    operationId: `prepare-${planId}`,
+    session: plainRef(bound.data),
+    expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
+    planId,
+    operation: { kind: "prepare", assignmentPath } as never,
+  });
+  return {
+    planId,
+    coordinator: plainRef(bound.data),
+    workflowId,
+    reviews: [
+      {
+        role: "product-manager",
+        agentId: "fixture-pm-agent",
+        resultRef: "agent://fixture-pm-agent",
+        reportPath: reportPaths[0]!,
+      },
+      {
+        role: "architect",
+        agentId: "fixture-architect-agent",
+        resultRef: "agent://fixture-architect-agent",
+        reportPath: reportPaths[1]!,
+      },
+      {
+        role: "writing-specialist",
+        agentId: "fixture-writer-agent",
+        resultRef: "artifact://fixture-writer-agent",
+        reportPath: reportPaths[2]!,
+      },
+    ],
+    plans: [{ planId, planPath, prepareEvidencePath }],
+  };
+}
+
+/** The completion checkpoint of one ACTIVE-route binding: no envelope path. */
+function activeCompletionParams(state: ActiveHandoffState): ToolParams {
+  return {
+    operation: "phase1-complete",
+    workflowId: state.workflowId,
+    mainWorktreeBranch: "main",
+    reviews: state.reviews,
+    plans: state.plans,
+  };
+}
+
+describe("model handoff on the ACTIVE route", () => {
+  test("the arm adopts the DB coordinator binding, records it, and the target fires from the DB readiness", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const state = await seedActiveHandoffAuthority(repo, session.getSessionId());
+
+    const armed = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(armed)).toBe("armed");
+    expect(stateOf(armed)).toBe("pending");
+    expect(harness.attempts).toEqual(["probe/slow-model"]);
+    expect(statesOf(harness)).toEqual(["attempting", "pending"]);
+
+    // The durable record carries the adopted DB binding, not a file address.
+    const record = harness.records()[0]!;
+    const adopted = record.binding.executionBinding;
+    expect(adopted).toBeDefined();
+    expect(adopted?.harnessRoot).toBe(realpathSync(repo.harness));
+    expect(adopted?.session).toEqual({
+      storeId: state.coordinator.storeId,
+      epoch: state.coordinator.epoch,
+      workflowId: state.workflowId,
+      role: "coordinator",
+      sessionId: session.getSessionId(),
+      planId: null,
+    });
+    expect(Object.getPrototypeOf(adopted?.session)).toBe(Object.prototype);
+
+    // The completion checkpoint runs the ACTIVE readiness arm: no envelope path
+    // is accepted or required, and the DB views plus the real witnesses fire the
+    // one-shot switch.
+    const fired = await harness.runTool(activeCompletionParams(state));
+    expect(codeOf(fired)).toBe("handed_off");
+    expect(statesOf(harness)).toEqual(["attempting", "pending", "attempting", "handed_off"]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
+    expect(fired.details.mstarModelHandoff?.integrationHead).toBe(git(["rev-parse", "HEAD"], repo.integration));
+  }, 120_000);
+
+  test("the retired register and snapshot never decide an ACTIVE-route start (S3 order)", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const state = await seedActiveHandoffAuthority(repo, session.getSessionId());
+
+    // The retired file evidence a route-blind classifier would have used: the
+    // register names a DIFFERENT workflow (so the file arm's classifier says
+    // `reserve`) while a leftover snapshot for THIS workflow sits at its derived
+    // path (so the file arm's reservation would refuse `already-bound`). The
+    // ACTIVE route must consult neither: it asks the engine's route first and
+    // then answers from the DB workflow/coordinator view.
+    writeRegister(repo.harness, ["legacy-sibling-iteration"]);
+    mkdirSync(join(repo.harness, "workflows", state.workflowId), { recursive: true });
+    writeJson(join(repo.harness, "workflows", state.workflowId, "snapshot.json"), {
+      schema_version: 1,
+      id: state.workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16",
+      updated_at: "2026-09-16T00:00:00.000Z",
+      plans: [],
+    });
+
+    const armed = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(armed)).toBe("armed");
+    expect(harness.attempts).toEqual(["probe/slow-model"]);
+    expect(harness.records()[0]?.binding.executionBinding?.session).toMatchObject({
+      workflowId: state.workflowId,
+      sessionId: session.getSessionId(),
+      role: "coordinator",
+      planId: null,
+    });
+  }, 120_000);
+
+  test("a session that is not the workflow's DB coordinator refuses the start without any model action", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    // A real workflow whose seat is another coordinator session.
+    const state = await seedActiveHandoffAuthority(repo, "creator-session");
+
+    const refused = await harness.runTool(startParams(state.workflowId));
+    expect(codeOf(refused)).toBe("coordinator-elsewhere");
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+    expect(harness.notices().some((line) => line.includes("coordinator-elsewhere"))).toBe(true);
+  }, 120_000);
+
+  test("a lifecycle the authority does not hold refuses instead of reserving an unregistered id", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: repo.harness });
+
+    const refused = await harness.runTool(startParams("absent-iteration"));
+    expect(codeOf(refused)).toBe("register-invalid");
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+  }, 120_000);
+
+  test("a durable FILE record on an ACTIVE root never fires from the retired route", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    // The authority governs the root first; the FILE arm's own artifacts are
+    // planted afterwards, so a verdict derived from them would be a live
+    // fallback — the checkpoint must refuse instead.
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: repo.harness });
+    const artifacts = createWorkflowArtifacts(repo, session.getSessionId(), "legacy-iteration");
+
+    // A pending binding as the pre-activation generation wrote it.
+    const baselineModelChangeId = session.appendModelChange("probe/slow-model", "default");
+    session.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+      version: 1,
+      binding: {
+        sessionId: session.getSessionId(),
+        workflowId: "legacy-iteration",
+        controlRoot: repo.main,
+        harnessRoot: repo.harness,
+        snapshotPath: join(repo.harness, "workflows", "legacy-iteration", "snapshot.json"),
+        compassPath: join(repo.harness, "iterations", "legacy-iteration", "delivery-compass.md"),
+      },
+      state: "pending",
+      operationId: "arm-legacy-fixture",
+      action: "arm",
+      baselineModelChangeId,
+      observedModel: "probe/slow-model",
+      reason: null,
+    } satisfies HandoffRecord);
+
+    const fired = await harness.runTool(completionParams(artifacts));
+    expect(codeOf(fired)).toBe("not-ready");
+    expect(fired.details.mstarModelHandoff?.codes).toEqual(["execution.consumer-not-ready"]);
+    expect(harness.attempts).toHaveLength(0);
+    expect(statesOf(harness)).toEqual(["pending"]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
+  }, 120_000);
 });

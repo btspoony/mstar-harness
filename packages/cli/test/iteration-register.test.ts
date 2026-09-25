@@ -20,7 +20,8 @@
  * fixture harness — no live harness is ever touched.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { initializeStore } from "@mstar-harness/engine";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -93,8 +94,17 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 }
 
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
-function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): void {
+async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
+  // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
+  // declaration is read, so the fixture owns the registered plan markdown.
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  for (const id of ["20260918-plan-alpha", "20260918-plan-beta"]) {
+    writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
+  }
+  // Contract §3: registration goes through the catalog journal, which requires
+  // an initialized ACTIVE store — the fixture provisions one.
+  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
   try {
     fn(harness, {
       root: join(harness, "status.json"),
@@ -106,8 +116,8 @@ function setupHarness(fn: (harness: string, paths: { root: string; snapshot: str
 }
 
 describe("mstar iteration register", () => {
-  test("registers an iteration end to end: root entry + snapshot, both validate (exit 0)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("registers an iteration end to end: root entry + snapshot, both validate (exit 0)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`iteration register: OK \u2014 ${WORKFLOW_ID} registered`);
@@ -132,7 +142,7 @@ describe("mstar iteration register", () => {
         {
           id: "20260918-plan-alpha",
           title: "Plan 20260918-plan-alpha",
-          file: "plans/20260918-plan-alpha.md",
+          file: realpathSync(join(harness, "plans", "20260918-plan-alpha.md")),
           status: "Todo",
           metadata: {
             iteration_refs: [COMPASS_REF],
@@ -143,7 +153,7 @@ describe("mstar iteration register", () => {
         {
           id: "20260918-plan-beta",
           title: "Plan 20260918-plan-beta",
-          file: "plans/20260918-plan-beta.md",
+          file: realpathSync(join(harness, "plans", "20260918-plan-beta.md")),
           status: "Todo",
           metadata: {
             iteration_refs: [COMPASS_REF],
@@ -164,10 +174,10 @@ describe("mstar iteration register", () => {
     });
   });
 
-  test("the registered workflow accepts a coordinator binding (exit 0)", () => {
-    setupHarness((harness) => {
+  test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
+    await setupHarness((harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--json"]);
+      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator", "--json"]);
       expect(bind.exitCode).toBe(0);
       const payload = JSON.parse(bind.stdout) as Record<string, unknown>;
       expect(payload.ok).toBe(true);
@@ -176,8 +186,8 @@ describe("mstar iteration register", () => {
     });
   });
 
-  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
@@ -189,8 +199,8 @@ describe("mstar iteration register", () => {
     });
   });
 
-  test("usage errors exit 2 without artifacts; help exits 0", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("usage errors exit 2 without artifacts; help exits 0", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       const variants: string[][] = [];
       for (const [flag, value] of [
         ["--workflow", WORKFLOW_ID],
@@ -243,8 +253,8 @@ describe("mstar iteration register", () => {
     });
   });
 
-  test("engine refusals exit 1 with authoritative bytes unchanged; orphan retry recovers (exit 0)", () => {
-    setupHarness((harness, { root, snapshot }) => {
+  test("engine refusals exit 1 with authoritative bytes unchanged; orphan retry recovers (exit 0)", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
       // Hostile workflow id (shared guard).
       const hostile = runCli(registerArgs(harness, ["--workflow", "../escape"]));
       expect(hostile.exitCode).toBe(1);
@@ -275,17 +285,17 @@ describe("mstar iteration register", () => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(1);
       expect(readFileSync(root, "utf8")).toBe("{ not json");
 
-      // Matching orphan retry: restore the empty root; recovery writes ONLY
-      // the missing root entry using the orphan's original timestamp.
-      const orphanStartedAt = (JSON.parse(goodSnapshot) as Record<string, unknown>).started_at;
+      // Retry after the root entry is lost: under the registration journal
+      // (contract §3) the workflow is already registered/bound, so a re-register
+      // REFUSES and points at `catalog reconcile`; the snapshot bytes are
+      // preserved verbatim and no root entry is invented.
       writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
       const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(0);
+      expect(retry.exitCode).toBe(1);
+      expect(retry.stderr).toContain("reconcile");
       expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([
-        { id: WORKFLOW_ID, type: "iteration", started_at: orphanStartedAt, dir: `workflows/${WORKFLOW_ID}` },
-      ]);
+      expect(rootDoc.workflows).toEqual([]);
     });
   });
 });

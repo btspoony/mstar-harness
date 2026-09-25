@@ -20,6 +20,16 @@
  * failure that silently drops the tool. * `resolveWorkflowDir` is likewise P1-only: it is loaded dynamically and
  * a stale engine (or a resolver failure) falls back to the DEFAULT
  * `workflows` name (same degrade as `mstar_status_validate`).
+ *
+ * EXECUTION authority (source readiness, plan S3): the snapshot is retired as a
+ * persistence route while the control harness's execution authority is ACTIVE.
+ * This gate's input is one plan's OWN row plus its lease (or the workflow's
+ * merge lease) — no session binding, no whole-document shape — so an ACTIVE
+ * authority answers it through the engine's `readExecutionSource` route
+ * (primary spec §5) and the row is projected into the SSOT
+ * `plans[].execution_lease` location the gate reads. `legacy`/`staged`/absent
+ * keeps the unchanged snapshot route, and a store that exists and cannot be
+ * read keeps its own refusal — never a fall-through to the retired bytes.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -29,7 +39,7 @@ import {
   validateIntegrationMergeLease,
   verifyPlanExecutionLease,
 } from "@mstar-harness/engine";
-import type { ValidationResult } from "@mstar-harness/engine";
+import type { ExecutionPlanView, ExecutionRead, ExecutionState, ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { workflowId: string; kind: "execution" | "integration"; planId?: string };
@@ -116,6 +126,51 @@ async function loadSnapshotFile(): Promise<{ snapshotFile: string } | { error: A
   return { snapshotFile };
 }
 
+/** §5 the engine's execution-source read (plan S2). P1-only export: dynamic
+ * import with an explicit upgrade error — a stale engine must never be answered
+ * by the retired snapshot for a harness whose authority it cannot see. */
+type ExecutionSourceReader = (
+  context: { harnessDir: string },
+  selection?: { workflowId?: string; planId?: string },
+) => Promise<
+  { route: "files" } | { route: "execution"; read: ExecutionRead<ExecutionState | ExecutionPlanView> }
+>;
+
+async function loadExecutionSource(): Promise<{ read: ExecutionSourceReader } | { error: AgentToolResult }> {
+  const engine = await import("@mstar-harness/engine");
+  const read = engine.readExecutionSource as ExecutionSourceReader | undefined;
+  if (typeof read !== "function") {
+    return {
+      error: result(
+        "installed @mstar-harness/engine lacks readExecutionSource — upgrade the engine (next release); CLI fallback: mstar lease verify",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { read };
+}
+
+/** The DB route's row projection: one plan's row in the SSOT shape the lease
+ * gate reads (`plans[].execution_lease`). The DB view keeps the lease OUTSIDE
+ * the row (`ExecutionPlanView.executionLease`), so the projection is explicit —
+ * and an absent lease stays `undefined`, which is exactly how the gate
+ * distinguishes `lease.verify.missing` / `lease.verify.orphan`. */
+function leaseRowOf(view: ExecutionPlanView): Record<string, unknown> {
+  return { ...(view.plan as unknown as Record<string, unknown>), execution_lease: view.executionLease ?? undefined };
+}
+
+/** Select one plan row from the authoritative workflow scope exactly like the
+ * snapshot route selects it: by `plan_id`/`id`, else the sole row. Never a
+ * cross-workflow or newest-row guess. */
+function selectLeaseRow(
+  rows: readonly Record<string, unknown>[],
+  planId: string | undefined,
+): Record<string, unknown> | undefined {
+  if (planId !== undefined) return rows.find((row) => row.plan_id === planId || row.id === planId);
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
 export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
   return {
     name: "mstar_lease_verify",
@@ -123,6 +178,7 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
     description:
       "Verify the lease state of a Morning Star workflow from its snapshot ({WORKFLOW_DIR}/<workflowId>/snapshot.json — .mstarc workflow_dir honored, default {harness}/workflows; resolved from the session cwd): kind=execution runs the engine verifyPlanExecutionLease gate on the snapshot plan row (SSOT plans[].execution_lease — the v1 metadata location is deleted; missing/orphan detection), kind=integration runs validateIntegrationMergeLease on the snapshot top-level integration_merge_lease (absent = unclaimed). " +
       "`planId` picks the row (default: the snapshot's sole plan row). " +
+      "While the control harness's execution authority is ACTIVE the same gates are answered from the authority's own plan rows and workflow record instead of the retired snapshot. " +
       "Use before writable dispatch, before InProgress claims, or when reviewing lease/merge state. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
       .object({
@@ -141,6 +197,86 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
             `no harness directory found from "${pi.cwd}" (looked for .mstar/ / .agents/ / .plans/ / plans/ walking up)`,
             { cwd: pi.cwd },
             true,
+          );
+        }
+        // §5: the lease gate's input is ONE plan's own row plus its lease (kind
+        // execution) or the workflow's merge lease (kind integration) — no
+        // session binding, no whole-document shape — so an ACTIVE execution
+        // authority answers it from the DB read adapter instead of the retired
+        // snapshot. The address is the exactly named workflow; the plan is then
+        // selected from that workflow's own rows with the same rule the snapshot
+        // route uses, never from a guessed parent. The route is asked FIRST, so
+        // this never becomes a silent file fallback; a store that exists and
+        // cannot answer keeps its own refusal.
+        const executionRead = await loadExecutionSource();
+        if ("error" in executionRead) return executionRead.error;
+        const served = await executionRead.read({ harnessDir }, { workflowId: params.workflowId });
+        if (served.route === "execution") {
+          const storeId = served.read.storeId;
+          const epoch = served.read.epoch;
+          const authority = `execution authority (store ${storeId}, epoch ${epoch})`;
+          const workflow = (served.read.data as ExecutionState).workflows[0];
+
+          if (params.kind === "integration") {
+            const lease = workflow?.integrationLease ?? undefined;
+            if (lease === undefined) {
+              return result(
+                `no active integration merge lease (unclaimed) — ${authority}`,
+                {
+                  kind: "integration",
+                  workflow_id: params.workflowId,
+                  route: "execution",
+                  store_id: storeId,
+                  epoch,
+                  state: "unclaimed",
+                  ok: true,
+                  violations: [],
+                },
+                false,
+              );
+            }
+            const gate = validateIntegrationMergeLease(lease);
+            return result(
+              gate.ok ? `integration merge lease OK — ${authority}` : violationLines(gate.violations),
+              {
+                kind: "integration",
+                workflow_id: params.workflowId,
+                route: "execution",
+                store_id: storeId,
+                epoch,
+                ok: gate.ok,
+                violations: gate.violations,
+              },
+              !gate.ok,
+            );
+          }
+
+          const rows = (workflow?.plans ?? []).map(leaseRowOf);
+          const row = selectLeaseRow(rows, params.planId);
+          if (row === undefined) {
+            const planLabel = params.planId ?? "(sole row)";
+            return result(
+              `plan "${planLabel}" not found in ${authority}`,
+              { kind: "execution", workflow_id: params.workflowId, plan_id: params.planId ?? null, route: "execution", store_id: storeId, epoch },
+              true,
+            );
+          }
+          const planId = String(row.plan_id ?? row.id ?? params.planId ?? "");
+          const verify = verifyPlanExecutionLease(row, planId);
+          return result(
+            verify.ok ? `execution lease OK for plan "${planId}" — ${authority}` : violationLines(verify.violations),
+            {
+              kind: "execution",
+              workflow_id: params.workflowId,
+              plan_id: planId,
+              route: "execution",
+              store_id: storeId,
+              epoch,
+              ok: verify.ok,
+              violations: verify.violations,
+              lease: verify.lease ?? null,
+            },
+            !verify.ok,
           );
         }
  // Dynamic engine import : see the module header —

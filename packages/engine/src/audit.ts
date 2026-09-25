@@ -1543,14 +1543,78 @@ export type PromoteAuditPlansOptions = {
 };
 
 /**
+ * The `Todo` plan rows a promotion of `selected` registers: one row per
+ * selected `NNN-*.md` file, `id` from the file stem and `file` from the
+ * `{PLAN_DIR}`-relative path.
+ *
+ * The TITLE comes from the plan document body itself
+ * (`readPlanFileSummary`). The audit directory's report README is a report
+ * artifact and a catalog import source, never the registration authority
+ * (state-projection-contract §2: plan id/title/path are DB catalog metadata
+ * and the body stays the file; §4 retires maintained index rows) — the
+ * former `## Execution order & status` index read is gone, so a hand-edited
+ * index can no longer silently rename a promoted plan row.
+ *
+ * Exported for the catalog registration journal
+ * (`catalog-registration.ts`), which recomputes the SAME registration
+ * identity from the reviewed request before publishing a catalog delta.
+ */
+export function promotedAuditPlanRows(outDir: string, selected: readonly string[]): PlanRow[] {
+  const planFiles = resolveSelectedPlanFiles(outDir, selected);
+  return planFiles.map((planFile) => {
+    const stem = planFile.replace(/\.md$/, "");
+    return {
+      id: stem,
+      title: readPlanFileSummary(join(outDir, planFile)).title,
+      file: planFileRel(outDir, planFile),
+      status: "Todo",
+    };
+  });
+}
+
+/**
+ * The create-only `type: plan` snapshot `promoteAuditPlans` writes: the
+ * selected plans as `Todo` rows plus the declared delivery fields. Extracted
+ * so the catalog registration journal recomputes this exact registration
+ * identity (which excludes timestamps) for the reviewed request before it
+ * publishes the catalog delta — one snapshot definition, no second source.
+ */
+export function promotedAuditSnapshot(
+  workflowId: string,
+  outDir: string,
+  selected: readonly string[],
+  options: PromoteAuditPlansOptions,
+  startedAt: string,
+): WorkflowSnapshot {
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: startedAt,
+    updated_at: startedAt.slice(0, 10),
+    plans: promotedAuditPlanRows(outDir, selected),
+    delivery_kind: options.deliveryKind,
+  };
+  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+    snapshot.branch = {
+      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
+    };
+  }
+  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
+  return snapshot;
+}
+
+/**
  * Promote selected audit plans into the v2 workflow lifecycle as a
  * `type: "plan"` workflow (mstar-audit SKILL.md § Plan output (all variants) — handoff): write the workflow
  * snapshot FIRST (with one Todo PlanRow per selected file), then register
  * the workflow entry — `validateStatusV2` validates the full status doc
  * including the per-snapshot existence check, so the snapshot must exist
- * before the registration. Plan rows are built from the README index
- * `## Execution order & status` columns (Plan/Title), falling back to the
- * private `readPlanFileSummary` only when the index lacks the row.
+ * before the registration. Plan rows are built from the selected plan
+ * documents themselves (`promotedAuditPlanRows`), never from the report
+ * README index.
  *
  * Run-once semantics: a workflow id whose snapshot already exists refuses
  * the promote (re-promote would drop its registered plan rows); remove
@@ -1615,39 +1679,7 @@ export async function promoteAuditPlans(
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const planFiles = resolveSelectedPlanFiles(outDir, selected);
-  const indexRows = readExecutionOrderIndex(outDir);
-  const plans: PlanRow[] = planFiles.map((planFile) => {
-    const stem = planFile.replace(/\.md$/, "");
-    const num = stem.slice(0, 3);
-    const indexRow = indexRows.get(num);
-    const title = indexRow?.title ?? readPlanFileSummary(join(outDir, planFile)).title;
-    return {
-      id: stem,
-      title,
-      file: planFileRel(outDir, planFile),
-      status: "Todo",
-    };
-  });
-
-  const now = new Date();
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "plan",
-    status: "running",
-    started_at: now.toISOString(),
-    updated_at: now.toISOString().slice(0, 10),
-    plans,
-    delivery_kind: options.deliveryKind,
-  };
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
-    snapshot.branch = {
-      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
-      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
-    };
-  }
-  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
+  const snapshot = promotedAuditSnapshot(workflowId, outDir, selected, options, new Date().toISOString());
   const entry: WorkflowEntry = {
     id: workflowId,
     type: "plan",
@@ -1761,38 +1793,6 @@ function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): 
     }
   }
   return resolved;
-}
-
-/** Parse the README index `## Execution order & status` table into
- * `num -> { title }` rows (Plan column = `001`, Title column adjacent). */
-function readExecutionOrderIndex(outDir: string): Map<string, { title: string }> {
-  const readmePath = join(outDir, "README.md");
-  let text: string;
-  try {
-    text = readFileSync(readmePath, "utf8");
-  } catch {
-    return new Map();
-  }
-  const rows = new Map<string, { title: string }>();
-  const lines = text.split("\n");
-  let inSection = false;
-  for (const line of lines) {
-    if (/^##\s+Execution order & status/.test(line)) {
-      inSection = true;
-      continue;
-    }
-    if (inSection && /^#/.test(line)) {
-      break;
-    }
-    if (!inSection) continue;
- // Split on unescaped `|` (the index escapes literal pipes in titles as
- // `\|`, matching escapeCell in renderIndex).
-    const cells = line.split(/(?<!\\)\|/).map((c) => c.trim());
-    if (cells.length >= 3 && /^\d{3}$/.test(cells[1])) {
-      rows.set(cells[1], { title: cells[2].replace(/\\\|/g, "|") });
-    }
-  }
-  return rows;
 }
 
 /**

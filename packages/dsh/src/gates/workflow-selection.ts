@@ -25,19 +25,39 @@
  * This module reads engine/fs + structural types only: the durable picker
  * store is loaded by the COMPOSITION EDGES (adapter / catalog /
  * workflow-ledger) and reaches the resolver as a plain `SessionHint`.
+ *
+ * TWO AUTHORITY ROUTES (primary spec §2.1/§5, plan S4). The binding order
+ * above is the FILE route's rule and stays byte-identical on
+ * `resolveActiveWorkflow`. While a control harness's EXECUTION authority is
+ * ACTIVE the root `status.json` registry is retired as a source, so a source
+ * consumer asks {@link readExecutionWorkflowSource} instead: it probes the ONE
+ * route and, on the active route, reads the registry/plan state through
+ * `readExecutionAuthority` and normalizes it into the SAME active-set input —
+ * so the two routes share one binding rule and one identity discipline, and a
+ * selector can never derive an answer from retired bytes or guess the
+ * newest/only lifecycle.
  */
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import {
+  assertCatalogExecutionCommitted,
+  readExecutionAuthority,
   readJson,
+  resolveExecutionReadRoute,
   resolveWorkflowDir,
+  resolveHarnessDir,
+  executionContextFor,
+  resumeExecutionSession,
   validateExecutionLease,
   validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
 } from '@mstar-harness/engine'
+import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState, StoreContext } from '@mstar-harness/engine'
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
+import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** The active-set resolver result: the session's active lifecycle or a clear error. */
 export type ActiveWorkflowSelection = WorkflowSelectionView
@@ -254,26 +274,14 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
  * `integration_worktree_path`. Each entry's snapshot is read at most once per
  * call, and only when a hint field could actually use it.
  */
-function automaticBinding(
-  harnessDir: string,
-  entries: readonly ActiveEntry[],
-  hint: SessionHint,
-): ActiveWorkflowSelection | undefined {
+function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWorkflowSelection | undefined {
   const cwd = hint.cwd === '' ? undefined : hint.cwd
   const holder = hint.leaseHolder === '' ? undefined : hint.leaseHolder
   if (cwd === undefined && holder === undefined) return undefined
-  const snapshots = new Map<string, Record<string, unknown> | undefined>()
-  const snapshotOf = (entry: ActiveEntry): Record<string, unknown> | undefined => {
-    const cached = snapshots.get(entry.dir)
-    if (cached !== undefined || snapshots.has(entry.dir)) return cached
-    const snapshot = readSnapshot(harnessDir, entry)
-    snapshots.set(entry.dir, snapshot)
-    return snapshot
-  }
   const leaseMatches = new Map<string, ActiveEntry>()
   const cwdMatches = new Map<string, ActiveEntry>()
-  for (const entry of entries) {
-    const snapshot = snapshotOf(entry)
+  for (const entry of source.entries) {
+    const snapshot = source.snapshotOf(entry)
     if (snapshot === undefined) continue
     const leases = validLeases(snapshot)
     if (
@@ -298,34 +306,116 @@ function automaticBinding(
 }
 
 /**
- * Resolve the ACTIVE lifecycle this session writes under (root v2
- * `status.json` `workflows[]` — the list holds non-terminal lifecycles
- * only, removal-at-terminal). This is the ONLY resolver the agent-flow
- * writer / ledger may use: no bound entry → a clear error, never a terminal
- * snapshot, never the root v1 file, and never the registry's first entry.
- *
- * EVERY registry entry is validated before N or the candidates are exposed:
- * the engine `validateWorkflowEntry` contract (`id`/`type`/`started_at` and a
- * harness-relative `dir` with no absolute path or `..` segment) plus
- * duplicate-id rejection. A bad row is an error, not a smaller active set —
- * and never a path the resolver would read outside the harness. Only a real
- * empty array is `workflow.selection.no-active`. Active-set definition:
- * membership in `workflows[]` — the engine lifecycle enum's non-terminal
- * states are `running` AND `paused`, so a PAUSED lifecycle stays in the
- * active set (it is still the operator's current lifecycle; only a TERMINAL
- * lifecycle is never a write target).
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
- * @param hint - the carrying session's structural identity, when it has one
- *   (omitted ⇒ the automatic rungs and the durable pick miss; unique-active
- *   still works).
+ * The normalized ACTIVE-SET source the binding order below runs on: the
+ * validated registry rows plus each entry's materialized state (the plan rows
+ * with their `execution_lease` and the lifecycle's integration topology). The
+ * FILE route assembles it from `status.json` + the workflow snapshots; the
+ * execution DB route normalizes `readExecutionAuthority`'s state into the SAME
+ * shape (primary spec §5: source consumers normalize into the existing pure
+ * gate input through an explicit adapter). The binding rule therefore exists
+ * once and cannot drift between the two authority routes.
  */
-export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): ActiveWorkflowSelection {
+interface ActiveSetSource {
+  readonly entries: readonly ActiveEntry[]
+  snapshotOf(entry: ActiveEntry): Record<string, unknown> | undefined
+}
+
+/** The registry rows of one v2 root document, validated entry by entry
+ * (engine `validateWorkflowEntry` + duplicate rejection) — the SAME
+ * acceptance for the file route and the DB route, so a bad row is an error
+ * rather than a smaller active set on either (never a path outside the
+ * harness). */
+function activeEntriesOf(registry: readonly unknown[]): { entries: ActiveEntry[] } | { error: ActiveWorkflowSelection } {
+  if (registry.length === 0) {
+    return {
+      error: {
+        kind: 'error',
+        code: 'workflow.selection.no-active',
+        message: 'no active lifecycle in status.json workflows[] — the agent-flow writer appends only to an active lifecycle',
+      },
+    }
+  }
+  const entries: ActiveEntry[] = []
+  const seen = new Set<string>()
+  for (const raw of registry) {
+    // Engine contract for one `workflows[]` row: `id`/`type`/`started_at`,
+    // and a harness-relative `dir` with no absolute path or `..` segment
+    // (so a snapshot read can never be pointed outside the harness). Every
+    // entry is validated before N or the candidates are exposed.
+    const gate = validateWorkflowEntry(raw)
+    if (!gate.ok) {
+      return {
+        error: {
+          kind: 'error',
+          code: 'workflow.selection.invalid-entry',
+          message: `workflows[] entry fails the v2 workflow-entry contract: ${gate.violations
+            .map((violation) => violation.message)
+            .join('; ')}`,
+        },
+      }
+    }
+    const entry = raw as { id: string; dir: string }
+    if (seen.has(entry.id)) {
+      return {
+        error: {
+          kind: 'error',
+          code: 'workflow.selection.invalid-registry',
+          message: `duplicate workflow id in status.json workflows[]: ${entry.id} — the registry must be keyed by unique active lifecycles`,
+        },
+      }
+    }
+    seen.add(entry.id)
+    entries.push({ id: entry.id, dir: entry.dir })
+  }
+  return { entries }
+}
+
+/**
+ * The selection tail over an already-normalized active set (D4 binding
+ * order): the two automatic rungs → the session's durable
+ * `selectedWorkflowId` → the only active entry. Explicit identity is
+ * preserved at every rung — an id is either named by the session's own
+ * evidence or the set is a single entry; a multi-active set with no binding
+ * is `workflow.selection.unbound-multi-active` and NOTHING falls back to the
+ * registry's first (or newest) entry.
+ */
+function selectActiveWorkflow(source: ActiveSetSource, hint?: SessionHint): ActiveWorkflowSelection {
+  if (hint !== undefined) {
+    const automatic = automaticBinding(source, hint)
+    if (automatic !== undefined) return automatic
+    const selected = hint.selectedWorkflowId
+    if (selected !== undefined && selected !== '') {
+      const picked = source.entries.find((entry) => entry.id === selected)
+      if (picked !== undefined) return { kind: 'active', workflowId: picked.id, dir: picked.dir }
+    }
+  }
+  if (source.entries.length === 1) {
+    const only = source.entries[0] as ActiveEntry
+    return { kind: 'active', workflowId: only.id, dir: only.dir }
+  }
+  return {
+    kind: 'error',
+    code: 'workflow.selection.unbound-multi-active',
+    message: `${source.entries.length} active lifecycles in status.json workflows[] — this session has no lease, is not inside a workflow worktree and has no stored selection; pick one for this session (writes pause until then)`,
+    activeWorkflowIds: source.entries.map((entry) => entry.id),
+  }
+}
+
+/**
+ * The file-route active set: the root v2 `status.json` registry plus each
+ * entry's snapshot, or the document's own error view (missing / unreadable /
+ * v1 / non-array registry). Each entry's snapshot is read at most once per
+ * call, and only when the binding rule needs it.
+ */
+function fileActiveSet(harnessDir: string): { source: ActiveSetSource } | { error: ActiveWorkflowSelection } {
   const statusPath = join(harnessDir, STATUS_FILE)
   if (!existsSync(statusPath)) {
     return {
-      kind: 'error',
-      code: 'status.missing',
-      message: `no ${STATUS_FILE} at ${harnessDir} — the root v2 document is required`,
+      error: {
+        kind: 'error',
+        code: 'status.missing',
+        message: `no ${STATUS_FILE} at ${harnessDir} — the root v2 document is required`,
+      },
     }
   }
   let doc: Record<string, unknown>
@@ -336,82 +426,332 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
     // listener).
     const parsed = asRecord(readJson(statusPath))
     if (parsed === undefined) {
-      return { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` }
+      return { error: { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` } }
     }
     doc = parsed
   } catch {
-    return { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` }
+    return { error: { kind: 'error', code: 'status.unreadable', message: `cannot read ${statusPath}` } }
   }
   if (doc.version !== 2) {
     return {
-      kind: 'error',
-      code: 'status.migration-required',
-      message: `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
+      error: {
+        kind: 'error',
+        code: 'status.migration-required',
+        message: `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
+      },
     }
   }
   const registry = doc.workflows
   if (!Array.isArray(registry)) {
     return {
-      kind: 'error',
-      code: 'workflow.selection.invalid-registry',
-      message: `status.json workflows[] is not an array: ${JSON.stringify(registry)} — the registry cannot be validated`,
-    }
-  }
-  if (registry.length === 0) {
-    return {
-      kind: 'error',
-      code: 'workflow.selection.no-active',
-      message: 'no active lifecycle in status.json workflows[] — the agent-flow writer appends only to an active lifecycle',
-    }
-  }
-  const entries: ActiveEntry[] = []
-  const seen = new Set<string>()
-  for (const raw of registry) {
-    // Engine contract for one `workflows[]` row: `id`/`type`/`started_at`,
-    // and a harness-relative `dir` with no absolute path or `..` segment
-    // (so `readSnapshot` can never be pointed outside the harness). Every
-    // entry is validated before N or the candidates are exposed.
-    const gate = validateWorkflowEntry(raw)
-    if (!gate.ok) {
-      return {
-        kind: 'error',
-        code: 'workflow.selection.invalid-entry',
-        message: `workflows[] entry fails the v2 workflow-entry contract: ${gate.violations
-          .map((violation) => violation.message)
-          .join('; ')}`,
-      }
-    }
-    const entry = raw as { id: string; dir: string }
-    if (seen.has(entry.id)) {
-      return {
+      error: {
         kind: 'error',
         code: 'workflow.selection.invalid-registry',
-        message: `duplicate workflow id in status.json workflows[]: ${entry.id} — the registry must be keyed by unique active lifecycles`,
-      }
-    }
-    seen.add(entry.id)
-    entries.push({ id: entry.id, dir: entry.dir })
-  }
-  if (hint !== undefined) {
-    const automatic = automaticBinding(harnessDir, entries, hint)
-    if (automatic !== undefined) return automatic
-    const selected = hint.selectedWorkflowId
-    if (selected !== undefined && selected !== '') {
-      const picked = entries.find((entry) => entry.id === selected)
-      if (picked !== undefined) return { kind: 'active', workflowId: picked.id, dir: picked.dir }
+        message: `status.json workflows[] is not an array: ${JSON.stringify(registry)} — the registry cannot be validated`,
+      },
     }
   }
-  if (entries.length === 1) {
-    const only = entries[0] as ActiveEntry
-    return { kind: 'active', workflowId: only.id, dir: only.dir }
-  }
+  const validated = activeEntriesOf(registry)
+  if ('error' in validated) return { error: validated.error }
+  const snapshots = new Map<string, Record<string, unknown> | undefined>()
   return {
-    kind: 'error',
-    code: 'workflow.selection.unbound-multi-active',
-    message: `${entries.length} active lifecycles in status.json workflows[] — this session has no lease, is not inside a workflow worktree and has no stored selection; pick one for this session (writes pause until then)`,
-    activeWorkflowIds: entries.map((entry) => entry.id),
+    source: {
+      entries: validated.entries,
+      snapshotOf: (entry: ActiveEntry): Record<string, unknown> | undefined => {
+        const cached = snapshots.get(entry.dir)
+        if (cached !== undefined || snapshots.has(entry.dir)) return cached
+        const snapshot = readSnapshot(harnessDir, entry)
+        snapshots.set(entry.dir, snapshot)
+        return snapshot
+      },
+    },
   }
 }
+
+/**
+ * Resolve the ACTIVE lifecycle this session writes under (root v2
+ * `status.json` `workflows[]` — the list holds non-terminal lifecycles
+ * only, removal-at-terminal). This is the ONLY resolver the agent-flow
+ * writer / ledger may use: no bound entry → a clear error, never a terminal
+ * snapshot, never the root v1 file, and never the registry's first entry.
+ *
+ * This is the FILE route (primary spec §2.1): the root v2 document is the
+ * pre-activation registry. While the harness's execution authority is ACTIVE
+ * that registry is retired, so a source consumer asks the route first
+ * ({@link readExecutionWorkflowSource}) instead of calling this resolver.
+ *
+ * EVERY registry entry is validated before N or the candidates are exposed
+ * (see {@link activeEntriesOf}). Active-set definition: membership in
+ * `workflows[]` — the engine lifecycle enum's non-terminal states are
+ * `running` AND `paused`, so a PAUSED lifecycle stays in the active set (it
+ * is still the operator's current lifecycle; only a TERMINAL lifecycle is
+ * never a write target).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param hint - the carrying session's structural identity, when it has one
+ *   (omitted ⇒ the automatic rungs and the durable pick miss; unique-active
+ *   still works).
+ */
+export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): ActiveWorkflowSelection {
+  const read = fileActiveSet(harnessDir)
+  return 'error' in read ? read.error : selectActiveWorkflow(read.source, hint)
+}
+
+/**
+ * §5 the execution-authority source read of the active-set rule: the ONE
+ * place a source consumer decides between the two authority routes.
+ *
+ * - `files` — the store predates migration 4, records `legacy`/`staged`, or no
+ *   store file exists. The caller keeps its unchanged file readers
+ *   ({@link resolveActiveWorkflow}); absence of a store is not an authority
+ *   verdict (§2.1), so the pre-activation route is untouched.
+ * - `active` — the execution authority is ACTIVE. The state comes from
+ *   `readExecutionAuthority` in ONE read transaction and is normalized into
+ *   the SAME active-set input the file route builds (registry rows, plan rows
+ *   with their `execution_lease`, integration topology), so the binding order
+ *   is shared and can never disagree between the routes. The retired
+ *   `status.json` / snapshots are NOT read: the DB registry is the whole
+ *   active set, its ids are addressed exactly (no newest/unique guess), and a
+ *   `workflow.selection.unbound-multi-active` set stays an error.
+ * - `unavailable` — the authority exists and cannot be read (corrupt, drifted,
+ *   busy, below-floor runtime, missing `node:sqlite` capability). A refusal,
+ *   never a fallback to the retired files (§5).
+ *
+ * The selected lifecycle's materialized state travels with the verdict, so a
+ * caller never re-reads a document to find out what it selected.
+ */
+export type ExecutionWorkflowSourceRead =
+  | { readonly kind: 'files' }
+  | {
+      readonly kind: 'active'
+      readonly workflowId: string
+      readonly dir: string
+      readonly snapshot: Record<string, unknown>
+      readonly storeId: string
+      readonly epoch: number
+    }
+  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection }
+  | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
+
+/**
+ * Stable code + message of a thrown store refusal (engine `StoreError` /
+ * `StoreReadError` carry `code`; anything else is reported as itself).
+ *
+ * Exported for the sibling gate module: a caller that must convert a store
+ * refusal into a GATE VIOLATION (the sync dispatch gate's authority check,
+ * which cannot await the route read) reports the same stable code — one
+ * extraction rule for the whole plugin, never a second sniffing copy.
+ */
+export function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error)
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : ''
+  return { code: code === '' ? 'store.authority-unreadable' : code, message }
+}
+
+/** One DB plan view as the plan-row shape the binding rule and the gate
+ * readers consume (`id`/`status`/`metadata` + the row's `execution_lease`).
+ * The DB stores the lease beside the row, never inside it (§2.2), so the
+ * adapter re-joins them here — the normalization §5 asks for. */
+function planRowOf(view: ExecutionPlanView): Record<string, unknown> {
+  return { ...(view.plan as Record<string, unknown>), execution_lease: view.executionLease }
+}
+
+/** One DB lifecycle's materialized state as the snapshot shape the file route
+ * produces: the workflow header fields plus its plan rows. §2.2/§E keeps
+ * `plans` and the merge lease OUT of the header (they are
+ * `execution_plans` / `execution_integration_leases` rows), so BOTH are
+ * re-joined here — the lease under the file route's own key and semantics
+ * (PRESENT only while a merge is claimed; a released or never-claimed lease is
+ * the file route's absent key), exactly as `workflowSnapshotOf` does for the
+ * engine's own rules. A consumer that read the materialized snapshot without
+ * it would treat a held merge reservation as unclaimed. */
+function executionSnapshotOf(state: ExecutionState, workflowId: string): Record<string, unknown> | undefined {
+  const workflow = state.workflows.find((candidate) => candidate.state.id === workflowId)
+  if (workflow === undefined) return undefined
+  return {
+    ...(workflow.state as Record<string, unknown>),
+    ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
+    plans: workflow.plans.map(planRowOf),
+  }
+}
+
+/**
+ * §5 read the active-set source through the authoritative adapter.
+ * @param context - the control harness `StoreContext` (its `harnessDir` is the
+ *   one root the route is probed on — never a cwd-local or worktree store).
+ * @param hint - the carrying session's structural identity + durable pick,
+ *   forwarded verbatim to the shared binding rule.
+ */
+export async function readExecutionWorkflowSource(
+  context: StoreContext,
+  hint?: SessionHint,
+): Promise<ExecutionWorkflowSourceRead> {
+  let route: 'execution' | 'files'
+  try {
+    route = await resolveExecutionReadRoute(context)
+  } catch (error) {
+    return { kind: 'unavailable', ...refusalOf(error) }
+  }
+  if (route === 'files') return { kind: 'files' }
+
+  let read: ExecutionRead<ExecutionState | ExecutionPlanView>
+  try {
+    read = await readExecutionAuthority(context)
+  } catch (error) {
+    return { kind: 'unavailable', ...refusalOf(error) }
+  }
+  // The no-selection arm answers with the whole state and the root token
+  // (§5): the registry membership the active set is built from is the root's
+  // own content.
+  const state = read.data as ExecutionState
+  if (!Array.isArray(state.root?.workflows) || !Array.isArray(state.workflows)) {
+    return {
+      kind: 'unavailable',
+      code: 'coordination.invalid-input',
+      message: 'the execution authority answered a scoped view for an unscoped selection — the active set cannot be read',
+    }
+  }
+  const validated = activeEntriesOf(state.root.workflows)
+  if ('error' in validated) return { kind: 'error', selection: validated.error }
+  const source: ActiveSetSource = {
+    entries: validated.entries,
+    snapshotOf: (entry: ActiveEntry) => executionSnapshotOf(state, entry.id),
+  }
+  const selection = selectActiveWorkflow(source, hint)
+  if (selection.kind !== 'active') return { kind: 'error', selection }
+  const snapshot = source.snapshotOf({ id: selection.workflowId, dir: selection.dir })
+  if (snapshot === undefined) {
+    return {
+      kind: 'error',
+      selection: {
+        kind: 'error',
+        code: 'workflow.selection.snapshot-unreadable',
+        message: `the execution authority registers ${selection.workflowId} but holds no state for it`,
+      },
+    }
+  }
+  return { kind: 'active', workflowId: selection.workflowId, dir: selection.dir, snapshot, storeId: read.storeId, epoch: read.epoch }
+}
+/**
+ * Persist an explicitly native-adopted canonical C1 binding. Picker selection
+ * never manufactures this authority witness.
+ */
+export function adoptExecutionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+  executionBinding: ExecutionBinding,
+): boolean {
+  if (executionBinding.harnessRoot !== harnessDir || executionBinding.session.sessionId !== sessionId) return false
+  const existing = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (existing.kind === 'unavailable') return false
+  const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+    selectedWorkflowId: executionBinding.session.workflowId,
+    executionBinding,
+    excludedBeforeSeq: existing.binding?.excludedBeforeSeq ?? 0,
+  })
+  return written.kind === 'written'
+}
+
+/** Clear a stale native binding while preserving the user selection/floor. */
+export function clearExecutionBinding(harnessDir: string, sessionId: string, cwd: string): boolean {
+  const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (binding.kind !== 'ok') return false
+  return updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+    executionBinding: null,
+    excludedBeforeSeq: binding.binding?.excludedBeforeSeq ?? 0,
+  }).kind === 'written'
+}
+
+/**
+ * The canonical directory of one workflow's ledger target — the F-207
+ * boundary, in this order for a reason: `existsSync` rejects an absent dir, a
+ * dangling symlink and an unreadable parent WITHOUT throwing; the
+ * symlink-FOLLOWING `statSync` then rejects a non-directory (a symlink to a
+ * file is not a workflow dir); `realpathSync` runs LAST so only a verified
+ * directory is canonicalized — the ledger, its identity index and its cursor
+ * must live under ONE spelling of the dir, and a removal or replacement racing
+ * between the checks throws into the caller's refusal rather than yielding a
+ * path that never existed.
+ * @param root - the resolved `{WORKFLOW_DIR}`.
+ * @param workflowId - the selected lifecycle id (the dir's basename).
+ * @returns the canonical absolute dir, or `null` when it is not a real dir.
+ */
+function ledgerTargetDir(root: string, workflowId: string): string | null {
+  const dir = join(root, workflowId)
+  if (!existsSync(dir)) return null
+  try {
+    if (!statSync(dir).isDirectory()) return null
+    return realpathSync(dir)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the explicit target consumed by the workflow ledger. Active targets
+ * require a canonical C1 binding AND a current SQL session row; the legacy
+ * route is served only when the source read says the pre-activation files are
+ * authoritative. This resolver is the single selection point of the ledger's
+ * explicit route, but it does NOT make resolve→append atomic: F2 holds the
+ * maintenance exclusion around its own append, this call runs outside it, so an
+ * activation may still complete between the two (recorded residual seam §4.3).
+ */
+export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
+  if (sessionId === '' || cwd === '') return null
+  const harnessDir = resolveHarnessDir(cwd, { workspaceRoot: cwd })
+  if (harnessDir === null) return null
+  const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (binding.kind === 'unavailable') return null
+  const executionBinding = binding.binding?.executionBinding
+  const selected = binding.binding?.selectedWorkflowId
+  const hint: SessionHint = { sessionId, cwd, ...(selected === undefined ? {} : { selectedWorkflowId: selected }) }
+  const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+  if (source.kind === 'unavailable' || source.kind === 'error') return null
+  const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir })
+  if (source.kind === 'files') {
+    if (executionBinding !== undefined && executionBinding !== null) return null
+    const legacy = resolveActiveWorkflow(harnessDir, hint)
+    if (legacy.kind !== 'active') return null
+    const targetDir = ledgerTargetDir(workflowRoot, legacy.workflowId)
+    return targetDir === null
+      ? null
+      : { workflowId: legacy.workflowId, workflowDir: targetDir, sessionId, source: 'legacy', epoch: null }
+  }
+  if (executionBinding === undefined || executionBinding === null) return null
+  if (executionBinding.harnessRoot !== harnessDir ||
+    executionBinding.session.sessionId !== sessionId ||
+    executionBinding.session.workflowId !== source.workflowId) return null
+  try {
+    const context = executionContextFor({ harnessDir }, {
+      source: 'host',
+      sessionId,
+      workflowId: executionBinding.session.workflowId,
+      role: executionBinding.session.role,
+      planId: executionBinding.session.planId,
+    })
+    const resumed = await resumeExecutionSession(context, executionBinding.session)
+    if (resumed.storeId !== source.storeId || resumed.epoch !== source.epoch) return null
+  } catch {
+    return null
+  }
+  const targetDir = ledgerTargetDir(workflowRoot, source.workflowId)
+  return targetDir === null
+    ? null
+    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, source: 'execution', epoch: source.epoch }
+}
+
+/** The plan rows of one materialized snapshot ([] when the doc has no plans
+ * array) — the gate readers' own view of {@link ExecutionWorkflowSourceRead}. */
+export function activeRowsOf(snapshot: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(snapshot.plans)) return []
+  return snapshot.plans
+    .map((row) => asRecord(row))
+    .filter((row): row is Record<string, unknown> => row !== undefined)
+}
+
 
 /**
  * Resolve the workflow the catalog/panel READ path aggregates (compass
@@ -487,4 +827,57 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
     }
   }
   return { kind: 'terminal', workflowId: best.workflowId, dir: best.dir }
+}
+
+/* ---------------------------------- catalog registration ---------------------------------- */
+
+/** One catalog-registration refusal: the stable code + its actionable message. */
+export interface CatalogRegistrationRefusal {
+  readonly code: string
+  readonly message: string
+}
+
+/**
+ * The catalog-registration gate for a root-visible workflow (state-projection
+ * contract §3 step 3; issue contract §7): a workflow whose registration
+ * operation is still `prepared`/`execution-written` is HALF-registered — the
+ * snapshot and the root `workflows[]` entry are visible while the catalog
+ * journal has not published its delta — so it must not be dispatched against
+ * until it is reconciled.
+ *
+ * Root workflow ROUTING stays JSON-owned: this guard never selects a
+ * lifecycle, never reads a selection from the store, and never invents one;
+ * the caller passes the workflow id its OWN JSON selection produced. What the
+ * guard adds is the registration verdict, which lives only in the store's
+ * journal, through the engine's own `assertCatalogExecutionCommitted` (the
+ * single registration authority — no second journal reader here).
+ *
+ * Pre-activation exclusion (issue contract §7, engine `coordination.ts`
+ * parity): a MISSING store (`store.not-initialized`) or a STAGED one
+ * (`store.not-active`) is not a catalog verdict — the legacy authority is
+ * still in force and the workflow is never retro-refused. Every other failure
+ * (corrupt store, below-floor/missing-capability runtime, schema drift, a
+ * conflict) is returned as a refusal rather than swallowed: a dispatch that
+ * cannot prove the registration is never allowed to proceed on a guess.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param workflowId - the workflow the caller's JSON selection resolved.
+ * @returns the refusal, or `null` when the registration is committed (or the
+ *   store makes no catalog claim yet).
+ */
+export async function catalogRegistrationRefusal(
+  harnessDir: string,
+  workflowId: string,
+): Promise<CatalogRegistrationRefusal | null> {
+  const context: StoreContext = { harnessDir }
+  try {
+    await assertCatalogExecutionCommitted(context, workflowId)
+    return null
+  } catch (error) {
+    const code = (error as { code?: unknown } | null | undefined)?.code
+    if (code === 'store.not-initialized' || code === 'store.not-active') return null
+    return {
+      code: typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable',
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
 }

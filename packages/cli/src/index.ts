@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { WorkflowSnapshotValidationError, collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "@mstar-harness/engine";
+import { WorkflowSnapshotValidationError, StoreError, collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "@mstar-harness/engine";
 import {
   planWorktreeCleanup,
   type CleanupDecision,
@@ -22,15 +22,16 @@ import {
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  abortCatalogExecution,
   checkSddAction,
   classifySkillLint,
+  CatalogError,
+  CatalogRegistrationError,
   AUDIT_CATEGORIES,
   AUDIT_CONFIDENCES,
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
-  appendProjectRegisterEntries,
-  closeProjectRegisterEntry,
   closeWorkflow,
   completenessLevel,
   declareWorkflowDeliveryKind,
@@ -48,33 +49,41 @@ import {
   findingsCleanupGate,
   GIT_CAPTURE_MAX_BYTES,
   getArtifactStore,
+  hasHarnessRootDeclaration,
   isReadOnlyAssignmentRole,
   isTerminalSnapshot,
+  IssueError,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
   lintStrategySections,
+  listIssues,
+  listPendingCatalogRegistrations,
   loadStoreModule,
+  openStore,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseCompassFrontmatter,
+  PlanPathError,
   planQualityBar,
-  PROJECT_REGISTER_FILE,
-  promoteAuditPlans,
   pushCadenceProbe,
   readCoordinatedArtifact,
+  readExecutionAuthority,
+  readExecutionSource,
   readMainWorktree,
   readWorkflowSnapshot,
+  reconcileCatalogExecution,
+  registerShippedCatalogExecution,
   recordWorkflowDelivery,
-  registerIterationWorkflow,
-  registerPlanWorkflow,
   replaceCoordinatedArtifact,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveProcessHarnessDir as resolveEngineProcessHarnessDir,
   resolveProjectDir,
+  resolveRegisteredPlanFile,
   resolveScaffoldDirs,
   resolveSddExecutionContext,
   resolveSkillRoot,
@@ -92,7 +101,6 @@ import {
   sddWorkspace,
   stripFrontmatter,
   taskBrief,
-  techDebtRollup,
   unregisterWorkflow,
   computePrTally,
   prReviewReportPath,
@@ -110,7 +118,6 @@ import {
   validateDesignTokenFrontmatter,
   validateIntegrationMergeLease,
   validateMstarReviewV1,
-  validateProjectRegister,
   validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
@@ -118,7 +125,6 @@ import {
   validateWorkflowSnapshot,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
-  _DEFAULT_PROJECT,
   type ArtifactKind,
   type ArtifactStore,
   type AuditCategory,
@@ -132,10 +138,12 @@ import {
   type AuditSeverityRank,
   type AuditTraceKind,
   type AuditTraceStep,
+  type CatalogExecutionWorkflow,
+  type ExecutionPlanView,
+  type ExecutionState,
   type GateResult,
   type HostId,
   type PrReportTarget,
-  type ProjectRegisterDoc,
   type QcAlignmentAssignment,
   type MergeClass,
   type PrSizeBand,
@@ -143,6 +151,8 @@ import {
   type ReviewPostPlan,
   type SddExecutionContext,
   type StatusV2Doc,
+  type StoreContext,
+  type StoreHandle,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -150,7 +160,30 @@ import {
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
+import {
+  assertLegacyExecutionFormAvailable,
+  failExecutionVerb,
+  printExecutionSuccess,
+  registerSessionCommands,
+  requireExecutionIdentity,
+} from "./execution-session";
+import {
+  activeWorkflowContext,
+  activeWorkflowScope,
+  closeActiveWorkflow,
+  readActiveWorkflowFlags,
+  readActiveRegistrationFlags,
+  recordActiveDelivery,
+  registerActiveWorkflow,
+  registerExecutionWorkflowCommands,
+} from "./execution-workflow";
+import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
+import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
+import { judgmentUsageFailurePayload, registerJudgmentCommands } from "./commands/judgment";
+import { registerStoreCommands } from "./store-migrate";
+import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
+import { runDashboard } from "./dashboard";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -385,33 +418,14 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
- * is a no-op except creating missing pieces. Ordering is normalized as the
- * final step of the gitignore routine: duplicate `.mstar/**` rules are
- * deduped segment-wise \u2014 a trailing duplicate is dropped only when no
- * un-crossable line lies strictly between it and the previously retained
- * broad rule (a custom `!.mstar/…` re-inclusion between two broad rules
- * makes the trailing broad semantically load-bearing: last-match-wins
- * re-ignores the custom path), and a misplaced `.mstar/**` (after one
- * or more canonical `!.mstar/…` re-includes, which gitignore's
- * last-match-wins would shadow) is relocated to sit immediately before the
- * first canonical re-include \u2014 but only when the move crosses no line
- * whose semantics we do not own. The broad rule may cross blank/comment
- * lines, other exact `.mstar/**` duplicates, the 5 canonical negations,
- * and our own `.mstarc` entry; every other line (custom `!.mstar/…`
- * negations, custom `.mstar/<path>` ignores, anything else) is
- * un-crossable. A broad rule already before every canonical negation is
- * correctly placed and never moves, regardless of surrounding custom
- * lines. Infeasible → the file keeps its user-authored order (missing
- * entries were already appended).
+ * is a no-op except creating missing pieces.
+ *
+ * An authored harness-root declaration (`hasHarnessRootDeclaration`) makes
+ * the `.gitignore` author-owned: the fence then writes NO bytes \u2014 no append,
+ * reorder, dedupe or normalization \u2014 and reports it as skipped. The fence
+ * only bootstraps an undeclared file with the canonical snippet; it never
+ * maintains a file that already states its own harness-root policy.
  */
-/** The 5 canonical `!.mstar/…` re-includes (verbatim from the snippet SSOT). */
-const CANONICAL_NEGATIONS: Record<string, true> = {
-  "!.mstar/AGENTS.md": true,
-  "!.mstar/knowledge/": true,
-  "!.mstar/knowledge/**": true,
-  "!.mstar/specs/": true,
-  "!.mstar/specs/**": true,
-};
 
 /**
  * Git top-level of `startDir` (lexical, symlink-safe): mirrors the engine's
@@ -446,7 +460,7 @@ function gitWorkspaceRoot(startDir: string): string {
 async function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
   // Store-root pinning (spec §C4): `scaffoldHarness` writes the initial
-  // protected documents (status.json, projects/_default/residuals.json)
+  // protected documents (status.json, snapshot.json)
   // create-only through the ACTIVE ArtifactStore under fail-loud path
   // agreement (`assertFsStorePath`). The default store resolves from the cwd,
   // so it diverges from the scaffold target whenever `pathArg` is not the
@@ -459,17 +473,21 @@ async function runScaffold(pathArg: string | undefined) {
   const created: string[] = [];
   const skipped: string[] = [];
 
- // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
- // snippet literals are `.mstar/**`-based, so the append only makes sense
- // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
- // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
- // and are skipped with an explicit note. The comparison AND the fence target
- // are anchored at the git top-level of `root` (falling back to `root` when
- // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
- // the harness dir against the config file's location, so scaffolding a
- // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
- // `<subdir>/.mstar` and skip the fence while process artifacts stay
- // committable.
+  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
+  // snippet literals are `.mstar/**`-based, so the append only makes sense
+  // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
+  // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
+  // and are skipped with an explicit note. The comparison AND the fence target
+  // are anchored at the git top-level of `root` (falling back to `root` when
+  // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
+  // the harness dir against the config file's location, so scaffolding a
+  // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
+  // `<subdir>/.mstar` and skip the fence while process artifacts stay
+  // committable.
+  //
+  // An authored harness-root declaration makes the file author-owned: the
+  // fence writes NO bytes — no append, reorder, dedupe or normalization. Only
+  // an undeclared file is bootstrapped with the canonical snippet.
   const workspaceRoot = gitWorkspaceRoot(root);
   const harnessKind = detectHarnessKind(harnessDir);
   const mstarDirAtWorkspaceRoot = workspaceRoot.endsWith(path.sep)
@@ -479,298 +497,26 @@ async function runScaffold(pathArg: string | undefined) {
     const gitignorePath = workspaceRoot.endsWith(path.sep)
       ? `${workspaceRoot}.gitignore`
       : `${workspaceRoot}${path.sep}.gitignore`;
-    const snippet = emitGitignoreSnippet("mstar");
     const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-    const snippetLines = snippet.split("\n").map((line) => line.trim());
-    const fenceEntries = snippetLines.filter(
-      (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
-    );
-    const commentLines = snippetLines.filter((line) => line.startsWith("#"));
-    const missing = fenceEntries.filter((entry) => !lines.has(entry));
-    if (missing.length > 0) {
-      const missingComments = commentLines.filter((line) => !lines.has(line));
-      const broadRule = ".mstar/**";
-      const currentLines = current.split(/\r?\n/);
-      const firstNegation = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
-      if (!lines.has(broadRule) && firstNegation !== -1) {
- // gitignore = last matching pattern wins: appending `.mstar/**`
- // after existing `!.mstar/…` re-includes would shadow them. Splice
- // the canonical block start (comments + broad rule + missing
- // re-includes) BEFORE the first negation so the re-includes stay
- // effective. `.mstarc` is a plain ignore (no negations) \u2014 appended
- // at the end when missing.
-        const blockStart = [...missingComments, broadRule, ...missing.filter((entry) => entry.startsWith("!.mstar/"))];
-        currentLines.splice(firstNegation, 0, ...blockStart);
-        let next = currentLines.join("\n");
-        if (missing.includes(".mstarc")) next = `${next}${next.endsWith("\n") ? "" : "\n"}.mstarc\n`;
-        fs.writeFileSync(gitignorePath, next, "utf8");
-      } else {
- // Broad rule present (append missing entries after it) or no
- // negations to shadow (append the whole block) \u2014 both safe.
+    if (hasHarnessRootDeclaration(current)) {
+      skipped.push(".gitignore (author-owned harness-root declaration)");
+    } else {
+      const snippet = emitGitignoreSnippet("mstar");
+      const snippetLines = snippet.split("\n").map((line) => line.trim());
+      const fenceEntries = snippetLines.filter(
+        (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
+      );
+      const commentLines = snippetLines.filter((line) => line.startsWith("#"));
+      const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+      const missing = fenceEntries.filter((entry) => !lines.has(entry));
+      if (missing.length > 0) {
+        const missingComments = commentLines.filter((line) => !lines.has(line));
         const prefix = current && !current.endsWith("\n") ? "\n" : "";
         fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
+        created.push(".gitignore (canonical harness snippet)");
+      } else {
+        skipped.push(".gitignore (canonical harness snippet already present)");
       }
-      created.push(".gitignore (canonical harness snippet)");
-    }
-
- // Unconditional final normalization \u2014 gitignore is last-match-wins, so a
- // misplaced `.mstar/**` (appearing after one or more canonical
- // `!.mstar/…` re-includes, whether pre-existing or just appended) would
- // shadow them. Dedupe is SEGMENTED: a duplicate `.mstar/**` is dropped
- // only when no un-crossable line lies strictly between it and the
- // previously retained broad rule \u2014 a custom `!.mstar/…` re-inclusion
- // between two broad rules makes the trailing broad semantically
- // load-bearing (last-match-wins re-ignores the custom path), so it is
- // retained exactly where it is. The kept (earliest) broad rule is then
- // relocated to sit immediately before the first canonical re-include \u2014
- // but only when the move crosses no line whose semantics we do not own.
- // The broad rule may cross blank/comment lines, other exact
- // `.mstar/**` duplicates, the 5 canonical negations, and our own
- // `.mstarc` entry; every other line (custom `!.mstar/…` negations,
- // custom `.mstar/<path>` ignores, anything else) is un-crossable. A
- // broad rule already before every canonical negation is correctly placed
- // and never moves, regardless of surrounding custom lines. Infeasible →
- // the file keeps its user-authored order (missing entries were already
- // appended above). Every other line stays byte-for-byte. Runs after
- // EVERY branch above.
-    const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
-    const broadIndexes = finalLines
-      .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-      .filter((index) => index !== -1);
-    const canonicalNegationIndexes = finalLines
-      .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-      .filter((index) => index !== -1);
-    const firstCanonicalNegationIndex = canonicalNegationIndexes[0] ?? -1;
-    let normalized = false;
-    if (broadIndexes.length > 0) {
- // Segmented dedupe: drop a duplicate `.mstar/**` only when NO
- // un-crossable line lies strictly between it and the previously
- // retained broad rule. A custom `!.mstar/…` re-inclusion (or any
- // other un-owned line) between two broad rules makes the trailing
- // broad semantically load-bearing \u2014 gitignore's last-match-wins
- // re-ignores the custom path, and deleting the broad would flip
- // that line's meaning. Retained secondary broads stay exactly
- // where they are.
-      let removed = 0;
-      let lastRetainedBroadIndex = broadIndexes[0];
-      for (let i = 1; i < broadIndexes.length; i++) {
-        const candidate = broadIndexes[i] - removed;
-        let crossable = true;
-        for (let j = lastRetainedBroadIndex + 1; j < candidate; j++) {
-          const line = finalLines[j].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          crossable = false;
-          break;
-        }
-        if (crossable) {
-          finalLines.splice(candidate, 1);
-          removed++;
-          normalized = true;
-        } else {
-          lastRetainedBroadIndex = candidate;
-        }
-      }
-      const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
- // A broad rule already before every canonical negation is correctly
- // placed \u2014 never move it, regardless of surrounding custom lines.
- // Only a broad rule AFTER the first canonical negation is misplaced.
-      if (firstCanonicalNegationIndex !== -1 && keptIndex > firstCanonicalNegationIndex) {
- // Feasibility: the move may only cross lines whose semantics we own
- // \u2014 blank/comment lines, other exact `.mstar/**` duplicates, the 5
- // canonical negations, and our own `.mstarc` entry. Any other line
- // (custom `!.mstar/…` negation, custom `.mstar/<path>` ignore, or
- // anything else) between the first canonical negation and the kept
- // rule makes the relocation infeasible \u2014 the file keeps its
- // user-authored order.
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndex; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "") continue; // blank
-          if (line.startsWith("#")) continue; // comment
-          if (line === ".mstar/**") continue; // duplicate broad rule
-          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
-          if (line === ".mstarc") continue; // our own entry
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndex, 0, broadLine);
-          normalized = true;
-        }
-      }
- // Ownership invariant, final pass. Pipeline order matters for
- // one-run convergence:
- // 1. PARTITION \u2014 user-authored targeted `.mstar/…` rules always speak
- // LAST: relocate every targeted user rule (non-canonical
- // `!.mstar/…` re-inclusions and `.mstar/<path>` ignores \u2014 never
- // the bare broad rule, canonical negations, or our own
- // `.mstarc`) to after the fence, preserving their relative order.
- // Gitignore's last-match-wins then resolves every overlap in the
- // user's favor while our tracked results stay re-included.
- // 2. DEDUPE \u2014 after the partition no un-owned line can sit between
- // two broad rules, so any extra `.mstar/**` is redundant: keep
- // the first only.
- // 3. RELOCATE \u2014 a broad rule sitting after the first canonical
- // negation is moved before it when only owned lines lie in
- // between.
- // 4. GUARANTEE \u2014 every canonical negation occurs at least once after
- // the last broad rule (append missing occurrences; duplicates are
- // harmless in gitignore).
-      const isTargetedUserMstarRule = (line: string): boolean => {
-        const trimmed = line.trim();
-        if (trimmed === "" || trimmed.startsWith("#")) return false;
-        if (trimmed === ".mstar/**" || trimmed === ".mstarc") return false;
-        if (CANONICAL_NEGATIONS[trimmed] === true) return false;
-        if (trimmed.startsWith("!.mstar/") || trimmed.startsWith(".mstar/")) return true;
-        return false;
-      };
-      const isOwnedLine = (line: string): boolean => !isTargetedUserMstarRule(line);
-
- // 1. Partition targeted user rules to the tail (with synthesis).
-      const targetedRules = finalLines.filter((line) => isTargetedUserMstarRule(line));
-      if (targetedRules.length > 0) {
-        const owned = finalLines.filter(isOwnedLine);
-        const hadTrailingNewline = owned[owned.length - 1] === "";
-        const ownedBody = hadTrailingNewline ? owned.slice(0, -1) : owned;
- // A contents-level negation like `!.mstar/custom/**` cannot take
- // effect while its parent directory stays excluded by
- // `.mstar/**` \u2014 git prunes excluded directories without descending
- // (this is why the canonical fence pairs `!.mstar/knowledge/` with
- // `!.mstar/knowledge/**`). Synthesize the missing
- // ancestor-directory re-inclusions so the relocated user rule keeps
- // working after the fence.
-        const tail: string[] = [];
-        const ensuredDirs = new Set<string>();
-        const broadPositionsPrePartition = finalLines
-          .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-          .filter((index) => index !== -1);
-        const lastBroadPrePartition =
-          broadPositionsPrePartition[broadPositionsPrePartition.length - 1] ?? -1;
-        for (const rule of targetedRules) {
-          const trimmedRule = rule.trim();
-          if (trimmedRule.startsWith("!") && trimmedRule.endsWith("/**")) {
-            const inner = trimmedRule.slice(1, -3); // e.g. `.mstar/custom`
-            const segments = inner.split("/").slice(1); // drop the harness dir name
-            let prefix = inner.split("/")[0];
-            for (const segment of segments) {
-              prefix += "/" + segment;
-              const dirNegation = "!" + prefix + "/";
- // Idempotency: skip when the dir negation already exists
- // after the last broad rule (synthesized by an earlier run)
- // or is already queued in this pass.
-              const alreadyQueued = ensuredDirs.has(dirNegation);
-              const alreadyPresent =
-                !alreadyQueued &&
-                finalLines.some(
-                  (line, index) =>
-                    index > lastBroadPrePartition && line.trim() === dirNegation,
-                );
-              if (!alreadyQueued && !alreadyPresent) {
-                ensuredDirs.add(dirNegation);
-                tail.push(dirNegation);
-              }
-            }
-          }
-          tail.push(rule);
-        }
-        const rebuilt = [...ownedBody, ...tail];
-        const current =
-          finalLines[finalLines.length - 1] === "" ? finalLines.slice(0, -1) : finalLines;
-        if (rebuilt.join("\n") !== current.join("\n")) {
-          finalLines.length = 0;
-          finalLines.push(...rebuilt);
-          normalized = true;
-        }
-      }
-
- // Recompute broad positions after the partition.
-      const broadAfter = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadAfter.length > 1) {
- // 2. Dedupe: post-partition every line between two broad rules is
- // owned, so extra broad rules are pure redundancy. Removing them
- // can only make canonical re-inclusions effective.
-        const [first, ...duplicates] = broadAfter;
-        let removed = 0;
-        for (const duplicate of duplicates) {
-          finalLines.splice(duplicate - removed, 1);
-          removed++;
-        }
-        if (removed > 0) normalized = true;
-      }
-
- // Recompute once more; relocate a misplaced primary broad rule.
-      const broadIndexesFinal = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      const canonicalNegationIndexesFinal = finalLines
-        .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-        .filter((index) => index !== -1);
-      const firstCanonicalNegationIndexFinal = canonicalNegationIndexesFinal[0] ?? -1;
-      if (
-        broadIndexesFinal.length > 0 &&
-        firstCanonicalNegationIndexFinal !== -1 &&
-        broadIndexesFinal[0] > firstCanonicalNegationIndexFinal
-      ) {
-        const keptIndex = broadIndexesFinal[0];
-        let feasible = true;
-        for (let i = firstCanonicalNegationIndexFinal; i < keptIndex; i++) {
-          const line = finalLines[i].trim();
-          if (line === "" || line.startsWith("#")) continue;
-          if (line === ".mstar/**" || line === ".mstarc") continue;
-          if (CANONICAL_NEGATIONS[line] === true) continue;
-          feasible = false;
-          break;
-        }
-        if (feasible) {
-          const [broadLine] = finalLines.splice(keptIndex, 1);
-          finalLines.splice(firstCanonicalNegationIndexFinal, 0, broadLine);
-          normalized = true;
-        }
-      }
-
- // 4. Guarantee: every canonical negation occurs at least once AFTER
- // the last broad rule. A retained/misplaced broad sitting between
- // canonical re-inclusions would otherwise shadow them under
- // last-match-wins even though the fence was reported as installed.
-      const broadIndexesLast = finalLines
-        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
-        .filter((index) => index !== -1);
-      if (broadIndexesLast.length > 0) {
-        const lastBroadIndex = broadIndexesLast[broadIndexesLast.length - 1];
- // Insert missing negations BEFORE the partitioned user tail (the
- // first targeted user rule, if any) \u2014 appending after it would put
- // our negations past the user's rules, and the next run's partition
- // would move the user rules again (flip-flop).
-        let insertIndex = finalLines.findIndex((line) => isTargetedUserMstarRule(line));
-        if (insertIndex === -1) insertIndex = finalLines.length;
-        for (const negation of Object.keys(CANONICAL_NEGATIONS)) {
-          const covered = finalLines.some(
-            (line, index) => index > lastBroadIndex && line.trim() === negation,
-          );
-          if (!covered) {
-            finalLines.splice(insertIndex, 0, negation);
-            insertIndex++;
-            normalized = true;
-          }
-        }
-      }
- // Preserve a trailing newline whenever normalization changed the
- // file (appends land after any newline the original file had).
-      if (normalized && finalLines[finalLines.length - 1] !== "") finalLines.push("");
-    }
-    if (normalized) {
-      fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
-      created.push(".gitignore (canonical harness snippet reordered)");
-    } else if (missing.length === 0) {
-      skipped.push(".gitignore (canonical harness snippet already present)");
     }
   } else {
     skipped.push(".gitignore (canonical harness snippet) \u2014 custom harness layout manages its own ignore rules");
@@ -913,9 +659,58 @@ pathCommand
     }
   });
 
+/* ------------------------------------------------------------------------ *
+ * § The execution-authority read route (primary spec §5, plan S2)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §5: a CLI read whose INPUT is a workflow-snapshot document refuses
+ * `execution.consumer-not-ready` while the control harness's execution
+ * authority is ACTIVE.
+ *
+ * `execution gate`'s pure gates consume the snapshot DOCUMENT — the phase-6
+ * close gate validates its whole shape, and the plan rows it validates carry
+ * their session binding. The DB adapter deliberately carries no session
+ * binding, so materializing a snapshot for those readers would be the
+ * session-file invention §5's STOP line forbids; the honest answer until that
+ * consumer is migrated is this explicit refusal, never the retired file's
+ * bytes and never an empty success. A store that exists and cannot be read
+ * (corrupt, drifted, busy) is the route resolver's own refusal and passes
+ * through unchanged.
+ */
+async function assertLegacyGateInputAvailable(context: StoreContext, what: string): Promise<void> {
+  if ((await resolveExecutionReadRoute(context)) !== "execution") return;
+  throw new StoreError(
+    "execution.consumer-not-ready",
+    `${what}: the execution authority of ${context.harnessDir} is ACTIVE, so this gate's snapshot/document input is ` +
+      `retired. Nothing was read: this gate consumes a snapshot document whose plan rows carry their session binding ` +
+      `(which the DB adapter deliberately does not), so it reports not-ready rather than inventing one. Read the ` +
+      `workflow/plan state through the execution DB adapter instead.`,
+  );
+}
+
+/** The label an authoritative (DB-route) verdict names as its source. */
+function authorityLabel(read: { storeId: string; epoch: number }): string {
+  return `execution authority (store ${read.storeId}, epoch ${read.epoch})`;
+}
+
+/**
+ * One plan row of an authoritative plan view, in the SSOT row shape the lease
+ * gate reads (`plans[].execution_lease`). The DB view keeps the lease OUTSIDE
+ * the row (`ExecutionPlanView.executionLease`), so the projection is explicit
+ * — and an absent lease stays `undefined`, which is how the gate distinguishes
+ * `lease.verify.missing` / `lease.verify.orphan`.
+ */
+function leaseRowOf(view: ExecutionPlanView): Record<string, unknown> {
+  return {
+    ...(view.plan as unknown as Record<string, unknown>),
+    execution_lease: view.executionLease ?? undefined,
+  };
+}
+
 const statusCommand = program
   .command("status")
-  .description("v2 status.json root / workflow snapshot / project-register checks (engine-backed)");
+  .description("v2 status.json root / workflow snapshot / issue-store findings checks (engine-backed)");
 
 /**
  * Process-harness resolution starts at the verified MAIN worktree: the
@@ -985,13 +780,50 @@ function readSnapshotForCheck(snapshotPath: string) {
 statusCommand
   .command("validate")
   .description(
-    "Validate a v2 status.json root or workflow snapshot (root: version 2 + updated_at + active workflows[] with per-entry snapshot invariants; snapshot: schema_version 1 + plan rows + lease shapes; v1 input fails closed with the mstar migrate hint)",
+    "Validate a v2 status.json root or workflow snapshot (root: version 2 + updated_at + active workflows[] with per-entry snapshot invariants; snapshot: schema_version 1 + plan rows + lease shapes; v1 input fails closed with the mstar migrate hint). " +
+      "With no path, an ACTIVE execution authority answers by validating its OWN register with its own readers (membership and every stored row) instead of the retired status.json",
   )
   .argument("[path]", "status.json or workflows/<id>/snapshot.json path (default: {HARNESS_DIR}/status.json)")
-  .action((pathArg?: string) => {
+  .action(async (pathArg?: string) => {
     let statusPath: string;
     try {
+      if (pathArg === undefined) {
+        // §5: the default target is the harness's ROOT REGISTER. While the DB
+        // is the execution authority that register lives in `execution_meta`/
+        // `execution_registry`, and the file at the same address is retired —
+        // validating the retired bytes would report a stale "OK".
+        //
+        // The authority validates its own register: this read runs the same
+        // readers the domain verbs do (registry membership against the workflow
+        // header, each plan row against its own key, the shipped coordination /
+        // lease / session rules), so an internally inconsistent register is
+        // `store.corrupt` rather than OK. The FILE document rules are not reused
+        // here: they describe the file route's schema (its `updated_at` is a
+        // YYYY-MM-DD date, while `execution_meta.root_updated_at` — the
+        // register's own timestamp — is a UTC instant by §2.2).
+        const harnessDir = resolveProcessHarnessDir();
+        if (harnessDir !== null && (await resolveExecutionReadRoute({ harnessDir })) === "execution") {
+          const read = await readExecutionAuthority({ harnessDir });
+          console.log(pc.green(`${authorityLabel(read)} register: OK`));
+          // The active transport addresses a scope by ITS OWN CAS token (§3.2):
+          // the register read is the route that reports them, so a caller can
+          // pass `--expect` from this read instead of inventing a revision.
+          console.log(`  root token: ${read.token}`);
+          if ("workflows" in read.data) {
+            for (const entry of read.data.workflows) {
+              console.log(`  workflow ${entry.state.id} token: ${entry.workflowToken}`);
+            }
+          }
+          return;
+        }
+      }
       statusPath = resolveStatusFilePath(pathArg);
+      // An explicitly named `status.json` is retired exactly like the default
+      // one: refuse rather than validate bytes no longer in authority. The
+      // snapshot branch below already goes through the guarded engine reader.
+      if (pathArg !== undefined && path.basename(statusPath) === "status.json") {
+        await assertLegacyGateInputAvailable({ harnessDir: path.dirname(statusPath) }, "status validate");
+      }
       if (!fs.existsSync(statusPath)) {
         throw new Error(`status file not found: ${statusPath}`);
       }
@@ -1020,27 +852,101 @@ statusCommand
     }
   });
 
+/**
+ * Issue severity enum order (issue contract §2) — the rollup's key order. The
+ * engine's legacy `Severity` export is the register-era enum (`nit`), so this
+ * names the issue vocabulary directly; the rollup test pins the exact key set.
+ */
+const ISSUE_SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"] as const;
+
+/**
+ * The store context of a command that reads the issue authority: --harness
+ * wins, else the cwd-resolved control root (mirrors `mstar issue` and
+ * `mstar store`).
+ */
+function issueStoreContextOf(options: { harness?: string }): StoreContext {
+  const override = typeof options.harness === "string" ? options.harness : undefined;
+  const resolved = resolveEngineProcessHarnessDir(process.cwd(), override);
+  const harnessDir = resolved ?? (override !== undefined ? path.resolve(override) : process.cwd());
+  return { harnessDir };
+}
+
+/**
+ * Refuse a store that is not the active issue authority before a user-facing
+ * read presents its rows as findings. The engine's list/read verbs legitimately
+ * read a staged store (contract §2 allows read-only staging), but the CLI's
+ * rollup is a findings report: a missing, corrupt or staged authority must fail
+ * loudly (the same fail-closed verdict `findingsCleanupGate` uses), never print
+ * an empty or provisional rollup.
+ */
+async function assertActiveIssueStore(context: StoreContext): Promise<void> {
+  const handle: StoreHandle = await openStore(context, "read");
+  try {
+    const meta = handle.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+      | { authorityState?: unknown }
+      | undefined;
+    if (!meta || meta.authorityState !== "active") {
+      throw new IssueError(
+        "store.not-active",
+        `The issue store is ${typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable"}; ` +
+          "the findings rollup requires an active store.",
+      );
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The open-issue rollup of the issue authority: every OPEN issue in
+ * `{HARNESS_DIR}/store.db`, counted once by severity and once by project. The
+ * register-era `by_target` / `by_plan` aggregates are gone with the register —
+ * the issue domain exposes no such scheduling attribute, and inventing one
+ * would be a second authority. Reads in pages so the count is exact beyond one
+ * page; never writes.
+ */
+async function readIssueRollup(context: StoreContext): Promise<{
+  total_open: number;
+  by_severity: Record<string, number>;
+  by_project: Record<string, number>;
+}> {
+  await assertActiveIssueStore(context);
+  const bySeverity: Record<string, number> = Object.fromEntries(ISSUE_SEVERITY_ORDER.map((severity) => [severity, 0]));
+  const byProject: Record<string, number> = {};
+  const pageSize = 200;
+  let total = 0;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await listIssues(context, { disposition: "open", limit: pageSize, offset });
+    total = page.total;
+    for (const issue of page.items) {
+      bySeverity[issue.severity] = (bySeverity[issue.severity] ?? 0) + 1;
+      byProject[issue.projectId] = (byProject[issue.projectId] ?? 0) + 1;
+    }
+    if (page.items.length === 0 || offset + page.items.length >= page.total) break;
+  }
+  return {
+    total_open: total,
+    by_severity: bySeverity,
+    by_project: Object.fromEntries(Object.entries(byProject).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+  };
+}
+
 statusCommand
   .command("tech-debt")
   .description(
-    "Print the residual tech-debt rollup aggregated over every {PROJECT_DIR}/<id>/residuals.json register " +
-      "(total_open / by_severity / by_target / by_plan; the project register is the source of truth \u2014 " +
-      "no stored-summary drift check, informational exit 0)",
+    "Print the open-issue rollup of the issue store ({HARNESS_DIR}/store.db): total_open / by_severity / by_project " +
+      "(informational exit 0; a missing, corrupt or staged store refuses \u2014 never an empty rollup)",
   )
-  .argument("[path]", "Project dir (default: resolved {PROJECT_DIR})")
-  .action((pathArg?: string) => {
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action(async (options: { harness?: string }) => {
     try {
-      const projectDir = pathArg ? path.resolve(pathArg) : resolveProjectDir();
-      if (!fs.existsSync(projectDir)) {
-        throw new Error(`project dir not found: ${projectDir}`);
-      }
-      const rollup = techDebtRollup(projectDir);
-      console.log(`status tech-debt: ${projectDir}`);
-      console.log(`total_open: ${rollup.computed.total_open}`);
-      console.log(`by_severity: ${JSON.stringify(rollup.computed.by_severity)}`);
-      console.log(`by_target: ${JSON.stringify(rollup.computed.by_target)}`);
-      console.log(`by_plan: ${JSON.stringify(rollup.computed.by_plan)}`);
-      console.log(pc.green("project register is the source of truth \u2014 no stored summary to drift (informational)"));
+      const context = issueStoreContextOf(options);
+      const rollup = await readIssueRollup(context);
+      console.log(`status tech-debt: ${context.harnessDir}`);
+      console.log(`total_open: ${rollup.total_open}`);
+      console.log(`by_severity: ${JSON.stringify(rollup.by_severity)}`);
+      console.log(`by_project: ${JSON.stringify(rollup.by_project)}`);
+      console.log(pc.green("store.db is the only findings authority \u2014 no stored summary to drift (informational)"));
     } catch (error) {
       console.error(pc.red(`status tech-debt failed: ${(error as Error).message}`));
       process.exitCode = 1;
@@ -1050,27 +956,20 @@ statusCommand
 statusCommand
   .command("findings-cleanup")
   .description(
-    "Enforce a plan's findings-cleanup mode on its project-register residuals (projects/<id>/residuals.json " +
-      "entries keyed by plan id \u2014 the snapshot plan linkage; zero-residual via Assignment, else allow-residual; exit 1 on violations)",
+    "Enforce a plan's findings-cleanup mode on the OPEN issues linked to it in the issue store " +
+      "({HARNESS_DIR}/store.db provenance; zero-residual via Assignment, else allow-residual). A missing, corrupt or " +
+      "staged store refuses (exit 1) instead of passing as no findings",
   )
-  .argument("<plan-id>", "Plan id whose register entries are checked against the cleanup mode")
+  .argument("<plan-id>", "Plan id whose linked open issues are checked against the cleanup mode")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .option("--project <id>", "Project id whose register is read (default: _default)")
   .option("--mode <mode>", "Cleanup mode override: zero-residual | allow-residual (default: allow-residual)")
-  .action((planId: string, options: { harness?: string; project?: string; mode?: string }) => {
+  .action(async (planId: string, options: { harness?: string; mode?: string }) => {
     try {
-      const projectDir = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
-      const registerPath = path.join(projectDir, options.project ?? _DEFAULT_PROJECT, PROJECT_REGISTER_FILE);
-      if (!fs.existsSync(registerPath)) {
-        throw new Error(`project register not found: ${registerPath}`);
-      }
-      const mode =
-        options.mode === "zero-residual" || options.mode === "allow-residual" ? options.mode : undefined;
+      const mode = options.mode === "zero-residual" || options.mode === "allow-residual" ? options.mode : undefined;
       if (options.mode !== undefined && mode === undefined) {
         throw new Error(`invalid --mode ${options.mode} (zero-residual | allow-residual)`);
       }
-      const register = readJson(registerPath) as ProjectRegisterDoc;
-      const gate = findingsCleanupGate(register, planId, mode ? { mode } : undefined);
+      const gate = await findingsCleanupGate(issueStoreContextOf(options), planId, mode ? { mode } : undefined);
       if (gate.ok) {
         console.log(pc.green(`findings-cleanup ${planId}: OK`));
         return;
@@ -1098,114 +997,35 @@ function collectEntries(value: string, previous: string[]): string[] {
 }
 
 /**
- * Single-component project-id guard for the `--project` write commands
- * (backlog-register / backlog-close). The id is joined onto `{PROJECT_DIR}`
- * and both commands WRITE `residuals.json` + `.status-write.lockdir/` there \u2014
- * an absolute or `..`-containing id would escape the projects dir ;
- * same class as the workflow-id guard in resolveSnapshotPath). Accept only one
- * safe path component: an alnum first char, then `[A-Za-z0-9._-]`. The built-in
- * `_default` project id (project-less flows) is a constant single-component
- * name that cannot escape, so it is allowed explicitly.
+ * The retired `status backlog-register` / `status backlog-close` verbs
+ * (issue-governance cutover G2b). They used to write project `residuals.json`
+ * registers, which are now migration history: the verbs refuse with the
+ * replacement instead of keeping a write-through alias. Registered (not
+ * deleted) so an old invocation reaches the guidance rather than a bare
+ * unknown-command error, and they accept any flag shape for the same reason.
  */
-const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function sanitizeProjectId(projectId: string): string {
-  if (projectId === _DEFAULT_PROJECT) {
-    return projectId;
-  }
-  if (
-    projectId === "" ||
-    projectId === "." ||
-    projectId === ".." ||
-    path.isAbsolute(projectId) ||
-    !PROJECT_ID_RE.test(projectId)
-  ) {
-    throw new Error(
-      `invalid project id ${JSON.stringify(projectId)} \u2014 expected one path component ` +
-        `([A-Za-z0-9][A-Za-z0-9._-]*); "." / ".." / absolute / separator-containing ids would escape {PROJECT_DIR}`,
-    );
-  }
-  return projectId;
-}
+const RETIRED_BACKLOG_COMMANDS: Record<string, string> = {
+  "backlog-register": "plan issue-add",
+  "backlog-close": "plan issue-close",
+};
 
-statusCommand
-  .command("backlog-register")
-  .description(
-    "Register deferred-PR backlog entries in a project register under the status write lock " +
-      "(engine-backed: same-day key bump + entry-id uniqueness inside withStatusWriteLock; " +
-      "each --entry is one residual JSON \u2014 source_plan/registered_at are filled by the CLI)",
-  )
-  .option("--project <id>", "Project id whose register is written (default: _default)")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .requiredOption("--key <plan-key>", "Base entries key (<plan-id>); the first free same-day key (base, base-2, \u2026) is used")
-  .option("--entry <json>", "Residual entry JSON (nine fields; source_plan/registered_at filled by the CLI) \u2014 repeatable", collectEntries, [])
-  .action(async (options: { project?: string; harness?: string; key: string; entry?: string[] }) => {
-    try {
-      const entriesRaw = options.entry ?? [];
-      if (entriesRaw.length === 0) {
-        throw new Error("at least one --entry is required \u2014 refusing to register an empty backlog");
-      }
-      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
-      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
- // Store-root pinning ( Part B): the engine writers put
- // through getArtifactStore(), whose default root is the cwd-resolved
- // harness \u2014 an explicit --harness must pin the store to that root.
-      if (options.harness) setArtifactStore(createFsStore(options.harness));
-      const projectDir = path.join(projectRoot, projectId);
-      const registeredAt = todayString();
-      const entries = entriesRaw.map((raw, index) => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (error) {
-          throw new Error(`--entry ${index + 1} is not valid JSON: ${(error as Error).message}`);
-        }
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          throw new Error(`--entry ${index + 1} must be a JSON object`);
-        }
- // Provenance is CLI-owned: source_plan = the used key (the engine sets
- // the bumped key per B-9 ①), registered_at = today ( contract).
-        return { ...(parsed as Record<string, unknown>), source_plan: options.key, registered_at: registeredAt };
-      });
-      const result = await appendProjectRegisterEntries({ projectDir, basePlanKey: options.key, entries });
-      console.log(
-        pc.green(`backlog-register: registered ${entries.length} entr${entries.length === 1 ? "y" : "ies"} under key ${result.key}`),
+for (const [verb, replacement] of Object.entries(RETIRED_BACKLOG_COMMANDS)) {
+  statusCommand
+    .command(verb)
+    .description(`Removed \u2014 ${replacement} replaces it; this verb refuses and writes nothing`)
+    .allowUnknownOption()
+    .allowExcessArguments()
+    .action(() => {
+      console.error(
+        pc.red(
+          `status ${verb}: removed \u2014 project registers are migration history; findings are issues in ` +
+            `{HARNESS_DIR}/store.db (capture/close via \`mstar ${replacement}\`, or the unscoped \`mstar issue add|close\`); ` +
+            "this verb writes nothing",
+        ),
       );
-    } catch (error) {
-      console.error(pc.red(`status backlog-register failed: ${(error as Error).message}`));
       process.exitCode = 1;
-    }
-  });
-
-statusCommand
-  .command("backlog-close")
-  .description(
-    "Close one project-register backlog entry in place under the status write lock " +
-      "(lifecycle: resolved + closed_at: <today> + closure_note; absent id/key fails loud, exit 1)",
-  )
-  .option("--project <id>", "Project id whose register is updated (default: _default)")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .requiredOption("--key <plan-key>", "Entries key (<plan-id>) holding the entry to close")
-  .requiredOption("--id <entry-id>", "id of the entry to close")
-  .option("--note <text>", "Closure note (default: \"closed by backlog close\")")
-  .action(async (options: { project?: string; harness?: string; key: string; id: string; note?: string }) => {
-    try {
-      const projectId = sanitizeProjectId(options.project ?? _DEFAULT_PROJECT);
-      const projectRoot = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
- // Store-root pinning ( Part B): see backlog-register.
-      if (options.harness) setArtifactStore(createFsStore(options.harness));
-      const projectDir = path.join(projectRoot, projectId);
-      await closeProjectRegisterEntry({
-        projectDir,
-        planKey: options.key,
-        entryId: options.id,
-        closureNote: options.note ?? "closed by backlog close",
-      });
-      console.log(pc.green(`backlog-close: resolved entry ${options.id} under key ${options.key}`));
-    } catch (error) {
-      console.error(pc.red(`status backlog-close failed: ${(error as Error).message}`));
-      process.exitCode = 1;
-    }
-  });
+    });
+}
 
 statusCommand
   .command("workflow-close")
@@ -1226,14 +1046,32 @@ statusCommand
   )
   .option("--workflow <id>", "Workflow id to close ({WORKFLOW_DIR}/<id>/snapshot.json)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
-  .option("--ended-at <date>", "Terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
-  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
-  .action(async (options: { workflow?: string; harness?: string; endedAt?: string; session?: string }) => {
+  .option("--ended-at <date>", "Pre-activation only: terminal ended_at timestamp (YYYY-MM-DD or RFC3339; default: today)")
+  .option("--session <path>", "Pre-activation: absolute coordinator session JSON envelope path (required to close a coordinated workflow)")
+  .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+  .option("--expect <token>", "Active DB route: the workflow's full execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+  .option("--reason <text>", "Active DB route: the reason recorded with the terminal lifecycle transition")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
+  .action(
+    async (options: {
+      workflow?: string;
+      harness?: string;
+      endedAt?: string;
+      session?: string;
+      sessionRef?: string;
+      expect?: string;
+      operation?: string;
+      reason?: string;
+      json?: boolean;
+    }) => {
     try {
       const workflowId = options.workflow;
       if (workflowId === undefined || workflowId.trim() === "") {
         throw new SddScriptError(
-          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]",
+          "usage: status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]\n" +
+            "       status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> " +
+            "--operation <id> --reason <text> [--harness <path>] [--json]",
           2,
         );
       }
@@ -1249,7 +1087,46 @@ statusCommand
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
       }
-      // Store-root pinning (see backlog-register): closeWorkflow and
+      // Active DB route (contract §3.2): the terminal state and the registry
+      // membership belong to the execution authority, so this form performs the
+      // terminal `lifecycle` transition and NOTHING else — no file close, no
+      // unregister step, and no `--ended-at` rewrite.
+      const active = readActiveWorkflowFlags(options, "status workflow-close");
+      if (active !== null) {
+        if (options.endedAt !== undefined) {
+          throw new SddScriptError(
+            "status workflow-close: --ended-at belongs to the pre-activation file close \u2014 the active lifecycle transition " +
+              "records its own timestamp",
+            2,
+          );
+        }
+        const reason = options.reason;
+        if (reason === undefined || reason.trim() === "") {
+          throw new SddScriptError(
+            "usage: status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> " +
+              "--operation <id> --reason <text> [--harness <path>] [--json]",
+            2,
+          );
+        }
+        setArtifactStore(createFsStore(harnessDir));
+        const receipt = await closeActiveWorkflow(
+          activeWorkflowContext({ workflowId, role: "coordinator", planId: null }, harnessDir, "status workflow-close"),
+          workflowId,
+          active,
+          reason,
+        );
+        printExecutionSuccess(
+          "status workflow-close",
+          receipt,
+          options.json === true,
+          `workflow-close: ${workflowId} closed through the execution authority`,
+        );
+        return;
+      }
+      // Pre-activation route. While the authority is ACTIVE the retired file
+      // close (and its unregister step) is refused before any write.
+      await assertLegacyExecutionFormAvailable({ harnessDir }, "status workflow-close");
+      // Store-root pinning (see `status workflow-register`): closeWorkflow and
       // unregisterWorkflow write through the active ArtifactStore with
       // fail-loud path agreement — the control harness root resolved above
       // must ALWAYS be pinned as the store root (the default store resolves
@@ -1295,20 +1172,21 @@ statusCommand
           : `workflow-close: status.json has no ${workflowId} entry (${statusFile})`,
       );
     } catch (error) {
-      failScript(error, "status workflow-close");
+      if (options.json === true) failExecutionVerb("status workflow-close", error, true);
+      else failScript(error, "status workflow-close");
     }
   });
 
 statusCommand
   .command("archive-residuals")
   .description(
-    "Removed in v3 \u2014 residual close is a project-register state change; this command exits 1 and names the replacement",
+    "Removed \u2014 residual close is an issue disposition now; this command exits 1 and names the replacement",
   )
   .action(() => {
     console.error(
       pc.red(
-        "status archive-residuals: removed in v3 \u2014 residuals live in project registers; close entries in " +
-          "projects/<id>/residuals.json (set lifecycle to resolved/waived/superseded with closure fields) instead",
+        "status archive-residuals: removed \u2014 findings are issues in {HARNESS_DIR}/store.db; close one with " +
+          "`mstar plan issue-close` (plan-scoped) or `mstar issue close|waive|duplicate|supersede` (unscoped) instead",
       ),
     );
     process.exitCode = 1;
@@ -1356,6 +1234,9 @@ workflowCommand
   .option("--completion-policy <text>", "Completion evidence policy (required for verification/report-only)")
   .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--expect <token>", "Active DB route: the store's full root execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one registration operation (the replay key)")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -1369,6 +1250,9 @@ workflowCommand
       completionPolicy?: string;
       startedAt?: string;
       harness?: string;
+      expect?: string;
+      operation?: string;
+      json?: boolean;
     }) => {
       try {
         const usage =
@@ -1403,20 +1287,65 @@ workflowCommand
         if (!harnessDir) {
           throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
         }
+        // Contract §3: one producer call, whichever route publishes it. The
+        // active route consumes it through `commitExecutionRegistration`
+        // (trusted identity + full expected token); the pre-activation route
+        // keeps the catalog journal unchanged.
+        const workflow: CatalogExecutionWorkflow = {
+          kind: "plan",
+          workflowId: options.workflow!,
+          options: {
+            harnessDir,
+            plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
+            deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+            ...(options.project !== undefined ? { project: options.project } : {}),
+            ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+            ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+            ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+            ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+          },
+        };
+        const active = readActiveRegistrationFlags(options, "workflow register");
+        if (active !== null) {
+          setArtifactStore(createFsStore(harnessDir));
+          const identity = requireExecutionIdentity(
+            { workflowId: options.workflow!, role: "coordinator", planId: null },
+            "workflow register",
+          );
+          const receipt = await registerActiveWorkflow({ harnessDir }, {
+            workflow,
+            actor: "cli:workflow-register",
+            flags: active,
+            identity,
+          });
+          if (options.json === true) {
+            console.log(JSON.stringify({ ok: true, route: "execution", operation: "workflow register", data: receipt }));
+          } else {
+            console.log(
+              pc.green(
+                `workflow register: OK \u2014 ${receipt.workflowId} registered through the execution authority ` +
+                  `(catalog revision ${receipt.catalogRevision}, operation ${receipt.operationId})`,
+              ),
+            );
+          }
+          return;
+        }
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow register");
         // Store-root pinning (see `status workflow-close`): the register
         // producer writes through the active ArtifactStore with fail-loud
         // path agreement — the control harness root resolved above must
         // ALWAYS be pinned as the store root.
         setArtifactStore(createFsStore(harnessDir));
-        const result = await registerPlanWorkflow(options.workflow!, {
-          harnessDir,
-          plan: { id: options.planId!, title: options.planTitle!, file: options.planFile! },
-          deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
-          ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
-          ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
-          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        // Contract §3: the shipped entry point registers through the catalog
+        // registration journal and reports success only from the committed
+        // receipt — a half-registered workflow is never advertised.
+        const result = await registerShippedCatalogExecution({ harnessDir }, {
+          // A fresh operation id per invocation: a retry after a crash hits the
+          // journal's pending/reconcile path instead of silently replaying, and
+          // a duplicate registration keeps its create-only refusal.
+          operationId: randomUUID(),
+          actor: "cli:workflow-register",
+          workflow,
         });
         console.log(
           pc.green(
@@ -1425,9 +1354,10 @@ workflowCommand
               : `workflow register: OK \u2014 ${result.workflowId} registered`,
           ),
         );
-        console.log(`  snapshot: ${result.snapshotPath}`);
+        console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
-        failScript(error, "workflow register");
+        if (options.json === true) failExecutionVerb("workflow register", error, true);
+        else failScript(error, "workflow register");
       }
     },
   );
@@ -1486,9 +1416,13 @@ workflowCommand
   .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (declare mode; required for development)")
   .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (declare mode; required for development)")
   .option("--completion-policy <text>", "Completion policy for verification/report-only (declare mode; required for that kind)")
-  .option("--session <path>", "Absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
-  .option("--at <timestamp>", "Recording/declaration timestamp (YYYY-MM-DD or RFC3339; default: now)")
+  .option("--session <path>", "Pre-activation: absolute coordinator session JSON envelope path (required to write a coordinated workflow)")
+  .option("--session-ref <wire>", "Active DB route: canonical session reference (exec-session-v1:<base64url>)")
+  .option("--expect <token>", "Active DB route: the workflow's full execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one operation (the replay key)")
+  .option("--at <timestamp>", "Pre-activation only: recording/declaration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -1498,15 +1432,21 @@ workflowCommand
       branchTarget?: string;
       completionPolicy?: string;
       session?: string;
+      sessionRef?: string;
+      expect?: string;
+      operation?: string;
       at?: string;
       harness?: string;
+      json?: boolean;
     }) => {
     try {
       const workflowId = options.workflow;
       const usage =
         "usage: workflow evidence --workflow <id> (--file <payload.json> | --declare-kind <kind> " +
         "[--branch-source <branch> --branch-target <branch> | --completion-policy <text>]) " +
-        "[--session <path>] [--at <ts>] [--harness <path>]";
+        "[--session <path>] [--at <ts>] [--harness <path>]\n" +
+        "       workflow evidence --workflow <id> --file <payload.json> --session-ref <wire> " +
+        "--expect <full-execution-token> --operation <id> [--harness <path>] [--json]";
       if (workflowId === undefined || workflowId.trim() === "") {
         throw new SddScriptError(usage, 2);
       }
@@ -1536,6 +1476,37 @@ workflowCommand
       const harnessDir = resolveProcessHarnessDir(options.harness);
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+      }
+      const active = readActiveWorkflowFlags(options, "workflow evidence");
+      if (declaring) {
+        // A one-time delivery-kind declaration is a pre-activation snapshot
+        // rewrite: the DB creation route declares its kind at registration, so
+        // there is no active operation for it and it is never disguised as one.
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow evidence --declare-kind");
+      } else if (active !== null) {
+        if (options.at !== undefined) {
+          throw new SddScriptError(
+            "workflow evidence: --at belongs to the pre-activation file write \u2014 the active delivery transition records its " +
+              "own timestamp",
+            2,
+          );
+        }
+        setArtifactStore(createFsStore(harnessDir));
+        const receipt = await recordActiveDelivery(
+          activeWorkflowContext(activeWorkflowScope(workflowId, active.ref, "workflow evidence"), harnessDir, "workflow evidence"),
+          workflowId,
+          active,
+          evidence!,
+        );
+        printExecutionSuccess(
+          "workflow evidence",
+          receipt,
+          options.json === true,
+          `workflow evidence: OK \u2014 ${workflowId} delivery evidence recorded through the execution authority`,
+        );
+        return;
+      } else {
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "workflow evidence");
       }
       // Store-root pinning (see `status workflow-close`): the evidence write
       // routes through the active ArtifactStore with fail-loud path
@@ -1571,7 +1542,8 @@ workflowCommand
         ),
       );
     } catch (error) {
-      failScript(error, "workflow evidence");
+      if (options.json === true) failExecutionVerb("workflow evidence", error, true);
+      else failScript(error, "workflow evidence");
     }
   });
 
@@ -1600,14 +1572,14 @@ const migrateCommand = program
 const persistCommand = program
   .command("persist")
   .description(
-    "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / residuals / review / json). " +
+    "Persist one JSON coordination doc through the ArtifactStore (status / snapshot / review / json). " +
       "Faces: put (default), get [--validate], list (keys only, no header), delete (idempotent). " +
       "The default FsStore resolves the harness dir from the cwd / MSTAR_HARNESS_DIR; --store <module> or " +
       "MSTAR_STORE_MODULE injects a module-backed store (filesystem paths only) for the process.",
   );
 
 /** Persist kinds (unknown kind is a usage error, exit 2). */
-const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "review", "json"];
+const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "review", "json"];
 
 /**
  * Kinds the coordination boundary protects: their local bytes belong to the
@@ -1617,23 +1589,40 @@ const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "residuals", "re
  * files keeps the plain put and its store refusal — the alias is a
  * path-shaped key, not a coordinated ref.
  */
-const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot", "residuals"];
+const COORDINATED_PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot"];
+
+/**
+ * The retired `residuals` kind (issue-governance cutover G2b): a project
+ * register is migration history, and the issue store is the only findings
+ * authority. The kind refuses with the replacement rather than mapping onto
+ * anything that could write a register — including through the `json` alias,
+ * which the engine's store boundary refuses for a project register target.
+ */
+function refuseRetiredPersistKind(kind: string): void {
+  if (kind !== "residuals") return;
+  throw new SddScriptError(
+    "`persist residuals` is retired \u2014 the issue store ({HARNESS_DIR}/store.db) is the only findings authority; " +
+      "capture and close through `mstar plan issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped)",
+    1,
+  );
+}
 
 function parsePersistKind(kind: string): ArtifactKind {
+  refuseRetiredPersistKind(kind);
   if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
   throw new SddScriptError(
     "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
       "       persist get <kind> --key <key> [--validate] [--store <module>]\n" +
       "       persist list <kind> [--store <module>]\n" +
       "       persist delete <kind> --key <key> [--store <module>]\n" +
-      `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | residuals | review | json`,
+      `  unknown kind ${JSON.stringify(kind)} \u2014 expected status | snapshot | review | json`,
     2,
   );
 }
 
 /**
  * Classify a put against the coordinated-artifact boundary and narrow its
- * contract. Coordinated kinds (`status` / `snapshot` / `residuals`) require
+ * contract. Coordinated kinds (`status` / `snapshot`) require
  * the caller's exact byte version — `absent` for a first create, else the
  * `sha256:<hex>` the versioned read reported — and a snapshot replacement
  * additionally requires the coordinator envelope that binds the writer
@@ -1648,7 +1637,7 @@ function resolvePersistWrite(
   if (!COORDINATED_PERSIST_KINDS.includes(kind)) {
     if (options.expectVersion !== undefined || sessionPath !== undefined) {
       throw new SddScriptError(
-        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot | residuals) \u2014 ${kind} keeps its existing writer`,
+        `usage: --expect-version / --session replace coordinated artifacts (status | snapshot) \u2014 ${kind} keeps its existing writer`,
         2,
       );
     }
@@ -1723,7 +1712,6 @@ function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
   let gate: GateResult;
   if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc);
   else if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
-  else if (kind === "residuals") gate = validateProjectRegister(payload);
   else if (kind === "review") gate = validateMstarReviewV1(payload);
   else return; // json \u2014 arbitrary payload, parse-only
   if (gate.ok) return;
@@ -1732,7 +1720,7 @@ function validatePersistPayload(kind: ArtifactKind, payload: unknown): void {
 }
 
 persistCommand
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // Not a commander requiredOption: the `get` subcommand declares the same
  // flag, and a parent requiredOption would be validated before subcommand
  // dispatch — `persist get ... --key k` would fail the parent's check.
@@ -1742,7 +1730,7 @@ persistCommand
   .option("--stdin", "Read the payload JSON from stdin")
   .option("--store <module>", "Store module path (filesystem only; overrides MSTAR_STORE_MODULE)")
   .option("--schema <id>", "Optional schema id stored on the artifact doc (e.g. mstar.review/v1); stored only by store modules that persist it \u2014 the default FsStore rejects it (exit 1)")
-  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot | residuals): "absent" or sha256:<hex> from `persist get --versioned`')
+  .option("--expect-version <version>", 'Exact byte version of the document being replaced (status | snapshot): "absent" or sha256:<hex> from `persist get --versioned`')
   .option("--session <path>", "Absolute coordinator session envelope path (required to replace a coordinated snapshot)")
   .action(
     async (
@@ -1778,7 +1766,7 @@ persistCommand
         validatePersistPayload(parsedKind, payload);
         await resolvePersistStore(options.store);
         const store = getArtifactStore();
-        // Protected kinds (`status` / `snapshot` / `residuals`, and any
+        // Protected kinds (`status` / `snapshot`, and any
         // `json` alias of those files) go through the FsStore boundary: only
         // the engine's locked writers may write them. The replacement face
         // runs inside the engine's own lock + same-host CAS check, so the
@@ -1816,7 +1804,7 @@ persistCommand
 persistCommand
   .command("get")
   .description("Print the stored payload JSON for <kind>/<key>, or exit 1 when absent")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --key / --store are declared on the parent `persist` command only:
  // commander parses a parent's options from the whole arg list, so a
  // subcommand's same-named declaration would never see the value. The get
@@ -1876,7 +1864,7 @@ persistCommand
 persistCommand
   .command("list")
   .description("Print the stored keys for <kind>, one per line, ascending, no header (json is not listable)")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --store is parsed by the parent `persist` command (same commander
  // dispatch constraint as `get` — see the note there).
   .action(async (kind: string, _options: object, command: Command) => {
@@ -1910,7 +1898,7 @@ persistCommand
 persistCommand
   .command("delete")
   .description("Delete the stored document for <kind>/<key> (idempotent: absent is a no-op; no prompt)")
-  .argument("<kind>", "status | snapshot | residuals | review | json")
+  .argument("<kind>", "status | snapshot | review | json")
  // --key / --store are parsed by the parent `persist` command (same
  // commander dispatch constraint as `get` — see the note there).
   .action(async (kind: string, _options: object, command: Command) => {
@@ -1992,20 +1980,22 @@ function solePlanRow(
 }
 
 /**
- * Run the engine execution-lease gate on one snapshot plan row and print the
- * verdict (SSOT rules live in lease-verify.ts / the engine \u2014 row-level
+ * Run the engine execution-lease gate on one plan row and print the verdict
+ * (SSOT rules live in lease-verify.ts / the engine — row-level
  * `plans[].execution_lease` is the only location in v3; metadata-only and
- * dual-write were deleted with the v1 read path).
+ * dual-write were deleted with the v1 read path). `readLabel` names the source
+ * the row came from: a snapshot path on the file route, the execution
+ * authority on the DB route.
  */
-function verifyLeaseRow(row: Record<string, unknown>, planId: string, snapshotPath: string): void {
+function verifyLeaseRow(row: Record<string, unknown>, planId: string, readLabel: string): void {
   const result = verifyPlanExecutionLease(row, planId);
   if (result.ok) {
     const holder = String((result.lease as Record<string, unknown>).holder ?? "");
-    console.log(pc.green(`${snapshotPath}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
+    console.log(pc.green(`${readLabel}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
     return;
   }
   const count = result.violations.length;
-  console.error(pc.red(`${snapshotPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
+  console.error(pc.red(`${readLabel}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
   for (const violation of result.violations) {
     console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
     if (violation.fix) console.error(`    fix: ${violation.fix}`);
@@ -2015,14 +2005,38 @@ function verifyLeaseRow(row: Record<string, unknown>, planId: string, snapshotPa
 
 leaseCommand
   .command("verify")
-  .description("Verify a plan's execution_lease on the workflow snapshot's plan row (missing/invalid \u2192 exit 1 with violations)")
+  .description(
+    "Verify a plan's execution_lease on the workflow snapshot's plan row (missing/invalid \u2192 exit 1 with violations). " +
+      "An ACTIVE execution authority answers the same gate from its own plan rows",
+  )
   .option("--workflow <id>", "Workflow id whose snapshot plan row is verified")
   .option("--plan <plan-id>", "Plan id whose execution_lease is verified (default: the snapshot's sole plan row)")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((options: { workflow?: string; plan?: string; harness?: string }) => {
+  .action(async (options: { workflow?: string; plan?: string; harness?: string }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError("usage: lease verify --workflow <id> [--plan <plan-id>] [--harness <path>]", 2);
+      }
+      // §5: the lease gate's input is one plan's OWN row plus its lease — no
+      // session binding and no whole-document shape — so an ACTIVE authority
+      // answers it from the DB adapter rather than from the retired snapshot.
+      const served = await readExecutionSource(
+        { harnessDir: resolveLeaseHarnessDir(options.harness) },
+        options.plan === undefined
+          ? { workflowId: options.workflow }
+          : { workflowId: options.workflow, planId: options.plan },
+      );
+      if (served.route === "execution") {
+        const label = authorityLabel(served.read);
+        if (options.plan !== undefined) {
+          verifyLeaseRow(leaseRowOf(served.read.data as ExecutionPlanView), options.plan, label);
+          return;
+        }
+        const rows = ((served.read.data as ExecutionState).workflows[0]?.plans ?? []).map(leaseRowOf);
+        const sole = solePlanRow(rows, `lease verify ${options.workflow}`);
+        if ("error" in sole) throw sole.error;
+        verifyLeaseRow(sole.row, String(sole.row.plan_id ?? sole.row.id ?? ""), label);
+        return;
       }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       if (!fs.existsSync(snapshotPath)) {
@@ -2060,14 +2074,40 @@ leaseCommand
 leaseCommand
   .command("verify-integration")
   .description(
-    "Verify the workflow snapshot's top-level integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
+    "Verify the workflow snapshot's top-level integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1). " +
+      "An ACTIVE execution authority answers the same gate from its own workflow record",
   )
   .option("--workflow <id>", "Workflow id whose snapshot top-level lease is verified")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((options: { workflow?: string; harness?: string }) => {
+  .action(async (options: { workflow?: string; harness?: string }) => {
     try {
       if (!options.workflow) {
         throw new SddScriptError("usage: lease verify-integration --workflow <id> [--harness <path>]", 2);
+      }
+      // §5: the workflow-wide merge lease is a DB-route field too
+      // (`ExecutionState.workflows[].integrationLease`), so the gate input comes
+      // from the adapter while the authority is active.
+      const served = await readExecutionSource(
+        { harnessDir: resolveLeaseHarnessDir(options.harness) },
+        { workflowId: options.workflow },
+      );
+      if (served.route === "execution") {
+        const label = authorityLabel(served.read);
+        const lease = (served.read.data as ExecutionState).workflows[0]?.integrationLease ?? undefined;
+        if (lease === undefined || lease === null) {
+          console.log(pc.green(`${label}: OK \u2014 no integration_merge_lease (unclaimed)`));
+          return;
+        }
+        const gate = validateIntegrationMergeLease(lease);
+        if (gate.ok) {
+          console.log(
+            pc.green(`${label}: OK \u2014 integration_merge_lease valid (holder ${String((lease as Record<string, unknown>).holder ?? "")})`),
+          );
+          return;
+        }
+        printChecklist("lease verify-integration", gate);
+        process.exitCode = 1;
+        return;
       }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       if (!fs.existsSync(snapshotPath)) {
@@ -2306,6 +2346,34 @@ function printChecklist(label: string, gate: GateResult): void {
   }
 }
 
+/**
+ * The resolved usage form of `iteration gate`: the `--phase 6` post-merge close
+ * branch, or the Phase 2–5 transition branch carrying its resolved `--compass`
+ * path. The two optional properties are mutually exclusive so the action's
+ * branch on `phase` also narrows `compass`.
+ */
+type IterationGateForm = { phase: 6; compass?: undefined } | { phase?: undefined; compass: string };
+
+/**
+ * Decide the gate's usage shape before any authority probe, so a malformed
+ * invocation is a usage error (exit 2) instead of surfacing as the active
+ * authority's refusal (exit 1): `--phase 6` is the only supported phase form and
+ * needs no `--compass`, and every other form requires a non-blank one.
+ */
+function resolveIterationGateForm(options: { phase?: string; compass?: string }): IterationGateForm {
+  if (options.phase !== undefined) {
+    if (Number(options.phase) !== 6) {
+      throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
+    }
+    return { phase: 6 };
+  }
+  const compass = options.compass;
+  if (compass === undefined || compass.trim() === "") {
+    throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
+  }
+  return { compass: path.resolve(compass) };
+}
+
 iterationCommand
   .command("gate")
   .description(
@@ -2324,13 +2392,19 @@ iterationCommand
   .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
   .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
   .action(
-    (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
+    async (options: { workflow: string; compass?: string; phase?: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
-      if (options.phase !== undefined) {
-        const phase = Number(options.phase);
-        if (phase !== 6) {
-          throw new SddScriptError(`usage: iteration gate --phase only supports 6 (got ${JSON.stringify(options.phase)})`, 2);
-        }
+      // The CLI's own usage shape is decided first (exit 2): a malformed
+      // invocation stays a usage error whether or not the authority is active,
+      // so it can never be answered by the route refusal below.
+      const form = resolveIterationGateForm(options);
+      // §5: this gate's input is a workflow SNAPSHOT document. While the
+      // execution authority is active that document is retired, and the DB
+      // adapter deliberately carries no session binding for its plan rows — so
+      // the gate reports not-ready instead of reading the leftover bytes (or
+      // inventing the session file its shape validation would demand).
+      await assertLegacyGateInputAvailable({ harnessDir: resolveLeaseHarnessDir(options.harness) }, "iteration gate");
+      if (form.phase !== undefined) {
         const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
         if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         const rootFile = path.join(resolveLeaseHarnessDir(options.harness), "status.json");
@@ -2347,11 +2421,8 @@ iterationCommand
         if (!gate.ok) process.exitCode = 1;
         return;
       }
-      if (options.compass === undefined || options.compass.trim() === "") {
-        throw new SddScriptError("usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)", 2);
-      }
       const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
-      const compassPath = path.resolve(options.compass);
+      const compassPath = form.compass;
       if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
       if (!fs.existsSync(compassPath)) throw new Error(`compass file not found: ${compassPath}`);
       const result = evaluatePhaseGate(readJson(snapshotPath), parseCompassFrontmatter(compassPath), {
@@ -2390,8 +2461,9 @@ iterationCommand
 
 /**
  * `mstar iteration register` — seam S1 sibling of `mstar workflow register`:
- * a thin wrapper over engine `registerIterationWorkflow` (create-only
- * `type: iteration` snapshot + root entry under one root lock, with
+ * a shipped registration entry point (contract §3 journal transport over
+ * engine `registerIterationWorkflow`: `type: iteration` snapshot + root
+ * entry under one root lock, with
  * byte-preserving orphan recovery). Transport shape errors (missing/blank
  * flags, malformed/non-object `--row` JSON) are usage exit 2; engine
  * domain refusals (duplicate ids, invalid fields, hostile workflow id,
@@ -2420,6 +2492,9 @@ iterationCommand
   .option("--project <id>", "Project register id recorded on the snapshot")
   .option("--started-at <timestamp>", "Registration timestamp (YYYY-MM-DD or RFC3339; default: now)")
   .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+  .option("--expect <token>", "Active DB route: the store's full root execution token (the CAS)")
+  .option("--operation <id>", "Active DB route: caller-supplied id of this one registration operation (the replay key)")
+  .option("--json", "Active DB route: machine-readable JSON on stdout")
   .action(
     async (options: {
       workflow?: string;
@@ -2431,6 +2506,9 @@ iterationCommand
       project?: string;
       startedAt?: string;
       harness?: string;
+      expect?: string;
+      operation?: string;
+      json?: boolean;
     }, command: Command) => {
       try {
         const usage =
@@ -2485,13 +2563,93 @@ iterationCommand
         // path agreement — the control harness root resolved above must
         // ALWAYS be pinned as the store root.
         setArtifactStore(createFsStore(harnessDir));
-        const result = await registerIterationWorkflow(options.workflow!, {
-          harnessDir,
-          compassRef: options.compassRef!,
-          branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
-          rows,
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+        // Registered-plan path contract (§4): every row pointer is threaded
+        // through the ONE resolver before registration, so the engine receives
+        // the canonical absolute pointer it persists and a repository-relative
+        // `.mstar/plans/<id>.md` spelling is refused with the actionable
+        // diagnostic (received form, base, expected canonical target, permitted
+        // forms) instead of being stored and later reinterpreted. Rows whose
+        // shape the engine owns are passed through untouched (their own refusal
+        // is authoritative).
+        const resolvedRows = rows.map((entry) => {
+          if (
+            typeof entry.id !== "string" ||
+            entry.id.trim() === "" ||
+            typeof entry.file !== "string" ||
+            entry.file.trim() === ""
+          ) {
+            return entry;
+          }
+          try {
+            return { ...entry, file: resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: entry.id, file: entry.file }).planPath };
+          } catch (error) {
+            if (!(error instanceof PlanPathError)) throw error;
+            const { received, form, base, expected, permitted } = error.details;
+            throw new Error(
+              `plan pointer refused [${error.code}] ${error.message}\n` +
+                `  received: ${JSON.stringify(received ?? null)} (form: ${String(form ?? "unknown")})\n` +
+                `  base: ${String(base ?? harnessDir)}\n` +
+                `  expected canonical target: ${String(expected ?? "")}\n` +
+                `  permitted forms: ${Array.isArray(permitted) ? permitted.join(" | ") : String(permitted ?? "")}`,
+            );
+          }
+        });
+        // Contract §3: one producer call, whichever route publishes it. The
+        // active route consumes it through `commitExecutionRegistration`
+        // (trusted identity + full expected token) with the P2-resolved plan
+        // pointers; the pre-activation route keeps the catalog journal
+        // unchanged.
+        const workflow: CatalogExecutionWorkflow = {
+          kind: "iteration",
+          workflowId: options.workflow!,
+          options: {
+            harnessDir,
+            compassRef: options.compassRef!,
+            branch: { base: options.branchBase!, integration: options.branchIntegration!, target: options.branchTarget! },
+            rows: resolvedRows,
+            ...(options.project !== undefined ? { project: options.project } : {}),
+            ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+          },
+        };
+        // Only the fields this helper reads are projected: `--row` is a
+        // repeatable array the registration owns, not part of the active
+        // transport flag set.
+        const active = readActiveRegistrationFlags(
+          { expect: options.expect, operation: options.operation },
+          "iteration register",
+        );
+        if (active !== null) {
+          setArtifactStore(createFsStore(harnessDir));
+          const identity = requireExecutionIdentity(
+            { workflowId: options.workflow!, role: "coordinator", planId: null },
+            "iteration register",
+          );
+          const receipt = await registerActiveWorkflow({ harnessDir }, {
+            workflow,
+            actor: "cli:iteration-register",
+            flags: active,
+            identity,
+          });
+          if (options.json === true) {
+            console.log(JSON.stringify({ ok: true, route: "execution", operation: "iteration register", data: receipt }));
+          } else {
+            console.log(
+              pc.green(
+                `iteration register: OK \u2014 ${receipt.workflowId} registered through the execution authority ` +
+                  `(catalog revision ${receipt.catalogRevision}, operation ${receipt.operationId})`,
+              ),
+            );
+          }
+          return;
+        }
+        await assertLegacyExecutionFormAvailable({ harnessDir }, "iteration register");
+        // Contract §3: the shipped entry point registers through the catalog
+        // registration journal and reports success only from the committed
+        // receipt — a half-registered workflow is never advertised.
+        const result = await registerShippedCatalogExecution({ harnessDir }, {
+          operationId: randomUUID(),
+          actor: "cli:iteration-register",
+          workflow,
         });
         console.log(
           pc.green(
@@ -2500,9 +2658,10 @@ iterationCommand
               : `iteration register: OK \u2014 ${result.workflowId} registered`,
           ),
         );
-        console.log(`  snapshot: ${result.snapshotPath}`);
+        console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
       } catch (error) {
-        failScript(error, "iteration register");
+        if (options.json === true) failExecutionVerb("iteration register", error, true);
+        else failScript(error, "iteration register");
       }
     },
   );
@@ -4540,20 +4699,32 @@ auditCommand
         throw new Error(`audit dir not found: ${outDir}`);
       }
       const harnessDir = resolveLeaseHarnessDir(options.harness);
- // Store-root pinning ( Part B): the root upsert inside
- // promoteAuditPlans puts through getArtifactStore() \u2014 pin it to the
+ // Store-root pinning ( Part B): the catalog writes inside
+ // the registration journal put through getArtifactStore() \u2014 pin it to the
  // resolved harness root (identical to the default when --harness is absent).
       setArtifactStore(createFsStore(harnessDir));
-      const result = await promoteAuditPlans(outDir, selected, {
-        harnessDir,
-        deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-        ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
-        ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
-        ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
-        ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+      // Contract §3: the promotion registers through the catalog registration
+      // journal and reports success only from the committed receipt — a
+      // half-registered workflow is never advertised.
+      const result = await registerShippedCatalogExecution({ harnessDir }, {
+        operationId: randomUUID(),
+        actor: "cli:audit-promote",
+        workflow: {
+          kind: "audit",
+          outDir,
+          selected,
+          options: {
+            harnessDir,
+            deliveryKind: options.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
+            ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
+            ...(options.branchSource !== undefined ? { branchSource: options.branchSource } : {}),
+            ...(options.branchTarget !== undefined ? { branchTarget: options.branchTarget } : {}),
+            ...(options.completionPolicy !== undefined ? { completionPolicy: options.completionPolicy } : {}),
+          },
+        },
       });
       console.log(pc.green(`audit promote: OK \u2014 workflow ${result.workflowId} registered`));
-      console.log(`  snapshot: ${result.snapshotPath}`);
+      console.log(`  snapshot: ${path.join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE)}`);
     } catch (error) {
       failScript(error, "audit promote");
     }
@@ -6222,6 +6393,146 @@ registerPlanCommands(program);
 // argument/failure protocol), registered by the same module.
 registerWorkflowCommands(program);
 
+// The ACTIVE transport verbs: the workflow-level DB grammar joins the existing
+// `workflow` group (created just above), and `mstar session` owns the local
+// identity launcher plus the active coordinator recovery.
+registerExecutionWorkflowCommands(program);
+
+registerSessionCommands(program);
+
+registerIssueCommands(program);
+
+registerCatalogCommands(program);
+registerJudgmentCommands(program);
+
+// `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
+// engine store boundary and the migration transport (contract §2/§7).
+registerStoreCommands(program);
+
+// `mstar store execution` — the EXECUTION operator family (contract §3.2/§6/§7),
+// attached to the `store` group registered just above: the group's owner module
+// is outside this round's file set, and commander aborts the whole CLI on a
+// duplicate command name, so the family joins that group instead of creating a
+// second one. It is the EXECUTION route: `store activate` remains the
+// issue/catalog barrier and is never aliased to execution activation.
+registerExecutionMigrationCommands(program);
+
+/**
+ * `mstar catalog reconcile` — the recovery verb contract §2 lists and P2
+ * deferred (the journal it recovers is P3's). Attached to the EXISTING
+ * `mstar catalog` group created by `registerCatalogCommands`: the group's
+ * owner module is outside this round's file set, and commander aborts the
+ * whole CLI on a duplicate command name, so the verb joins that group instead
+ * of creating a second one (the same technique `attachWorkflowGroup` below
+ * uses for the detached `mstar workflow` group).
+ *
+ * Flags are owned by this command's own `--help`: `--operation-id <id>`
+ * recovers one pending operation, `--list` reports the pending operations
+ * without writing. Envelope and exit codes follow the catalog family
+ * (`{ok:true,data}` / `{ok:false,code,message}`, exit 0 success, 1
+ * domain/runtime/IO refusal, 2 usage).
+ */
+function registerCatalogReconcileCommand(target: Command): void {
+  const catalogGroup = target.commands.find((command) => command.name() === "catalog");
+  if (catalogGroup === undefined) {
+    throw new Error("registerCatalogReconcileCommand: the `catalog` command group must be registered first");
+  }
+  const usage =
+    "usage: catalog reconcile --operation-id <id> [--abort] [--harness <dir>] [--json]\n" +
+    "       catalog reconcile --list [--harness <dir>] [--json]";
+
+  // The group's own blurb enumerates its verbs (`catalog.ts`, outside this
+  // round's file set): keep the enumeration truthful now that it has a ninth.
+  catalogGroup.description(`${catalogGroup.description()} \`reconcile\` recovers a pending execution registration.`);
+
+  const printFailure = (error: unknown, json: boolean): void => {
+    if (error instanceof SddScriptError) {
+      if (json) console.log(JSON.stringify({ ok: false, code: "usage", message: error.message, details: { operation: "reconcile" } }));
+      else console.error(pc.red(`catalog reconcile: ${error.message}`));
+      process.exitCode = error.exitCode;
+      return;
+    }
+    if (error instanceof CatalogRegistrationError || error instanceof CatalogError || error instanceof StoreError) {
+      if (json) console.log(JSON.stringify({ ok: false, code: error.code, message: error.message, details: { operation: "reconcile" } }));
+      else console.error(pc.red(`catalog reconcile: ${error.message}`));
+      process.exitCode = 1;
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) console.log(JSON.stringify({ ok: false, code: "catalog.internal-error", message, details: { operation: "reconcile" } }));
+    else console.error(pc.red(`catalog reconcile failed: ${message}`));
+    process.exitCode = 1;
+  };
+
+  catalogGroup
+    .command("reconcile")
+    .exitOverride()
+    .description(
+      "Recover a pending execution registration (contract \u00a73 step 4, engine-backed): re-checks the exact request identity and " +
+        "the recorded byte versions, finishes the writes the operation owns, publishes the catalog delta and commits. A " +
+        "committed operation returns its recorded receipt and writes nothing (idempotent); a state that cannot be finished " +
+        "without replacing or adopting bytes refuses `catalog.reconcile-conflict` and leaves everything in place. --list " +
+        "reports the pending operations without writing",
+    )
+    .option("--operation-id <id>", "Pending operation id to reconcile (named by the refusal that reported it)")
+    .option("--abort", "Abandon the pending operation instead of finishing it (refused once it wrote execution bytes)")
+    .option("--list", "List the pending registration operations, read-only")
+    .option("--harness <path>", "Harness dir override (default: resolved control {HARNESS_DIR})")
+    .option("--json", "Machine-readable envelope on stdout")
+    .action(async (options: { operationId?: string; abort?: boolean; list?: boolean; harness?: string; json?: boolean }) => {
+      const json = options.json === true;
+      try {
+        if (options.list === true && options.operationId !== undefined) {
+          throw new SddScriptError(`--list and --operation-id are mutually exclusive\n${usage}`, 2);
+        }
+        if (options.abort === true && options.operationId === undefined) {
+          throw new SddScriptError(`--abort requires --operation-id\n${usage}`, 2);
+        }
+        const harnessDir = resolveEngineProcessHarnessDir(process.cwd(), options.harness);
+        if (harnessDir === null) {
+          throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness <path>`);
+        }
+        const context = { harnessDir };
+        if (options.list === true) {
+          const pending = await listPendingCatalogRegistrations(context);
+          if (json) console.log(JSON.stringify({ ok: true, data: { pending } }));
+          else if (pending.length === 0) console.log("catalog reconcile: no pending registration operation");
+          else {
+            console.log(`catalog reconcile: ${pending.length} pending registration operation(s)`);
+            for (const entry of pending) {
+              console.log(`  ${entry.operationId}  ${entry.workflowId}  ${entry.kind}  ${entry.phase}  root-visible: ${entry.rootVisible}`);
+            }
+          }
+          return;
+        }
+        const operationId = options.operationId?.trim();
+        if (operationId === undefined || operationId === "") {
+          throw new SddScriptError(`--operation-id is required (or pass --list)\n${usage}`, 2);
+        }
+        // Store-root pinning (see `workflow register`): reconcile finishes the
+        // producer's writes through the active ArtifactStore, whose fail-loud
+        // path agreement requires the resolved harness root as its root.
+        setArtifactStore(createFsStore(harnessDir));
+        if (options.abort === true) {
+          const aborted = await abortCatalogExecution(context, operationId, "abandoned from the command line");
+          if (json) console.log(JSON.stringify({ ok: true, data: aborted }));
+          else console.log(pc.yellow(`catalog reconcile: ${aborted.workflowId} abandoned (operation ${aborted.operationId}) \u2014 nothing was written`));
+          return;
+        }
+        const receipt = await reconcileCatalogExecution(context, operationId);
+        if (json) console.log(JSON.stringify({ ok: true, data: receipt }));
+        else {
+          console.log(pc.green(`catalog reconcile: OK \u2014 ${receipt.workflowId} recovered (operation ${receipt.operationId})`));
+          console.log(`  catalog revision: ${receipt.catalogRevision}`);
+        }
+      } catch (error) {
+        printFailure(error, json);
+      }
+    });
+}
+
+registerCatalogReconcileCommand(program);
+
 /**
  * Attach the detached `mstar workflow` group built above (see its declaration).
  * Run AFTER every other registrar so an already-created `workflow` group is
@@ -6242,6 +6553,30 @@ function attachWorkflowGroup(target: Command): void {
 
 attachWorkflowGroup(program);
 
+// Read-only local dashboard. Loopback binding is fixed: there is deliberately
+// no host/bind-address option.
+program
+  .command("dashboard")
+  .description("Start the read-only Morning Star dashboard on 127.0.0.1")
+  .option("--port <port>", "TCP port (0 = OS-selected)", "0")
+  .option("--open", "Open the dashboard in the default browser")
+  .option("--project <projectId>", "Initial project selector")
+  .action(async (options: { port: string; open?: boolean; project?: string }) => {
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      console.error(pc.red(`dashboard: --port must be an integer between 0 and 65535 \u2014 got ${JSON.stringify(options.port)}`));
+      process.exitCode = 2;
+      return;
+    }
+    const harnessDir = resolveProcessHarnessDir();
+    if (harnessDir === null) {
+      console.error(pc.red("dashboard: no {HARNESS_DIR} found from the working directory; run inside an initialized harness workspace."));
+      process.exitCode = 1;
+      return;
+    }
+    await runDashboard({ harnessDir, port, open: options.open, project: options.project });
+  });
+
 program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb
   // families that opted into `exitOverride` (the `mstar plan` transport):
@@ -6249,11 +6584,28 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   // Commander already wrote the message (and help text) to stderr; with
   // `--json` the invocation still gets the A2 failure object on stdout.
   if (error instanceof CommanderError) {
-    if (process.argv.includes("--json")) {
-      const payload = planUsageFailurePayload(process.argv, error.message);
+    const judgmentPayload = error.exitCode === 0 ? null : judgmentUsageFailurePayload(process.argv, error.message);
+    if (judgmentPayload !== null) {
+      console.log(judgmentPayload);
+    } else if (process.argv.includes("--json")) {
+      const payload =
+        planUsageFailurePayload(process.argv, error.message) ??
+        issueUsageFailurePayload(process.argv, error.message) ??
+        catalogUsageFailurePayload(process.argv, error.message) ??
+        executionMigrationUsageFailurePayload(process.argv, error.message);
       if (payload !== null) console.log(payload);
     }
     process.exitCode = error.exitCode === 0 ? 0 : 2;
+    return;
+  }
+  // Issue-store launch/capability boundary:
+  // store refusals reach the CLI as `StoreError` from the engine's lazily
+  // imported `node:sqlite` boundary. They are domain/runtime refusals
+  // (contract §5): stable code + actionable message on stderr, exit 1 —
+  // never a silent empty result and never a transport fallback.
+  if (error instanceof StoreError) {
+    console.error(pc.red(`Store refused: ${(error as Error).message}`));
+    process.exitCode = 1;
     return;
   }
   console.error(pc.red(`Setup failed: ${(error as Error).message}`));

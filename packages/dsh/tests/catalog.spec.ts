@@ -37,13 +37,21 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import {
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  openStore,
+  registerCatalogEntity,
+} from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload, catalogCacheKey } from '../src/gates/catalog.ts'
+import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey } from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -60,6 +68,97 @@ const inboxMessage = (): UserMessage => createUserMessage({
   source: { kind: 'user' },
   content: [{ type: 'text', text: 'hello from the inbox' }],
 })
+
+/* ===========================================================================
+ * Execution-authority fixtures (plan S4 / Phase-5 F3): the REAL store through
+ * the engine's own producers, and NO root `status.json` — the state a real
+ * cutover leaves once the retired registry is gone.
+ * ========================================================================== */
+
+const AUTHORITY_TS = '2026-09-21T00:00:00.000Z'
+
+/**
+ * Initialize the REAL execution authority (create-only empty-execution
+ * initializer) with zero or more registered lifecycles. Each
+ * `createExecutionWorkflow` consumes the PREVIOUS receipt's root token, so a
+ * second lifecycle walks the registry revisions instead of guessing one.
+ */
+async function seedExecutionAuthority(
+  harnessDir: string,
+  workflows: readonly { id: string; planId: string }[],
+): Promise<void> {
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+  let token = (await initializeExecutionAuthority({ harnessDir })).token
+  for (const workflow of workflows) {
+    await registerCatalogEntity(
+      { harnessDir },
+      {
+        kind: 'plan',
+        id: workflow.planId,
+        title: `${workflow.planId} title`,
+        rootKind: 'plans',
+        relativePath: `plans/${workflow.planId}.md`,
+      },
+      { operationId: `register-${workflow.planId}`, actor: 'catalog.spec' },
+    )
+    const receipt = await createExecutionWorkflow(
+      {
+        harnessDir,
+        caller: {
+          sessionId: `host-${workflow.id}`,
+          role: 'coordinator',
+          workflowId: workflow.id,
+          planId: null,
+        } satisfies ExecutionCaller,
+      } satisfies ExecutionContext,
+      {
+        entry: { id: workflow.id, type: 'plan', started_at: AUTHORITY_TS, dir: `workflows/${workflow.id}` },
+        snapshot: {
+          schema_version: 1,
+          id: workflow.id,
+          type: 'plan',
+          status: 'running',
+          started_at: AUTHORITY_TS,
+          updated_at: AUTHORITY_TS,
+          plans: [
+            {
+              id: workflow.planId,
+              title: `${workflow.planId} title`,
+              file: `plans/${workflow.planId}.md`,
+              status: 'Todo',
+            },
+          ],
+          delivery_kind: 'development',
+          branch: { source: `feature/${workflow.id}`, target: 'main' },
+        } as never,
+        expected: token,
+        operationId: `create-${workflow.id}`,
+      },
+    )
+    token = receipt.token
+  }
+}
+
+/**
+ * Seal a freshly seeded store for readers (the G2a / store-cutover pattern):
+ * one read open+close so later reads do not hit the documented bun-test open
+ * flake (a read right after the writer closes can surface `store.corrupt` /
+ * `store.busy`, which the authority route correctly treats as fail-closed
+ * `store.authority-unavailable`). Without it the store's SHAPE, not the
+ * authority ROUTE these cases are about, would decide the verdict.
+ */
+async function sealStoreForReaders(harnessDir: string): Promise<void> {
+  const handle = await openStore({ harnessDir }, 'read')
+  handle.close()
+}
+
+/** Unreadable authority through the REAL engine channel: a directory where the
+ * database file belongs (`openStore` refuses `store.corrupt`). */
+async function corruptStore(harnessDir: string): Promise<void> {
+  for (const suffix of ['', '-wal', '-shm']) await rm(join(harnessDir, `store.db${suffix}`), { force: true })
+  await mkdir(join(harnessDir, 'store.db'), { recursive: true })
+}
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
@@ -570,15 +669,23 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     },
     { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '2026-08-19' },
   ]
-  /** The golden fixture's project register (the v1 `residual_findings` home). */
+  /**
+   * The golden fixture's legacy project register. It exists ON DISK so the
+   * golden proves the retired register is never read: the open items the row
+   * shows come from the issue store seeded next to it.
+   */
   const GOLDEN_REGISTER = {
     entries: {
       'plan-b': [
-        { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-19' },
-        { id: 'R2', title: 'style nit', severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-19' },
+        { id: 'R9', title: 'legacy register row (must stay invisible)', severity: 'critical', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-19' },
       ],
     },
   }
+  /** The golden fixture's open issues (the authority the row reads). */
+  const GOLDEN_ISSUES = [
+    { title: 'deferred blocker', severity: 'high' as const, operationId: 'op-golden-1' },
+    { title: 'style nit', severity: 'info' as const, operationId: 'op-golden-2' },
+  ]
   /** The golden fixture's project roadmap (frontmatter milestones — the project rollup source). */
   const GOLDEN_ROADMAP = [
     '---',
@@ -651,11 +758,21 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       'knowledge/README.md': GOLDEN_KNOWLEDGE,
     })
     const app = booted = await bootApp({ root })
+    // The issue/catalog authority: a real store holding the golden open issues
+    // and the golden knowledge document row.
+    await seedStore(harnessDir)
+    for (const issue of GOLDEN_ISSUES) await seedOpenIssue(harnessDir, { ...issue })
+    await seedKnowledgeDoc(harnessDir, {
+      id: 'doc-golden',
+      relativePath: 'conventions/harness-context.md',
+      title: 'Harness context',
+      operationId: 'op-golden-doc',
+    })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row } = catalogRowOf(decision)
     // The payload is NOT persisted on the row's source — read it from the same
     // builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
 
     // The state section: every field is the legacy-row golden shape, sourced
     // from the selected workflow snapshot + workflow agent-flow + project
@@ -668,19 +785,19 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
         { id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: [] },
         { id: 'plan-b', status: 'Done', doneAt: '2026-08-19', iterationRefs: [] },
       ],
+      residualFindings: [
+        { planId: '', id: 'I-000001', severity: 'high', title: 'deferred blocker' },
+        { planId: '', id: 'I-000002', severity: 'info', title: 'style nit' },
+      ],
       residuals: [
         { severity: 'high', count: 1 },
-        { severity: 'nit', count: 1 },
-      ],
-      residualFindings: [
-        { planId: 'plan-b', id: 'R1', severity: 'high', title: 'deferred blocker' },
-        { planId: 'plan-b', id: 'R2', severity: 'nit', title: 'style nit' },
+        { severity: 'info', count: 1 },
       ],
       project: {
         milestones: ['P1 foundation', 'P2 migrate + dogfood', 'P3 dsh viz'],
         openResiduals: [
           { severity: 'high', count: 1 },
-          { severity: 'nit', count: 1 },
+          { severity: 'info', count: 1 },
         ],
       },
       iterationBaseBranch: 'dev-dsh',
@@ -691,6 +808,12 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       integrationWorktreePath: '/integration/worktree',
       leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
       knowledge: { docCount: 1, categories: ['conventions'] },
+      storeFacts: {
+        kind: 'store',
+        projection: 'unavailable',
+        storeRevision: expect.any(Number) as unknown as number,
+        diagnostic: expect.stringContaining('projection unavailable') as unknown as string,
+      },
       direction: 'Golden direction.',
       agentFlow: {
         events: [
@@ -720,7 +843,8 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     const text = textOf(row)
     expect(text).toContain(`workflow: ${GOLDEN_WORKFLOW} (active)`)
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('residuals: high 1, nit 1')
+    expect(text).toContain('residuals: high 1, info 1')
+    expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
@@ -846,6 +970,55 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(payload.iteration).toBeUndefined()
     expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.unbound-multi-active)')
     expect(textOf(row)).not.toContain('workflow warning: workflow.selection.multi-active')
+  })
+
+  it('surfaces the authority selection verdicts after retirement, never a silent null state section (F3)', async () => {
+    // The root status.json is GONE in both fixtures below — the execution
+    // authority retired it, which is exactly the state the file-existence gate
+    // used to swallow into a null state section.
+    const emptyRoot = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-verdict-empty-'))
+    const emptyHarness = join(emptyRoot, 'harness')
+    await mkdir(emptyHarness, { recursive: true })
+    await seedExecutionAuthority(emptyHarness, [])
+    await sealStoreForReaders(emptyHarness)
+    const emptyApp = await bootApp({ root: emptyRoot })
+    const emptyState = (await buildCatalogPayloadWithStore(emptyApp.ctx, emptyHarness)).state
+    expect(emptyState?.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.no-active',
+      message: expect.stringContaining('no active lifecycle'),
+    })
+    expect(emptyState?.plans).toEqual([])
+    await emptyApp.dispose()
+
+    // Unbound multi-active set: the picker verdict, with its active ids.
+    const unboundRoot = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-verdict-unbound-'))
+    const unboundHarness = join(unboundRoot, 'harness')
+    await mkdir(unboundHarness, { recursive: true })
+    await seedExecutionAuthority(unboundHarness, [
+      { id: 'wf-alpha', planId: 'plan-alpha' },
+      { id: 'wf-beta', planId: 'plan-beta' },
+    ])
+    await sealStoreForReaders(unboundHarness)
+    const unboundApp = booted = await bootApp({ root: unboundRoot })
+    const unboundState = (await buildCatalogPayloadWithStore(unboundApp.ctx, unboundHarness)).state
+    expect(unboundState?.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.unbound-multi-active',
+      message: expect.stringContaining('2 active lifecycles'),
+      activeWorkflowIds: ['wf-alpha', 'wf-beta'],
+    })
+
+    // Unreadable authority: the fail-closed verdict, with the store's own code
+    // — the store bytes themselves are unreadable here, so no writer can hold
+    // it open.
+    await corruptStore(unboundHarness)
+    const unavailableState = (await buildCatalogPayloadWithStore(unboundApp.ctx, unboundHarness)).state
+    expect(unavailableState?.selection).toEqual({
+      kind: 'error',
+      code: 'store.corrupt',
+      message: expect.any(String),
+    })
   })
 
   it('no active workflows → the latest terminal snapshot by mtime (history view); non-terminal snapshots are skipped', async () => {

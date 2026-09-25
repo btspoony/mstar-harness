@@ -1,8 +1,10 @@
 # @mstar-harness/opencode
 
-Morning Star (启明星) harness plugin for [OpenCode](https://opencode.ai).
+Morning Star harness plugin for [OpenCode](https://opencode.ai).
 
 Install this package via OpenCode’s `plugin` array — it bundles `mstar-*` skills, role agents, and iteration commands so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the Cursor and Codex plugins.
+
+Development and asset bundling use **Bun >=1.4.0**. The published plugin is a `--target node` bundle for the OpenCode host process — that is a Node entry with a **Node >=24.18.0** floor (`node:sqlite`), not a second demand to install Bun on every OpenCode user machine. Do not treat CLI shebang launch and this plugin entry as “must have both runtimes”: they are two entrypoints with two floors — this plugin is the Node one, the installer CLI below is the Bun-shebang one.
 
 ## Install
 
@@ -22,6 +24,8 @@ Or use the installer CLI:
 npx @mstar-harness/cli init --target opencode
 ```
 
+That command executes the CLI’s Bun-shebang bin, so it needs **Bun >=1.4.0** on PATH — `npx` fetches the package but does not supply the runtime. On a Node-only machine run the installed bundle under Node instead: `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode`.
+
 ## What you get
 
 | Path in package | Contents |
@@ -32,11 +36,19 @@ npx @mstar-harness/cli init --target opencode
 
 The plugin resolves **only paths inside this package** — not `process.cwd()/skills`, so your app repo root does not affect harness loading.
 
-## Status write lint (hook coverage)
+## Coordination-write gate (hook coverage)
 
-The plugin registers a non-blocking `tool.execute.before` lint for `write`/`edit` tools that target `{HARNESS_DIR}/status.json`: the about-to-be-written (or current on-disk) document is validated against the engine `status.validateStatus` schema and violations are logged as warnings. The hook never blocks and never modifies the write.
+The plugin registers a `tool.execute.before` hook for `write`/`edit` tools that target harness coordination documents. It routes the target through the engine's DB-aware authority route before any document validation:
 
-Hook coverage follows the engine `resolveHarnessDir` resolution — a repo `.mstarc` `[config] harness_dir` (gitignored local config), else the probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) or declare it in `.mstarc` to enable the lint for such repos.
+- a direct write to the issue/catalog store (`{HARNESS_DIR}/store.db`, `-wal`, `-shm`) is decided as `store.direct-write-refused`;
+- a write to a retired project register while the store is the **active** authority is decided as `project.register.retired`; before activation (no store, or a staged store) the register keeps its ordinary shape validation;
+- an authority the route cannot read — below-floor runtime, missing `node:sqlite`, or a corrupt/busy store — is decided fail-closed (`store.authority-unavailable`, carrying the engine's own refusal code).
+
+**Authority protection is warn-only on this host.** OpenCode's plugin API (`@opencode-ai/plugin` 1.4.8) types `tool.execute.before` as `Promise<void>` — there is no abort or refusal return channel — so the hook cannot stop the tool call. The three authority decisions above are unconditional (they ignore the soft/hard enforcement axis, because re-creating a retired authority is not a document-validity question) and are surfaced as error-level log lines with `hardBlocked: true` set in-process, **but the write still executes**. Do not rely on this host to stop a hand write of the authority bytes; dsh, omp and the ZCode hook enforce the same decisions for real. When OpenCode gains a refusal channel, the existing `hardBlocked` result is what gets wired to abort.
+
+Everything else keeps the original behaviour — `{HARNESS_DIR}/status.json` / snapshot writes are validated against the engine schema and reported as warnings, soft-enforced writes pass silently, and the hook never modifies a write.
+
+Hook coverage follows the engine `resolveHarnessDir` resolution — a repo `.mstarc` `[config] harness_dir` (gitignored local config), else the probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) or declare it in `.mstarc` to enable the gate for such repos. The store API is loaded lazily, so the plugin still mounts on an engine that predates it.
 
 ## Dispatch presence lint (hook coverage)
 

@@ -10,6 +10,18 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 - Role prompts: `mstar-roles`; **`/pm`** or **`pm` skill** → general PM orchestration (per-plan dispatch, gates, QC) without an iteration command. Host **`commands/`** for formal iteration Phase 1–5 (semantics → **`mstar-iteration`**).
 - Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 
+## Runtime and upgrade
+
+- **Runtime**: this host ships no bundled store-backed entrypoint — the plugin mounts skills, commands and rules as text, so the floor belongs to whatever executes: a harness CLI invoked from a Cursor session runs through the installed binary's entrypoint (Bun shebang → **Bun >=1.4.0**; an explicit `node <bundle>` → **Node >=24.18.0**). A check that needs the engine on a below-floor runtime refuses actionably; there is no transport or JSON fallback.
+- **Upgrade / reload**: refresh the plugin's installed copy / rules and start a new Cursor session so the mounted skills and commands come from the new build; editing this checkout changes nothing for an installed plugin until that refresh.
+- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+
+## Coordination transport (no host-native seat)
+
+This host ships no native execution transport: it mounts skills, commands and rules as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the active route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`), or the pre-activation file route while the control root's execution authority is not active (`--session <absolute-json>` + a row revision). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).
+
+Restarting this host or opening a new session does **not** re-issue an identity: a launcher that mints a local identity mints a **new** one, and a copied id is never claimed. A stopped or unreachable coordinator is replaced only by the explicit recovery verb that owns the current authority (`mstar session recover` on the active route, or the guarded Prepare recovery on the file route) — never by restarting a process, re-running a command, or editing a document.
+
 ## Plan mode × harness dual-write
 
 When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows).

@@ -4,7 +4,7 @@
 
 - Command frontmatter/argument surface → **`commands/iteration-drive.md`**
 - Executable flags, exit codes, JSON envelopes → **`mstar-use-cli`**（CLI owner）
-- `coordination` / session / handoff / revision fields and row/register ownership → **`mstar-artifacts/references/status-and-residuals.md`**（sole runtime schema home）
+- `coordination` / session / handoff / revision fields and row/issue ownership → **`mstar-artifacts/references/status-and-residuals.md`**（sole runtime schema home）
 - Portable primary Assignment header → **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**
 - Dispatch mechanics, isolation gates → **`mstar-dispatch-gates`**, **`mstar-sdd`**, **`mstar-branch-worktree`**
 
@@ -28,7 +28,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 /iteration-drive --resume <absolute-session-json-path>
 ```
 
-- The first two are **fresh** addressing forms; the third explicitly **resumes** an already bound session.
+- The first two are **fresh** addressing forms; the third explicitly **resumes** an already bound session through the **pre-activation** file route, so it is lawful only while the harness's execution authority is not active — on an ACTIVE harness it refuses (`execution.consumer-not-ready`) rather than being reinterpreted, and the session's own read-only resume is `mstar plan bind --execution --resume-ref <wire>` (§2).
 - Fail **before any bind** on: duplicate flags, unknown flags, positional arguments, missing/blank values, mixed forms, partial `--workflow`/`--plan` pairs, and any path that is not absolute.
 - Rejection is terminal for the turn: report the malformed form and the accepted forms. There is no fallback plan, no "first unfinished row", and no whole-iteration fallback.
 - Both fresh forms resolve the **same** registered Assignment: `--workflow/--plan` reads `row.coordination.prepared.assignment_path`; it never selects the first unfinished row.
@@ -36,7 +36,15 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 ## 2. Scoped boot
 
 1. **Load PM identity in the current primary session**: `mstar-harness-core` → `mstar-roles` → `references/project-manager.md`. No PM subagent is spawned or dispatched for any address form — PM runs in the **primary session** on every host（rule home → `mstar-roles/references/project-manager.md` § Plan-scoped authority；dispatch surface → the active host reference（`mstar-host`）§ C5）.
-2. **Bind once**, matching the form exactly:
+2. **Bind once**, matching the form exactly. On a harness whose execution authority is **active**（the canonical transport; → `mstar-use-cli` `references/plan-and-workflow.md` § Transports）the caller identity is independently acquired for this invocation and no session file is written or read:
+
+   ```bash
+   mstar plan bind --execution --workflow <id> --plan <id> --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+   mstar plan bind --execution --workflow <id> --coordinator --expect <workflow-execution-token> --operation <id> [--harness <absolute-path>] [--json]   # coordinator seat only
+   mstar plan bind --execution --resume-ref <wire> [--json]                                        # read-only resume of that session
+   ```
+
+   Pre-activation（only while that authority is not active）the matching forms are:
 
    ```bash
    mstar plan bind --assignment <absolute-md-path> [--json]
@@ -45,27 +53,29 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
    mstar plan bind --coordinator --workflow <id> [--harness <absolute-path>] [--json]   # coordinator seat only
    ```
 
-   `bind` is the only operation without an external `--expect`: it reads, checks and claims atomically against current ownership. Fresh coordinator bind initializes the workflow's coordinator only when absent; a second fresh coordinator fails exactly like a duplicate plan holder. Plan fresh bind requires a row that was **prepared** by the coordinator.
+   `bind` is the only operation without an external `--expect`: it reads, checks and claims atomically against current ownership. Fresh coordinator bind initializes the workflow's coordinator only when absent; a second fresh coordinator fails exactly like a duplicate plan holder. Plan fresh bind requires a row that was **prepared** by the coordinator. A **resume is read-only** — it never reacquires ownership, never re-identifies the caller and is **never** the recovery path for a stopped owner.
 3. **Re-read with `show` and constrain the session to the returned scope**:
 
    ```bash
-   mstar plan show --session <plan-session.json> [--json]
+   mstar plan show --session-ref <wire> [--plan <id>] [--json]        # active: a plan-pm reference carries its own plan; a coordinator reference requires --plan
+   mstar plan show --workflow <id> --plan <id> [--json]               # public authoritative read
+   mstar plan show --session <plan-session.json> [--json]             # pre-activation
    mstar plan show --session <coordinator-session.json> --plan <id> [--json]
    ```
 
-   `show` returns the selected row, resolved scoped paths, `allowed_operations`, snapshot byte version and project-register byte version, and `revision`. It never returns an editable sibling snapshot. A plan session passes no `--plan`; a coordinator session requires it.
+   `show` returns the selected row, resolved scoped paths, `allowed_operations`, the snapshot byte version, and `revision`. It never returns an editable sibling snapshot. A plan session passes no `--plan`; a coordinator session requires it. On the active route the reference carries the workflow it authorizes — `--session-ref` accepts no `--workflow` — and the token to spend comes from the scope read, not from a remembered value.
 4. **Constrain everything that follows to that scope**: loaded skills, dispatched child inputs, session backlog, goal text, session todos, STOP conditions, and every writable path.
-5. **Stale input stops.** If a later `show` reports the Assignment hash changed, the session/scope/holder no longer matches, or the revision is behind, stop and report — do not re-bind silently and do not fall back to generic iteration drive.
+5. **Stale input stops.** If a later `show` reports the Assignment hash changed, the session/scope/holder no longer matches, or the token is behind, stop and report — do not re-bind silently and do not fall back to generic iteration drive.
 
 ## 3. Scope boundary (writable surface)
 
-A scoped actor writes **only its own row and its registered project residual bucket**. Concretely:
+A scoped actor writes **only its own row and the issues linked to it that it captures or closes**. Concretely:
 
 | Permitted | Forbidden |
 |---|---|
 | row `coordination.*`（`prepared` / `progress` / `handoff`）, row `status`, row `revision`, retained `metadata.working_branch` / `metadata.worktree_path` / `metadata.track_branches` | sibling rows, lifecycle anchors, snapshot `branch` / `integration_worktree_path` / `execution_policy`, `compass_ref` |
-| `entries[<planId>]` in `projects/<project-id>/residuals.json` via `residual-add` / `residual-close` | other register buckets, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
-| `progress` / `residual-add` / `residual-close` / `handoff`（plan session） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, a lease-release verb |
+| issues in `{HARNESS_DIR}/store.db` linked to this plan, via `issue-add` / `issue-close` | any other plan's issues, the retired `projects/<project-id>/residuals.json` register bucket, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
+| `progress` / `issue-add` / `issue-close` / `handoff`（plan session） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, a lease-release verb |
 
 Field semantics, ownership and lock rules → **`mstar-artifacts/references/status-and-residuals.md`**（「Plan coordination」）.
 
@@ -79,18 +89,32 @@ Drive the bound plan with the **existing** SDD / gate machinery; scope is inheri
 4. **Progress**（row status + summary + evidence paths）:
 
    ```bash
+   # active (canonical): own reference, the plan's full execution token, own operation id
+   mstar plan progress --session-ref <plan-wire> --file <absolute-json-path> \
+     --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+
+   # pre-activation only
    mstar plan progress --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
    ```
 
    Allowed transitions: `InProgress` → `InProgress|InReview|Blocked`; `Blocked` → `Blocked|InProgress`; `InReview` → `InReview|InProgress|Blocked` **before handoff**. Never `Todo`/`Done`, never lease removal.
-5. **Residuals**（findings cleanup mode from the Assignment）:
+5. **Findings**（cleanup mode from the Assignment）: capture each finding as an issue **linked to this plan**, and close one with its disposition:
 
    ```bash
-   mstar plan residual-add   --session <plan-session> --file <absolute-json-path> --expect <revision> --expect-register <version> [--json]
-   mstar plan residual-close --session <plan-session> --entry <id> --note <text> --expect <revision> --expect-register <version> [--json]
+   # active
+   mstar plan issue-add   --session-ref <plan-wire> --file <absolute-json-path> \
+     --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+   mstar plan issue-close --session-ref <plan-wire> --issue <id> --disposition <resolved|waived|duplicate|superseded> \
+     --file <absolute-json-path> --expect-issue <issue-revision> \
+     --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+
+   # pre-activation only
+   mstar plan issue-add   --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
+   mstar plan issue-close --session <plan-session> --issue <id> --disposition <resolved|waived|duplicate|superseded> \
+     --file <absolute-json-path> --expect-issue <issue-revision> --expect <revision> [--json]
    ```
 
-   Register ownership, entry provenance and the fail-loud validation handoff → **`mstar-artifacts/references/status-and-residuals.md`**.
+   The capture contract — who captures, the idempotence by source identity, and the migration mapping for the retired register — is **`mstar-project-governance`「Issue capture」**; each report names the DB-assigned issue ids and revisions. The retired `residual-add` / `residual-close` verbs refuse and write nothing.
 
 **Backlog / goals / todos / STOP are plan-local**: the session backlog is this plan's tasks; goal text covers **this plan's** flow only（`mstar-host` § `/goal` directive）; todos are the plan's task list, and no global phase entry（Phase 3/PR/compound）is seeded; the STOP is the handoff in §5, not plan `Done`.
 
@@ -99,6 +123,11 @@ Drive the bound plan with the **existing** SDD / gate machinery; scope is inheri
 When QC/QA evidence is complete and no child writer is active:
 
 ```bash
+# active
+mstar plan handoff --session-ref <plan-wire> --file <absolute-json-path> \
+  --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+
+# pre-activation only
 mstar plan handoff --session <plan-session> --file <absolute-json-path> --expect <revision> [--json]
 ```
 
@@ -106,19 +135,27 @@ mstar plan handoff --session <plan-session> --file <absolute-json-path> --expect
 - The handoff record is immutable; the plan keeps its `execution_lease` and stays **`InReview`**.
 - **Then STOP the scoped session.** Handoff is the scoped finish line. Do **not** set `Done`, do **not** delete `execution_lease`, do **not** open Phase 3 / PR, do **not** run compound, and do **not** treat "last unfinished plan" as an exception that advances the iteration.
 - A user asking to mark `Done` before integration is rejected: `Done` + lease release is the coordinator's atomic completion after a verified merge（§6）.
-- After handoff, further `progress` / `residual-*` mutations are rejected by the engine until a coordinator `return`; the session reports the handoff id and waits.
+- After handoff, further `progress` / `issue-add` / `issue-close` mutations are rejected by the engine until a coordinator `return`; the session reports the handoff id and waits.
 
 ## 6. Coordinator sequence（one coordinator seat per workflow）
 
 ```bash
-mstar plan prepare           --session <coordinator-session> --plan <id> --assignment <absolute-md-path> --expect <revision> [--json]
-mstar plan accept            --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan return            --session <coordinator-session> --plan <id> --handoff <id> --reason <text> --expect <revision> [--json]
-mstar plan integration-start --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan integration-accept --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan complete          --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
-mstar plan reconcile         --session <coordinator-session> --plan <id> --handoff <id> --expect <revision> [--json]
+# active (canonical): the coordinator's own reference + the plan scope's full execution token + an operation id
+mstar plan prepare            --session-ref <coordinator-wire> --plan <id> --assignment <absolute-md-path> --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+mstar plan accept             --session-ref <coordinator-wire> --plan <id> --handoff <id> --expect <plan-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+mstar plan return             --session-ref <coordinator-wire> --plan <id> --handoff <id> --reason <text> --expect <plan-execution-token> --operation <id> [--json]
+mstar plan integration-start  --session-ref <coordinator-wire> --plan <id> --handoff <id> --expect <plan-execution-token> --operation <id> [--json]
+mstar plan integration-accept --session-ref <coordinator-wire> --plan <id> --handoff <id> --expect <plan-execution-token> --operation <id> [--json]
+mstar plan complete           --session-ref <coordinator-wire> --plan <id> --handoff <id> --expect <plan-execution-token> --operation <id> [--json]
+mstar plan reconcile          --session-ref <coordinator-wire> --plan <id> --handoff <id> --expect <plan-execution-token> --operation <id> [--json]
+
+# pre-activation only (same verbs, file route)
+mstar plan prepare --session <coordinator-session> --plan <id> --assignment <absolute-md-path> --expect <revision> [--json]
+# … and every other verb above with `--session <coordinator-session> --expect <revision>` instead of
+#   `--session-ref/--expect/--operation`.
 ```
+
+A stopped or unreachable coordinator is replaced **only** by `mstar session recover` under an independently acquired coordinator identity (named prior holder or explicit `--unowned`, stop attestation, the workflow's exact token, an operation id) — never by a copied reference, a restarted launcher or a hand edit.
 
 1. **`prepare`** registers the reviewed Assignment on a `Todo`/`Blocked` row after checking path, branch, status and lock inputs and after dependency readiness. It is preparation, not a second business plan; dependency and task-readiness judgment stays PM's.
 2. **`accept`** is ownership transfer, not integration acceptance: `submitted → accepted`, `execution_lease.holder` moves to the coordinator while worktree/branch stay. No merge, no `Done`.
@@ -144,26 +181,28 @@ mstar plan reconcile         --session <coordinator-session> --plan <id> --hando
 
 8. The coordinator — not the plan session — retains dependency release, compass / index / root projections, the iteration PR, and Phase 3–6.
 
-## 7. Revision protocol（`--expect`）
+## 7. Revision / token protocol（`--expect`）
 
-- `--expect` is the nonnegative row `coordination.revision` from `show`（absent coordination = 0）— **not** the snapshot `schema_version` or a date.
-- Every mutating row verb requires it. A sibling row's mutation does not change this row's revision; same-row stale input fails `coordination.version-conflict`.
-- After any successful changed row mutation the revision increments **once**; a no-op replay does not increment it. The precondition is still checked on replay, so a stale retry first refreshes with `show`.
-- `bind` is the only exception（§2）. Document/register byte versions are separate CAS values（`--expect-register`, `--expect-version`）and never substitute for the row revision.
+- **Active:** `--expect` is the addressed scope's **full execution token**（`exec-v1:<kind>:<store-id>:<epoch>:<key64>:<revision>`）read immediately before the call — `mstar status validate` prints the root and per-workflow tokens and a scope read returns its own. A revision integer is a usage refusal on this route, never coerced.
+- **Pre-activation:** `--expect` is the nonnegative row `coordination.revision` from `show`（absent coordination = 0）— **not** the snapshot `schema_version` or a date.
+- Every mutating row verb requires its token on either transport. A sibling row's mutation does not change this row's token; same-row stale input fails `coordination.version-conflict`.
+- After any successful changed row mutation the token advances **once**（active: a fresh token is printed on success）; a replayed operation id / no-op replay does not advance it. The precondition is still checked on replay, so a stale retry first refreshes with `show`.
+- A fresh `bind` is the only exception（§2）. The snapshot byte version（`--expect-version`）and the issue revision（`--expect-issue`）are separate CAS values and never substitute for the row token.
 
-## 8. Sessions and credentials
+## 8. Sessions and the credential boundary
 
-- Fresh claims allocate a new session UUID; a holder is never derived from a plan id, Assignment path, PID or terminal label. Assignment identity is not session identity.
-- Session envelopes are credentials/pointers, not a second process-SSOT copy. **Never pass a session path — coordinator or plan — into a child Assignment or child invocation.** Children receive the plan's `Worktree path`, `Working branch`, `Plan Path`, `SDD dir` and task-specific brief/report/diff paths only（`mstar-sdd/references/file-handoffs.md`）.
-- `--resume` validates the current session and lease and may report handed-off / accepted / completed context read-only. It never reacquires a released lease, never restarts execution, and never attaches to an active foreign holder automatically.
-- A duplicate fresh entry for the same plan — by **either** address — fails with code `coordination.duplicate-holder` plus the active holder, workflow and plan. Only explicit `--resume` of the original session continues；no automatic attach, fallback plan, TTL/idle/pane-state theft.
+- Fresh claims allocate a new session identity; a holder is never derived from a plan id, Assignment path, PID or terminal label. Assignment identity is not session identity.
+- **The active reference is a lookup, not a bearer credential.** `exec-session-v1:<base64url>` names a stored session row and grants nothing by itself: the engine compares the independently acquired caller inside its own transaction, so a copied or stale reference refuses without writing. A token (`--expect`) and an operation id are CAS/replay values, not secrets that confer authority.
+- **Nothing on this boundary travels into a child.** Never pass a session path, a session reference, a `--expect` value (revision or full execution token) or an operation id into a child Assignment or child invocation — coordinator or plan. Children receive the plan's `Worktree path`, `Working branch`, `Plan Path`, `SDD dir` and task-specific brief/report/diff paths only（`mstar-sdd/references/file-handoffs.md`）; a leaf that receives any of the above stops and reports it rather than using it.
+- **Resume ≠ recovery.** A resume（active: `mstar plan bind --execution --resume-ref <wire>`; pre-activation: `--resume <absolute-json>`）validates the current session and lease and may report handed-off / accepted / completed context **read-only**. It never reacquires a released lease, never restarts execution, and never attaches to an active foreign holder automatically. Replacing a stopped owner is a separate, explicit act on the authority that owns it: `mstar session recover` (named prior holder or `--unowned`, stop attestation, exact token, operation id) on the active route, or the guarded Prepare recovery on the file route.
+- A duplicate fresh entry for the same plan — by **either** address — fails with code `coordination.duplicate-holder` plus the active holder, workflow and plan. Only an explicit read-only resume of the original session continues；no automatic attach, fallback plan, TTL/idle/pane-state theft.
 - Cross-primary references are readable **absolute control-root filesystem paths**；`local://` is not a portable handoff address.
-- Lost credentials or an abandoned active owner need explicit human recovery outside these commands. No `--force`, takeover or automatic abandonment flag exists.
+- Lost credentials or an abandoned active owner need the explicit recovery verb above. No `--force`, takeover or automatic abandonment flag exists, and hand-editing a session file or a coordination document is never a path.
 
 ## 9. Evidence, STOP and failures
 
 - Session todos and the final report stay **plan-scoped**: scoped checks / before-after pressure traces and the plan's own gates. Never claim whole-iteration evidence.
-- STOP conditions: handoff submitted（§5）, invalid input（§1）, stale scope/revision（§2/§7）, duplicate holder（§8）, un-reconciled Git（§6.7）, or a blocked dependency. Report the code, the holder, and the exact next command.
+- STOP conditions: handoff submitted（§5）, invalid input（§1）, stale scope/token（§2/§7）, duplicate holder（§8）, un-reconciled Git（§6.7）, or a blocked dependency. Report the code, the holder, and the exact next command.
 - Failures are reported from the CLI envelope（`ok:false` + `code`）, never invented: exit 2 = invalid input shape, exit 1 = scope / ownership / revision / state / Git / path / lock rejection.
 
 ## 10. Missing CLI = fail closed

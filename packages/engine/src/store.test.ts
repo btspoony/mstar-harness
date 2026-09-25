@@ -23,14 +23,25 @@
  * inside `withProtectedWrite`, the private context the locked coordination
  * writers open, so the read/write/delete and path-guard coverage stays
  * truthful against the authorization the boundary now requires.
+ * - Injected-store canonical control-target guard (retained-body contract): an
+ * injected non-FsStore refuses the protected control targets (root register,
+ * workflow snapshot, and a `json` alias of either) while the CANONICAL control
+ * authority is active — before its own method runs, judged against a root the
+ * injector's `root` claim cannot establish — and it refuses the retired
+ * project register unconditionally (the stale runtime kind, and a `json` alias
+ * of the register). The wrapper exposes no `root` at all: a custom adapter's
+ * claim is not the FsStore capability the path-agreement check and the direct
+ * CAS/versioned consumers verify against. Body refs still round-trip, optional
+ * members stay absent when declined, and the pre-activation route is
+ * unchanged.
  * - `list?` interface + FsStore enumeration (exists-conditional status,
- * snapshot/residuals dir scans through the single path table, review
+ * snapshot dir scans through the single path table, review
  * union with the one PLAN_SHAPED_KEY_RE detector, json non-enumerable,
  * `[]` on missing backing, sorted ascending, listed keys round-trip
  * through `get`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -41,10 +52,13 @@ import {
   resolveArtifactPath,
   setArtifactStore,
   type ArtifactDoc,
+  type ArtifactKind,
   type ArtifactRef,
   type ArtifactStore,
 } from "../src/store.js";
 import { withProtectedWrite } from "../src/coordination-write.js";
+import { initializeExecutionAuthority } from "../src/execution-store.js";
+import { initializeStore } from "../src/store-db.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -85,13 +99,83 @@ function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
   };
 }
 
+/** Recording store for the injected-store guard cases: every data port is
+ * recorded, and an arbitrary `root` claim can be attached (a custom store names
+ * its own root — the guard must not read it as authority). */
+function probeStore(
+  rootClaim?: string,
+): ArtifactStore & { root?: string; puts: ArtifactDoc[]; gets: ArtifactRef[]; deletes: ArtifactRef[] } {
+  const puts: ArtifactDoc[] = [];
+  const gets: ArtifactRef[] = [];
+  const deletes: ArtifactRef[] = [];
+  const store: ArtifactStore & {
+    root?: string;
+    puts: ArtifactDoc[];
+    gets: ArtifactRef[];
+    deletes: ArtifactRef[];
+  } = {
+    puts,
+    gets,
+    deletes,
+    async put(doc: ArtifactDoc): Promise<void> {
+      puts.push(doc);
+    },
+    async get(ref: ArtifactRef): Promise<undefined> {
+      gets.push(ref);
+      return undefined;
+    },
+    async delete(ref: ArtifactRef): Promise<void> {
+      deletes.push(ref);
+    },
+  };
+  if (rootClaim !== undefined) store.root = rootClaim;
+  return store;
+}
+
+/** Map-backed injected store: a body store that really round-trips. */
+function memoryStore(): ArtifactStore {
+  const docs = new Map<string, unknown>();
+  return {
+    async put(doc: ArtifactDoc): Promise<void> {
+      docs.set(`${doc.kind}:${doc.key}`, doc.payload);
+    },
+    async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+      return docs.get(`${ref.kind}:${ref.key}`) as T | undefined;
+    },
+    async list(kind: ArtifactKind): Promise<ArtifactRef[]> {
+      return [...docs.keys()]
+        .filter((entry) => entry.startsWith(`${kind}:`))
+        .map((entry) => ({ kind, key: entry.slice(kind.length + 1) }));
+    },
+  };
+}
+
+/** A control root holding a store whose execution authority is still `legacy`
+ * (its schema has the execution tables; nothing was activated). */
+async function legacyControlRoot(label: string): Promise<string> {
+  const root = tmpRoot(label);
+  const handle = await initializeStore({ harnessDir: root });
+  handle.close();
+  return root;
+}
+
+/** A control root whose execution authority is ACTIVE — the authority an
+ * injected store's protected targets must be judged against. */
+async function activeControlRoot(label: string): Promise<string> {
+  const root = await legacyControlRoot(label);
+  await initializeExecutionAuthority({ harnessDir: root });
+  return root;
+}
+
 /**
  * A writer view of the FsStore: every call runs inside the same private
  * authorization context the locked coordination writers open (spec §C4). A
- * protected document — `status.json`, a workflow `snapshot.json`, a project
- * `residuals.json`, directly or through a `json` alias — may only be written
- * from that context, so a bare `store.put`/`store.delete` is refused; the
- * unprotected kinds (`review`, unrelated `json`) are unaffected by it. This
+ * protected document — `status.json` or a workflow `snapshot.json`, directly
+ * or through a `json` alias — may only be written from that context, so a
+ * bare `store.put`/`store.delete` is refused; the unprotected kinds
+ * (`review`, unrelated `json`) are unaffected by it. The retired register
+ * kind refuses everywhere (issue authority), inside or outside the context.
+ * This
  * keeps the file's read/write/delete, alias-classification and path-guard
  * coverage intact against the authorization the boundary requires.
  */
@@ -158,12 +242,14 @@ describe("createFsStore path mapping", () => {
     }
   });
 
-  test("residuals maps to {PROJECT_DIR}/<key>/residuals.json", async () => {
+  test("issue authority: the retired residuals kind is refused, never mapped", async () => {
     const root = tmpRoot("store-residuals-");
     try {
       const store = authorizedStore(createFsStore(root));
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
-      expect(existsSync(join(root, "projects", "proj-1", "residuals.json"))).toBe(true);
+      expect(
+        store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } } as never),
+      ).rejects.toThrow(/no longer persists project registers/);
+      expect(existsSync(join(root, "projects", "proj-1", "residuals.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -202,15 +288,13 @@ describe("createFsStore path mapping", () => {
     }
   });
 
-  test("snapshot/residuals honor .mstarc workflow_dir / project_dir overrides", async () => {
+  test("snapshot honors .mstarc workflow_dir overrides", async () => {
     const root = tmpRoot("store-mstarc-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=wf-custom\nproject_dir=proj-custom\n");
       const store = authorizedStore(createFsStore(root));
       await store.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } });
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
       expect(existsSync(join(root, "wf-custom", "wf-1", "snapshot.json"))).toBe(true);
-      expect(existsSync(join(root, "proj-custom", "proj-1", "residuals.json"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -222,28 +306,24 @@ describe("createFsStore path mapping", () => {
 // ---------------------------------------------------------------------------
 
 describe("FsStore round-trip", () => {
-  test("status / snapshot / residuals / review put then get returns the payload", async () => {
+  test("status / snapshot / review put then get returns the payload", async () => {
     const root = tmpRoot("store-roundtrip-");
     try {
       const store = authorizedStore(createFsStore(root));
       const status = { version: 2, updated_at: "2026-08-27", workflows: [] };
       const snapshot = { id: "wf-1", status: "in_progress" };
-      const residuals = { entries: [{ id: "R1" }] };
       const review = { verdict: "approve" };
       await store.put({ kind: "status", key: "root", payload: status });
       await store.put({ kind: "snapshot", key: "wf-1", payload: snapshot });
-      await store.put({ kind: "residuals", key: "proj-1", payload: residuals });
       await store.put({ kind: "review", key: "20260827-artifact-store", payload: review });
  // Intermediate variables: a nested `expect(await store.get(...))` lets
  // TS infer the get<T> type parameter from the expect overload (never)
  // and narrows the actual to undefined — assign first, then assert.
       const gotStatus = await store.get({ kind: "status", key: "root" });
       const gotSnapshot = await store.get({ kind: "snapshot", key: "wf-1" });
-      const gotResiduals = await store.get({ kind: "residuals", key: "proj-1" });
       const gotReview = await store.get({ kind: "review", key: "20260827-artifact-store" });
       expect(gotStatus).toEqual(status);
       expect(gotSnapshot).toEqual(snapshot);
-      expect(gotResiduals).toEqual(residuals);
       expect(gotReview).toEqual(review);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -256,7 +336,6 @@ describe("FsStore round-trip", () => {
       const store = authorizedStore(createFsStore(root));
       expect(await store.get({ kind: "status", key: "root" })).toBeUndefined();
       expect(await store.get({ kind: "snapshot", key: "wf-1" })).toBeUndefined();
-      expect(await store.get({ kind: "residuals", key: "proj-1" })).toBeUndefined();
       expect(await store.get({ kind: "review", key: "20260827-artifact-store" })).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -392,18 +471,11 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("residuals lists project dirs with residuals.json, ascending; stray dirs excluded; missing backing \u2192 []", async () => {
+  test("issue authority: list refuses the retired residuals kind", async () => {
     const root = tmpRoot("store-list-residuals-");
     try {
       const store = authorizedStore(createFsStore(root));
-      expect(await store.list!("residuals")).toEqual([]);
-      await store.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } });
-      await store.put({ kind: "residuals", key: "_default", payload: { entries: [] } });
-      mkdirSync(join(root, "projects", "no-register"));
-      expect(await store.list!("residuals")).toEqual([
-        { kind: "residuals", key: "_default" },
-        { kind: "residuals", key: "proj-1" },
-      ]);
+      expect(() => store.list!("residuals" as never)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -480,15 +552,13 @@ describe("FsStore list (D4)", () => {
       const payloads: Record<string, unknown> = {
         status: { version: 2, updated_at: "2026-08-28", workflows: [] },
         snapshot: { id: "wf-1" },
-        residuals: { entries: [] },
         review: { verdict: "approve" },
       };
       await store.put({ kind: "status", key: "root", payload: payloads.status });
       await store.put({ kind: "snapshot", key: "wf-1", payload: payloads.snapshot });
-      await store.put({ kind: "residuals", key: "proj-1", payload: payloads.residuals });
       await store.put({ kind: "review", key: "20260828-store-engine", payload: payloads.review });
       await store.put({ kind: "review", key: "review-inline", payload: payloads.review });
-      for (const kind of ["status", "snapshot", "residuals", "review"] as const) {
+      for (const kind of ["status", "snapshot", "review"] as const) {
         for (const ref of await store.list!(kind)) {
  // Intermediate variable: a nested `expect(await store.get(...))` lets
  // TS infer the get<T> type parameter from the expect overload (never)
@@ -522,8 +592,6 @@ describe("FsStore list (D4)", () => {
  // vanishes between check and read. Pre-fix list threw; post-fix [].
       writeFileSync(join(root, "workflows"), "not a dir", "utf8");
       expect(await store.list!("snapshot")).toEqual([]);
-      writeFileSync(join(root, "projects"), "not a dir", "utf8");
-      expect(await store.list!("residuals")).toEqual([]);
  // Same for the review union: sdd/_reviews as a file.
       mkdirSync(join(root, "sdd"), { recursive: true });
       writeFileSync(join(root, "sdd", "_reviews"), "not a dir", "utf8");
@@ -538,13 +606,17 @@ describe("FsStore list (D4)", () => {
     }
   });
 
-  test("optional-member absence: a store with only put/get stays a valid ArtifactStore (D1-adapter class declines)", () => {
+  test("optional-member absence: a store with only put/get stays a valid ArtifactStore (D1-adapter class declines)", async () => {
     const store = recordingStore();
     setArtifactStore(store);
     const active = getArtifactStore();
-    expect(active).toBe(store);
+    // The guard wraps the data ports; the optional members the injected store
+    // declines are not invented, and the body document is still that store's to
+    // persist (a review body is not a control target).
     expect(active.delete).toBeUndefined();
     expect(active.list).toBeUndefined();
+    await active.put({ kind: "review", key: "review-declining", payload: { verdict: "approve" } });
+    expect(store.puts.map((doc) => doc.key)).toEqual(["review-declining"]);
   });
 });
 
@@ -629,10 +701,14 @@ describe("FsStore json escape hatch", () => {
 // ---------------------------------------------------------------------------
 
 describe("setArtifactStore / getArtifactStore", () => {
-  test("getArtifactStore returns the injected store while set", () => {
+  test("the active store serves the injected store's body port while set", async () => {
     const store = recordingStore();
     setArtifactStore(store);
-    expect(getArtifactStore()).toBe(store);
+    // The injected instance is what the accessor serves — not the default
+    // FsStore. Its protected targets are guarded (see the injected-store guard
+    // cases), and a body document is still its document to persist.
+    await getArtifactStore().put({ kind: "review", key: "review-served", payload: { verdict: "approve" } });
+    expect(store.puts.map((doc) => doc.key)).toEqual(["review-served"]);
   });
 
   test("setArtifactStore(undefined) resets to the default FsStore", async () => {
@@ -675,6 +751,228 @@ describe("setArtifactStore / getArtifactStore", () => {
       expect(() => getArtifactStore()).toThrow(/harness dir not found from .* cannot create the default FsStore/);
     } finally {
       process.chdir(previousCwd);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Injected store — canonical control-target guard (retained-body contract)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every call below runs inside `withEnv(<control root>)` so the guard resolves
+ * a fixture authority instead of whatever harness the test runner's cwd happens
+ * to sit in. The guard runs in the call's SYNCHRONOUS prologue — the env window
+ * therefore covers the call expression itself, and the returned promise is
+ * awaited outside it.
+ *
+ * The cases encode the boundary: an injected store is a body store. While the
+ * CANONICAL CONTROL root's execution authority is ACTIVE, the protected control
+ * documents (root register, workflow snapshot, and a `json` alias of either)
+ * refuse before the injected method runs; the injector's own `root` claim can
+ * neither establish that authority nor a refusal; body refs still round-trip.
+ */
+describe("injected ArtifactStore \u2014 canonical control-target guard", () => {
+  test("an injected store cannot reach a protected target while the canonical authority is active", async () => {
+    const root = await activeControlRoot("injected-guard-protected-");
+    try {
+      const store = probeStore();
+      setArtifactStore(store);
+      const active = getArtifactStore();
+
+      const putStatus = withEnv(root, () =>
+        active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
+      );
+      await expect(putStatus).rejects.toMatchObject({ code: "execution.direct-write-refused" });
+      const getStatus = withEnv(root, () => active.get({ kind: "status", key: "root" }));
+      await expect(getStatus).rejects.toMatchObject({ code: "execution.consumer-not-ready" });
+      const deleteStatus = withEnv(root, () => active.delete!({ kind: "status", key: "root" }));
+      await expect(deleteStatus).rejects.toMatchObject({ code: "execution.direct-write-refused" });
+
+      const putSnapshot = withEnv(root, () => active.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } }));
+      await expect(putSnapshot).rejects.toMatchObject({ code: "execution.direct-write-refused" });
+
+      // A `json` alias of a protected file is the same class: the alias's
+      // canonical target decides, not the name the caller used.
+      mkdirSync(join(root, "workflows", "wf-1"), { recursive: true });
+      writeFileSync(join(root, "workflows", "wf-1", "snapshot.json"), "{}\n", "utf8");
+      const alias = join(root, "snapshot-alias.json");
+      symlinkSync(join(root, "workflows", "wf-1", "snapshot.json"), alias);
+      const putAlias = withEnv(root, () => active.put({ kind: "json", key: alias, payload: { probe: true } }));
+      await expect(putAlias).rejects.toMatchObject({ code: "execution.direct-write-refused" });
+
+      // Refuse BEFORE the injected callback: not one data port ran, and the
+      // protected target's bytes are untouched by the refused alias write.
+      expect(store.puts).toEqual([]);
+      expect(store.gets).toEqual([]);
+      expect(store.deletes).toEqual([]);
+      expect(readFileSync(join(root, "workflows", "wf-1", "snapshot.json"), "utf8")).toEqual("{}\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store's root claim cannot establish authority, in either direction", async () => {
+    const root = await activeControlRoot("injected-guard-claim-");
+    const noStore = tmpRoot("injected-guard-claim-nostore-");
+    const foreign = await legacyControlRoot("injected-guard-claim-foreign-");
+    try {
+      // Every claim — none, a root with no authority, a FOREIGN harness root —
+      // is judged against the canonical control authority, which is active.
+      for (const store of [probeStore(), probeStore(noStore), probeStore(foreign)]) {
+        setArtifactStore(store);
+        const active = getArtifactStore();
+        const attempt = withEnv(root, () =>
+          active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
+        );
+        await expect(attempt).rejects.toMatchObject({ code: "execution.direct-write-refused" });
+        expect(store.puts).toEqual([]);
+      }
+
+      // The claim invents no refusal either: a store claiming an ACTIVE root
+      // elsewhere leaves the declared route intact while the canonical control
+      // authority is inactive.
+      const claiming = probeStore(root);
+      setArtifactStore(claiming);
+      const claimedActive = getArtifactStore();
+      const legacy = await legacyControlRoot("injected-guard-claim-legacy-");
+      const allowed = withEnv(legacy, () =>
+        claimedActive.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
+      );
+      await expect(allowed).resolves.toBeUndefined();
+      expect(claiming.puts.map((doc) => doc.kind)).toEqual(["status"]);
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(noStore, { recursive: true, force: true });
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
+
+  test("body refs still round-trip through the injected store while the authority is active", async () => {
+    const root = await activeControlRoot("injected-guard-bodies-");
+    try {
+      const store = memoryStore();
+      setArtifactStore(store);
+      const active = getArtifactStore();
+      const review = { verdict: "approve", findings: [] };
+
+      const putReview = withEnv(root, () =>
+        active.put({ kind: "review", key: "20260922-injected-body", payload: review }),
+      );
+      await expect(putReview).resolves.toBeUndefined();
+      const getReview = withEnv(root, () => active.get({ kind: "review", key: "20260922-injected-body" }));
+      await expect(getReview).resolves.toEqual(review);
+      const listReview = withEnv(root, () => active.list!("review"));
+      await expect(listReview).resolves.toEqual([{ kind: "review", key: "20260922-injected-body" }]);
+
+      // A document body outside the protected classes is an ordinary target.
+      const body = join(root, "bodies", "doc.json");
+      const putBody = withEnv(root, () => active.put({ kind: "json", key: body, payload: { note: "body" } }));
+      await expect(putBody).resolves.toBeUndefined();
+      const getBody = withEnv(root, () => active.get({ kind: "json", key: body }));
+      await expect(getBody).resolves.toEqual({ note: "body" });
+
+      // Nothing the injected store was asked to hold landed as a control file.
+      expect(existsSync(join(root, "status.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store keeps its declared route while the canonical authority is not active", async () => {
+    const legacy = await legacyControlRoot("injected-guard-legacy-");
+    const bare = tmpRoot("injected-guard-bare-");
+    try {
+      // `legacy` holds a store whose execution authority is not active; `bare`
+      // holds no store file at all. Both keep the legacy route.
+      for (const root of [legacy, bare]) {
+        const store = probeStore();
+        setArtifactStore(store);
+        const active = getArtifactStore();
+        const put = withEnv(root, () =>
+          active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
+        );
+        await expect(put).resolves.toBeUndefined();
+        const get = withEnv(root, () => active.get({ kind: "snapshot", key: "wf-1" }));
+        await expect(get).resolves.toBeUndefined();
+        expect(store.puts.map((doc) => doc.kind)).toEqual(["status"]);
+        expect(store.gets.map((ref) => ref.kind)).toEqual(["snapshot"]);
+      }
+    } finally {
+      rmSync(legacy, { recursive: true, force: true });
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store cannot recreate, read or delete the retired project register", async () => {
+    const root = await legacyControlRoot("injected-guard-register-");
+    try {
+      const store = probeStore();
+      setArtifactStore(store);
+      const active = getArtifactStore();
+
+      // The stale runtime kind: refused on every data port, and — unlike the
+      // protected control documents — refused whatever the execution state.
+      const putKind = withEnv(root, () =>
+        active.put({ kind: "residuals", key: "proj-1", payload: { entries: [] } } as never),
+      );
+      await expect(putKind).rejects.toThrow(/no longer persists project registers/);
+      const getKind = withEnv(root, () => active.get({ kind: "residuals", key: "proj-1" } as never));
+      await expect(getKind).rejects.toThrow(/no longer persists project registers/);
+      const deleteKind = withEnv(root, () => active.delete!({ kind: "residuals", key: "proj-1" } as never));
+      await expect(deleteKind).rejects.toThrow(/no longer persists project registers/);
+
+      // A `json` alias is classified by its CANONICAL target: the register path
+      // the project layer would use, the same path before it exists (a missing
+      // leaf must not create one), and a symlink onto it.
+      const register = join(root, "projects", "proj-1", "residuals.json");
+      const missingLeaf = withEnv(root, () => active.put({ kind: "json", key: register, payload: { entries: [] } }));
+      await expect(missingLeaf).rejects.toThrow(/project registers are retired migration history/);
+
+      mkdirSync(join(root, "projects", "proj-1"), { recursive: true });
+      writeFileSync(register, `${JSON.stringify({ entries: [] })}\n`, "utf8");
+      const alias = join(root, "register-alias.json");
+      symlinkSync(register, alias);
+      const aliasRead = withEnv(root, () => active.get({ kind: "json", key: alias }));
+      await expect(aliasRead).rejects.toThrow(/project registers are retired migration history/);
+      const aliasDelete = withEnv(root, () => active.delete!({ kind: "json", key: alias }));
+      await expect(aliasDelete).rejects.toThrow(/project registers are retired migration history/);
+
+      // Refuse before the injected callback, and the planted register is intact.
+      expect(store.puts).toEqual([]);
+      expect(store.gets).toEqual([]);
+      expect(store.deletes).toEqual([]);
+      expect(existsSync(register)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an injected store's root claim is not exposed as an FsStore capability", async () => {
+    const root = tmpRoot("injected-guard-rootcap-");
+    const elsewhere = tmpRoot("injected-guard-rootcap-other-");
+    try {
+      const store = probeStore(root);
+      setArtifactStore(store);
+      const injected = getArtifactStore();
+      // A custom adapter's `root` is a claim about a directory it may write
+      // somewhere else entirely, so the active store exposes NO root: the
+      // path-agreement check skips it (the adapter owns its own mapping) and the
+      // direct byte/CAS and `--versioned` consumers find no FsStore capability.
+      expect("root" in injected).toBe(false);
+      expect(() => assertFsStorePath(injected, { kind: "status", key: "root" }, join(root, "status.json"))).not.toThrow();
+
+      // The engine's own FsStore keeps the capability it is verified by: the
+      // same diverging target is refused for it.
+      setArtifactStore(createFsStore(elsewhere));
+      expect("root" in getArtifactStore()).toBe(true);
+      expect(() =>
+        assertFsStorePath(getArtifactStore(), { kind: "status", key: "root" }, join(root, "status.json")),
+      ).toThrow(/routed writer path mismatch/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
     }
   });
 });
@@ -796,9 +1094,9 @@ describe("loadStoreModule", () => {
       );
       const store = await loadStoreModule(filePath);
       const payload = { note: "default object" };
-      await store.put({ kind: "residuals", key: "proj-1", payload });
-      const gotResiduals = await store.get({ kind: "residuals", key: "proj-1" });
-      expect(gotResiduals).toEqual(payload);
+      await store.put({ kind: "review", key: "review-1", payload });
+      const got = await store.get({ kind: "review", key: "review-1" });
+      expect(got).toEqual(payload);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -898,13 +1196,15 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       });
       expect(readFileSync(statusPath)).toEqual(before);
 
-      // A snapshot/register direct write is refused too — and creates nothing.
-      for (const ref of [{ kind: "snapshot", key: "wf-1" }, { kind: "residuals", key: "p1" }] as const) {
-        await expect(store.put({ ...ref, payload: { probe: true } })).rejects.toMatchObject({
-          code: "coordination.direct-write-refused",
-        });
-        await expect(remove(ref)).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
-      }
+      // A snapshot direct write is refused too, and a retired register write
+      // is refused outright (issue authority) — neither creates anything.
+      await expect(store.put({ kind: "snapshot", key: "wf-1", payload: { probe: true } })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      await expect(remove({ kind: "snapshot", key: "wf-1" })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      await expect(store.put({ kind: "residuals", key: "p1", payload: { probe: true } } as never)).rejects.toThrow();
       expect(existsSync(join(root, "workflows", "wf-1", "snapshot.json"))).toBe(false);
       expect(existsSync(join(root, "projects", "p1", "residuals.json"))).toBe(false);
     } finally {

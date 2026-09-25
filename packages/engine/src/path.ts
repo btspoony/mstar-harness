@@ -32,17 +32,24 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
+// Call-time-only cycle with catalog.ts (which imports this module's resolvers
+// and coordination.ts): `catalogRootDir` calls them only when a catalog verb
+// runs, and this module calls the catalog verbs only inside
+// `scaffoldHarness`, so neither side dereferences the other during module
+// evaluation (same pattern as the project.ts / status.ts cycles below).
+import { CatalogError, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { loadMstarc, type MstarcConfig } from "./mstarc.js";
 // Call-time-only cycles with project.ts / status.ts (both → path.ts): none of
 // the cycle members dereferences the other's bindings during module
 // evaluation — the constants and the validators are used only inside
 // scaffoldHarness — so the ESM live-binding cycle is safe (same pattern as
 // the status.ts ↔ workflow.ts cycle documented in status.ts).
-import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister } from "./project.js";
+import { _DEFAULT_PROJECT, PROJECT_ROADMAP_FILE } from "./project.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactRef, type ArtifactStore } from "./store.js";
-import { CoordinationError, isPlainObject, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import { StoreError, type StoreContext } from "./store-db.js";
+import { CoordinationError, isPlainObject, readArtifactBytes, sha256Bytes, withProtectedWrite } from "./coordination-write.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -448,32 +455,24 @@ State the project direction here.
 `;
 
 /**
- * Scaffolded `projects/_default/residuals.json` template — the empty
- * project register `{ "entries": {} }` (mstar-project-governance §
- * residuals.json register 生命周期), which passes `validateProjectRegister`.
- * Kept as a constant so the engine has no runtime dependency on skill
- * files.
- */
-const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
-  entries: {},
-};
-
-/**
  * Initialize the harness directory under `root`: create the resolved
  * harness dir (default `.mstar/`, or the `.mstarc`-declared `harness_dir`
  * / `MSTAR_HARNESS_DIR` override — see `resolveScaffoldDirs`) with `plans/`,
  * `iterations/`, `knowledge/`, `specs/`, `sdd/`, write `status.json` from
  * the empty template, and prebuild the v3 project layer `_default/` under
  * the resolved project dir (default `{HARNESS_DIR}/projects/`, or the
- * `.mstarc`-declared `project_dir`) with a valid `roadmap.md` + empty
- * `residuals.json` (plan-conventions § 初始化 Plan 目录;
+ * `.mstarc`-declared `project_dir`) with a valid `roadmap.md`
+ * (plan-conventions § 初始化 Plan 目录;
  * mstar-project-governance § `_default` 回退). Idempotent: an existing
  * `roadmap.md` is never clobbered, and re-running on an initialized tree only
  * creates missing pieces. Returns the absolute resolved harness dir.
  *
- * The two coordination documents (`status.json`, `_default/residuals.json`)
- * are written create-only through the active `ArtifactStore` inside the
- * private protected-write context, serialized on the target's
+ * The scaffold does NOT create a legacy `residuals.json` register
+ * (issue-governance cutover G2a): the issue store (`store.db`) is the
+ * findings authority and the register is migration history — a scaffold must
+ * never recreate the retired authority. The one coordination document
+ * (`status.json`) is written create-only through the active `ArtifactStore`
+ * inside the private protected-write context, serialized on the target's
  * `withStatusWriteLock` (spec §C4): a concurrent writer's bytes are never
  * replaced, and an existing empty/malformed document fails validation instead
  * of being silently reinitialized. Callers whose target root differs from the
@@ -502,7 +501,8 @@ export async function scaffoldHarness(root: string): Promise<string> {
   );
 // v3 project layer: `projects/_default/` is scaffolded (the fallback
 // project for project-less flows); other project ids and `workflows/`
-// stay on-demand (engine writers create them).
+// stay on-demand (engine writers create them). No legacy register is
+// scaffolded — issue authority lives in the issue store.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
   const roadmapPath = join(defaultProjectDir, PROJECT_ROADMAP_FILE);
@@ -510,14 +510,50 @@ export async function scaffoldHarness(root: string): Promise<string> {
     const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
-  await scaffoldProtectedDoc(
-    store,
-    { kind: "residuals", key: _DEFAULT_PROJECT },
-    join(defaultProjectDir, PROJECT_REGISTER_FILE),
-    EMPTY_REGISTER_TEMPLATE,
-    (payload) => validateProjectRegister(payload),
-  );
+  await registerScaffoldCatalog(root, roadmapPath);
   return harnessDir;
+}
+
+/**
+ * Register the scaffolded `_default` project through the catalog domain
+ * boundary (state-projection contract §2/§4). The project identity and its
+ * canonical location (`projects/_default/roadmap.md`) are catalog rows — the
+ * roadmap body stays a file, and no Markdown index nor an extra residual
+ * register is created for the active store.
+ *
+ * The store context is the scaffold ROOT (what the caller passed), not the
+ * resolved harness dir: `storeDbPath` re-resolves its context, and a harness
+ * dir that already owns a `plans/` child would resolve to `plans/store.db` —
+ * the scaffold root resolves to the harness marker itself, stably, which is
+ * the same store the documented `{HARNESS_DIR}` resolution names.
+ *
+ * The catalog is not this scaffold's precondition: a workspace whose store
+ * does not exist yet (or is still staged) scaffolds its files and leaves
+ * catalog registration to the store/activation lifecycle, which owns
+ * `store init`. Every other store failure propagates.
+ */
+async function registerScaffoldCatalog(root: string, roadmapPath: string): Promise<void> {
+  const context: StoreContext = { harnessDir: root };
+  const operation: CatalogOperation = { operationId: `scaffold:project:${_DEFAULT_PROJECT}`, actor: "scaffold" };
+  try {
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "project",
+        id: _DEFAULT_PROJECT,
+        title: "Default Project",
+        description: "Fallback project for project-less harness flows.",
+        rootKind: "projects",
+        relativePath: `${_DEFAULT_PROJECT}/${PROJECT_ROADMAP_FILE}`,
+        sourceHash: sha256Bytes(readFileSync(roadmapPath)),
+      },
+      operation,
+    );
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return;
+    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    throw error;
+  }
 }
 
 /**
@@ -629,20 +665,43 @@ export function emitGitignoreSnippet(kind?: HarnessKind): string {
 }
 
 /**
- * Validate that `<root>/.gitignore` contains a complete canonical
- * harness ignore set — default-ignore `<dir>/**` plus the tracked
- * re-includes (AGENTS.md, knowledge/, specs/) per plan-conventions
- * § Git 跟踪策略. Rule
- * (chosen alignment): the gate passes when the repo's .gitignore holds ONE
- * complete set for the DETECTED harness kind — `.mstar/` for a `.mstar`
- * harness, `.agents/` for a legacy `.agents` harness; layouts without a
- * canonical snippet (rung-3 `.plans`/`plans`, or no harness yet) accept
- * either complete set. This is deliberately per-kind, unlike the CLI `init`
- * fence which requires BOTH prefixes (flat dual-entry list — packages/cli
- * src/adapters/shared-install.ts HARNESS_PROCESS_GITIGNORE); a repo fenced
- * for one layout still passes here. Extra entries are fine; any missing
- * entry of the required set is a violation. Non-blocking: returns a
- * `ValidationResult` (v1 enforcement depth, roadmap §8.5).
+ * Harness-root declaration rule: a trimmed, non-blank, non-comment line
+ * matching `^!?/?\.(?:mstar|agents)(?:\/|$)`.
+ * Both root spellings count, with or without a leading slash, as does a
+ * negation (`!`); `.mstarc` alone does not declare. This is a mechanical
+ * line scan — no escaping, glob, precedence or custom-root semantics.
+ */
+const HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+
+/**
+ * Whether `content` states a harness-root declaration: any trimmed non-blank,
+ * non-comment line naming a `.mstar` or `.agents` harness root. Read only —
+ * the lines are trimmed for recognition and the input bytes are never
+ * rewritten. A declared file is author-owned: the caller must not append,
+ * reorder, dedupe or normalize its contents.
+ */
+export function hasHarnessRootDeclaration(content: string): boolean {
+  return content
+    .split(/\r?\n/)
+    .some((line) => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0 || trimmed.startsWith("#")) return false;
+      return HARNESS_ROOT_DECLARATION.test(trimmed);
+    });
+}
+
+/**
+ * Validate that `<root>/.gitignore` carries a harness ignore policy. An
+ * authored harness-root declaration makes the file author-owned and the gate
+ * passes as `gitignore.author-declared` — regardless of the DETECTED harness
+ * kind, and without proposing a rewrite, normalization or canonical-completion
+ * append. A file with no such declaration is undeclared: it reports the
+ * canonical entries it lacks for the detected kind — `.mstar/` for a `.mstar`
+ * harness, `.agents/` for a legacy `.agents` harness, the default `.mstar/`
+ * set for a layout without a canonical snippet (rung-3 `.plans`/`plans`, or no
+ * harness yet) — plus the fix that appends the canonical snippet. A missing
+ * file stays `gitignore.missing`. Non-blocking: returns a `ValidationResult`
+ * instead of throwing.
  */
 export function validateGitignore(root: string): ValidationResult {
   const gitignorePath = join(resolve(root), ".gitignore");
@@ -659,47 +718,34 @@ export function validateGitignore(root: string): ValidationResult {
       fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
     };
   }
+  if (hasHarnessRootDeclaration(content)) {
+    return {
+      ok: true,
+      severity: "low",
+      code: "gitignore.author-declared",
+      message: `.gitignore at ${gitignorePath} states a harness-root declaration \u2014 the file is author-owned and left untouched`,
+    };
+  }
   const lines = new Set(
     content
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line.length > 0),
   );
-  const mstarMissing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
-  const agentsMissing = GITIGNORE_PROCESS_ENTRIES_AGENTS.filter((entry) => !lines.has(entry));
-  let missing: readonly string[];
-  let label: string;
-  if (kind === "agents") {
-    missing = agentsMissing;
-    label = ".agents/ set";
-  } else if (kind === "mstar") {
-    missing = mstarMissing;
-    label = ".mstar/ set";
-  } else {
- // Unknown kind — either complete set passes; report the set needing the
- // fewest additions (completing either one clears the gate).
-    label = "either .mstar/ or .agents/ set";
-    missing =
-      mstarMissing.length === 0 || agentsMissing.length === 0
-        ? []
-        : mstarMissing.length <= agentsMissing.length
-          ? mstarMissing
-          : agentsMissing;
-  }
-  if (missing.length > 0) {
-    return {
-      ok: false,
-      severity: "medium",
-      code: "gitignore.missing-entries",
-      message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (${label}): ${missing.join(", ")}`,
-      fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
-    };
-  }
+  // Every canonical entry itself states a `.mstar/`/`.agents/` root
+  // declaration, so an undeclared file cannot hold any of them: the
+  // diagnostic lists the complete set for the detected kind (the default
+  // `.mstar/` set when the layout is unknown).
+  const canonical = kind === "agents" ? GITIGNORE_PROCESS_ENTRIES_AGENTS : GITIGNORE_PROCESS_ENTRIES;
+  const missing = canonical.filter((entry) => !lines.has(entry));
+  const label =
+    kind === "agents" ? ".agents/ set" : kind === "mstar" ? ".mstar/ set" : "either .mstar/ or .agents/ set";
   return {
-    ok: true,
-    severity: "low",
-    code: "gitignore.ok",
-    message: `.gitignore at ${gitignorePath} contains a complete canonical harness ignore set \u2014 default-ignore + tracked re-includes (${label})`,
+    ok: false,
+    severity: "medium",
+    code: "gitignore.missing-entries",
+    message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (${label}): ${missing.join(", ")}`,
+    fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
   };
 }
 

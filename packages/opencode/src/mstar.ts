@@ -18,6 +18,28 @@
  * `status.resolveCompassEnforcement`): error-level lines with a skill-text
  * pointer + a GateResult carrying `hardBlocked: true` (a refusal-capable
  * caller MUST refuse the write — this hook itself cannot abort the tool).
+ * G4b authority protection: a write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm`)
+ * and a write to a project register of a store-backed workspace are refused
+ * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
+ * `store.direct-write-refused`, `project.register.retired`,
+ * `store.authority-unavailable`; a register keeps its document validator only
+ * while no store / a staged store leaves it the live authority. Plan S4 adds
+ * the EXECUTION authority's retired persistence route: a root `status.json` /
+ * `workflows/<id>/snapshot.json` write is refused
+ * `execution.direct-write-refused` while that authority is ACTIVE (fail-closed
+ * when it exists and cannot be read) — canonical and symlinked targets alike.
+ * This host has no refusal channel, so every one of those verdicts is a
+ * decision record + error log, never an OS/tool fence.
+ * Native execution association (S15): the tool hook's native `sessionID` is
+ * the authoritative session fact, and the scope (workflow / role / plan) can
+ * only come from an independently acquired `MSTAR_EXECUTION_IDENTITY` — never
+ * from tool arguments. A bound association makes this consumer consult the
+ * SHARED CLI (the writer) under that native identity and report its
+ * authoritative outcome; a missing native session or missing scope is an
+ * explicit operational exclusion. The shared CLI owns every mutation and every
+ * refusal: this plugin advertises `decision-only` for the write hook because
+ * `tool.execute.before` cannot stop a tool call, and nothing here claims a
+ * fence, a stopped writer, or a cached/boolean success.
  * Never throws raw exceptions in either mode — OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  * `Promise<void>` with no refusal channel, so hard mode is surfaced as the
@@ -54,16 +76,31 @@ import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
   composeDispatchGate,
+  decodeExecutionSessionRef,
+  executionContextFor,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
   readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
+  resumeExecutionSession,
+  serializeExecutionValue,
+  validateExecutionIdentity,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusV2Doc } from "@mstar-harness/engine";
+import type {
+  EnforcementFlag,
+  ExecutionContext,
+  ExecutionIdentity,
+  ExecutionSessionRef,
+  GateResult,
+  StatusV2Doc,
+  StoreContext,
+  StoreRuntimeInfo,
+} from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 type JsonPrimitive = string | number | boolean | null;
@@ -73,6 +110,376 @@ type FrontmatterAndBody = {
   body: string;
 };
 type MessagePart = { type: string; text?: string };
+
+/** The only native identity OpenCode exposes to a tool hook. */
+export type OpenCodeHookSession = Readonly<{ sessionID?: unknown }>;
+/**
+ * The active identity channel (§3.2): the value a launcher overwrites from
+ * native host facts. This consumer reproduces the producer form with the
+ * engine's own canonical serializer — there is no second codec here.
+ */
+export const EXECUTION_IDENTITY_ENV = "MSTAR_EXECUTION_IDENTITY";
+/** The legacy pre-activation channel: an active identity never comes from it. */
+export const LEGACY_SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
+
+/** The shared CLI entrypoint this consumer's writer transport invokes. */
+export const OPENCODE_EXECUTION_CLI = "mstar";
+
+/**
+ * The channel overrides one invocation must install — exactly the launcher's
+ * rule: the identity is overwritten from native facts, while BOTH legacy keys
+ * (`MSTAR_HOST_SESSION_ID`, `MSTAR_HARNESS_DIR`) are removed. Root selection
+ * stays explicit — the `--harness` flag where a verb accepts it, otherwise the
+ * child's own cwd — so an inherited root variable never decides the target.
+ */
+export function openCodeExecutionEnvOverrides(identity: ExecutionIdentity): Record<string, string | undefined> {
+  return {
+    [EXECUTION_IDENTITY_ENV]: serializeExecutionValue(identity),
+    [LEGACY_SESSION_ID_ENV]: undefined,
+    MSTAR_HARNESS_DIR: undefined,
+  };
+}
+
+/** The scope an independently acquired ambient identity addresses, or null. */
+export function openCodeAmbientScope(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<ExecutionIdentity, "workflowId" | "role" | "planId"> | null {
+  const raw = env[EXECUTION_IDENTITY_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  return {
+    workflowId: record.workflowId as string,
+    role: record.role as ExecutionIdentity["role"],
+    planId: (record.planId ?? null) as string | null,
+  };
+}
+
+/** One OpenCode association verdict: a real bound identity, or exclusion. */
+export type OpenCodeAssociation =
+  | {
+      kind: "bound";
+      identity: ExecutionIdentity;
+      /** The reference this plugin holds for the native session, when any. */
+      sessionRef: string | null;
+      capability: "decision-only";
+    }
+  | { kind: "unavailable"; capability: "decision-only"; reason: string; operationallyExcluded: true };
+
+/**
+ * Associate the native hook session with an independently acquired scope. The
+ * native `sessionID` is the authoritative session fact and overwrites whatever
+ * the ambient identity carried; the scope (workflow/role/plan) can only come
+ * from that ambient channel, never from tool arguments. A missing native
+ * session, a missing scope, or a scope that fails the C1 rules is an explicit
+ * operational exclusion — never a success-shaped warning and never a guess.
+ */
+export function openCodeAssociation(
+  input: OpenCodeHookSession,
+  env: NodeJS.ProcessEnv = process.env,
+): OpenCodeAssociation {
+  const sessionId = input?.sessionID;
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `${LEGACY_SESSION_ID_ENV}/native session missing: OpenCode supplied no sessionID, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  const scope = openCodeAmbientScope(env);
+  if (scope === null) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `no independently acquired scope in ${EXECUTION_IDENTITY_ENV}, so this consumer is operationally excluded`,
+      operationallyExcluded: true,
+    };
+  }
+  try {
+    const identity = openCodeExecutionIdentity(input, scope);
+    return { kind: "bound", identity, sessionRef: openCodeSessionRefs.get(sessionId) ?? null, capability: "decision-only" };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      capability: "decision-only",
+      reason: `native association refused: ${(error as Error).message}`,
+      operationallyExcluded: true,
+    };
+  }
+}
+
+/** The result of one shared-CLI invocation under the native identity. */
+export type OpenCodeCliResult = Readonly<{
+  status: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  envelope: Record<string, unknown> | null;
+  /** True when the bounded deadline expired — reported, never silently green. */
+  timedOut: boolean;
+}>;
+
+/**
+ * Invoke the shared CLI as this consumer's writer/reader transport, carrying
+ * the identity acquired from native facts in the overwritten channel. The CLI
+ * (not this hook) owns every mutation; a refusal keeps the CLI's own exit code
+ * and envelope, and nothing here is upgraded into a fence. The invocation is
+ * bounded: a hung CLI is reported as a timeout instead of stalling the hook.
+ */
+export function runOpenCodeExecutionCli(
+  argv: readonly string[],
+  identity: ExecutionIdentity,
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenCodeCliResult {
+  const source = options.env ?? process.env;
+  const env: NodeJS.ProcessEnv = { ...source };
+  const overrides = openCodeExecutionEnvOverrides(identity);
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  const command =
+    options.command ?? (typeof source[OPENCODE_EXECUTION_CLI_ENV] === "string" ? source[OPENCODE_EXECUTION_CLI_ENV] : OPENCODE_EXECUTION_CLI);
+  const child = spawnSync(command, [...argv], {
+    cwd: options.cwd,
+    env,
+    encoding: "utf8",
+    timeout: CLI_CONSULT_TIMEOUT_MS,
+  });
+  const stdout = typeof child.stdout === "string" ? child.stdout : "";
+  const stderr = typeof child.stderr === "string" ? child.stderr : "";
+  let envelope: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(stdout.trim());
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      envelope = parsed as Record<string, unknown>;
+    }
+  } catch {
+    envelope = null;
+  }
+  // Node and Bun spell the same child outcome differently; read both once
+  // through one named shape instead of casting per access.
+  const outcome = child as {
+    signal?: string | null;
+    signalCode?: string | null;
+    exitCode?: number | null;
+    error?: { code?: string };
+  };
+  return {
+    status: child.status ?? outcome.exitCode ?? null,
+    signal: outcome.signalCode ?? outcome.signal ?? null,
+    stdout,
+    stderr,
+    envelope,
+    timedOut: outcome.error?.code === "ETIMEDOUT",
+  };
+}
+
+/**
+ * The plugin's own native-session → session-reference association store. A
+ * launcher that bound this host session records the reference here; the gated
+ * write path then consults the shared CLI's session-authorized read, which
+ * revalidates caller, root, store, epoch and row. An absent reference degrades
+ * to a read that proves LESS and says so.
+ */
+const openCodeSessionRefs = new Map<string, string>();
+
+export function rememberOpenCodeSessionRef(sessionId: string, wire: string): void {
+  openCodeSessionRefs.set(sessionId, wire);
+}
+
+export function forgetOpenCodeSessionRef(sessionId: string): void {
+  openCodeSessionRefs.delete(sessionId);
+}
+
+/** The canonical reference wire this plugin recognises inside observed argv. */
+const SESSION_REF_WIRE_RE = /exec-session-v1:[A-Za-z0-9_-]+/g;
+
+/**
+ * Learn this native session's reference from its OWN CLI traffic: a `bash`
+ * invocation (or a dispatch prompt) that carries `--session-ref` /
+ * `--resume-ref` names a reference the session was already issued, so the next
+ * consultation can take the session-authorized read instead of the weaker
+ * authority/register read. Only a well-formed wire whose own session id IS this
+ * native session is remembered — a foreign or malformed value is not a
+ * reference this consumer holds.
+ */
+export function observeOpenCodeSessionRefs(nativeSessionId: unknown, text: unknown): void {
+  if (typeof nativeSessionId !== "string" || nativeSessionId.trim() === "") return;
+  if (typeof text !== "string" || text === "") return;
+  for (const wire of text.match(SESSION_REF_WIRE_RE) ?? []) {
+    try {
+      if (decodeExecutionSessionRef(wire).sessionId !== nativeSessionId) continue;
+    } catch {
+      continue;
+    }
+    openCodeSessionRefs.set(nativeSessionId, wire);
+  }
+}
+
+/** The CLI entrypoint this consumer invokes; a repo whose CLI is not on PATH sets it. */
+export const OPENCODE_EXECUTION_CLI_ENV = "MSTAR_EXECUTION_CLI";
+
+/** The bounded time one CLI consultation may take before it is reported as a timeout. */
+const CLI_CONSULT_TIMEOUT_MS = 15_000;
+
+/** What one consultation actually proved — the log must claim no more. */
+export type OpenCodeConsultPlan = { argv: string[]; proof: "session-authorized" | "authority-read" | "register-read" };
+
+/**
+ * The real CLI invocation for one bound association. Preference order: the
+ * session-authorized read (revalidates the caller) when this plugin holds the
+ * session reference — `plan show --session-ref` for a plan-pm scope and the
+ * read-only resume (`plan bind --execution --resume-ref`) for a coordinator
+ * scope, which carries no plan for the show form to address; otherwise
+ * `plan show --workflow/--plan` (authority and row read, caller currency NOT
+ * verified); otherwise `status validate` with no flags, whose argument-less
+ * form reads the ACTIVE register.
+ */
+export function openCodeConsultPlan(
+  association: OpenCodeAssociation & { kind: "bound" },
+  root: string | null,
+): OpenCodeConsultPlan {
+  const { identity, sessionRef } = association;
+  const harnessFlags = root === null ? [] : ["--harness", root];
+  if (sessionRef !== null && identity.role === "plan-pm") {
+    return {
+      argv: ["plan", "show", "--session-ref", sessionRef, "--plan", String(identity.planId), "--json", ...harnessFlags],
+      proof: "session-authorized",
+    };
+  }
+  if (sessionRef !== null) {
+    // A coordinator reference: the only session-authorized READ that scope has
+    // is the read-only resume, which revalidates caller, root, store, epoch and
+    // the live row. It takes no other flag, so the root comes from the cwd.
+    return {
+      argv: ["plan", "bind", "--execution", "--resume-ref", sessionRef, "--json"],
+      proof: "session-authorized",
+    };
+  }
+  if (identity.role === "plan-pm") {
+    return {
+      argv: [
+        "plan",
+        "show",
+        "--workflow",
+        identity.workflowId,
+        "--plan",
+        String(identity.planId),
+        "--json",
+        ...harnessFlags,
+      ],
+      proof: "authority-read",
+    };
+  }
+  // A coordinator scope: the register read is the real argument-less verb.
+  return { argv: ["status", "validate"], proof: "register-read" };
+}
+
+/** Default harness layout names: their PARENT is the directory a CLI walks up from. */
+const HARNESS_LAYOUT_NAMES = new Set([".mstar", ".agents", ".plans", "plans"]);
+
+/**
+ * The cwd one consultation runs from. A CLI resolves the process harness root
+ * by walking UP from its cwd, so the parent of a layout-named harness dir is
+ * the workspace root that resolution expects; a custom-layout root is its own
+ * starting point.
+ */
+function openCodeConsultCwd(root: string | null): string | undefined {
+  if (root === null) return undefined;
+  return HARNESS_LAYOUT_NAMES.has(path.basename(root)) ? path.dirname(root) : root;
+}
+
+/**
+ * The gated-write consultation: with a bound native association this consumer
+ * really invokes the shared CLI (the writer) under the native identity and
+ * reports exactly what that call proved; with no association it states the
+ * explicit operational exclusion. It never claims the hook stopped anything,
+ * and a refusal keeps the CLI's own code — a missing or stale context is never
+ * reported as success.
+ */
+function consultSharedCliForGatedWrite(association: OpenCodeAssociation, targetPath: string): void {
+  if (association.kind === "unavailable") {
+    defaultStatusLogger(
+      "warn",
+      `native execution association unavailable — this consumer is operationally excluded for authorized writes (${association.reason}); the write is NOT stopped`,
+    );
+    return;
+  }
+  const root = resolveHarnessRootOf(path.dirname(targetPath)) ?? resolveHarnessDir(path.dirname(targetPath));
+  const plan = openCodeConsultPlan(association, root);
+  // The root reaches the CLI explicitly: `--harness` where the verb accepts it
+  // (see `openCodeConsultPlan`) and, for the argument-less register read, the
+  // child's own cwd — the workspace root that the CLI's upward probe expects.
+  // No environment variable decides the target.
+  const result = runOpenCodeExecutionCli(plan.argv, association.identity, { cwd: openCodeConsultCwd(root) });
+  const code = result.envelope?.code;
+  const proofNote =
+    plan.proof === "session-authorized"
+      ? "session-authorized read (caller, root, store, epoch and row revalidated)"
+      : plan.proof === "authority-read"
+        ? "authority/row read — this call does NOT consume the native identity, so caller currency is NOT verified"
+        : "register read — this call does NOT consume the native identity, so caller currency is NOT verified";
+  if (result.timedOut) {
+    defaultStatusLogger("warn", `shared CLI ${plan.argv[0]} timed out after ${CLI_CONSULT_TIMEOUT_MS}ms — ${proofNote}; the write is NOT stopped`);
+    return;
+  }
+  if (result.status === 0) {
+    // `status validate` prints no JSON envelope: a zero exit IS its verdict;
+    // `plan show --json` adds the row payload. Neither proves caller currency
+    // for the non-identity-consuming forms, which the note states.
+    defaultStatusLogger("info", `shared CLI ${plan.argv.join(" ")} ok — ${proofNote} (decision-only; not a fence)`);
+    return;
+  }
+  defaultStatusLogger(
+    "warn",
+    `shared CLI ${plan.argv.join(" ")} refused or failed (${String(code ?? result.signal ?? result.status ?? "no result")}) — ${proofNote}; the write is NOT stopped`,
+  );
+}
+
+/**
+ * Build the engine identity from OpenCode's native per-call session fact.
+ * The spawn target (`subagent`) and model-supplied arguments are deliberately
+ * absent from this path. Missing/unsafe native identity is a refusal, never a
+ * generated or cached substitute.
+ */
+export function openCodeExecutionIdentity(
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+): ExecutionIdentity {
+  const sessionId = input?.sessionID;
+  const identity = {
+    source: "host" as const,
+    sessionId: typeof sessionId === "string" ? sessionId : "",
+    ...scope,
+  };
+  validateExecutionIdentity(identity, scope);
+  return identity;
+}
+
+/**
+ * Decode and resume an OpenCode-bound reference using the native hook session.
+ * The engine re-reads authority, store identity, epoch and active row; this
+ * helper never treats a cached reference or boolean flag as admission.
+ */
+export async function resumeOpenCodeExecutionSession(
+  context: StoreContext,
+  input: OpenCodeHookSession,
+  scope: Pick<ExecutionIdentity, "workflowId" | "role" | "planId">,
+  reference: string | ExecutionSessionRef,
+) {
+  const identity = openCodeExecutionIdentity(input, scope);
+  const executionContext: ExecutionContext = executionContextFor(context, identity);
+  const session = typeof reference === "string" ? decodeExecutionSessionRef(reference) : reference;
+  return resumeExecutionSession(executionContext, session);
+}
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -492,6 +899,368 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
 }
 
 /**
+ * Issue/catalog authority paths (G4b) — the store database plus the retired
+ * register route. Mirrors the omp write gate
+ * (`packages/omp/src/hooks/pre/mstar-gates.ts` `readAuthorityRoute`) and the
+ * ZCode gate (`hooks/src/mstar-write-gate.ts`) in this host's GateResult
+ * dialect: the CLASSIFICATION is the engine's single path; the refusal
+ * channel differs per host.
+ */
+
+/** The authority database and its WAL sidecars, directly at a harness root. */
+const STORE_DB_FILE = "store.db";
+const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
+
+/** Case-folded authority-name matching (qc2-F-004, dsh/omp/ZCode parity): the
+ * match never hinges on byte case. This host cannot enforce (the decision is
+ * the error-log / `hardBlocked` audit trail only), so a case-variant alias
+ * (`Store.db`) must not skip even that. */
+const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
+
+/** Refusal codes, in the frozen store / `project.register.*` vocabulary. */
+const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
+const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
+const REGISTER_RETIRED_CODE = "project.register.retired";
+/** §4.3/§5: a write to a coordination document the EXECUTION authority
+ * retired as a persistence route (plan S4). */
+const EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
+
+/** A store whose absence positively identifies the PRE-activation state
+ * (legacy register authority in force, issue contract §7): missing
+ * (`store.not-initialized`) or staged (`store.not-active`). Every other
+ * refusal leaves the authority state UNKNOWN and is refused (dsh G4a
+ * `catalogRegistrationRefusal` exclusion list, mirrored). */
+const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
+
+/**
+ * Issue-store engine API (G4b). Like the P1 validators above, these exports
+ * postdate the published engine floor — a static named import would fail at
+ * module link against an older (or stubbed) installed engine and drop the
+ * WHOLE plugin, so they load through the same lazy holder pattern. `null`
+ * (missing exports / import failure) means the authority cannot be consulted:
+ * the register path then refuses fail-closed with the upgrade guidance while
+ * every unrelated document lint keeps working.
+ */
+type StoreApi = {
+  detectStoreRuntime: () => StoreRuntimeInfo;
+  assertStoreRuntimeSupported: (info: StoreRuntimeInfo) => void;
+  /** One read envelope over the authority: resolves the active store revision. */
+  readAuthority: (harnessDir: string) => Promise<number>;
+  /**
+   * §5 (plan S4) the ONE execution-source route decision, when the installed
+   * engine carries it. OPTIONAL on purpose: an engine that predates the
+   * execution authority has no route to resolve AND no harness can carry an
+   * ACTIVE execution authority, so the retired documents keep their unchanged
+   * document lint instead of a refusal class that cannot be true. An engine
+   * that HAS the authority always exports it.
+   */
+  resolveExecutionRoute?: (harnessDir: string) => Promise<"execution" | "files">;
+};
+
+let cachedStoreApi: Promise<StoreApi | null> | null = null;
+
+export function loadStoreApi(): Promise<StoreApi | null> {
+  cachedStoreApi ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.detectStoreRuntime === "function" &&
+      typeof mod.assertStoreRuntimeSupported === "function" &&
+      typeof mod.withStoreRead === "function" &&
+      typeof mod.queryDashboard === "function"
+        ? ({
+            detectStoreRuntime: mod.detectStoreRuntime,
+            assertStoreRuntimeSupported: mod.assertStoreRuntimeSupported,
+            readAuthority: async (harnessDir: string) => {
+              const envelope = await mod.withStoreRead(
+                { harnessDir },
+                mod.queryDashboard("issues", { limit: 1 }),
+              );
+              return envelope.storeRevision;
+            },
+            ...(typeof mod.resolveExecutionReadRoute === "function"
+              ? {
+                  resolveExecutionRoute: (harnessDir: string) =>
+                    mod.resolveExecutionReadRoute({ harnessDir }),
+                }
+              : {}),
+          } as const)
+        : null,
+    )
+    .catch(() => null);
+  return cachedStoreApi;
+}
+
+/** Test seam (same holder pattern as `newValidatorsLoader`): replace `load` to
+ * simulate an engine build without the issue-store API, or to observe when the
+ * store-backed route is entered. */
+export const storeApiLoader: { load: () => Promise<StoreApi | null> } = { load: loadStoreApi };
+
+/**
+ * Actual-runtime probe override (test-injectable): when unset — the shipped
+ * default — the route reads the ACTUAL runtime through the engine's
+ * `detectStoreRuntime` (the Bun global first, so a Bun process is never judged
+ * by Bun's EMULATED `process.versions.node`, which reports "26.3.0" on Bun
+ * 1.4.0). Bun-run OpenCode gets the Bun floor; a native Node runner of this
+ * plugin gets the Node floor — the invoked entrypoint's own runtime, never
+ * both.
+ */
+export const storeRuntimeOverride: { info: (() => StoreRuntimeInfo) | null } = { info: null };
+
+/** Stable code + message of a thrown refusal. */
+function refusalOf(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  return { code: code === "" ? "store.authority-unreadable" : code, message };
+}
+
+/** What the issue store says about a register target. */
+type AuthorityRoute =
+  | { kind: "legacy" }
+  | { kind: "retired"; storeRevision: number }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
+  const api = await storeApiLoader.load();
+  if (api === null) {
+    return {
+      kind: "unavailable",
+      code: "engine-store-api-missing",
+      message:
+        "the installed @mstar-harness/engine exposes no issue-store API (detectStoreRuntime / " +
+        "assertStoreRuntimeSupported / withStoreRead / queryDashboard), so the register path cannot be " +
+        "answered; upgrade the engine (next release)",
+    };
+  }
+  try {
+    api.assertStoreRuntimeSupported(storeRuntimeOverride.info?.() ?? api.detectStoreRuntime());
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+  try {
+    return { kind: "retired", storeRevision: await api.readAuthority(harnessDir) };
+  } catch (error) {
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "legacy" }
+      : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** True when `dir` itself is a harness root: the v2 markers this plugin
+ * classifies documents with (`status.json` + layout dirs), or the root the
+ * engine resolves from the directory's PARENT (default `.mstar`-style and
+ * `.mstarc harness_dir` roots — `resolveHarnessDir(dir)` probes *inside* a
+ * directory, so it never answers for the root itself). */
+function isHarnessRootDir(dir: string): boolean {
+  if (hasHarnessRootMarkers(dir)) return true;
+  const parentResolved = resolveHarnessDir(path.dirname(dir));
+  return parentResolved !== null && path.resolve(parentResolved) === dir;
+}
+
+/** The path a write to `resolved` really lands on (S-G4b-03): authority
+ * classification runs on the caller's own path first and on this one when the
+ * target is an alias — a symlink outside the harness tree resolving to a
+ * harness-root `store.db` / retired `residuals.json` IS that authority file.
+ * A dangling symlink resolves to its would-be target: the file a write
+ * through the link creates. A fresh (absent) target canonicalizes through its
+ * nearest EXISTING ancestor: an ancestor directory symlinked into a harness
+ * tree lands the write at the protected destination even though no marker is
+ * visible on the textual path, so the classification follows the filesystem
+ * there too. One canonicalization per checked target (the document lint keeps
+ * the caller's path), mirrored in the omp entries, the dsh authority gate and
+ * the ZCode write gate. */
+function landedPathOf(resolved: string): string {
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    try {
+      return path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
+    } catch {
+      // The target does not exist yet and is not itself a dangling link — but
+      // a missing FINAL component can still sit under a symlinked ANCESTOR,
+      // and the filesystem lands the write at the canonical destination
+      // through that alias. Canonicalize the nearest EXISTING ancestor and
+      // rejoin the missing suffix; only a path with no existing ancestor at
+      // all keeps the caller's path (a plain fresh file — the path itself
+      // decides).
+      let dir = path.dirname(resolved);
+      for (;;) {
+        try {
+          return path.join(fs.realpathSync(dir), path.relative(dir, resolved));
+        } catch {
+          const parent = path.dirname(dir);
+          if (parent === dir) return resolved;
+          dir = parent;
+        }
+      }
+    }
+  }
+}
+
+/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
+ * sitting directly at a harness root: the runtime's own store location for a
+ * harness root is `<harness root>/store.db`, and hand-writing those bytes is
+ * never a supported operation — hard vs soft, staged vs active, alias or not,
+ * all the same. The name match is case-insensitive (qc2-F-004, dsh/omp/ZCode
+ * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
+ * (`Store.db`) lands on the same authority bytes, so the warn-only audit
+ * trail must not hinge on byte case either. */
+function isStoreAuthorityTarget(target: string): boolean {
+  if (!STORE_AUTHORITY_NAMES.includes(path.basename(target).toLowerCase())) return false;
+  return isHarnessRootDir(path.dirname(target));
+}
+
+/** The register file's basename, matched case-insensitively (qc2-F-004). */
+const REGISTER_BASENAME = /residuals\.json/i;
+/** The canonical register shape under the resolved project dir — one project
+ * component + the register file — with the file name folded (qc2-F-004). */
+const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
+
+/** The harness root of a register target the exact-case classifiers MISS
+ * because its basename is a case variant (`RESIDUALS.json`, qc2-F-004): the
+ * canonical register shape (one project component + the register file under
+ * the resolved project dir) is matched case-insensitively from the nearest
+ * harness root up the tree — the same walk the engine's marker probe runs for
+ * exact-case names, so a case-variant register is authority-classified like
+ * the file itself and keeps its document validator on the pre-activation
+ * fall-through (dsh/omp/ZCode parity). `null` when the basename is not a
+ * register name or no ancestor root holds the shape. */
+function caseFoldedRegisterRoot(candidate: string): string | null {
+  const target = path.resolve(candidate);
+  if (!REGISTER_BASENAME.test(path.basename(target))) return null;
+  let dir = path.dirname(target);
+  for (;;) {
+    if (isHarnessRootDir(dir)) {
+      let projectDir: string;
+      const resolvers = classifyDirResolvers;
+      if (resolvers !== null) {
+        try {
+          projectDir = resolvers.resolveProjectDir(dir, { harnessDir: dir });
+        } catch {
+          projectDir = path.join(dir, "projects");
+        }
+      } else {
+        projectDir = path.join(dir, "projects");
+      }
+      if (REGISTER_SHAPE.test(path.relative(projectDir, target))) return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** The harness root of a project register this write reaches ONLY through a
+ * symlink alias (`landed` differs from the caller's own `resolved` path): the
+ * register is an authority document, so its route is decided on the path the
+ * write really lands on. `null` when the target is not an alias, or does not
+ * land on a register (S-G4b-03). */
+function aliasedRegisterDir(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(path.resolve(landed));
+  return aliased?.kind === "register" ? aliased.harnessDir : null;
+}
+
+/** One authority refusal as a refusal-capable GateResult: `hardBlocked` is
+ * set unconditionally (no enforcement flag involved) so a caller with a
+ * refusal channel must refuse the write. */
+function authorityRefusal(code: string, message: string, log: StatusLogger): GateResult {
+  log(
+    "error",
+    `${code}: ${message} — blocked by decision only: this host's \`tool.execute.before\` has no refusal ` +
+      "channel, so the write is NOT stopped — authority protection is warn-only here (skill: " +
+      "mstar-artifacts/references/status-and-residuals.md)",
+  );
+  return { ok: false, violations: [{ ok: false, severity: "high", code, message }], hardBlocked: true };
+}
+
+function storeDirectWriteRefusal(targetPath: string, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    STORE_DIRECT_WRITE_CODE,
+    `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` +
+      "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " +
+      "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " +
+      "register|update`",
+    log,
+  );
+}
+
+function registerRetiredRefusal(storeRevision: number, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    REGISTER_RETIRED_CODE,
+    "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
+      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
+    log,
+  );
+}
+
+/**
+ * §4.3 the EXECUTION authority's retired coordination documents (plan S4):
+ * root `status.json` and `workflows/<id>/snapshot.json` are no longer a
+ * persistence route while that authority is ACTIVE, so persisting them would
+ * create a second authority — refused regardless of the compass enforcement
+ * flag and regardless of whether the bytes would validate.
+ *
+ * This host's channel is honest about what it is: `tool.execute.before`
+ * returns void here (no refusal channel), so this result is a DECISION plus an
+ * error-log record, never an OS/tool fence. `authorityRefusal` states exactly
+ * that; nothing in this path may claim the write was stopped.
+ */
+function executionDirectWriteRefusal(targetPath: string, log: StatusLogger): GateResult {
+  return authorityRefusal(
+    EXECUTION_DIRECT_WRITE_CODE,
+    `${targetPath} is retired as a persistence route while the control harness's execution authority is ACTIVE — ` +
+      "the root status and the workflow snapshots live in the execution store ({HARNESS_DIR}/store.db, owned by " +
+      "the runtime). Use the execution DB route (the coordination verbs), not a file writer. This write is refused",
+    log,
+  );
+}
+
+function authorityUnavailableRefusal(
+  route: { code: string; message: string },
+  log: StatusLogger,
+  authority = "the issue authority",
+  write = "register write",
+): GateResult {
+  return authorityRefusal(
+    STORE_AUTHORITY_UNAVAILABLE_CODE,
+    `${authority} could not be read ([${route.code}] ${route.message}) — the ${write} is refused ` +
+      "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
+    log,
+  );
+}
+
+/**
+ * §5 (plan S4) what the control harness's EXECUTION authority says about a
+ * coordination-document write in this host's dialect. `resolveExecutionReadRoute`
+ * (through the lazy store holder) is the ONE place a consumer decides between
+ * the DB authority and the file route; a store that EXISTS and cannot be read
+ * is `unavailable` (fail-closed, never a fall-through to the file route) and a
+ * harness with no store keeps the file route (§2.1: absence is not an
+ * authority verdict). An installed engine without the route export is the
+ * pre-execution engine: there is no authority to classify, so the documents
+ * keep their unchanged document lint.
+ */
+type ExecutionWriteRoute =
+  | { kind: "files" }
+  | { kind: "active" }
+  | { kind: "unavailable"; code: string; message: string };
+
+async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
+  const api = await storeApiLoader.load();
+  const resolve = api?.resolveExecutionRoute;
+  if (resolve === undefined) return { kind: "files" };
+  try {
+    return (await resolve(harnessDir)) === "execution" ? { kind: "active" } : { kind: "files" };
+  } catch (error) {
+    return { kind: "unavailable", ...refusalOf(error) };
+  }
+}
+
+/**
  * `status.json` / workflow snapshot / project register write lint (roadmap
  * §8.5 `beforeStatusWrite`, v3 hard cutover).
  *
@@ -505,26 +1274,47 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
  * `projects/<id>/residuals.json` (the v1 root `residual_findings` surface
  * is gone — the residual write gate moved to the register path).
  *
+ * Authority paths (G4b + plan S4) are decided before the document path and
+ * are NOT governed by the enforcement flag (an authority invariant, not
+ * document validity — the ZCode/omp write gates refuse the same classes
+ * unconditionally): a `{HARNESS_DIR}/store.db` (`-wal`/`-shm`) write is
+ * refused outright, a root `status.json` / `workflows/<id>/snapshot.json`
+ * write is refused while the control harness's EXECUTION authority is ACTIVE
+ * (`execution.direct-write-refused` — the retired persistence route), and a
+ * project register is routed through the DB-aware authority check — refused as
+ * `project.register.retired` while the issue store is the active findings
+ * authority, refused as `store.authority-unavailable` when that authority
+ * cannot be read at all, and shape-validated only while no store / a staged
+ * store leaves the register the live authority (issue contract §7). These
+ * refusal classes are decided on the path a target really LANDS on
+ * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or to
+ * a project register is refused and routed exactly like the file itself, while
+ * everything else keeps the caller's path and behaviour. The runtime floor is
+ * read from the ACTUAL runtime (engine `detectStoreRuntime` — the Bun global
+ * first, never Bun's emulated `process.versions.node`) and asserted
+ * in-process before the store is touched.
+ *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5):
  * - **Warn mode (default)** — flag absent: violations are surfaced as `warn`
- * through the plugin log channel; `hardBlocked` is false.
+ *   through the plugin log channel; `hardBlocked` is false.
  * - **Hard mode** — the write context carries `Enforcement: hard` via
- * `opts.enforcement`, or (when omitted) the repo's iteration compass
- * frontmatter declares `enforcement: hard` (engine
- * `status.resolveCompassEnforcement`): violations are surfaced as `error`
- * lines with a skill-text pointer and the returned GateResult carries
- * `hardBlocked: true` — a refusal-capable caller MUST refuse the write
- * (this hook itself cannot abort the tool; see the blocking-channel note).
+ *   `opts.enforcement`, or (when omitted) the repo's iteration compass
+ *   frontmatter declares `enforcement: hard` (engine
+ *   `status.resolveCompassEnforcement`): violations are surfaced as `error`
+ *   lines with a skill-text pointer and the returned GateResult carries
+ *   `hardBlocked: true` — a refusal-capable caller MUST refuse the write.
  * Never throws a raw exception: hard mode is the structured result +
  * error log channel.
  *
  * Blocking channel note (documented behavior): OpenCode's plugin API
- * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
- * — there is no error/refusal return channel on this host. The plugin
- * therefore surfaces hard mode as error-level log lines (captured into the
- * OpenCode server log) + the structured `hardBlocked` result; host bindings
- * with a refusal channel (pi/dsh when their APIs land) must refuse the write
- * when `hardBlocked === true`.
+ * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
+ * `Promise<void>` — there is no error/refusal return channel on this host.
+ * The plugin therefore surfaces hard mode — the authority classes included —
+ * as error-level log lines (captured into the OpenCode server log) + the
+ * structured `hardBlocked` result; host bindings with a refusal channel
+ * (pi/dsh when their APIs land) must refuse the write when
+ * `hardBlocked === true`. This host does NOT enforce: an authority refusal
+ * here is a decision record, never an OS/tool fence.
  *
  * Returns the engine gate result when the target is a canonical harness
  * coordination document and something could be validated; `null` otherwise
@@ -541,14 +1331,82 @@ export async function validateStatusWrite(
     if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
 
     const resolved = path.resolve(targetPath);
+ // S-G4b-03: the AUTHORITY decision runs on the path the target really lands
+ // on — a symlink alias of the store database or of a project register IS
+ // that authority file. Nothing else is canonicalized.
+    const landed = landedPathOf(resolved);
+    const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
  // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
- // classifying — the sync slot feeds `harnessDocKindOfTarget` (stale
- // engine -> null -> default-layout names, the pre-F1 behavior).
+ // classifying — the sync slot feeds `harnessDocKindOfTarget` AND the
+ // authority-target marker probe (stale engine -> null -> default-layout
+ // names, the pre-F1 behavior).
     classifyDirResolvers = await dirResolversLoader.load();
-    const target = harnessDocKindOfTarget(resolved);
+// G4b authority paths first: the store database is never writable by hand,
+// and a register target is decided by the DB-aware authority route rather
+// than by its document shape (both refuse unconditionally).
+    if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget, log);
+    const classified = harnessDocKindOfTarget(resolved);
+    // §4.3/§5 (plan S4) the EXECUTION authority's retired documents come
+    // next: root status and workflow snapshots are refused while that
+    // authority is ACTIVE, and refused fail-closed when it exists and cannot
+    // be read. The classification covers the caller's own path AND the path
+    // the write really lands on (S-G4b-03) — and it covers BOTH harness roots:
+    // a status/snapshot symlinked into ANOTHER harness's tree lands on THAT
+    // harness's document, so EITHER root's verdict (ACTIVE or UNAVAILABLE)
+    // refuses the write. A single-root probe would let a pre-activation
+    // harness's alias bypass the authority the bytes really belong to (an
+    // identical landed root costs no second probe). The old protected artifact
+    // paths keep their canonical target checks even though the new authority
+    // refuses writing them. This is an authority invariant, not the compass
+    // axis.
+    const landedAlias = landed === resolved ? null : harnessDocKindOfTarget(landed);
+    const executionDirs: string[] = [];
+    if (classified !== null && classified.kind !== "register") executionDirs.push(classified.harnessDir);
+    if (
+      landedAlias !== null &&
+      landedAlias.kind !== "register" &&
+      !executionDirs.includes(landedAlias.harnessDir)
+    ) {
+      executionDirs.push(landedAlias.harnessDir);
+    }
+    for (const executionDir of executionDirs) {
+      const executionRoute = await readExecutionWriteRoute(executionDir);
+      if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved, log);
+      if (executionRoute.kind === "unavailable") {
+        return authorityUnavailableRefusal(
+          executionRoute,
+          log,
+          "the harness's execution authority",
+          "coordination-document write",
+        );
+      }
+    }
+    // A project register is an authority document too — reached through an
+    // alias it takes the same route (status/snapshot aliases are handled
+    // above). A case-variant register basename (qc2-F-004) bypasses both
+    // exact-case classifications and is classified by the folded shape walk
+    // instead, so the warn-only audit trail fires for it too (dsh/omp/ZCode
+    // parity).
+    const registerDir =
+      classified?.kind === "register"
+        ? classified.harnessDir
+        : (landedAlias?.kind === "register"
+            ? landedAlias.harnessDir
+            : (aliasedRegisterDir(resolved, landed) ??
+              caseFoldedRegisterRoot(resolved) ??
+              (landed !== resolved ? caseFoldedRegisterRoot(landed) : null)));
+    const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
     if (!target) return null;
 
     let result: GateResult | null;
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(registerDir);
+      if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
+      if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
+// `legacy` (no store / staged store): pre-activation, the register is
+// still the findings authority, so its own validator decides below.
+    }
+
     if (opts.doc !== undefined) {
       if (target.kind === "status") {
         result = validateDocByKind(opts.doc, target.kind, null);
@@ -775,9 +1633,17 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const args = (output?.args ?? {}) as Record<string, unknown>;
       const prompt = args.prompt;
       const rawFilePath = args.filePath;
+      // Native-session reference association: this session's OWN CLI traffic
+      // (a `bash` invocation or a dispatch prompt carrying `--session-ref` /
+      // `--resume-ref`) names a reference it was already issued, so later
+      // gated-write consultations can take the session-authorized read that
+      // revalidates caller, root, store, epoch and row.
+      observeOpenCodeSessionRefs(input.sessionID, typeof args.command === "string" ? args.command : undefined);
+      observeOpenCodeSessionRefs(input.sessionID, typeof prompt === "string" ? prompt : undefined);
       const rawPath = args.path;
       const filePath =
         typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
+      const nativeAssociation = openCodeAssociation(input);
 
  // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
  // validation on subagent dispatch. OpenCode's `task` tool carries the
@@ -833,6 +1699,9 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: consult the shared CLI under the
+        // native association (positive path) or state the explicit exclusion.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation, filePath);
       } else if (input.tool === "edit") {
  // Classify the target FIRST : the dir-resolvers loader is
  // cached, so the kind check is cheap — the synchronous file read +
@@ -840,7 +1709,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
  // docs. Non-coordination targets (source files, configs, prose —
  // the overwhelming majority of edits) skip the read/parse entirely.
         classifyDirResolvers = await dirResolversLoader.load();
-        if (harnessDocKindOfTarget(filePath) === null) return;
+        if (harnessDocKindOfTarget(filePath) === null && !isStoreAuthorityTarget(filePath)) return;
  // Patched-doc linting: when the OpenCode `edit` args carry a
  // literal `oldString` -> `newString` pair (one pair per tool call —
  // no replacements array, no regex), synthesize the PATCHED text and
@@ -896,6 +1765,8 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
           );
         }
+        // A gated coordination document: same positive CLI consultation path.
+        if (gate !== null) consultSharedCliForGatedWrite(nativeAssociation, filePath);
       }
     },
 

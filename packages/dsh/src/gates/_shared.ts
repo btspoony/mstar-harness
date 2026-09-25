@@ -28,6 +28,14 @@ import type { IterationGateListView, IterationGateViolationView } from '../types
 import type { SessionHint } from './workflow-selection.ts'
 /** Canonical harness status file name (mstar-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
+/**
+ * The issue/catalog authority's file name under the resolved `{HARNESS_DIR}`
+ * (issue-store contract §2 — `<resolved harness root>/store.db`). `store.db`
+ * is the ONE authority the host readers consult; the retired
+ * `projects/<id>/residuals.json` registers and the Markdown index tables are
+ * migration history.
+ */
+export const STORE_DB_FILE = 'store.db'
 /** Plugin configuration. */
 export interface Config {
   /**
@@ -198,6 +206,12 @@ export function stripInterpolationHazard(text: string): string {
 }
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
+// simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
+// generic, so the inferred meta.default output admits a `Volatile<...>` arm
+// that `Partial<Config>` rejects (3.18.2 accepted this assignment). The cast
+// only relaxes this one initializer check — the runtime value and the declared
+// `z<Config>` contract are unchanged. Drop it when the fork's `.default`
+// return instantiates concretely again.
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
@@ -237,7 +251,7 @@ export const Config: z<Config> = z.object({
   // the dispatch/persona array keys so absence stays observable).
   workflowGate: z.union(['off', 'warn', 'ask', 'hard']).default('warn'),
   workflowNames: z.array(z.string()).default(undefined as unknown as string[]),
-})
+}) as z<Config>
 /** One violation line for logs and the typed veto message. */
 export function formatViolation(violation: ValidationResult): string {
   return `[${violation.severity}] ${violation.code}: ${violation.message}${violation.fix !== undefined ? ` (fix: ${violation.fix})` : ''}`

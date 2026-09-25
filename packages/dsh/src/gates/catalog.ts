@@ -39,23 +39,29 @@ import { existsSync, readFileSync, readdirSync, realpathSync, type Dirent } from
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
+  assertExecutionFileReadAllowed,
   evaluatePhaseGate,
+  listCatalog,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
+  queryDashboard,
   readJson,
   resolveProjectDir,
   resolveRepoEnforcement,
   readWorkflowSnapshot,
-  PROJECT_REGISTER_FILE,
+  withStoreRead,
   PROJECT_ROADMAP_FILE,
   WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
+import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { CatalogRegistrationRefusal } from './workflow-selection.ts'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
   AgentFlowView,
   HarnessLeaseView,
   HarnessPlanView,
+  HarnessResidualSeverity,
   HarnessResidualView,
   IterationGateView,
   MstarEngineStatusPayload,
@@ -64,11 +70,13 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
+  StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
 import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
+import { catalogRegistrationRefusal, readExecutionWorkflowSource, refusalOf, resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
+import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
@@ -76,27 +84,24 @@ const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 /** Default catalog cache refresh interval (ms) — see Config `catalogTtlMs`. */
 export const DEFAULT_CATALOG_TTL_MS = 60_000
 
-/** Residual severity vocabulary (mstar-artifacts severity SSOT order). */
-const RESIDUAL_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
+/**
+ * Issue severity rank, highest first (issue-store contract §2 `severity`), and
+ * the display's bucket order for the open-issue rollup. The authority's own
+ * order (`listIssues`: severity rank desc → last real activity desc → id asc)
+ * decides the DETAIL rows; this list only orders the severity BUCKETS so the
+ * digest reads critical→info regardless of which bucket arrived first.
+ */
+const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const
 
 /**
- * Engine `isOpenResidual` parity (packages/engine/src/status.ts lines
- * 159–163): an entry is open when `lifecycle` is missing, `null` or `false`
- * (the jq `//` default covers `false` too — `lifecycle: false` counts as
- * open), otherwise it must be the STRING `'open'`. The engine does not
- * export this from the public surface, so the catalog implements the same
- * semantics locally (iteration non-goals forbid engine changes).
+ * How many open issues one catalog refresh will enumerate before it discloses
+ * that the rollup is a partial view (the count then carries the page bound in
+ * its text). The issue page API caps one request at 200 rows, so the rollup
+ * pages; the usual harness has tens of open issues and never reaches the cap.
  */
-function isOpenResidualParity(entry: Record<string, unknown>): boolean {
-  const lifecycle = entry.lifecycle
-  const effective = lifecycle === false || lifecycle === null || lifecycle === undefined ? 'open' : lifecycle
-  return effective === 'open'
-}
-
-/** Severity sort index for a residual finding (critical first). */
-function residualSeverityIndex(severity: string): number {
-  return (RESIDUAL_SEVERITIES as readonly string[]).indexOf(severity)
-}
+const ISSUE_ROLLUP_MAX_PAGES = 5
+/** One issue page's row cap (issue contract §5: `limit` max 200). */
+const ISSUE_PAGE_LIMIT = 200
 
 /** The plugin's own manifest version (single-version invariant; own manifest first). */
 function pluginVersion(): string {
@@ -129,6 +134,32 @@ function engineStatusSource(): MstarEngineStatusSource {
 }
 
 /**
+ * The SYNCHRONOUS build's route decision (§5, plan S4) — the counterpart of
+ * the async pre-read's {@link readExecutionWorkflowSource} for the builders
+ * that cannot await it (the `mstar:engine-status` context provider and direct
+ * tool/test calls). It calls the engine's own synchronous legacy-reader guard
+ * (`assertExecutionFileReadAllowed` — the same primitive the dsh gate seams
+ * use, never a re-implementation), so an ACTIVE execution authority makes the
+ * selection a structured REFUSAL instead of an `active` selection assembled
+ * from the retired `status.json` / snapshot bytes, and an authority that
+ * exists and cannot be read refuses fail-closed. A harness with no store file
+ * at all keeps the unchanged file route (§2.1: absence is not an authority
+ * verdict), exactly as the read adapter discriminates.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (never null: the caller
+ *   returns before this on a null dir).
+ * @param hint - the carrying session's effective selection hint.
+ */
+function syncAuthoritySelection(harnessDir: string, hint?: SessionHint): WorkflowSelectionView {
+  try {
+    assertExecutionFileReadAllowed({ harnessDir })
+  } catch (error) {
+    const refusal = refusalOf(error)
+    return { kind: 'error', code: refusal.code, message: refusal.message }
+  }
+  return resolveReadWorkflow(harnessDir, hint)
+}
+
+/**
  * The payload the ONE unified engine-status catalog row renders from (the
  * watermark + iteration gate + workspace-state digest). Every field is
  * boot/workspace-resolved — the unified mstar version is a
@@ -138,21 +169,57 @@ function engineStatusSource(): MstarEngineStatusSource {
  * the payload is built ONCE at `apply()`; without one it is built on the
  * FIRST pre-step of each workspace. The whole cache entry is then
  * TTL-refreshed (Config `catalogTtlMs`, default 60000 — a mid-session
- * status/compass/residual change lands within one interval). The
- * documented staleness tradeoff keeps synchronous disk I/O off the
- * agent-loop hot path: a timestamp compare + Map lookup per step between
- * refreshes.
+ * status/compass/issue change lands within one interval). The documented
+ * staleness tradeoff keeps disk/DB I/O off the agent-loop hot path: a
+ * timestamp compare + Map lookup per step between refreshes.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  * @param hint - the carrying session's structural identity + durable pick
  *   (D4): the ONE selection resolves the state and iteration sections
  *   together, so the read path can never aggregate two different lifecycles.
+ * @param facts - the store-backed open-item facts (issues rollup + knowledge
+ *   catalog digest) the async pre-read produced. Omitted only by the
+ *   synchronous callers (the `mstar:engine-status` context provider and
+ *   direct tool/test calls): the state then discloses that the authority was
+ *   not read rather than showing an empty rollup as if it were a finding of
+ *   "none open", and the route decision falls to the synchronous authority
+ *   guard ({@link syncAuthoritySelection}) — never a file-derived selection
+ *   while the execution authority is ACTIVE.
  */
-function engineStatusPayload(harnessDir: string | null, hint?: SessionHint): MstarEngineStatusPayload {
+function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, facts?: StoreFacts): MstarEngineStatusPayload {
   // ONE read-path resolution per build (D4): the state section AND the
   // iteration gate consume the SAME selection — never two independent
-  // `resolveReadWorkflow` calls that could disagree.
-  const selection = harnessDir !== null ? resolveReadWorkflow(harnessDir, hint) : undefined
-  const iteration = harnessDir !== null ? iterationGateSource(harnessDir, selection) : undefined
+  // resolutions that could disagree. Root routing is the ROUTE's answer: the
+  // store-backed pre-read's verdict when it ran (§5: the DB registry on an
+  // ACTIVE execution authority, its own refusal when the authority exists and
+  // cannot be read), the unchanged file resolver otherwise.
+  const authority = facts?.authority
+  // Route decision, in order: the store-backed pre-read's OWN verdict when it
+  // ran (`active` with the materialized state, its structured `error`, or the
+  // fail-closed `unavailable`); the SYNCHRONOUS guard when no pre-read ran (the
+  // synchronous builders cannot await the route — the engine's synchronous
+  // legacy-reader guard decides instead: an ACTIVE or unreadable authority
+  // REFUSES, while a harness with no store file keeps the unchanged file
+  // route); and the file resolver for the pre-read's own `files` verdict.
+  const resolved = harnessDir === null
+    ? undefined
+    : authority === undefined
+      ? syncAuthoritySelection(harnessDir, hint)
+      : authority.kind === 'active'
+        ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
+        : authority.kind === 'error'
+          ? authority.selection
+          : authority.kind === 'unavailable'
+            ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
+            : resolveReadWorkflow(harnessDir, hint)
+  // The materialized lifecycle the route selected (an ACTIVE execution
+  // authority hands its own state over): the sections below never re-read a
+  // retired document to find out what the selection was about.
+  const snapshot = authority?.kind === 'active' ? authority.snapshot : undefined
+  const refusal = facts?.selectionRefusal
+  const selection = resolved !== undefined && resolved.kind === 'active' && refusal !== undefined
+    ? { kind: 'error' as const, code: refusal.code, message: refusal.message }
+    : resolved
+  const iteration = harnessDir !== null ? iterationGateSource(harnessDir, selection, snapshot) : undefined
   return {
     version: pluginVersion(),
     harnessDir,
@@ -164,7 +231,9 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint): Mst
     // event data that is not losslessly JSON-serializable (undefined-valued
     // object properties included) with a hard round failure.
     ...(iteration !== undefined ? { iteration } : {}),
-    state: harnessDir !== null && selection !== undefined ? harnessStateSource(harnessDir, selection) : null,
+    state: harnessDir !== null && selection !== undefined
+      ? harnessStateSource(harnessDir, selection, facts ?? UNREAD_STORE_FACTS, snapshot)
+      : null,
   }
 }
 
@@ -302,8 +371,9 @@ export function buildCatalogPayload(
   ctx: Context,
   harnessDir: string | null,
   hint?: SessionHint,
+  facts?: StoreFacts,
 ): MstarEngineStatusPayload {
-  const payload = engineStatusPayload(harnessDir, hint)
+  const payload = engineStatusPayload(harnessDir, hint, facts)
   if (payload.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
@@ -334,7 +404,25 @@ export function buildCatalogPayload(
  * @param hint - the carrying session's effective selection hint.
  * @param ttlMs - refresh interval in milliseconds.
  */
-function catalogPayloadFor(
+/**
+ * The wired ASYNC build: the store-backed pre-read ({@link readStoreFacts} —
+ * the issue rollup, the knowledge catalog digest and the selected workflow's
+ * catalog-registration verdict) followed by the synchronous payload assembly.
+ * This is what the pre-step listener serves, and the only way to get a payload
+ * whose open-item facts came from the authority; `buildCatalogPayload` without
+ * facts is the synchronous path whose state discloses that no store read
+ * happened. Never throws for a refused store — the refusal travels in the
+ * state's `storeFacts`.
+ */
+export async function buildCatalogPayloadWithStore(
+  ctx: Context,
+  harnessDir: string | null,
+  hint?: SessionHint,
+): Promise<MstarEngineStatusPayload> {
+  return buildCatalogPayload(ctx, harnessDir, hint, await readBuildFacts(harnessDir, hint))
+}
+
+async function catalogPayloadFor(
   ctx: Context,
   cache: Map<string, CatalogCacheEntry>,
   invalidation: CatalogInvalidation,
@@ -343,18 +431,49 @@ function catalogPayloadFor(
   cwd: string,
   hint: SessionHint | undefined,
   ttlMs: number,
-): MstarEngineStatusPayload {
-  if (sessionId === undefined) return buildCatalogPayload(ctx, harnessDir, hint)
+): Promise<MstarEngineStatusPayload> {
+  if (sessionId === undefined) return await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
   const key = catalogCacheKey(harnessDir, sessionId, cwd, hint)
   const entry = cache.get(key)
   if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) {
     invalidation.register(harnessDir, sessionId, key)
     return entry.payload
   }
-  const payload = buildCatalogPayload(ctx, harnessDir, hint)
+  const payload = await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
   cache.set(key, { payload, builtAt: Date.now() })
   invalidation.register(harnessDir, sessionId, key)
   return payload
+}
+
+/**
+ * The async pre-read ONE cache refresh performs before the payload is built:
+ * the store-backed open-item facts, plus the catalog-registration verdict for
+ * the SELECTED workflow. A workflow whose catalog registration is still
+ * pending is never displayed as a healthy active lifecycle — the state's
+ * selection is replaced by the structured refusal (the same channel a v1 root
+ * or an unbound multi-active set uses), with the reconcile command in the
+ * message, so the model sees the half-registered workspace before it
+ * dispatches into it (where the dispatch gate refuses outright).
+ */
+async function readBuildFacts(harnessDir: string | null, hint: SessionHint | undefined): Promise<StoreFacts | undefined> {
+  if (harnessDir === null) return undefined
+  const facts = await readStoreFacts(harnessDir)
+  // §5 (plan S4): the ONE route decision for this build — never a file-route
+  // selection derived from the retired register while the execution authority
+  // is ACTIVE, and never a fallback when that authority exists and cannot be
+  // read. The verdict travels with the facts so the synchronous payload
+  // assembly below cannot re-read a document to disagree with it.
+  const authority = await readExecutionWorkflowSource({ harnessDir }, hint)
+  const selection = authority.kind === 'active'
+    ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
+    : authority.kind === 'error'
+      ? authority.selection
+      : authority.kind === 'unavailable'
+        ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
+        : resolveReadWorkflow(harnessDir, hint)
+  if (selection.kind !== 'active') return { ...facts, authority }
+  const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
+  return refusal === null ? { ...facts, authority } : { ...facts, authority, selectionRefusal: refusal }
 }
 
 /** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
@@ -388,7 +507,18 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
         lines.push(`workflow warning: ${state.selection.warning.code} ${state.selection.warning.message}`)
       }
       lines.push(`plans: ${state.plans.length === 0 ? 'none registered' : joinCapped(state.plans, CATALOG_STATE_JOIN_LIMIT, ' ', (p) => `${p.id}(${p.status})`)}`)
-      lines.push(`residuals: ${state.residuals.length === 0 ? 'none open' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
+      // The open-item rollup renders its authority's verdict, never a bare
+      // empty list: a store that could not be read says so (with the engine's
+      // refusal text), and a stale/unavailable PROJECTION is disclosed on its
+      // own line — the issue rows are read directly and stay authoritative
+      // while the projected execution/roadmap views may lag.
+      const store = state.storeFacts
+      if (store !== undefined && store.kind === 'unavailable') {
+        lines.push(`residuals: unavailable — ${store.diagnostic ?? 'the issue/catalog authority was not read'}`)
+      } else {
+        lines.push(`residuals: ${state.residuals.length === 0 ? 'none open' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
+        if (store?.diagnostic != null) lines.push(`store: ${store.diagnostic}`)
+      }
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         const integration = state.specIntegrationBranch !== null ? ` (spec integration: ${state.specIntegrationBranch})` : ''
         lines.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}${integration}`)
@@ -455,52 +585,71 @@ function hhmm(ts: number): string {
 }
 
 /**
- * The workspace-state catalog source: the plan registry, open residual
- * counts, branch/policy anchors, active leases, knowledge index digest and
- * the steering compass direction one-liner — the "where are we" facts the
- * model would otherwise have to read status.json / the compass / the
- * knowledge index for. Built from the SAME cached cycle as the sibling
- * rows (one status.json + compass + knowledge-index read per cache
- * refresh). Returns undefined when the workspace has no harness dir or no
- * status.json (the row is absent — advisory degrade, same as the
- * iteration-gate row).
+ * The workspace-state catalog source: the plan registry, open-issue counts,
+ * branch/policy anchors, active leases, knowledge catalog digest and the
+ * steering compass direction one-liner — the "where are we" facts the model
+ * would otherwise have to read status.json / the compass / the catalog for.
+ * Built from the SAME cached cycle as the sibling rows (one status.json +
+ * compass read per cache refresh; the issue/catalog facts arrive as the
+ * async pre-read's {@link StoreFacts}). Returns undefined when the workspace
+ * has no harness dir, or resolves neither a status.json nor a structured
+ * selection verdict (the row is absent — advisory degrade, same as the
+ * iteration-gate row): a verdict is operator-visible reason, so it keeps the
+ * section PRESENT even after the execution authority retired the file registry.
  *
  * v3 per-lifecycle aggregation (compass v3.0.0 § Catalog selection rule):
  * the state section aggregates the SELECTED workflow lifecycle — resolved
  * ONCE by the caller (D4: the same selection the iteration gate consumes).
  * `state.plans[]` / `leases` come from the selected snapshot's `plans[]` rows
- * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, residuals
- * from the project registers (`projects/<id>/residuals.json` — the v1
- * `residual_findings` home after migrate). Never a root v1 `plans[]` / root
- * `agent-flow.jsonl` read. The direction one-liner and the branch fallbacks
- * come from the SELECTED snapshot's own `compass_ref` — never a directory-wide
- * first-active compass scan.
+ * verbatim (root action JSON stays the execution authority), `agentFlow` from
+ * the workflow dir's `agent-flow.jsonl`, and the open-item facts from
+ * `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
+ * `plans[]` / root `agent-flow.jsonl` read, and never a project register: the
+ * retired registers are not consulted anywhere on this path. The direction
+ * one-liner and the branch fallbacks come from the SELECTED snapshot's own
+ * `compass_ref` — never a directory-wide first-active compass scan.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  * @param selection - the ONE read-path selection for this build.
+ * @param facts - the store-backed open-item facts (see {@link StoreFacts}).
+ * @param authoritySnapshot - §5 (plan S4) the selected lifecycle's state as the
+ *   execution authority materialized it. Present exactly when the route was
+ *   `execution`: the retired `status.json` / snapshot documents are then NOT
+ *   consulted (the authority is the source), and the section is built even
+ *   though no `status.json` needs to exist.
  */
-function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView): MstarHarnessState | null {
+function harnessStateSource(
+  harnessDir: string,
+  selection: WorkflowSelectionView,
+  facts: StoreFacts,
+  authoritySnapshot?: Record<string, unknown>,
+): MstarHarnessState | null {
   const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return null
+  // A structured selection verdict is the operator-visible reason this
+  // workspace cannot be aggregated, and it must survive the retirement of the
+  // file registry: an ACTIVE (or unreadable) execution authority, an empty DB
+  // registry and an unbound multi-active set all arrive with NO status.json on
+  // disk, so the file-existence gate below may not swallow them into a silent
+  // null state section. The ONE verdict that keeps the advisory-degrade null is
+  // `status.missing` — "no coordination document anywhere", which is what an
+  // absent harness resolves to on the file route.
+  if (selection.kind === 'error') {
+    return selection.code === 'status.missing' ? null : selectionErrorState(selection, facts, harnessDir)
+  }
+  if (authoritySnapshot === undefined && !existsSync(statusPath)) return null
   try {
-    // ONE residual rollup per catalog build : the state
-    // section AND the project rollup zone consume the same register parse —
-    // never two independent `residualRollup` walks per refresh.
-    const rollup = residualRollup(harnessDir)
     const str = (value: unknown): string | null =>
       typeof value === 'string' && value.trim() !== '' ? value.trim() : null
     /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
     const iterationRefsOf = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
-    if (selection.kind === 'error') {
-      // Clear selection error (v1/unmigrated root, no snapshots, unbound
-      // multi-active): the state section stays PRESENT with the
-      // operator-visible reason (and, for the picker, the active ids) and
-      // empty aggregates — never a root v1 read, never a silent empty row.
-      return selectionErrorState(selection, rollup, harnessDir)
-    }
     const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
     let snapshot: Record<string, unknown>
-    if (!existsSync(snapshotPath)) {
+    if (authoritySnapshot !== undefined) {
+      // §5 (plan S4): the execution authority already materialized this
+      // lifecycle's state — the retired snapshot is not opened at all (its
+      // bytes are refused by the engine's own reader anyway).
+      snapshot = authoritySnapshot
+    } else if (!existsSync(snapshotPath)) {
       // S-d: an active/terminal selection whose snapshot is
       // MISSING degrades to a STRUCTURED selection error (the state section
       // stays PRESENT with the operator-visible reason and empty
@@ -513,30 +662,31 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
           code: 'workflow.selection.snapshot-unreadable',
           message: `cannot read the selected workflow snapshot ${snapshotPath}`,
         },
-        rollup,
+        facts,
         harnessDir,
       )
-    }
-    try {
-      // Canonical reader: legacy-only snapshots stay readable through the
-      // single sanctioned alias normalization (the v1
-      // `control_worktree_path` key reads as `integration_worktree_path`);
-      // any other validation violation refuses the read → the same
-      // structured snapshot-unreadable degrade. The reader's migration
-      // diagnostic is advisory and the catalog has no note channel — the
-      // CLI surface prints it instead.
-      snapshot = readWorkflowSnapshot(join(harnessDir, selection.dir)).snapshot
-    } catch {
-      // Same structured degrade for an unreadable/corrupt snapshot file.
-      return selectionErrorState(
-        {
-          kind: 'error',
-          code: 'workflow.selection.snapshot-unreadable',
-          message: `cannot read the selected workflow snapshot ${snapshotPath}`,
-        },
-        rollup,
-        harnessDir,
-      )
+    } else {
+      try {
+        // Canonical reader: legacy-only snapshots stay readable through the
+        // single sanctioned alias normalization (the v1
+        // `control_worktree_path` key reads as `integration_worktree_path`);
+        // any other validation violation refuses the read → the same
+        // structured snapshot-unreadable degrade. The reader's migration
+        // diagnostic is advisory and the catalog has no note channel — the
+        // CLI surface prints it instead.
+        snapshot = readWorkflowSnapshot(join(harnessDir, selection.dir)).snapshot
+      } catch {
+        // Same structured degrade for an unreadable/corrupt snapshot file.
+        return selectionErrorState(
+          {
+            kind: 'error',
+            code: 'workflow.selection.snapshot-unreadable',
+            message: `cannot read the selected workflow snapshot ${snapshotPath}`,
+          },
+          facts,
+          harnessDir,
+        )
+      }
     }
     // The SELECTED snapshot's OWN compass (D4): direction and the branch
     // fallbacks read this lifecycle's `compass_ref` only — a session never
@@ -574,7 +724,7 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
         }
       }
     }
-    const { residuals, residualFindings } = rollup
+    const { residuals, residualFindings } = facts
     // v3 branch/policy anchors: the snapshot's first-class fields (migrate
     // lifts the v1 root metadata into `branch` / `execution_policy` /
     // `integration_worktree_path`); the SELECTED lifecycle's compass frontmatter
@@ -588,7 +738,7 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(harnessDir, residuals),
+      project: projectRollupSource(harnessDir, facts.residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -596,7 +746,8 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
       worktreeMode: str(executionPolicy?.worktree_mode),
       integrationWorktreePath: str(snapshot.integration_worktree_path),
       leases,
-      knowledge: knowledgeDigest(harnessDir),
+      knowledge: facts.knowledge,
+      storeFacts: facts.source,
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
       // Actual subagent flow evidence — read on the same per-workspace cache
       // cycle as the sibling state rows (one bounded ledger read per TTL
@@ -619,15 +770,15 @@ function harnessStateSource(harnessDir: string, selection: WorkflowSelectionView
  * The shared empty-aggregate state for a selection failure (S-d :
  * the state section stays PRESENT with the operator-visible reason and
  * empty aggregates — never a root v1 read, never a silent null state. The
- * project rollup zone still shows the workspace-level residual counts (the
- * rollup is computed once per build — — and passed in).
+ * project rollup zone still shows the workspace-level open-issue counts (the
+ * rollup is read once per refresh and passed in).
  *
  * No selected lifecycle ⇒ no compass: direction is null rather than borrowed
  * from whichever iteration happens to be steering.
  */
 function selectionErrorState(
   selection: WorkflowSelectionView,
-  rollup: { residuals: HarnessResidualView[]; residualFindings: ResidualFindingView[] | null },
+  facts: StoreFacts,
   harnessDir: string,
 ): MstarHarnessState {
   return {
@@ -635,9 +786,13 @@ function selectionErrorState(
     workflowType: null,
     workflowStatus: null,
     plans: [],
-    residuals: [],
-    residualFindings: null,
-    project: projectRollupSource(harnessDir, rollup.residuals),
+    // The open-item rollup is NOT selection-scoped: issues are plan- and
+    // workflow-independent (issue contract §6), and a selection failure (an
+    // unbound multi-active set, a v1 root) must not blank the workspace's
+    // open-item facts.
+    residuals: facts.residuals,
+    residualFindings: facts.residualFindings,
+    project: projectRollupSource(harnessDir, facts.residuals),
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -645,7 +800,8 @@ function selectionErrorState(
     worktreeMode: null,
     integrationWorktreePath: null,
     leases: [],
-    knowledge: knowledgeDigest(harnessDir),
+    knowledge: facts.knowledge,
+    storeFacts: facts.source,
     direction: null,
     agentFlow: null,
   }
@@ -653,20 +809,16 @@ function selectionErrorState(
 
 /**
  * The additive project rollup (compass v3.0.0 AC-4 / AC-P3 — the panel's
- * fifth zone): roadmap milestones + open-residual severity counts from the
- * PROJECT layer (`projects/<id>/roadmap.md` frontmatter `milestones[]` +
- * `projects/<id>/residuals.json` registers — the v1 root
- * `residual_findings` home after migrate). Aggregates across ALL project
- * registers (workspace-level, same semantics as {@link residualRollup}).
- * Always-present (lossless): no roadmap files → `milestones: []`; no
- * registers / no open entries → `openResiduals: []`. Unreadable roadmaps
- * are skipped (advisory).
- *
- * the open-residual rollup is computed ONCE per catalog
- * build by the caller and passed in — this zone never re-walks the project
- * registers itself.
+ * fifth zone): roadmap milestones + open-issue severity counts from the
+ * PROJECT layer. The milestones come from the roadmap DOCUMENT bodies
+ * (`projects/<id>/roadmap.md` frontmatter `milestones[]` — a roadmap is a
+ * Markdown body, not a register, so it stays a file read); the open counts are
+ * the harness-wide issue rollup the caller read from `store.db`, never a
+ * second walk and never a project register. Always-present (lossless): no
+ * roadmap files → `milestones: []`; no open issues → `openResiduals: []`.
+ * Unreadable roadmaps are skipped (advisory).
  */
-function projectRollupSource(harnessDir: string, residuals: HarnessResidualView[]): MstarHarnessProject {
+function projectRollupSource(harnessDir: string, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
   const milestones: string[] = []
   const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
   if (existsSync(projectsDir)) {
@@ -699,122 +851,157 @@ function projectRollupSource(harnessDir: string, residuals: HarnessResidualView[
 }
 
 /**
- * Open residual findings from the v3 project registers
- * (`projects/<id>/residuals.json` — the v1 `residual_findings` home after
- * migrate; compass AC-2/AC-3). Aggregates across ALL project registers
- * (workspace-level, same semantics as the v1 root key). No register files
- * → `residualFindings: null` (advisory — same pattern as `knowledge`);
- * register(s) present with no open entries → [].
+ * The open-item facts the state section renders: the issue rollup, its detail
+ * rows and the knowledge catalog digest — ALL read from the issue/catalog
+ * authority (`{HARNESS_DIR}/store.db`), plus the disclosure of how that read
+ * went (`source`). Collected by {@link readStoreFacts} on the async pre-step
+ * path; the synchronous builders fall back to {@link UNREAD_STORE_FACTS},
+ * which says so instead of pretending the rollup is empty.
  */
-function residualRollup(harnessDir: string): { residuals: HarnessResidualView[]; residualFindings: ResidualFindingView[] | null } {
-  const registers = projectRegisters(harnessDir)
-  const residuals: HarnessResidualView[] = []
-  const counts = new Map<string, number>()
-  let residualFindings: ResidualFindingView[] | null = null
-  if (registers.length > 0) {
-    residualFindings = []
-    for (const register of registers) {
-      const entries = asRecord(register.doc.entries)
-      if (entries === undefined) continue
-      for (const planId of Object.keys(entries)) {
-        const findings = entries[planId]
-        if (!Array.isArray(findings)) continue
-        for (const finding of findings) {
-          const entry = asRecord(finding)
-          if (entry === undefined) continue
-          // Open-parity FIRST (W-A : a closed register entry
-          // (resolved / waived / closed lifecycle) is NOT an open residual
-          // — the engine's `isOpenResidual` parity — so it must never
-          // count toward the severity rollup NOR the detail view. The
-          // register is open-by-construction after migrate, but a stale or
-          // already-closed entry must not inflate the workspace counts or
-          // the fifth-zone chips (engine treats closed entries as closed).
-          if (!isOpenResidualParity(entry)) continue
-          const severity = entry.severity
-          // Rollup: every valid-severity OPEN entry counts.
-          if (typeof severity === 'string' && (RESIDUAL_SEVERITIES as readonly string[]).includes(severity)) {
-            counts.set(severity, (counts.get(severity) ?? 0) + 1)
-          }
-          // Detail: open-lifecycle filtered (same parity as the count —
-          // one filter drives both); unknown severities skipped; severity
-          // ordered critical→nit (stable sort keeps the source order
-          // within one severity); capped at 10.
-          if (typeof severity !== 'string' || residualSeverityIndex(severity) === -1) continue
-          residualFindings.push({
-            planId,
-            id: typeof entry.id === 'string' ? entry.id : '',
-            severity,
-            title: typeof entry.title === 'string' ? entry.title : '',
-          })
-        }
-      }
+interface StoreFacts {
+  readonly source: StoreFactsView
+  readonly residuals: readonly HarnessResidualView[]
+  readonly residualFindings: readonly ResidualFindingView[] | null
+  readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
+  /**
+   * The catalog-registration refusal for the SELECTED workflow, when the store
+   * reports one: the state renders it as a structured selection error instead
+   * of presenting a half-registered lifecycle as healthy.
+   */
+  readonly selectionRefusal?: CatalogRegistrationRefusal
+  /**
+   * §5 (plan S4) the ONE route decision the async pre-read made for this
+   * build: the execution authority's own active-set answer (`active` with the
+   * selected lifecycle's materialized state, `error`, `unavailable`) or
+   * `files` when the pre-activation file route still answers. Absent only on
+   * the synchronous build (no pre-read ran) — that build decides through the
+   * engine's synchronous legacy-reader guard
+   * ({@link syncAuthoritySelection}), so it refuses on an ACTIVE/unreadable
+   * authority instead of presenting a file-derived selection as the
+   * authority's.
+   */
+  readonly authority?: ExecutionWorkflowSourceRead
+}
+
+/** The empty aggregate a build without a store read reports (never a silent "none open"). */
+const UNREAD_STORE_FACTS: StoreFacts = {
+  source: {
+    kind: 'unavailable',
+    projection: null,
+    storeRevision: null,
+    diagnostic: 'the issue/catalog store was not read for this build',
+  },
+  residuals: [],
+  residualFindings: null,
+  knowledge: null,
+}
+
+/** One refresh's open-issue rollup (counts + detail) plus the knowledge digest. */
+async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
+  const context: StoreContext = { harnessDir }
+  try {
+    const envelope = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT } }))
+    const items: Array<IssuePage['items'][number]> = [...envelope.data.items]
+    // The rollup counts EVERY open issue: page through the authority's own
+    // order until the reported total is covered (bounded — a capped count
+    // then discloses the bound instead of silently undercounting).
+    let pages = 1
+    while (items.length < envelope.data.total && pages < ISSUE_ROLLUP_MAX_PAGES) {
+      const next = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT, offset: items.length } }))
+      if (next.data.items.length === 0) break
+      items.push(...next.data.items)
+      pages += 1
     }
-    for (const severity of RESIDUAL_SEVERITIES) {
+    const counts = new Map<HarnessResidualSeverity, number>()
+    for (const item of items) counts.set(item.severity, (counts.get(item.severity) ?? 0) + 1)
+    const residuals: HarnessResidualView[] = []
+    for (const severity of ISSUE_SEVERITIES) {
       const count = counts.get(severity)
       if (count !== undefined && count > 0) residuals.push({ severity, count })
     }
-    residualFindings.sort((a, b) => residualSeverityIndex(a.severity) - residualSeverityIndex(b.severity))
-    residualFindings = residualFindings.slice(0, 10)
+    // The detail rows keep the AUTHORITY's order (severity rank desc → last
+    // real activity desc → id asc) and its own severity string; `planId`
+    // stays empty — an issue is plan-independent, and its plan/iteration
+    // links are provenance, not a column of a summary row.
+    const residualFindings: ResidualFindingView[] = items.slice(0, 10).map((item) => ({
+      planId: '',
+      id: item.id,
+      severity: item.severity,
+      title: item.title,
+    }))
+    return {
+      source: {
+        kind: 'store',
+        projection: envelope.projection.freshness,
+        storeRevision: envelope.storeRevision,
+        diagnostic: storeProjectionDiagnostic(envelope.projection, items.length, envelope.data.total),
+      },
+      residuals,
+      residualFindings,
+      knowledge: await readKnowledgeDigest(context),
+    }
+  } catch (error) {
+    return {
+      source: {
+        kind: 'unavailable',
+        projection: null,
+        storeRevision: null,
+        diagnostic: storeRefusalText(error),
+      },
+      residuals: [],
+      residualFindings: null,
+      knowledge: null,
+    }
   }
-  return { residuals, residualFindings }
 }
 
 /**
- * Read every project register (`projects/<id>/residuals.json`) under the
- * harness dir. Unreadable registers are skipped (advisory); a missing
- * projects dir / no register files → [].
+ * The disclosure text of ONE store-backed read: `null` while the projection is
+ * current and the count whole, otherwise the named reason — a STALE or
+ * UNAVAILABLE projection (execution/roadmap views may lag; the issue rows read
+ * here are authoritative either way) and/or the paging bound.
  */
-function projectRegisters(harnessDir: string): Array<{ projectId: string; doc: Record<string, unknown> }> {
-  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
-  if (!existsSync(projectsDir)) return []
-  let entries
-  try {
-    entries = readdirSync(projectsDir, { withFileTypes: true })
-  } catch {
-    return []
+function storeProjectionDiagnostic(projection: ReadProjection, counted: number, total: number): string | null {
+  const parts: string[] = []
+  if (projection.freshness !== 'current') {
+    const sources = projection.diagnostics.map((diagnostic) => diagnostic.sourceKey).join(', ')
+    parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative; execution/roadmap views may lag`)
   }
-  const registers: Array<{ projectId: string; doc: Record<string, unknown> }> = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const registerPath = join(projectsDir, entry.name, PROJECT_REGISTER_FILE)
-    if (!existsSync(registerPath)) continue
-    try {
-      registers.push({ projectId: entry.name, doc: readJson(registerPath) })
-    } catch {
-      continue // unreadable register — skip (advisory)
-    }
-  }
-  return registers
+  if (counted < total) parts.push(`first ${counted} of ${total} open issues counted`)
+  return parts.length === 0 ? null : parts.join('; ')
 }
 
 /**
- * Knowledge index digest: `{HARNESS_DIR}/knowledge/README.md` rows →
- * doc count + distinct categories (the first path segment of each row's
- * Document cell). Null when the index is absent or unreadable (advisory).
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * One refusal as the display states it: the engine's stable code (when the
+ * error carries one) plus its message verbatim. A below-floor runtime, a
+ * missing capability, a staged/corrupt store and a schema drift all arrive
+ * here as the engine's own actionable text — never as an empty rollup, and
+ * never converted into a JSON fallback.
  */
-function knowledgeDigest(harnessDir: string): { docCount: number; categories: string[] } | null {
-  const indexPath = join(harnessDir, 'knowledge', 'README.md')
-  if (!existsSync(indexPath)) return null
-  try {
-    const categories = new Set<string>()
-    let docCount = 0
-    for (const line of readFileSync(indexPath, 'utf8').split(/\r?\n/)) {
-      const row = line.trim().match(/^\|(.+)\|$/)
-      if (row === null) continue
-      const cells = row[1]!.split('|').map((cell) => cell.trim()).filter((cell) => cell !== '')
-      if (cells.length < 4) continue
-      const path = cells[0]!.replace(/^`|`$/g, '')
-      const category = path.split('/')[0]
-      if (category === undefined || category === '' || !path.includes('/')) continue
-      categories.add(category)
-      docCount += 1
-    }
-    if (docCount === 0) return null
-    return { docCount, categories: [...categories].sort() }
-  } catch {
-    return null
+function storeRefusalText(error: unknown): string {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  const message = error instanceof Error ? error.message : String(error)
+  return typeof code === 'string' && code !== '' ? `[${code}] ${message}` : message
+}
+
+/**
+ * Knowledge catalog digest from the DB catalog (state-projection contract §1:
+ * document identity lives in `store.db`, bodies stay files — the retired
+ * `{KNOWLEDGE_DIR}/README.md` index is NOT read). `docCount` counts every
+ * registered knowledge document (archived/superseded rows stay registered)
+ * and `categories` are the distinct first path segments of their
+ * catalog-relative paths. Throws when the catalog cannot be read — the caller
+ * has already proven the authority active, and a failed catalog read must
+ * reach {@link readStoreFacts}'s catch instead of reporting an empty digest.
+ */
+async function readKnowledgeDigest(context: StoreContext): Promise<{ docCount: number; categories: string[] }> {
+  const page = await listCatalog(context, { kind: 'document', documentKind: 'knowledge', limit: ISSUE_PAGE_LIMIT })
+  const categories = new Set<string>()
+  for (const item of page.items) {
+    const category = item.relativePath.split('/')[0]
+    if (category !== undefined && category !== '' && item.relativePath.includes('/')) categories.add(category)
   }
+  return { docCount: page.total, categories: [...categories].sort() }
 }
 
 /**
@@ -917,19 +1104,28 @@ function pathInside(root: string, candidate: string): boolean {
  * explicit probes).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  * @param selection - the ONE read-path selection for this build.
+ * @param authoritySnapshot - §5 (plan S4) the selected lifecycle's state as the
+ *   execution authority materialized it: present exactly on the `execution`
+ *   route, where the retired snapshot file is not opened and no `status.json`
+ *   needs to exist.
  */
 function iterationGateSource(
   harnessDir: string | null,
   selection: WorkflowSelectionView | undefined,
+  authoritySnapshot?: Record<string, unknown>,
 ): MstarIterationGateView | undefined {
   if (harnessDir === null || selection === undefined || selection.kind === 'error') return undefined
-  const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return undefined
+  if (authoritySnapshot === undefined) {
+    const statusPath = join(harnessDir, STATUS_FILE)
+    if (!existsSync(statusPath)) return undefined
+  }
   const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
   try {
     // v3 relocation: the gate's first doc is the SELECTED workflow snapshot
     // (`workflows/<id>/snapshot.json`); its own `compass_ref` is the second.
-    const snapshotDoc = readJson(snapshotPath)
+    // §5: on the execution route that doc is the authority's own materialized
+    // state, never the retired file.
+    const snapshotDoc = authoritySnapshot ?? readJson(snapshotPath)
     const compass = selectedCompass(harnessDir, selection.workflowId, snapshotDoc)
     if (compass === undefined) return undefined
     // No git probes at boot: the row reports what the two control docs
@@ -955,6 +1151,9 @@ function iterationGateSource(
       iterationId: compass.iterationId,
       // The evaluated doc: the selected workflow snapshot (v3), not the root
       // status.json — mirrors the CLI `iteration gate --workflow <id>` input.
+      // On the execution route this names that lifecycle's canonical snapshot
+      // ADDRESS; the evaluated bytes are the authority's own materialized
+      // state (they are read from the DB, not from this path).
       statusPath: snapshotPath,
       compassPath: compass.compassPath,
       gate,
@@ -1037,7 +1236,7 @@ export async function preStepCatalogListener(
     // a READ path and must still render, so it falls back to the structural
     // hint and reports the degrade once through the logger.
     const hint = sessionHintForCatalog(harnessDir, payload.agent)
-    const catalogPayload = catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
+    const catalogPayload = await catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
     const messages = [...decision.messages]
     const text = renderEngineStatusCatalog(catalogPayload)
     // Digest gate: inject the ONE unified row on the first step of a turn,

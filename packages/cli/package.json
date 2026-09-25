@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/cli",
   "version": "3.11.2",
-  "description": "Morning Star harness CLI — installer bootstrap + mstar workflow verbs (path/status/lease/sdd/iteration/dispatch/worktree/lint/design-md/audit/compound/host/skill).",
+  "description": "Morning Star harness CLI — installer bootstrap + mstar workflow verbs (path/status/lease/sdd/iteration/dispatch/worktree/lint/design-md/audit/compound/host/skill) and synthetic-only judgment review advice.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -18,14 +18,15 @@
   },
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js && bun ../../scripts/escape-dist-literals.ts dist/mstar-harness.js",
+    "build": "bun run scripts/build-web.ts && rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js && bun ../../scripts/escape-dist-literals.ts dist/mstar-harness.js",
     "check": "bun run src/index.ts --help",
-    "typecheck:src": "bunx tsc --noEmit -p tsconfig.json",
+    "typecheck:src": "bun run scripts/build-web.ts && bunx tsc --noEmit -p tsconfig.json",
     "test": "bun run --cwd ../engine build && bun run build && bun test",
     "prepublishOnly": "bun run build && bun run check"
   },
   "engines": {
-    "bun": ">=1.2.17"
+    "bun": ">=1.4.0",
+    "node": ">=24.18.0"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.2",
@@ -36,6 +37,9 @@
     "access": "public"
   },
   "devDependencies": {
-    "@mstar-harness/engine": "workspace:*"
+    "@mstar-harness/judgment": "workspace:*",
+    "@mstar-harness/engine": "workspace:*",
+    "htm": "^3.1.1",
+    "preact": "^10.29.8"
   }
 }

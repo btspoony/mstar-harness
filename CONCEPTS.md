@@ -36,11 +36,29 @@ The two concurrency tokens guarding the **protected documents** — the coordina
 A **row revision** is a monotonic counter on one plan row, advanced only when that row changes, so two sessions mutating different rows of the same snapshot both persist and only a re-write of the same row conflicts. An **artifact version** is the hash of a document's exact on-disk bytes (`absent` before its first write) and guards whole-document replacement. A caller passes the row revision to plan mutations and the artifact version to document replacement; a missing token is refused rather than read as "replace whatever is there", and a stale token is a loud conflict carrying expected and actual values. Related: Workflow lifecycle, Project register.
 *Avoid:* document revision (ambiguous between the two), mtime or date as a version.
 
+### Consulted header set
+The closed set of plan-Markdown labels the plan contract actually reads — `plan_id`, `main worktree branch`, `working branch` — matched **exactly**, never by prefix. Every other label in the header region is body content and is skipped, so a descriptive sibling such as `Working branch policy` may sit beside `Working branch` without being consumed as either. Prefix matching silently aliases the two: the policy sentence would be compared against a real branch value, and the refusal it produces would blame the wrong document. Growing the contract means adding a label to the set deliberately — the set is the contract, not the header region. Related: Row revision and artifact version, Enforcement flag.
+*Avoid:* plan header (ambiguous with the Assignment header block), reserved fields.
+
 ### Delivery kind
 The purpose declaration a registered workflow carries at registration (`development` vs `verification/report-only`), recorded by the register producer and consumed by the delivery tail: development workflows owe PR submission + verified merge + evidence-backed terminal close; verification/report-only workflows follow their explicitly recorded alternative completion policy. Absence of `branch.target` is not an implicit exemption, and `plan-row Done` never implies `workflow completed`. Related: Task budget, Workflow lifecycle.
 
 ### Task budget (implement / ops rounds)
 The implementer-side capacity contract field on a canonical Assignment: **one implementer round** within which the declared Files list and verification gates close (bare `Task budget` accepted), citing the existing Effort band — never a wall-clock target or numeric-minutes table. Presence is enforced fail-level by the dispatch validator for the implement/ops complement (`assignment.field.task-budget-missing`, severity `high`); review/audit rounds keep their separate `Budget` / `Return shape` fields, and orientation roles are not exempt. A multi-session estimate is not an exemption — the plan declares a split point — and budget pressure never shortens assigned scoped verification. Related: Review seat layers.
+
+## Governance store
+
+### Staged store
+A `{HARNESS_DIR}/store.db` that has received a reviewed migration apply but has not been activated. It refuses ordinary issue/catalog mutations **and** authority-shaped reads (`store.not-active`), is inspectable only through the migration surface (manifest/receipt), and is never the issue authority until the activation epoch flips. The three acts are distinct — **apply ≠ activate ≠ retire**: a staged apply never supersedes live authority, and no capture window exists between cutover and activation (post-activation findings record their occurrence at capture time, never back-dated). Related: Authority route.
+
+### Maintenance exclusion
+The single outermost lock key an engine-side lifecycle operation (store activation, restore, migration) holds so that **no cooperative writer in any package** can append into the window it guards. Every cooperative writer takes it before its own per-artifact lock, and a writer that already holds it refuses new writes with a named reason instead of proceeding. It is distinct from the per-artifact lockdir, which only serializes writers of one file: the exclusion crosses package boundaries, so a writer honouring only its own file's lock is not participating. It is a coordination discipline, not an authority — holding it does not unify file append with DB authorization. Related: Staged store, Authority route.
+*Avoid:* maintenance lock (ambiguous with the per-workflow lock), global lock.
+
+### Authority route
+The classification every host write gate runs **before** document judgment: a write target resolves to the store (`store.db` incl. `-wal`/`-shm`), a retired project register, or the pre-activation legacy fall-through — case-folded, ancestor-walked, and realpath-canonicalized so sidecars, case variants, and symlinks cannot bypass it. Enforcing hosts (dsh, omp, ZCode hook) veto `store.direct-write-refused` / `project.register.retired` / `store.authority-unavailable` in both enforcement modes; a host without a refusal channel (OpenCode `tool.execute.before`) is **warn-only** by documented contract. The route is deliberately mirrored per host until the one-home engine export lands (residual R4). Related: Staged store, Three-domain write model.
+
+**Read side.** Once the authority serves **reads** too, the same rule applies with two additions: the route decision must precede every file read (a path that will refuse opens no file), and a target is classified by its **landed** identity (`realpath`), not only by the caller's textual path. A synchronous surface reuses the engine's synchronous guard instead of reimplementing one, and the discrimination "no store file ⇒ file route stays lawful / unreadable store ⇒ fail closed" is explicit — both halves were Critical findings during the execution-authority cutover. Related: Authority route, Staged store.
 
 ## Agent list (dsh panel)
 

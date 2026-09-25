@@ -24,13 +24,14 @@ English / [中文](README_CN.md)
 [![npm: opencode](https://img.shields.io/npm/dt/@mstar-harness/opencode?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20opencode)](https://www.npmjs.com/package/@mstar-harness/opencode)
 </div>
 
-**Morning Star** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
+**Morning Star / 晨星** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
 
 - **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
 - **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, project residuals, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
+- **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
+- **Issue/catalog store vs execution JSON** — `{HARNESS_DIR}/store.db` (SQLite) is the issue and catalog authority after activation; `ArtifactStore` remains execution/review JSON (`status.json`, snapshots). The retired project registers are migration history with no write path. They are not the same store.
 - **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **What ships**
@@ -57,6 +58,8 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 | Codex | `npx @mstar-harness/cli init --target codex`<br>then `codex plugin add morning-star-harness@mstar-repo` (repo-bundled marketplace) |
 | Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root<br>(`plugin.json` + `skills/` are the portable package) |
 
+> CLI commands in this section run the published bin through its Bun shebang: `npx` / `bunx` / `npm i -g` all need **Bun >=1.4.0** on PATH. Node-only machine: `npm install @mstar-harness/cli`, then `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>` (see **Runtime floors**).
+
 ### Engine gate checks (Recommended)
 
 ```bash
@@ -80,6 +83,10 @@ Codex agent-link repair and named-role verification: [Codex installation](INSTAL
 The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
 
 Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: the **`mstar-use-cli`** skill.
+
+### Runtime floors (entrypoint, not “install both”)
+
+The published CLI keeps a Bun shebang (`#!/usr/bin/env bun`). Normal launch of `mstar-harness` / the dist file uses **Bun >=1.4.0**. An explicit `node <CLI bundle>` uses **Node >=24.18.0**. `npx` / `bunx` fetch the package but still execute that same Bun-shebang bin, so they need **Bun >=1.4.0** on PATH as well — a package runner is not a runtime; on a Node-only machine install the package and run the bundle under Node (`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`). Bun-hosted plugins need Bun; native Node entries need Node. Do not treat those floors as a demand to install both runtimes on every machine. This README does not prove packaged compatibility or store activation.
 
 ## Use
 
@@ -137,6 +144,15 @@ The audit and review commands are read-only and advisory; findings can become pl
 | `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | Deep pre-merge review of a PR / branch / diff at three strengths — `quick` (single-pass, 1 seat) / `default` (no-flag landing tier, reduced seats) / `deep` (full three-stage pipeline) — one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub by the command's main agent at Stage 3 synthesis when a PR number is given. `deep` runs the full three-stage pipeline (collect → domain review → main-agent synthesis; one verdict / one GitHub Review); `default` / `quick` are lighter single/dual-seat passes. Multi-PR input → first PR only; remaining PRs queued as audit todos (next session); suggest one session per PR. |
 | `/amazing-e2e-check [environment/device] [scenarios]` | Execute explicitly requested browser/device/installed-deployment scenarios through `mstar-e2e` in a separate workflow; never a routine iteration QA gate. |
 
+### Local dashboard
+
+`mstar dashboard` serves a **read-only** web UI of the issue store and the execution/roadmap projections on `127.0.0.1` — loopback only, with no bind-address option. It covers the issue list and detail with recorded history, the workflow / iteration / roadmap views, and one cumulative captured-vs-retired issue-flow chart. The dashboard never mutates anything; make changes with the CLI (`mstar issue …`, `mstar catalog …`) and stop the server with Ctrl-C.
+
+```
+mstar dashboard            # prints the resolved URL after the server is listening
+mstar dashboard --help     # --port / --open / --project
+```
+
 ## Harness Workflow
 
 ```mermaid
@@ -165,7 +181,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance checklist"]
     P1 --> Q{"Residual findings remain"}
     P2 --> Q
-    Q -->|Yes| R["PM/QA: register or accept residuals in project register"]
+    Q -->|Yes| R["PM: capture confirmed findings as issues in {HARNESS_DIR}/store.db"]
     R --> S["PM: mark plan Done and merge to integration branch"]
     Q -->|No| S
     S --> T["PM: sync compass plan status"]
@@ -207,8 +223,8 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-sdd` | Subagent-driven development |
 | `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
 | `mstar-conventions` | `{HARNESS_DIR}` discovery / init |
-| `mstar-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
-| `mstar-project-governance` | Roadmap authoring + residual register lifecycle, `_default` fallback |
+| `mstar-artifacts` | Plans, `status.json`, issue capture pointers, Findings cleanup |
+| `mstar-project-governance` | Roadmap authoring + issue capture contract, register migration history, `_default` fallback |
 | `mstar-design-md` | DESIGN.md gate for UI plans |
 | `mstar-review-qc` | PM QC tri orchestration |
 | `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |

@@ -4,13 +4,24 @@
  * T2; primary spec §C capacity/reservation and §D transport boundary).
  *
  * Fixture discipline: every coordination fact these cases assert on is created
- * through the REAL engine verbs — `bindPlanSession` (coordinator and plan),
- * `mutatePlanCoordination` (`prepare` / `progress` / `handoff` / `return`) in a
- * real Git repository with real linked worktrees — never by writing an accepted
- * lease, binding or handoff into the snapshot by hand. The journal, by contrast,
- * is this module's own transport document, so the case that needs a stale or
- * foreign journal writes that file directly: it is not engine state, and reading
- * a foreign one must refuse rather than take over.
+ * through the REAL engine verbs on the DB authority — `createExecutionWorkflow`,
+ * `bindExecutionSession` (coordinator and plan) and `mutateExecutionPlan`
+ * (`prepare` / `progress` / `handoff` / `return`) in a real Git repository with
+ * real linked worktrees — never by writing an accepted lease, binding or handoff
+ * into a snapshot by hand. The journal, by contrast, is this module's own
+ * transport document, so the case that needs a stale or recovered intent writes
+ * that file directly: it is not engine state, and an intent the engine cannot
+ * re-derive is exactly the state a replay has to survive.
+ *
+ * The harness is provisioned with a REAL issue store (`initializeStore`): since
+ * the issue-governance cutover (G2a) the handoff gate reads the plan's open
+ * findings from `{HARNESS_DIR}/store.db`, and it fails closed when that
+ * authority is missing or staged — it has no pre-activation branch (engine
+ * `issue-cutover.test.ts` pins the refusal, issue contract §7 governs register
+ * CAPTURES, not a plan handoff). These cases assert on launch admission and
+ * occupancy against a genuinely handing-off plan, so the fixture supplies the
+ * same active store the store-cutover suites build — no open issue is linked to
+ * these plans, so the `allow-residual` gate is clean.
  *
  * Launch transport is never executed here and no case claims it was: these cases
  * prove admission, occupancy and transition bookkeeping against real files. The
@@ -30,20 +41,32 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  bindPlanSession,
+  bindExecutionSession,
+  createExecutionWorkflow,
   createFsStore,
-  mutatePlanCoordination,
-  readPlanCoordination,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionPlan,
+  readExecutionAuthority,
+  registerCatalogEntity,
   setArtifactStore,
-  type CoordinationResult,
+  type ExecutionCaller,
+  type ExecutionContext,
+  type ExecutionPlanView,
+  type ExecutionReceipt,
+  type ExecutionSessionRef,
+  type ExecutionState,
+  type ExecutionToken,
 } from "@mstar-harness/engine";
-import { recordPlanLaunch, reservePlanLaunch, type LaunchIntent, type PlanLaunchResult } from "../src/phase2-launches";
+import { recordPlanLaunch, reservePlanLaunch, type ExecutionLaunchAuthority, type LaunchIntent, type PlanLaunchResult } from "../src/phase2-launches";
 import type { Phase2Request } from "../src/phase2-orchestration";
 
 const WORKFLOW_ID = "wf-instances";
 const PROJECT_ID = "proj-instances";
 const PLAN_IDS = ["plan-a", "plan-b", "plan-c", "plan-d"] as const;
 const JOURNAL_FILE = "omp-launches.json";
+/** The native session the DB coordinator binding belongs to (a host observes its own). */
+const COORDINATOR_SESSION_ID = "fixture-coordinator";
 /** Managed-environment variables this feature reads; restored after every case. */
 const MANAGED_ENV_KEYS = ["HERDR_ENV", "TMUX"] as const;
 
@@ -57,7 +80,8 @@ type Fixture = {
   snapshotPath: string;
   journalPath: string;
   integrationPath: string;
-  coordinatorSession: string;
+  /** The DB coordinator session this fixture's launch authority resumes. */
+  coordinator: ExecutionSessionRef;
   baseSha: string;
   planPaths: Record<string, string>;
   assignments: Record<string, string>;
@@ -162,7 +186,6 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
   const assignments: Record<string, string> = {};
   const sddDirs: Record<string, string> = {};
   const worktrees: Record<string, string> = {};
-  const rows: Array<Record<string, unknown>> = [];
   for (const planId of PLAN_IDS) {
     const planPath = join(harness, "plans", `${planId}.md`);
     const sddDir = join(harness, "sdd", planId);
@@ -183,35 +206,8 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
     sddDirs[planId] = sddDir;
     assignments[planId] = join(sddDir, "assignment.md");
     writeText(assignments[planId]!, assignmentText({ harness, planId, planPath, worktreePath, sddDir, branch }));
-    rows.push({
-      id: planId,
-      plan_id: planId,
-      title: `Plan ${planId}`,
-      file: `.mstar/plans/${planId}.md`,
-      status: "Todo",
-      metadata: { project_id: PROJECT_ID },
-    });
   }
 
-  writeJson(join(harness, "status.json"), {
-    version: 2,
-    updated_at: "2026-09-16",
-    workflows: [
-      { id: WORKFLOW_ID, status: "running", type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` },
-    ],
-  });
-  writeJson(snapshotPath, {
-    schema_version: 1,
-    id: WORKFLOW_ID,
-    type: "iteration",
-    status: "running",
-    started_at: "2026-09-16T00:00:00Z",
-    updated_at: "2026-09-16T00:00:00Z",
-    phase: "phase-2-execute",
-    branch: { base: "main", integration: "integration/wf" },
-    integration_worktree_path: integrationPath,
-    plans: rows,
-  });
   setArtifactStore(createFsStore(harness));
 
   return {
@@ -221,7 +217,7 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
     snapshotPath,
     journalPath: join(workflowDir, JOURNAL_FILE),
     integrationPath,
-    coordinatorSession: "",
+    coordinator: null as unknown as ExecutionSessionRef,
     baseSha: headOf(root),
     planPaths,
     assignments,
@@ -230,41 +226,162 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
   };
 }
 
-/** Bind the lifecycle coordinator (real engine verb) and prepare every plan. */
+/** Provision the harness's issue authority — the store the handoff gate reads
+ * its findings from (real `node:sqlite` migrations, the same initializer the
+ * store-cutover suites use; never a mocked reader). */
+async function seedIssueStore(fixture: Fixture): Promise<void> {
+  const handle = await initializeStore({ harnessDir: fixture.harness });
+  handle.close();
+}
+
+/**
+ * A canonical PLAIN copy of an engine-returned session reference. The engine's
+ * canonical-value rule accepts only objects whose prototype is `Object.prototype`
+ * or `null`, so a reference that travels back into a request has to be projected
+ * field by field — never handed over as the engine's own object.
+ */
+function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
+  return {
+    storeId: ref.storeId,
+    epoch: ref.epoch,
+    workflowId: ref.workflowId,
+    role: ref.role,
+    sessionId: ref.sessionId,
+    planId: ref.planId,
+  };
+}
+
+/** The trusted caller this fixture's DB verbs run as (the workflow's creator). */
+function coordinatorContextOf(fixture: Fixture): ExecutionContext {
+  return {
+    harnessDir: fixture.harness,
+    caller: { sessionId: COORDINATOR_SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+  };
+}
+
+/** The plan-pm caller of one plan's own session (its address is the plan). */
+function planContextOf(fixture: Fixture, planId: PlanId, sessionId: string): ExecutionContext {
+  return {
+    harnessDir: fixture.harness,
+    caller: { sessionId, role: "plan-pm", workflowId: WORKFLOW_ID, planId } satisfies ExecutionCaller,
+  };
+}
+
+/**
+ * REAL ACTIVE execution authority: the issue store upgraded to an execution
+ * authority, the four plans registered in the catalog, one created workflow in
+ * `phase-2-execute` holding them, every plan PREPARED from its real Assignment
+ * file through the DB verb, and the coordinator bound under the native session
+ * id this fixture's launch authority acquires. Nothing is planted as file
+ * state: the DB authority is the only coordination source on this route.
+ */
+async function seedActiveAuthority(fixture: Fixture): Promise<void> {
+  const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
+  for (const planId of PLAN_IDS) {
+    await registerCatalogEntity(
+      { harnessDir: fixture.harness },
+      { kind: "plan", id: planId, title: `Plan ${planId}`, rootKind: "plans", relativePath: `plans/${planId}.md` },
+      { operationId: `register-${planId}`, actor: "phase2-launches.test" },
+    );
+  }
+  const context = coordinatorContextOf(fixture);
+  const created = await createExecutionWorkflow(context, {
+    entry: { id: WORKFLOW_ID, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` },
+    snapshot: {
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "iteration",
+      status: "running",
+      phase: "phase-2-execute",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      branch: { base: "main", integration: "integration/wf" },
+      integration_worktree_path: fixture.integrationPath,
+      plans: PLAN_IDS.map((planId) => ({
+        id: planId,
+        title: `Plan ${planId}`,
+        file: `plans/${planId}.md`,
+        status: "Todo",
+        // The plan's own launch scope, as the engine's lease derivation expects
+        // it (`planLeaseScope` requires exactly these two metadata fields).
+        metadata: { project_id: PROJECT_ID, worktree_path: fixture.worktrees[planId]!, working_branch: `feature/${planId}` },
+      })),
+    } as never,
+    // Creation is a ROOT-scoped CAS: the receipt's own token is a root token and
+    // must never be handed to a workflow-scoped verb.
+    expected: initialized.token,
+    operationId: `create-${WORKFLOW_ID}`,
+  });
+  expect(created.data.workflows[0]?.state.id).toBe(WORKFLOW_ID);
+  const bound = await bindExecutionSession(context, {
+    workflowId: WORKFLOW_ID,
+    planId: null,
+    role: "coordinator",
+    expected: await workflowTokenOf(fixture),
+    operationId: `bind-${COORDINATOR_SESSION_ID}`,
+  });
+  fixture.coordinator = bound.data;
+  // The journal (and the lock the launcher takes) lives in the canonical
+  // workflow directory, so it must exist on disk — the authority never writes it.
+  mkdirSync(fixture.workflowDir, { recursive: true });
+  for (const planId of PLAN_IDS) {
+    await mutateExecutionPlan(context, {
+      operationId: `prepare-${planId}`,
+      session: plainRef(fixture.coordinator),
+      expected: await planTokenOf(fixture, planId),
+      planId,
+      operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! } as never,
+    });
+  }
+}
+
+/** Bind the lifecycle coordinator in the DB and prepare every plan. */
 async function bindFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const fixture = makeFixture(options);
-  const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
-  expect(bound.outcome).toBe("bound");
-  fixture.coordinatorSession = bound.session_file;
-  for (const planId of PLAN_IDS) {
-    const view = await readPlanCoordination(fixture.coordinatorSession, planId, fixture.root);
-    const prepared = await mutatePlanCoordination({
-      sessionPath: fixture.coordinatorSession,
-      planId,
-      expectedRevision: view.revision,
-      operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! },
-    });
-    expect(prepared.outcome).toBe("prepared");
-  }
+  await seedIssueStore(fixture);
+  await seedActiveAuthority(fixture);
   return fixture;
 }
 
-/** One coordinator-scoped operation on a plan, with the revision read just before. */
-async function coordinatorOp(fixture: Fixture, planId: PlanId, operation: Record<string, unknown>): Promise<CoordinationResult> {
-  const view = await readPlanCoordination(fixture.coordinatorSession, planId, fixture.root);
-  return mutatePlanCoordination({
-    sessionPath: fixture.coordinatorSession,
+/** The plan's own CAS token, read fresh from the authority at call time. */
+async function planTokenOf(fixture: Fixture, planId: PlanId): Promise<ExecutionToken> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId });
+  return read.token;
+}
+
+/**
+ * The workflow's own CAS token. A `{workflowId}` read returns the WORKFLOW token,
+ * while `createExecutionWorkflow`'s receipt carries the ROOT token its creation
+ * CAS used — the two are not interchangeable, and a workflow-scoped verb refuses
+ * a root token (`execution.token-kind`) instead of coercing it.
+ */
+async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
+  return read.token;
+}
+
+/** One coordinator-scoped DB operation on a plan, with its own plan token read just before. */
+async function coordinatorOp(fixture: Fixture, planId: PlanId, operation: Record<string, unknown>): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  return mutateExecutionPlan(coordinatorContextOf(fixture), {
+    operationId: `coordinator-op-${planId}-${operation.kind}`,
+    session: plainRef(fixture.coordinator),
+    expected: await planTokenOf(fixture, planId),
     planId,
-    expectedRevision: view.revision,
     operation: operation as never,
   });
 }
 
-/** Bind one plan's own session (claims the row's execution lease), returning its envelope path. */
-async function bindPlanSessionOf(fixture: Fixture, planId: PlanId): Promise<string> {
-  const bound = await bindPlanSession({ scope: { workflowId: WORKFLOW_ID, planId, harnessDir: fixture.harness }, cwd: fixture.root });
-  expect(bound.outcome).toBe("claimed");
-  return bound.session_file;
+/** Bind one plan's own session (claims the row's execution lease), returning the DB session reference. */
+async function bindPlanSessionOf(fixture: Fixture, planId: PlanId): Promise<ExecutionSessionRef> {
+  const sessionId = `plan-${planId}-${Math.random().toString(36).slice(2, 8)}`;
+  const bound = await bindExecutionSession(planContextOf(fixture, planId, sessionId), {
+    workflowId: WORKFLOW_ID,
+    planId,
+    role: "plan-pm",
+    expected: await planTokenOf(fixture, planId),
+    operationId: `bind-${sessionId}`,
+  });
+  return bound.data;
 }
 
 /** Seed the native preference through the host's project override surface. */
@@ -281,8 +398,12 @@ function evidenceOf(fixture: Fixture, name: string): string {
   return path;
 }
 
-function authorityOf(fixture: Fixture): { coordinatorSessionPath: string; cwd: string } {
-  return { coordinatorSessionPath: fixture.coordinatorSession, cwd: fixture.root };
+function authorityOf(fixture: Fixture): ExecutionLaunchAuthority {
+  return {
+    cwd: fixture.root,
+    identity: { source: "host", sessionId: fixture.coordinator.sessionId, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
+    binding: { version: 1, harnessRoot: fixture.harness, session: plainRef(fixture.coordinator) },
+  };
 }
 
 function reserveFor(fixture: Fixture, planId: string, overrides: Record<string, unknown> = {}): Promise<PlanLaunchResult> {
@@ -322,8 +443,8 @@ function refusalOf(outcome: PlanLaunchResult): { code: string; message: string }
 }
 
 /** The plan row's current prepared Assignment pin (what a launch must match). */
-function preparedHashOf(fixture: Fixture, planId: string): string {
-  const coordination = planRowOf(fixture, planId).coordination as Record<string, unknown> | undefined;
+async function preparedHashOf(fixture: Fixture, planId: string): Promise<string> {
+  const coordination = (await planRowOf(fixture, planId as PlanId)).coordination as Record<string, unknown> | undefined;
   const prepared = coordination?.prepared as Record<string, unknown> | undefined;
   if (typeof prepared?.assignment_sha256 !== "string") throw new Error(`plan ${planId} has no prepared pin`);
   return prepared.assignment_sha256;
@@ -368,15 +489,35 @@ function journalIntents(fixture: Fixture): Array<Record<string, unknown>> {
   return readJson(fixture.journalPath).intents as Array<Record<string, unknown>>;
 }
 
-function planRowOf(fixture: Fixture, planId: string): Record<string, unknown> {
-  const rows = readJson(fixture.snapshotPath).plans as Array<Record<string, unknown>>;
-  const row = rows.find((entry) => entry.id === planId);
-  if (row === undefined) throw new Error(`snapshot has no row ${planId}`);
-  return row;
+/**
+ * The plan's authoritative view, read fresh from the DB (the snapshot is
+ * retired). The read is WORKFLOW-scoped on purpose: a `{workflowId, planId}`
+ * read answers the bare plan view, while the plan-row collection projected here
+ * lives in the workflow view's own `plans` array.
+ */
+async function planViewOf(fixture: Fixture, planId: PlanId): Promise<ExecutionPlanView> {
+  const read = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
+  if (!("workflows" in read.data)) {
+    throw new Error(`the authority read of ${WORKFLOW_ID} returned no workflow view, so the plan row of ${planId} cannot be read`);
+  }
+  const view = read.data.workflows[0]?.plans.find((entry) => entry.plan.id === planId);
+  if (view === undefined) throw new Error(`the authority holds no plan row ${planId}`);
+  return view;
 }
 
-function handoffIdOf(fixture: Fixture, planId: PlanId): string {
-  const coordination = planRowOf(fixture, planId).coordination as Record<string, unknown> | undefined;
+/** The same facts the legacy snapshot row carried, projected from the DB view. */
+async function planRowOf(fixture: Fixture, planId: PlanId): Promise<Record<string, unknown>> {
+  const view = await planViewOf(fixture, planId);
+  return {
+    ...(view.plan as Record<string, unknown>),
+    coordination: view.coordination ?? undefined,
+    session: view.session === null ? undefined : { session_id: view.session.sessionId },
+    execution_lease: view.executionLease === null ? undefined : view.executionLease,
+  };
+}
+
+async function handoffIdOf(fixture: Fixture, planId: PlanId): Promise<string> {
+  const coordination = (await planRowOf(fixture, planId)).coordination as Record<string, unknown> | undefined;
   const handoff = coordination?.handoff as Record<string, unknown> | undefined;
   if (typeof handoff?.id !== "string") throw new Error(`plan ${planId} has no handoff id`);
   return handoff.id;
@@ -384,15 +525,17 @@ function handoffIdOf(fixture: Fixture, planId: PlanId): string {
 
 /** The child's own path to its scoped stop: bind, report InReview, hand off. */
 async function handOffPlan(fixture: Fixture, planId: PlanId): Promise<string> {
-  const sessionPath = await bindPlanSessionOf(fixture, planId);
-  const view = await readPlanCoordination(sessionPath, planId, fixture.root);
-  const progressed = await mutatePlanCoordination({
-    sessionPath,
+  const bound = await bindPlanSessionOf(fixture, planId);
+  const session = plainRef(bound);
+  const context = planContextOf(fixture, planId, session.sessionId);
+  const progressed = await mutateExecutionPlan(context, {
+    operationId: `progress-${planId}`,
+    session,
+    expected: await planTokenOf(fixture, planId),
     planId,
-    expectedRevision: view.revision,
-    operation: { kind: "progress", progress: { status: "InReview", summary: "slice implemented", evidence_paths: [] } },
+    operation: { kind: "progress", progress: { status: "InReview", summary: "slice implemented", evidence_paths: [] } } as never,
   });
-  expect(progressed.outcome).toBe("progressed");
+  expect(progressed.data.coordination?.handoff).toBeUndefined();
 
   const reports = [join(fixture.sddDirs[planId]!, "review", "qc1.md"), join(fixture.sddDirs[planId]!, "review", "qc2.md")];
   for (const path of reports) writeText(path, "# qc report\n");
@@ -402,11 +545,11 @@ async function handOffPlan(fixture: Fixture, planId: PlanId): Promise<string> {
   writeText(qa, "# qa pass\n");
 
   const sourceSha = headOf(fixture.worktrees[planId]!);
-  const after = await readPlanCoordination(sessionPath, planId, fixture.root);
-  const handed = await mutatePlanCoordination({
-    sessionPath,
+  const handed = await mutateExecutionPlan(context, {
+    operationId: `handoff-${planId}`,
+    session,
+    expected: await planTokenOf(fixture, planId),
     planId,
-    expectedRevision: after.revision,
     operation: {
       kind: "handoff",
       evidence: {
@@ -418,7 +561,7 @@ async function handOffPlan(fixture: Fixture, planId: PlanId): Promise<string> {
       },
     } as never,
   });
-  expect(handed.outcome).toBe("handed-off");
+  expect(handed.data.coordination?.handoff?.state).toBe("submitted");
   return handoffIdOf(fixture, planId);
 }
 
@@ -452,8 +595,8 @@ describe("phase2 launch admission journal", () => {
     const intents = journalIntents(fixture);
     expect(intents.map((entry) => entry.planId)).toEqual(["plan-a", "plan-b"]);
     expect(intents[0]!.state).toBe("submitted");
-    const lease = planRowOf(fixture, "plan-a").execution_lease as Record<string, unknown>;
-    expect(lease.holder).toBe(readJson(childSession).session_id);
+    const lease = (await planRowOf(fixture, "plan-a")).execution_lease as Record<string, unknown>;
+    expect(lease.holder).toBe(childSession.sessionId);
   });
 
   test("last slot race has one winner", async () => {
@@ -489,7 +632,7 @@ describe("phase2 launch admission journal", () => {
     expect(intents.map((entry) => entry.state)).toEqual(["submitted", "reserved"]);
     expect(intents[0]!.target).toBe("pane-plan-a");
     expect(intents[0]!.evidencePaths).toEqual([...submittedA.evidencePaths]);
-    const lease = planRowOf(fixture, "plan-a").execution_lease as Record<string, unknown>;
+    const lease = (await planRowOf(fixture, "plan-a")).execution_lease as Record<string, unknown>;
     expect(typeof lease.holder).toBe("string");
   });
 
@@ -510,7 +653,7 @@ describe("phase2 launch admission journal", () => {
     // The coordinator returns the handoff for rework: returned work reactivates
     // occupancy, and plan-a still counts once (pending intent + live binding).
     const returned = await coordinatorOp(fixture, "plan-a", { kind: "return", handoffId, reason: "fix the slice" });
-    expect(returned.outcome).toBe("returned");
+    expect((returned.data.coordination as Record<string, unknown> | null)?.handoff).toMatchObject({ state: "returned" });
     const afterReturn = refusalOf(await reserveFor(fixture, "plan-d"));
     expect(afterReturn.code).toBe("launch.capacity-exceeded");
     expect(afterReturn.message).toContain("plan-a");
@@ -580,27 +723,56 @@ describe("phase2 launch admission journal", () => {
 
     const a = intentOf(await reserveFor(fixture, "plan-a"));
 
-    // A scoped plan session is not the lifecycle coordinator: it may not launch
-    // sibling primaries, and neither call accepts its authority.
+    // A plan-pm session is not the lifecycle coordinator: the launch authority
+    // is the coordinator identity, so a plan session's binding is refused by
+    // name — before any store, snapshot or journal is read.
     const childSession = await bindPlanSessionOf(fixture, "plan-a");
-    const planAuthority = { coordinatorSessionPath: childSession, cwd: fixture.root };
+    const planAuthority: ExecutionLaunchAuthority = {
+      cwd: fixture.root,
+      identity: { source: "host", sessionId: childSession.sessionId, workflowId: WORKFLOW_ID, role: "plan-pm", planId: "plan-a" },
+      binding: { version: 1, harnessRoot: fixture.harness, session: childSession },
+    };
     expect(refusalOf(await reservePlanLaunch(
       { operation: "reserve-launch", planId: "plan-b", transport: "herdr", skill: { name: "herdr", source: "herdr" }, capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" } },
       planAuthority,
-    )).code).toBe("launch.session-denied");
+    )).code).toBe("launch.invalid-request");
     expect(refusalOf(await recordPlanLaunch(
       { operation: "record-launch", intentId: a.id, observation: "starting", evidencePath: evidenceOf(fixture, "foreign") },
       planAuthority,
-    )).code).toBe("launch.session-denied");
+    )).code).toBe("launch.invalid-request");
 
-    // A journal opened by another coordinator identity is never taken over.
-    const ownJournal = readJson(fixture.journalPath);
-    writeJson(fixture.journalPath, {
-      ...ownJournal,
-      coordinator: { session_id: "another-coordinator", session_file: join(fixture.workflowDir, "sessions", "another.json") },
-    });
-    expect(refusalOf(await reserveFor(fixture, "plan-b")).code).toBe("launch.journal-corrupt");
-    writeJson(fixture.journalPath, ownJournal);
+    // A binding that no longer describes the authority's current state is never
+    // taken over: the DB authority is what continues the journal, and the refusal
+    // is the ENGINE's own code for the state the reference is actually in — this
+    // module renames nothing.
+    const reservePlanB = (authority: ExecutionLaunchAuthority): Promise<PlanLaunchResult> =>
+      reservePlanLaunch(
+        { operation: "reserve-launch", planId: "plan-b", transport: "herdr", skill: { name: "herdr", source: "herdr" }, capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" } },
+        authority,
+      );
+
+    // (a) A reference from a superseded epoch is the §2.1 reference-authority
+    //     fence, which the engine answers with the shared store-level
+    //     `store.stale-epoch` before anything is read (`assertReferenceAuthority`).
+    const supersededEpoch: ExecutionLaunchAuthority = {
+      cwd: fixture.root,
+      identity: { source: "host", sessionId: fixture.coordinator.sessionId, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
+      binding: { version: 1, harnessRoot: fixture.harness, session: { ...plainRef(fixture.coordinator), epoch: fixture.coordinator.epoch + 1 } },
+    };
+    expect(refusalOf(await reservePlanB(supersededEpoch)).code).toBe("store.stale-epoch");
+
+    // (b) A well-formed reference the store holds no ACTIVE row for — what the
+    //     epoch fence never reaches — is the engine's own
+    //     `execution.session-unavailable`: a session reference authorizes only
+    //     the binding the store records at the current epoch.
+    const unheldSession = "fixture-unbound-coordinator";
+    const unheldAuthority: ExecutionLaunchAuthority = {
+      cwd: fixture.root,
+      identity: { source: "host", sessionId: unheldSession, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
+      binding: { version: 1, harnessRoot: fixture.harness, session: { ...plainRef(fixture.coordinator), sessionId: unheldSession } },
+    };
+    expect(refusalOf(await reservePlanB(unheldAuthority)).code).toBe("execution.session-unavailable");
+    expect(journalIntents(fixture).some((entry) => entry.planId === "plan-b")).toBe(false);
 
     // A duplicate identical request returns the recorded intent and consumes no
     // second slot.
@@ -687,7 +859,7 @@ describe("phase2 launch admission journal", () => {
     // A recovered intent whose recorded checkout is NOT the one that handed off:
     // the durable handoff belongs to another launch/attempt, so it must not
     // discharge this record even though the prepared pin and plan match.
-    expect(preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
+    expect(await preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
     const foreign = { ...a, id: "phase2-launch:plan-a:0", state: "reserved", worktreePath: fixture.worktrees["plan-b"]! };
     appendJournalIntents(fixture, [foreign]);
 

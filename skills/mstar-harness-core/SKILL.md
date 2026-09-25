@@ -1,9 +1,9 @@
 ---
 name: mstar-harness-core
-description: Morning Star (启明星) harness **生命周期 / 授权语义权威与全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、核心研发守则、护栏不变量、Morning Star Skill 索引与宿主入口。加载**选择**权威在 **`mstar-roles`**（hub § Load Order 按 Assignment `Skill presets:` 决策；本 skill 不另设全局必读表）：PM 与标准路线仍以本 skill 为全局入口；独立直接调用专题时本 skill 是首个依赖；explicit `none` 角色路线以身份 + 角色自有方法自洽（唯一 hub bootstrap 例外）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 按其角色 preset 清单加载。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。版本漂移（version drift）/ CLI 与插件版本不一致 / 提示更新插件或 CLI → 按「版本对齐」节处理（doctor 检查 + 定向更新提示）。
+description: Morning Star (晨星) harness **生命周期 / 授权语义权威与全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、核心研发守则、护栏不变量、Morning Star Skill 索引与宿主入口。加载**选择**权威在 **`mstar-roles`**（hub § Load Order 按 Assignment `Skill presets:` 决策；本 skill 不另设全局必读表）：PM 与标准路线仍以本 skill 为全局入口；独立直接调用专题时本 skill 是首个依赖；explicit `none` 角色路线以身份 + 角色自有方法自洽（唯一 hub bootstrap 例外）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 按其角色 preset 清单加载。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。版本漂移（version drift）/ CLI 与插件版本不一致 / 提示更新插件或 CLI → 按「版本对齐」节处理（doctor 检查 + 定向更新提示）。
 ---
 
-# Morning Star Harness Core（启明星核心）
+# Morning Star Harness Core（晨星核心）
 
 本 skill 是 harness 的**唯一全局入口与裁决层**。专题 skill 展开细节；**冲突时以本 skill 的状态机、Done 权限与索引为准**。
 
@@ -35,6 +35,8 @@ description: Morning Star (启明星) harness **生命周期 / 授权语义权�
 **per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
 
 **迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。细则 → **`mstar-iteration`**。
+
+**Capture duty**：确认的 finding 即落为 `{HARNESS_DIR}/store.db` 的 issue（计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现追加 occurrence，**不**新开第二个）——**捕获只记证据，处置是独立的授权动作**。cutover 落地后 **open issue 即 residual SSOT**（project register 只作迁移历史）。契约唯一权威 → **`mstar-project-governance`「Issue capture」**（本 skill 不复述）。
 
 ## 加载约定（强制）
 

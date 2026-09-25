@@ -34,24 +34,34 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, basename, join, sep } from "node:path";
 import {
+  EXECUTION_PIN_CONFLICT_CODE,
   amendPrepareWorkflow,
   bindPlanSession,
+  executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
+  recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
   resolvePlanScope,
   setCompleteStandaloneMutateGapForTest,
+  setPrepareRecoveryEnvelopeGapForTest,
+  showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
+  type CatalogExecutionPin,
   type CoordinationResult,
   type PlanCoordinationView,
+  type PrepareCoordinatorRecoveryView,
   type PrepareWorkflowPatch,
   type PrepareWorkflowResult,
 } from "../src/coordination.js";
+import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { initializeExecutionAuthority } from "../src/execution-store.js";
+import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
@@ -59,6 +69,7 @@ import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, ty
 import {
   closeWorkflow,
   recordWorkflowDelivery,
+  stableJson,
   WORKFLOW_SNAPSHOT_FILE,
   writeWorkflowSnapshot,
   type WorkflowSnapshot,
@@ -68,6 +79,11 @@ const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
 const PEER_PLAN_ID = "plan-b";
 const PROJECT_ID = "proj-a";
+/**
+ * The deterministic local identity every fixture-bind acquires. A coordinator
+ * envelope is never created from a generated id, so the fixtures state theirs.
+ */
+const FIXTURE_COORDINATOR_ID = "fixture-coordinator";
 
 type Fixture = {
   root: string;
@@ -248,20 +264,35 @@ async function sleep(ms: number): Promise<void> {
   return promise;
 }
 
+/**
+ * The stable refusal code of a failed call. The scoped layer keeps the core
+ * domain codes it does not own — a stale issue revision stays
+ * `issue.revision-conflict`, a broken store stays `store.*` — instead of
+ * rewrapping them in a coordination code, so the reader below accepts either
+ * shape and still pins the exact expectation at the call site.
+ */
 async function errorCodeOf(run: () => Promise<unknown>): Promise<string> {
   try {
     await run();
   } catch (error) {
     if (error instanceof CoordinationError) return error.code;
+    const code = (error as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && code.includes(".")) return code;
     throw error;
   }
   throw new Error("expected the coordination call to fail");
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensureCoordinator(fixture: Fixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     expect(bound.ok).toBe(true);
     expect(bound.operation).toBe("bind");
     fixture.coordinatorSession = bound.session_file;
@@ -299,27 +330,62 @@ async function resumePlan(fixture: Fixture, planId: string): Promise<Coordinatio
   return bindPlanSession({ resumePath: sessionPath, cwd: fixture.root });
 }
 
-function residual(id: string): Record<string, string> {
+/**
+ * An issue capture entry as the scoped `residual-add` operation now takes it
+ * (G2a): the core `CaptureInput` minus `projectId` — the plan scope supplies
+ * the project. No disposition is recorded at capture time (contract §6).
+ */
+function finding(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    id,
     title: `Finding ${id}`,
+    kind: "review-obligation",
     severity: "medium",
-    source: "qc",
-    scope: "engine",
-    decision: "defer",
+    impact: "blocks plan approval",
+    acceptance: "fixed or explicitly dispositioned",
     owner: "@fullstack-dev",
-    target: "next-slice",
-    tracking: "residual register",
+    sourceIdentity: `qc:report:${id}`,
+    rootCauseKey: `root-cause:${id}`,
+    acceptanceKey: "fix-verified",
+    occurrenceKey: `occ-${id}`,
+    sourceKind: "qc-report",
+    location: "packages/engine",
+    observedBehavior: `finding ${id} observed`,
+    evidence: ["review/qc1.md"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+    ...overrides,
   };
 }
 
-function registerBucket(fixture: Fixture, planId: string): Array<Record<string, unknown>> {
-  const doc = readJson(fixture.registerPath);
-  const entries = doc.entries;
-  if (typeof entries !== "object" || entries === null) throw new Error("register has no entries object");
-  const bucket = (entries as Record<string, unknown>)[planId];
-  if (!Array.isArray(bucket)) throw new Error(`register has no bucket for ${planId}`);
-  return bucket as Array<Record<string, unknown>>;
+/** Close one captured issue through the scoped operation (core closure evidence). */
+function closeOp(issueId: string, expectedIssueRevision: number, disposition = "resolved"): Record<string, unknown> {
+  return {
+    kind: "residual-close",
+    issueId,
+    disposition,
+    evidence:
+      disposition === "resolved"
+        ? { reason: "fixed in session", references: ["review/qc1.md"], alignmentRef: "qa acceptance record" }
+        : disposition === "waived"
+          ? { reason: "accepted risk", scope: "engine", references: [], alignmentRef: "user alignment" }
+          : { reason: `folded into ${issueId}`, references: [], canonicalIssueId: "I-000001" },
+    expectedIssueRevision,
+  };
+}
+
+/** The open issues the issue store links to a plan (the authority the gate reads). */
+async function linkedOpenIssues(fixture: Fixture, planId: string): Promise<Array<{ id: string; severity: string; disposition: string }>> {
+  const handle = await openStore({ harnessDir: fixture.harness }, "read");
+  try {
+    return handle.db
+      .prepare(
+        "select issues.id as id, issues.severity as severity, issues.disposition as disposition from issues " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "where issues.disposition = 'open' order by issues.id asc",
+      )
+      .all(planId) as Array<{ id: string; severity: string; disposition: string }>;
+  } finally {
+    handle.close();
+  }
 }
 
 type GitFixture = Fixture & { integrationPath: string; baseSha: string; planSha: string };
@@ -333,8 +399,12 @@ function headOf(cwd: string): string {
  * and whose snapshot names a real integration checkout, so the handoff and
  * integration proofs run against real objects instead of path stubs.
  */
-function gitFixture(): GitFixture {
+async function gitFixture(): Promise<GitFixture> {
   const fixture = makeFixture() as GitFixture;
+  // The findings cleanup gate consumes the issue store (G2a): handoff-level
+  // fixtures run against an active store whose catalog has this workflow's
+  // plan rows, so prepare and the lifecycle gate both see committed authority.
+  await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
   fixture.baseSha = headOf(fixture.root);
   fixture.integrationPath = join(fixture.root, "wt-integration");
   rmSync(fixture.worktreePath, { recursive: true, force: true });
@@ -482,12 +552,20 @@ describe("binding", () => {
   test("coordinator bind claims the lifecycle with a 0600 envelope and refuses a second holder", async () => {
     const fixture = makeFixture();
 
-    const bound = await bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root });
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
     fixture.coordinatorSession = bound.session_file;
 
     expect(bound.operation).toBe("bind");
     expect(bound.outcome).toBe("bound");
-    expect(bound.session_file).toBe(join(fixture.workflowDir, "sessions", `coordinator-${bound.session.session_id}.json`));
+    expect(bound.session_file).toBe(
+      join(fixture.workflowDir, "sessions", `coordinator-${FIXTURE_COORDINATOR_ID}.json`),
+    );
     expect(bound.session.role).toBe("coordinator");
     expect(bound.session.plan_id).toBeUndefined();
     expect(existsSync(fixture.coordinatorSession)).toBe(true);
@@ -512,7 +590,13 @@ describe("binding", () => {
     // A second coordinator identity is refused and the binding is untouched.
     expect(
       await errorCodeOf(() =>
-        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "second-coordinator",
+        }),
       ),
     ).toBe("coordination.duplicate-holder");
     const after = readJson(fixture.snapshotPath) as { coordination?: { coordinator?: { session_file?: string } } };
@@ -702,15 +786,18 @@ describe("binding", () => {
     expect(readdirSync(sessionsDir).sort()).toEqual(envelopes);
   });
 
-  test("an absent session id keeps the generated UUID identity, and a re-used one never overwrites an envelope", async () => {
+  test("prerequisite identity — an omitted coordinator id writes nothing, and a re-used one never overwrites an envelope", async () => {
+    // A fresh coordinator bind never generates an identity: the engine refuses
+    // before any write, so the workflow keeps no envelope and no sessions dir.
     const fixture = makeFixture();
-    const bound = await bindPlanSession({
-      coordinator: true,
-      workflowId: WORKFLOW_ID,
-      harnessDir: fixture.harness,
-      cwd: fixture.root,
-    });
-    expect(bound.session.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+      ),
+    ).toBe("coordination.identity-missing");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
 
     // An envelope that already occupies the id's role-scoped path is never
     // replaced: the existing exclusive-create refusal reports it instead of
@@ -718,7 +805,7 @@ describe("binding", () => {
     const fresh = makeFixture();
     const orphan = join(fresh.workflowDir, "sessions", "coordinator-host-session-orphan.json");
     writeText(orphan, '{"stray":true}\n');
-    const before = readFileSync(fresh.snapshotPath, "utf8");
+    const freshBefore = readFileSync(fresh.snapshotPath, "utf8");
     expect(
       await errorCodeOf(() =>
         bindPlanSession({
@@ -731,7 +818,55 @@ describe("binding", () => {
       ),
     ).toBe("coordination.session-mismatch");
     expect(readFileSync(orphan, "utf8")).toBe('{"stray":true}\n');
-    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(before);
+    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(freshBefore);
+  });
+
+  test("prerequisite identity — an explicit id is adopted, two same-workflow binds retain one owner, and a foreign root never inherits it", async () => {
+    const fixture = makeFixture();
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(bound.outcome).toBe("bound");
+    expect(bound.session.session_id).toBe("host-session-explicit");
+    expect(readJson(fixture.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // One owner per workflow: a second fresh bind, even naming another id, is
+    // refused and mutates nothing.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "host-session-other",
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+
+    // A second control harness is isolated: the same session id binds a
+    // *different* workflow there and writes nothing into the first root.
+    const other = makeFixture();
+    const foreign = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: other.harness,
+      cwd: other.root,
+      sessionId: "host-session-explicit",
+    });
+    expect(foreign.outcome).toBe("bound");
+    expect(readJson(other.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-explicit" },
+    });
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
   });
 
   test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {
@@ -799,7 +934,7 @@ describe("binding", () => {
 
 describe("handoff-transitions", () => {
   test("handoff seals the evidence, accept moves the lease to the coordinator, return restores it", async () => {
-    const fixture = gitFixture();
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -1084,105 +1219,43 @@ describe("scope-and-revisions", () => {
   });
 });
 
-describe("residual-ownership", () => {
-  test("residual add/close touch only this plan's bucket and CAS on the register bytes", async () => {
-    const fixture = makeFixture();
+describe("issue-authority — scoped plan issue operations (G2a)", () => {
+  test("issue authority: residual-add captures issues in the store and links the plan; no register is written", async () => {
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await preparePlan(fixture, PEER_PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     await bindPlan(fixture, PEER_PLAN_ID);
 
-    // Seed a sibling bucket: it must survive every write of this plan.
-    writeJson(fixture.registerPath, {
-      entries: {
-        [PEER_PLAN_ID]: [{ ...residual("r-peer"), source_plan: PEER_PLAN_ID, registered_at: "2026-09-14" }],
-      },
-    });
-    const peerBucketBefore = registerBucket(fixture, PEER_PLAN_ID);
-
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect(view.register_version).not.toBe("absent");
-
     const added = await mutatePlanCoordination({
       sessionPath: fixture.planSession,
       planId: PLAN_ID,
       expectedRevision: view.revision,
-      operation: { kind: "residual-add", entries: [residual("r-1"), residual("r-2")] as never, expectedRegisterVersion: view.register_version },
+      operation: { kind: "residual-add", entries: [finding("r-1"), finding("r-2")] as never },
     });
     expect(added.outcome).toBe("residual-added");
-    const bucket = registerBucket(fixture, PLAN_ID);
-    expect(bucket.map((entry) => entry.id)).toEqual(["r-1", "r-2"]);
-    for (const entry of bucket) {
-      expect(entry.source_plan).toBe(PLAN_ID);
-      expect(entry.lifecycle_id).toBe(WORKFLOW_ID);
-      expect(String(entry.registered_at)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    }
-    expect(registerBucket(fixture, PEER_PLAN_ID)).toEqual(peerBucketBefore);
+    // The IDs are DB-allocated, so the writer reports them (`created: true`) —
+    // the caller cannot guess them the way it supplied the register entry ids.
+    expect(added.issues).toEqual([
+      { issue_id: "I-000001", revision: 2, created: true },
+      { issue_id: "I-000002", revision: 2, created: true },
+    ]);
 
-    // The register byte version moved; a stale CAS is refused.
-    const afterAdd = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect(afterAdd.register_version).not.toBe("absent");
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "residual-add", entries: [residual("r-3")] as never, expectedRegisterVersion: "absent" },
-    }),
-      ),
-    ).toBe("coordination.version-conflict");
-    // A missing precondition is refused outright (never a blind write).
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "residual-add", entries: [residual("r-3")] as never } as never,
-    }),
-      ),
-    ).toBe("coordination.expected-version-required");
-
-    const closed = await mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "residual-close", entryId: "r-2", note: "fixed in slice A", expectedRegisterVersion: afterAdd.register_version },
-    });
-    expect(closed.outcome).toBe("residual-closed");
-    const closedEntry = registerBucket(fixture, PLAN_ID)[1];
-    expect(closedEntry.lifecycle).toBe("resolved");
-    expect(String(closedEntry.closed_at)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(closedEntry.closure_note).toBe("fixed in slice A");
-    expect(registerBucket(fixture, PEER_PLAN_ID)).toEqual(peerBucketBefore);
-
-    // Closing twice, or closing a residual owned by another plan, is refused.
-    const afterClose = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "residual-close", entryId: "r-2", note: "again", expectedRegisterVersion: afterClose.register_version },
-    }),
-      ),
-    ).toBe("coordination.invalid-transition");
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "residual-close", entryId: "r-peer", note: "not mine", expectedRegisterVersion: afterClose.register_version },
-    }),
-      ),
-    ).toBe("coordination.invalid-input");
+    // The DB is the only mutation target: the issues exist, are linked to THIS
+    // plan only, and no legacy register file was created anywhere.
+    const open = await linkedOpenIssues(fixture, PLAN_ID);
+    expect(open.map((issue) => issue.id)).toEqual(["I-000001", "I-000002"]);
+    expect(existsSync(fixture.registerPath)).toBe(false);
+    const peerView = await readPlanCoordination(fixture.peerSession, PEER_PLAN_ID, fixture.root);
+    // No register byte version exists any more: the view reports the row's own
+    // revision and the snapshot version only.
+    expect("register_version" in peerView).toBe(false);
+    expect(await linkedOpenIssues(fixture, PEER_PLAN_ID)).toEqual([]);
   });
 
-  test("two independent processes adding concurrently keep both register changes", async () => {
-    const fixture = makeFixture();
+  test("issue authority: two independent processes capturing concurrently both land in the store", async () => {
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await preparePlan(fixture, PEER_PLAN_ID);
     const sessionA = (await bindPlan(fixture, PLAN_ID)).session_file;
@@ -1195,9 +1268,7 @@ describe("residual-ownership", () => {
         `import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from ${JSON.stringify(
           join(import.meta.dir, "..", "src", "coordination.ts"),
         )};`,
-        `import { createFsStore, setArtifactStore } from ${JSON.stringify(join(import.meta.dir, "..", "src", "store.ts"))};`,
-        "const [root, harness, planId, sessionPath, residualId] = process.argv.slice(2);",
-        "setArtifactStore(createFsStore(harness));",
+        "const [root, planId, sessionPath, occurrenceKey] = process.argv.slice(2);",
         "const resumed = await bindPlanSession({ resumePath: sessionPath, cwd: root });",
         "if (resumed.outcome !== \"resumed\") throw new Error(`bad resume: ${resumed.outcome}`);",
         "for (let attempt = 0; attempt < 8; attempt += 1) {",
@@ -1209,14 +1280,13 @@ describe("residual-ownership", () => {
         "      expectedRevision: view.revision,",
         "      operation: {",
         "        kind: \"residual-add\",",
-        "        entries: [{ id: residualId, title: residualId, severity: \"low\", source: \"qa\", scope: \"engine\", decision: \"defer\", owner: \"@fullstack-dev\", target: null, tracking: null }] as never,",
-        "        expectedRegisterVersion: view.register_version,",
+        "        entries: [{ title: occurrenceKey, kind: \"review-obligation\", severity: \"low\", impact: \"i\", acceptance: \"a\", sourceIdentity: `qc:${occurrenceKey}`, rootCauseKey: `rc:${occurrenceKey}`, acceptanceKey: \"fix\", occurrenceKey, sourceKind: \"qc-report\", location: \"engine\", observedBehavior: \"observed\", evidence: [], discoveredAt: \"2026-09-18T00:00:00Z\" }] as never,",
         "      },",
         "    });",
-        "    console.log(`added ${residualId}`);",
+        "    console.log(`added ${occurrenceKey}`);",
         "    process.exit(0);",
         "  } catch (error) {",
-        "    if (error && error.code === \"coordination.version-conflict\") continue;",
+        "    if (error && (error.code === \"store.busy\" || error.code === \"coordination.version-conflict\")) continue;",
         "    console.error(error);",
         "    process.exit(2);",
         "  }",
@@ -1227,11 +1297,12 @@ describe("residual-ownership", () => {
       ].join("\n"),
     );
 
+    await sealStoreForReaders(fixture);
     const children = [
-      { planId: PLAN_ID, sessionPath: sessionA, residualId: "r-a" },
-      { planId: PEER_PLAN_ID, sessionPath: sessionB, residualId: "r-b" },
+      { planId: PLAN_ID, sessionPath: sessionA, occurrenceKey: "occ-a" },
+      { planId: PEER_PLAN_ID, sessionPath: sessionB, occurrenceKey: "occ-b" },
     ].map((child) =>
-      Bun.spawn([process.execPath, script, fixture.root, fixture.harness, child.planId, child.sessionPath, child.residualId], {
+      Bun.spawn([process.execPath, script, fixture.root, child.planId, child.sessionPath, child.occurrenceKey], {
         cwd: fixture.root,
         stdout: "pipe",
         stderr: "pipe",
@@ -1245,21 +1316,99 @@ describe("residual-ownership", () => {
       expect(child.exitCode, message).toBe(0);
     }
 
-    // Both writers' changes survive: the register lock plus the byte-version CAS
-    // serialize the two processes instead of letting one clobber the other.
-    expect(registerBucket(fixture, PLAN_ID).map((entry) => entry.id)).toEqual(["r-a"]);
-    expect(registerBucket(fixture, PEER_PLAN_ID).map((entry) => entry.id)).toEqual(["r-b"]);
+    // SQLite serialized the two writers: both captures survive with no lost
+    // update, exactly one issue per plan (ids may land in either order).
+    const planIssues = await linkedOpenIssues(fixture, PLAN_ID);
+    const peerIssues = await linkedOpenIssues(fixture, PEER_PLAN_ID);
+    expect(planIssues).toHaveLength(1);
+    expect(peerIssues).toHaveLength(1);
+    expect([planIssues[0]!.id, peerIssues[0]!.id].sort()).toEqual(["I-000001", "I-000002"]);
+    expect(existsSync(fixture.registerPath)).toBe(false);
+  });
+
+  test("issue authority: residual-close mutates the DB under the issue revision; stale or foreign scope refuses", async () => {
+    const fixture = await gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await preparePlan(fixture, PEER_PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PEER_PLAN_ID);
+
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const added = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "residual-add", entries: [finding("r-1"), finding("r-2")] as never },
+    });
+    const second = added.issues![1]!;
+
+    // A stale issue revision is a visible refusal: nothing is closed.
+    const staleCode = await errorCodeOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: view.revision,
+        operation: closeOp(second.issue_id, second.revision + 7) as never,
+      }),
+    );
+    expect(staleCode).toBe("issue.revision-conflict");
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001", "I-000002"]);
+
+    // The authorized close uses the issue revision the add reported.
+    const closed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: closeOp(second.issue_id, second.revision) as never,
+    });
+    expect(closed.outcome).toBe("residual-closed");
+    expect(existsSync(fixture.registerPath)).toBe(false);
+    const open = await linkedOpenIssues(fixture, PLAN_ID);
+    expect(open.map((issue) => issue.id)).toEqual(["I-000001"]);
+
+    // An exact replay of the close is idempotent, not a second transition
+    // (contract §4): the same operation id and input return the same result.
+    const replayed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: closeOp(second.issue_id, second.revision) as never,
+    });
+    expect(replayed.outcome).toBe("residual-closed");
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
+
+    // A different terminal attempt for the same issue reuses the deterministic
+    // operation id with different input, so the core refuses the operation
+    // instead of re-dispositioning an already-closed issue.
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.planSession,
+          planId: PLAN_ID,
+          expectedRevision: view.revision,
+          operation: closeOp(second.issue_id, second.revision + 1) as never,
+        }),
+      ),
+    ).toBe("store.operation-conflict");
+
+    // A plan session cannot close an issue linked to another plan: the refusal
+    // surfaces the issue contract's stable scope code, not a coordination code.
+    const peerView = await readPlanCoordination(fixture.peerSession, PEER_PLAN_ID, fixture.root);
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.peerSession,
+          planId: PEER_PLAN_ID,
+          expectedRevision: peerView.revision,
+          operation: closeOp("I-000001", 2) as never,
+        }),
+      ),
+    ).toBe("issue.scope-refused");
   });
 });
 
-/** A register bucket entry as the engine persists it (provenance included). */
-function storedResidual(planId: string, id: string): Record<string, unknown> {
-  return { ...residual(id), source_plan: planId, registered_at: "2026-09-15" };
-}
-
 describe("protected-writers", () => {
   const STATUS_REF = { kind: "status", key: "root" } as const;
-  const REGISTER_REF = { kind: "residuals", key: PROJECT_ID } as const;
 
   test("the root status is replaced under an exact byte-version precondition", async () => {
     const fixture = makeFixture();
@@ -1332,85 +1481,40 @@ describe("protected-writers", () => {
     expect(readFileSync(statusPath).equals(uncoordinated)).toBe(true);
   });
 
-  test("a register is replaceable only while no coordinated plan owns a bucket", async () => {
+  test("issue authority: a project register replacement is retired and refused outright", async () => {
     const fixture = makeFixture();
+    await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
     const harnessRoot = realpathSync(fixture.harness);
-    const legacyBucket = [storedResidual(PEER_PLAN_ID, "r-legacy")];
 
-    // A register that predates coordination: the only bucket belongs to a plan
-    // the coordinated workflow never prepared.
-    writeJson(fixture.registerPath, { entries: { [PEER_PLAN_ID]: legacyBucket } });
-    const legacy = readFileSync(fixture.registerPath);
-    const owned = await replaceCoordinatedArtifact({
-      harnessRoot,
-      ref: REGISTER_REF,
-      payload: { entries: { [PEER_PLAN_ID]: [...legacyBucket, storedResidual(PEER_PLAN_ID, "r-next")] } },
-      expectedVersion: artifactVersion(legacy),
-    });
-    expect(owned.version).toBe(artifactVersion(readFileSync(fixture.registerPath)));
-    expect(registerBucket(fixture, PEER_PLAN_ID).map((entry) => entry.id)).toEqual(["r-legacy", "r-next"]);
-
-    // A stale byte version is refused, and the file is left alone.
+    // A register that predates coordination is migration history: the
+    // replacement surface refuses the retired kind before any CAS.
+    writeJson(fixture.registerPath, { entries: { [PEER_PLAN_ID]: [] } });
     const before = readFileSync(fixture.registerPath);
     expect(
       await errorCodeOf(() =>
-        replaceCoordinatedArtifact({ harnessRoot, ref: REGISTER_REF, payload: { entries: {} }, expectedVersion: artifactVersion(legacy) }),
-      ),
-    ).toBe("coordination.version-conflict");
-    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
-
-    // Prepare the plan in the coordinated workflow, then propose a bucket for
-    // it: the proposed side refuses before anything is written.
-    await preparePlan(fixture, PLAN_ID);
-    expect(
-      await errorCodeOf(() =>
         replaceCoordinatedArtifact({
           harnessRoot,
-          ref: REGISTER_REF,
-          payload: {
-            entries: {
-              [PEER_PLAN_ID]: [...legacyBucket, storedResidual(PEER_PLAN_ID, "r-next")],
-              [PLAN_ID]: [storedResidual(PLAN_ID, "r-scoped")],
-            },
-          },
-          expectedVersion: artifactVersion(before),
+          ref: { kind: "residuals", key: PROJECT_ID } as never,
+          payload: { entries: {} },
+          expectedVersion: "absent",
         }),
       ),
-    ).toBe("coordination.scoped-writer-required");
+    ).toBe("coordination.store");
     expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
 
-    // Once the scoped writer owns a bucket, even a like-for-like replacement is
-    // refused: the register is no longer a whole-writer target.
-    const session = (await bindPlan(fixture, PLAN_ID)).session_file;
-    const view = await readPlanCoordination(session, PLAN_ID, fixture.root);
+    // The residual-add mutation itself never recreates the register: after
+    // the DB cutover a coordinated plan still leaves the legacy file alone.
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
     await mutatePlanCoordination({
-      sessionPath: session,
+      sessionPath: fixture.planSession,
       planId: PLAN_ID,
       expectedRevision: view.revision,
-      operation: { kind: "residual-add", entries: [residual("r-scoped")] as never, expectedRegisterVersion: view.register_version },
+      operation: { kind: "residual-add", entries: [finding("r-scoped")] as never },
     });
-    expect(registerBucket(fixture, PLAN_ID).map((entry) => entry.id)).toEqual(["r-scoped"]);
-    const ownedBytes = readFileSync(fixture.registerPath);
-    expect(
-      await errorCodeOf(() =>
-        replaceCoordinatedArtifact({
-          harnessRoot,
-          ref: REGISTER_REF,
-          payload: readJson(fixture.registerPath),
-          expectedVersion: artifactVersion(ownedBytes),
-        }),
-      ),
-    ).toBe("coordination.scoped-writer-required");
-    expect(readFileSync(fixture.registerPath).equals(ownedBytes)).toBe(true);
-
-    // The read surface reports the version of the bytes it validated, and
-    // refuses to hand back a document the register schema rejects.
-    expect(await readCoordinatedArtifact(harnessRoot, REGISTER_REF)).toEqual({
-      payload: readJson(fixture.registerPath),
-      version: artifactVersion(ownedBytes),
-    });
-    writeText(fixture.registerPath, "{\n  \"entries\": {\n    \"plan-a\": [{}]\n  }\n}\n");
-    expect(await errorCodeOf(() => readCoordinatedArtifact(harnessRoot, REGISTER_REF))).toBe("coordination.store");
+    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
   });
 
   test("uncoordinated kinds refuse explicitly and a plan session cannot replace a snapshot", async () => {
@@ -1493,8 +1597,9 @@ function mergeFeature(fixture: GitFixture): string {
  * A single-row standalone development workflow with a real feature checkout and
  * delivery anchors only (no integration worktree or branch.integration).
  */
-function standaloneGitFixture(): GitFixture {
+async function standaloneGitFixture(): Promise<GitFixture> {
   const fixture = makeFixture() as GitFixture;
+  await storeBacked(fixture, [PLAN_ID]);
   fixture.baseSha = headOf(fixture.root);
   fixture.integrationPath = join(fixture.root, "wt-integration-unused");
   rmSync(fixture.worktreePath, { recursive: true, force: true });
@@ -1524,7 +1629,7 @@ function standaloneGitFixture(): GitFixture {
 
 /** Accepted standalone handoff: the state route-specific complete starts from. */
 async function acceptedStandaloneFixture(): Promise<GitFixture> {
-  const fixture = standaloneGitFixture();
+  const fixture = await standaloneGitFixture();
   await preparePlan(fixture, PLAN_ID);
   await bindPlan(fixture, PLAN_ID);
   claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -1536,8 +1641,8 @@ async function acceptedStandaloneFixture(): Promise<GitFixture> {
 
 
 /** Legacy wrong-source shape: registered source equals target while the handoff names the feature branch. */
-function wrongSourceLegacyGitFixture(withPr = false): GitFixture {
-  const fixture = standaloneGitFixture();
+async function wrongSourceLegacyGitFixture(withPr = false): Promise<GitFixture> {
+  const fixture = await standaloneGitFixture();
   const snapshot = snapshotOf(fixture);
   snapshot.branch = { source: "main", target: "main" };
   if (withPr) {
@@ -1552,7 +1657,7 @@ function wrongSourceLegacyGitFixture(withPr = false): GitFixture {
 }
 
 async function wrongSourceAcceptedFixture(withPr = false): Promise<GitFixture> {
-  const fixture = wrongSourceLegacyGitFixture(withPr);
+  const fixture = await wrongSourceLegacyGitFixture(withPr);
   await preparePlan(fixture, PLAN_ID);
   await bindPlan(fixture, PLAN_ID);
   claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -1575,7 +1680,7 @@ function snapshotWithoutRepairDelta(snapshot: Record<string, unknown>): Record<s
 
 /** A fixture handed off and accepted: the state integration starts from. */
 async function acceptedFixture(): Promise<GitFixture> {
-  const fixture = gitFixture();
+  const fixture = await gitFixture();
   await preparePlan(fixture, PLAN_ID);
   await bindPlan(fixture, PLAN_ID);
   claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -1857,6 +1962,27 @@ describe("standalone-development-completion", () => {
     const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
     const replayed = await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" });
     expect(replayed.outcome).toBe("already-completed");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+  }, 30000);
+
+  test("report-only completion accepts matching policy evidence without integration or merge proof", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const snapshot = snapshotOf(fixture) as Record<string, unknown>;
+    snapshot.delivery_kind = "verification/report-only";
+    snapshot.completion_policy = "acceptance report";
+    delete snapshot.branch;
+    delete snapshot.integration_worktree_path;
+    delete snapshot.integration_merge_lease;
+    snapshot.delivery = { completion: { policy: "acceptance report", evidence: "report.md" } };
+    writeJson(fixture.snapshotPath, snapshot);
+
+    const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
+    expect(completed.outcome).toBe("completed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
+    expect(planRowOf(fixture, PLAN_ID).execution_lease).toBeUndefined();
+    expect(handoffFields(planRowOf(fixture, PLAN_ID)).integration).toBeUndefined();
+    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    expect((await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" })).outcome).toBe("already-completed");
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
   }, 30000);
 
@@ -2152,33 +2278,74 @@ describe("legacy-delivery-source-repair", () => {
   }, 30000);
 });
 
-describe("findings-gate-locking", () => {
-  test("a finding that lands while the handoff waits for the register lock still refuses it", async () => {
-    const fixture = gitFixture();
+describe("findings-gate — issue authority (G2a)", () => {
+  test("issue authority: an open critical issue in the store refuses the handoff, closing it releases the gate", async () => {
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
     updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
     const evidence = handoffEvidenceOf(fixture, fixture.planSha);
-    // The register directory exists but holds nothing yet, so the unlocked
-    // read this case has to defeat resolves to the absent register.
-    mkdirSync(dirname(fixture.registerPath), { recursive: true });
 
-    const landing = withStatusWriteLock(fixture.registerPath, async () => {
-      await sleep(1000);
-      // An unresolved Critical blocks approval under either cleanup mode.
-      writeJson(fixture.registerPath, {
-        entries: { [PLAN_ID]: [{ ...storedResidual(PLAN_ID, "R1"), severity: "critical" }] },
-      });
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const added = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "residual-add", entries: [finding("r-crit", { severity: "critical" })] as never },
     });
+    const critical = added.issues![0]!;
 
+    // An unresolved critical blocks approval under the plan's cleanup mode —
+    // read from the issue store, never from a register.
     const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.invalid-transition");
-    await landing;
-    // The refusal is non-advancing: the row keeps InReview and its lease, and no
-    // handoff is sealed under a finding the plan was told to close.
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+
+    // The authorized disposition (a separate act, contract §4) releases the gate.
+    const closed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: closeOp(critical.issue_id, critical.revision) as never,
+    });
+    expect(closed.outcome).toBe("residual-closed");
+    const handedOff = await handoffCall(fixture, evidence);
+    expect(handedOff.outcome).toBe("handed-off");
+  }, 30000);
+
+  test("issue authority: a missing or staged store refuses the handoff instead of passing it as no findings", async () => {
+    const fixture = await gitFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
+    updatePlanRow(fixture, PLAN_ID, (row) => ({ ...row, status: "InReview" }));
+    const evidence = handoffEvidenceOf(fixture, fixture.planSha);
+    const sessionId = readJson(fixture.planSession).session_id;
+
+    // A staged store is the pre-activation exclusion window (contract §7): the
+    // bytes exist, but the DB is not yet the findings authority, so the step
+    // refuses rather than treating "no readable open issues" as "clean".
+    const staged = await openStore({ harnessDir: fixture.harness }, "write");
+    try {
+      staged.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      staged.close();
+    }
+    const before = readFileSync(fixture.snapshotPath);
+    expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.store");
+    // The refusal is non-advancing: snapshot bytes, row status and the lease
+    // this session holds are all untouched.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(sessionId);
+
+    // A missing store is not an empty one either: the same step still refuses.
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${join(fixture.harness, "store.db")}${suffix}`, { force: true });
+    expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.store");
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(sessionId);
   }, 30000);
 });
 
@@ -2189,7 +2356,7 @@ describe("findings-gate-locking", () => {
 describe("seam-regressions", () => {
   /** A prepared plan whose bound session holds the row's execution lease. */
   async function claimedPlan(): Promise<GitFixture> {
-    const fixture = gitFixture();
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -2241,8 +2408,7 @@ describe("seam-regressions", () => {
         expectedRevision: view.revision,
         operation: {
           kind: "residual-add",
-          entries: [residual("r-lease")] as never,
-          expectedRegisterVersion: view.register_version,
+          entries: [finding("r-lease")] as never,
         },
       }),
     );
@@ -2290,46 +2456,44 @@ describe("seam-regressions", () => {
       return { ...rest, plan_id: id };
     });
 
+    // The register kind is retired (issue authority): the replacement surface
+    // refuses before any ownership scan, and no register is created.
     expect(
       await errorCodeOf(() =>
         replaceCoordinatedArtifact({
           harnessRoot,
-          ref: { kind: "residuals", key: PROJECT_ID } as const,
-          payload: { entries: { [PLAN_ID]: [storedResidual(PLAN_ID, "r-guard")] } },
+          ref: { kind: "residuals", key: PROJECT_ID } as never,
+          payload: { entries: { [PLAN_ID]: [] } },
           expectedVersion: "absent",
         }),
       ),
-    ).toBe("coordination.scoped-writer-required");
+    ).toBe("coordination.store");
     expect(existsSync(fixture.registerPath)).toBe(false);
   });
 
-  test("a malformed existing register fails closed instead of reading as empty (T1-C3-009)", async () => {
+  test("issue authority: a register on disk is never a runtime authority for the scoped mutation (T1-C3-009)", async () => {
     const fixture = makeFixture();
+    await storeBacked(fixture, [PLAN_ID]);
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect(view.register_version).toBe("absent");
 
+    // A legacy register (even a valid or malformed one) no longer backs the
+    // mutation: residual-add goes to the issue store only and the register
+    // bytes stay untouched.
     writeText(fixture.registerPath, "{}\n");
     const corrupted = readFileSync(fixture.registerPath);
     const snapshotBefore = readFileSync(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: fixture.planSession,
-          planId: PLAN_ID,
-          expectedRevision: view.revision,
-          operation: {
-            kind: "residual-add",
-            entries: [residual("r-x")] as never,
-            expectedRegisterVersion: artifactVersion(corrupted),
-          },
-        }),
-      ),
-    ).toBe("coordination.store");
+    await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "residual-add", entries: [finding("r-x")] as never },
+    });
     expect(readFileSync(fixture.registerPath).equals(corrupted)).toBe(true);
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
   });
 
   test("a replacement that retains an existing uncoordinated workflow is judged, not rejected (T1-C4-011)", async () => {
@@ -2477,7 +2641,7 @@ describe("gitRead subprocess failure classification", () => {
 
   /** A prepared, leased InReview plan with valid handoff evidence on disk. */
   async function handoffReadyFixture(): Promise<GitFixture> {
-    const fixture = gitFixture();
+    const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
     claimExecutionLease(fixture, PLAN_ID, fixture.planSession);
@@ -2563,6 +2727,7 @@ describe("gitRead subprocess failure classification", () => {
       ``,
     ].join("\n"));
 
+    await sealStoreForReaders(fixture);
     const startedAt = Date.now();
     const child = Bun.spawn(
       [process.execPath, scriptPath, fixture.root, fixture.harness, PLAN_ID, fixture.planSession, evidencePath],
@@ -2834,7 +2999,7 @@ function prepareSnapshotOf(fixture: PrepareFixture): { plans: Array<Record<strin
   return doc as { plans: Array<Record<string, unknown>> } & Record<string, unknown>;
 }
 
-/** Bind the lifecycle coordinator once per fixture (the engine picks the path). */
+/** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
     const bound = await bindPlanSession({
@@ -2842,6 +3007,7 @@ async function ensurePrepareCoordinator(fixture: PrepareFixture): Promise<string
       workflowId: PREPARE_WORKFLOW,
       harnessDir: fixture.harness,
       cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
     });
     expect(bound.ok).toBe(true);
     fixture.coordinatorSession = bound.session_file;
@@ -2890,6 +3056,38 @@ async function failureOf(run: () => Promise<unknown>): Promise<Error> {
     return error instanceof Error ? error : new Error(String(error));
   }
   throw new Error("expected the call to fail");
+}
+
+/**
+ * Activate an instrument through the REAL local store, and return it. Scoped
+ * coordination is served only by the store `createFsStore` created: an injected
+ * foreign store is wrapped by `guardedInjectedStore` and keeps no `root` claim,
+ * so `localStore` refuses it (`coordination.local-store-required`) before the
+ * instrument's ports are ever consulted. An instrument that must be reached
+ * through the coordination surface therefore installs its ports — and its
+ * claimed root, the consultation a window can trigger on — on that same
+ * instance, instead of standing in for it. The instrument receives the
+ * ORIGINAL ports as its `inner`, so its pass-through calls cannot recurse into
+ * itself.
+ */
+function instrumentLocalStore<T extends ArtifactStore & { root: string }>(
+  harness: string,
+  build: (inner: ArtifactStore & { root: string }) => T,
+): T {
+  const local = createFsStore(harness);
+  const originalPut = local.put;
+  const originalGet = local.get;
+  const inner: ArtifactStore & { root: string } = {
+    root: local.root,
+    put: (doc) => originalPut(doc),
+    get: <R>(ref: ArtifactRef) => originalGet<R>(ref),
+  };
+  const instrument = build(inner);
+  local.put = (doc) => instrument.put(doc);
+  local.get = <R>(ref: ArtifactRef) => instrument.get<R>(ref);
+  Object.defineProperty(local, "root", { configurable: true, get: () => instrument.root });
+  setArtifactStore(local);
+  return instrument;
 }
 
 /**
@@ -3099,7 +3297,10 @@ describe("Prepare workflow amendment", () => {
   test("both real plan-header forms are read by value: `**Label:** v` and `**Label**: v`", async () => {
     // Every other case writes the dominant form (the colon inside the bold).
     // The bootstrap plan's own header block writes the colon after the bold,
-    // and its branch fields must read the same.
+    // and its branch fields must read the same. A real reviewed plan also
+    // carries the descriptive `**Working branch policy:**` line beside its
+    // `**Working branch:**` declaration; the policy is prose about the branch,
+    // never the branch value.
     const colonAfterBold = makePrepareFixture();
     await ensurePrepareCoordinator(colonAfterBold);
     writeText(
@@ -3111,6 +3312,7 @@ describe("Prepare workflow amendment", () => {
         "**Status:** Todo",
         "**Main worktree branch**: main",
         `**Working branch:** feature/${PREPARE_APPEND}`,
+        "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
         "",
         "Body.",
         "",
@@ -3120,7 +3322,11 @@ describe("Prepare workflow amendment", () => {
     const amended = await amendPrepare(colonAfterBold, preparePatchOf(colonAfterBold));
 
     expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
-    expect(prepareSnapshotOf(colonAfterBold).plans).toHaveLength(2);
+    const acceptedRows = prepareSnapshotOf(colonAfterBold).plans;
+    expect(acceptedRows).toHaveLength(2);
+    // The accepted row carries the branch the `Working branch` header declares,
+    // not the policy sentence beside it.
+    expect(acceptedRows[1]!.metadata).toMatchObject({ working_branch: `feature/${PREPARE_APPEND}` });
 
     // The same form declaring another branch refuses: the parsed value is
     // compared, never swallowed into the markup.
@@ -3243,32 +3449,52 @@ describe("Prepare workflow amendment", () => {
   test("both reviewed branch headers are required on an appended plan", async () => {
     // The plan document is the reviewed authority for the branch metadata: an
     // absent header is never treated as agreement with the branches the append
-    // itself claims.
-    const planCases: ReadonlyArray<{ name: string; lines: readonly string[] }> = [
+    // itself claims, and the descriptive `Working branch policy` line beside it
+    // is prose — it cannot stand in for the `Working branch` declaration.
+    const planCases: ReadonlyArray<{
+      name: string;
+      lines: readonly string[];
+      /** The declaration the refusal must name as missing. */
+      field: string;
+      header: string;
+    }> = [
       {
-        name: "missing-working-branch",
-        lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", "**Main worktree branch:** main"],
+        name: "working-branch-policy-only",
+        lines: [
+          `**plan_id:** ${PREPARE_APPEND}`,
+          "**Status:** Todo",
+          "**Main worktree branch:** main",
+          "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
+        ],
+        field: "metadata.working_branch",
+        header: "Working branch",
       },
       {
         name: "missing-main-worktree-branch",
         lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", `**Working branch:** feature/${PREPARE_APPEND}`],
+        field: "mainWorktreeBranch",
+        header: "Main worktree branch",
       },
     ];
 
     for (const planCase of planCases) {
       const fixture = makePrepareFixture();
       await ensurePrepareCoordinator(fixture);
-      writeText(
-        join(fixture.planDir, `${PREPARE_APPEND}.md`),
-        [`# Plan ${PREPARE_APPEND}`, "", ...planCase.lines, "", "Body.", ""].join("\n"),
-      );
+      const planPath = join(fixture.planDir, `${PREPARE_APPEND}.md`);
+      writeText(planPath, [`# Plan ${PREPARE_APPEND}`, "", ...planCase.lines, "", "Body.", ""].join("\n"));
       const before = protectedBytes(fixture);
 
-      const refusal = await prepareRefusalOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+      const failure = await failureOf(() => amendPrepare(fixture, preparePatchOf(fixture)));
+      if (!(failure instanceof CoordinationError)) throw failure;
 
-      expect(`${planCase.name}: ${refusal.code}`).toBe(
-        `${planCase.name}: coordination.prepare-amendment.invalid-plan`,
-      );
+      const label = `${planCase.name}: `;
+      expect(`${label}${failure.code}`).toBe(`${label}coordination.prepare-amendment.invalid-plan`);
+      // The refusal names the missing declaration, the row and the reviewed
+      // file as facts, so it stays actionable without pinning one sentence.
+      expect(failure.message).toContain(planCase.header);
+      expect(failure.message).toContain(planPath);
+      expect(failure.details).toMatchObject({ plan_id: PREPARE_APPEND, field: planCase.field, path: planPath });
+      // It refuses before mutation: every protected byte is unchanged.
       expect(protectedBytes(fixture)).toEqual(before);
     }
   });
@@ -3532,6 +3758,23 @@ describe("Prepare workflow amendment", () => {
               prepareAppendOf(fixture, PREPARE_APPEND, { file: join(fixture.planDir, `${PREPARE_UNREVIEWED}.md`) }),
             ],
           }),
+      },
+      {
+        // Missing / non-string pointers are shape violations this boundary owns:
+        // the shared resolver names the pointer form with `path.isAbsolute(file)`
+        // before its own type check, so reaching it with these would surface a
+        // native `TypeError` instead of the refusal vocabulary.
+        name: "file-missing",
+        patch: (fixture) =>
+          preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: undefined })] }),
+      },
+      {
+        name: "file-null",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: null })] }),
+      },
+      {
+        name: "file-not-a-string",
+        patch: (fixture) => preparePatchOf(fixture, { appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, { file: 42 })] }),
       },
       {
         name: "header-id-mismatch",
@@ -3943,13 +4186,10 @@ describe("Prepare workflow amendment", () => {
     await ensurePrepareCoordinator(fixture);
     const view = await prepareViewOf(fixture);
     const lockDir = join(dirname(fixture.snapshotPath), ".status-write.lockdir");
-    const store = new CompetingCommitStore(
-      createFsStore(fixture.harness),
-      fixture.snapshotPath,
-      lockDir,
-      "2099-01-01T00:00:00.000Z",
+    const store = instrumentLocalStore(
+      fixture.harness,
+      (inner) => new CompetingCommitStore(inner, fixture.snapshotPath, lockDir, "2099-01-01T00:00:00.000Z"),
     );
-    setArtifactStore(store);
 
     const amended = await amendWith(fixture, preparePatchOf(fixture), {
       snapshotVersion: view.view.snapshotVersion,
@@ -4094,7 +4334,13 @@ describe("Prepare workflow amendment", () => {
     // execution path admits a workflow the root never registered.
     expect(readFileSync(fixture.statusPath, "utf8")).toBe(statusBytes);
     const bindRefusal = await prepareRefusalOf(() =>
-      bindPlanSession({ coordinator: true, workflowId: orphanId, harnessDir: fixture.harness, cwd: fixture.root }),
+      bindPlanSession({
+        coordinator: true,
+        workflowId: orphanId,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
     );
     expect(bindRefusal.code).toBe("coordination.workflow-not-found");
 
@@ -4102,5 +4348,1323 @@ describe("Prepare workflow amendment", () => {
     const recreate = await prepareRefusalOf(() => writeWorkflowSnapshot(orphan, orphanDir, { createOnly: true }));
     expect(recreate.code).toBe("coordination.version-conflict");
     expect(readFileSync(orphanSnapshotPath, "utf8")).toBe(createdBytes);
+  });
+
+  test("a plan-file correction repairs a malformed repository-relative pointer and preserves every other row field", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = prepareSnapshotOf(fixture);
+    const oldRow = before.plans[0]!;
+    const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
+    // The fixture row holds the repository-relative pointer rows registered
+    // before the resolver landed; the correction names that same plan's
+    // canonical file and the exact pointer it replaces.
+    expect(oldRow.file).toBe(`.mstar/plans/${PREPARE_ROW}.md`);
+
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: correctedPath },
+        ],
+      }),
+    );
+
+    expect(amended.ok).toBe(true);
+    expect(amended.view.allowed).toBe(true);
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    const after = prepareSnapshotOf(fixture);
+    // Only the pointer moved: the row keeps its identity, title, status,
+    // metadata and position, and the appended row still lands after it.
+    expect(after.plans[0]).toEqual({ ...oldRow, file: correctedPath });
+    expect(after.plans[0]!.metadata).toEqual(oldRow.metadata);
+    expect(after.plans[1]!.file).toBe(join(fixture.planDir, `${PREPARE_APPEND}.md`));
+    expect(after.plans).toHaveLength(2);
+
+    // A correction is a delta on its own: with the compass declaring only the
+    // registered row it is admitted with an empty append array.
+    const only = makePrepareFixture();
+    await ensurePrepareCoordinator(only);
+    writeText(only.compassPath, readFileSync(only.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const onlyRow = prepareSnapshotOf(only).plans[0]!;
+    const onlyPath = join(only.planDir, `${PREPARE_ROW}.md`);
+
+    const correctedOnly = await amendPrepare(
+      only,
+      preparePatchOf(only, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: onlyPath },
+        ],
+      }),
+    );
+
+    expect(correctedOnly.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(only).plans).toEqual([{ ...onlyRow, file: onlyPath }]);
+
+    // The declared harness-relative spelling is an accepted OLD form too — the
+    // resolver reads it, and the correction canonicalizes it.
+    const declared = makePrepareFixture();
+    await ensurePrepareCoordinator(declared);
+    writeText(declared.compassPath, readFileSync(declared.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, ""));
+    const declaredRow = prepareSnapshotOf(declared).plans[0]!;
+    const declaredDoc = prepareSnapshotOf(declared);
+    declaredDoc.plans[0]!.file = `plans/${PREPARE_ROW}.md`;
+    writeJson(declared.snapshotPath, declaredDoc);
+
+    const declaredAmended = await amendPrepare(
+      declared,
+      preparePatchOf(declared, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+        ],
+      }),
+    );
+
+    expect(declaredAmended.view.planIds).toEqual([PREPARE_ROW]);
+    expect(prepareSnapshotOf(declared).plans).toEqual([
+      { ...declaredRow, file: join(declared.planDir, `${PREPARE_ROW}.md`) },
+    ]);
+  }, 30000);
+
+  test("a plan-file correction refuses an unbindable old or new pointer without writing anything", async () => {
+    const cases: ReadonlyArray<{
+      name: string;
+      prepare?: (fixture: PrepareFixture) => void;
+      correction: (fixture: PrepareFixture) => unknown;
+    }> = [
+      { name: "entry-not-an-object", correction: () => "plan-prepare" },
+      {
+        name: "unexpected-key",
+        correction: (fixture) => ({
+          id: PREPARE_ROW,
+          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          status: "Todo",
+        }),
+      },
+      { name: "missing-id", correction: (fixture) => ({ expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        name: "unsafe-id",
+        correction: (fixture) => ({ id: "../plan-prepare", expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "unknown-row",
+        correction: (fixture) => ({
+          id: PREPARE_UNREVIEWED,
+          expectedFile: `.mstar/plans/${PREPARE_UNREVIEWED}.md`,
+          file: join(fixture.planDir, `${PREPARE_UNREVIEWED}.md`),
+        }),
+      },
+      { name: "expected-file-missing", correction: (fixture) => ({ id: PREPARE_ROW, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      {
+        // The exact value is required: a canonical absolute spelling of the
+        // same pointer is not what the row holds, so the observation is stale.
+        name: "expected-file-form-mismatch",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.planDir, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "expected-file-other-value",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-foreign",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.root, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-another-plan",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_APPEND}.md`) }),
+      },
+      {
+        name: "new-file-traversal",
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: `../plans/${PREPARE_ROW}.md` }),
+      },
+      {
+        name: "new-file-missing",
+        prepare: (fixture) => rmSync(join(fixture.planDir, `${PREPARE_ROW}.md`)),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "new-file-header-mismatch",
+        prepare: (fixture) =>
+          writeText(join(fixture.planDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: "feature/plan-other" })),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // The row's pointer names another plan: a correction repairs a
+        // malformed pointer of the SAME plan, it never rebinds a row.
+        name: "old-pointer-names-another-plan",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/${PREPARE_APPEND}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-same-basename-elsewhere",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/archive/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/archive/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        name: "old-pointer-foreign-absolute",
+        prepare: (fixture) => {
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = join(fixture.root, `${PREPARE_ROW}.md`);
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: join(fixture.root, `${PREPARE_ROW}.md`), file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+      {
+        // A copied plan document with a matching header, under an unrelated
+        // directory: neither its spelling nor its target is this plan's file.
+        name: "old-pointer-copied-document-with-matching-header",
+        prepare: (fixture) => {
+          const copyDir = join(fixture.planDir, "copy");
+          mkdirSync(copyDir, { recursive: true });
+          writeText(join(copyDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: PREPARE_ROW, workingBranch: `feature/${PREPARE_ROW}` }));
+          const doc = prepareSnapshotOf(fixture);
+          doc.plans[0]!.file = `.mstar/plans/copy/${PREPARE_ROW}.md`;
+          writeJson(fixture.snapshotPath, doc);
+        },
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/copy/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+      },
+    ];
+
+    for (const correctionCase of cases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      correctionCase.prepare?.(fixture);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(fixture, preparePatchOf(fixture, { correctPlanFiles: [correctionCase.correction(fixture)] })),
+      );
+
+      expect(`${correctionCase.name}: ${refusal.code}`).toBe(
+        `${correctionCase.name}: coordination.prepare-amendment.invalid-plan`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+
+    // A correction that would not move the pointer is not a correction: the
+    // already-canonical row refuses as a no-op.
+    const noop = makePrepareFixture();
+    await ensurePrepareCoordinator(noop);
+    const canonical = join(noop.planDir, `${PREPARE_ROW}.md`);
+    const noopDoc = prepareSnapshotOf(noop);
+    noopDoc.plans[0]!.file = canonical;
+    writeJson(noop.snapshotPath, noopDoc);
+    const noopBefore = protectedBytes(noop);
+
+    const noopRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        noop,
+        preparePatchOf(noop, {
+          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: canonical, file: canonical }],
+        }),
+      ),
+    );
+
+    expect(noopRefusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(protectedBytes(noop)).toEqual(noopBefore);
+  }, 30000);
+
+  test("a plan-file correction is gated by the collision, CAS and whole-workflow admission rules", async () => {
+    // `correctPlanFiles` is validated as an array like every other patch key.
+    const malformed = makePrepareFixture();
+    await ensurePrepareCoordinator(malformed);
+    const malformedBefore = protectedBytes(malformed);
+    const malformedRefusal = await prepareRefusalOf(() =>
+      amendPrepare(malformed, preparePatchOf(malformed, { correctPlanFiles: "plan-prepare" })),
+    );
+    expect(malformedRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
+    expect(protectedBytes(malformed)).toEqual(malformedBefore);
+
+    // The same id cannot be appended and corrected in one patch.
+    const overlap = makePrepareFixture();
+    await ensurePrepareCoordinator(overlap);
+    const overlapBefore = protectedBytes(overlap);
+    const overlapRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        overlap,
+        preparePatchOf(overlap, {
+          correctPlanFiles: [
+            {
+              id: PREPARE_APPEND,
+              expectedFile: `.mstar/plans/${PREPARE_APPEND}.md`,
+              file: join(overlap.planDir, `${PREPARE_APPEND}.md`),
+            },
+          ],
+        }),
+      ),
+    );
+    expect(overlapRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(overlap)).toEqual(overlapBefore);
+
+    // …and never twice in one correction list.
+    const duplicate = makePrepareFixture();
+    await ensurePrepareCoordinator(duplicate);
+    const duplicateBefore = protectedBytes(duplicate);
+    const duplicateRefusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        duplicate,
+        preparePatchOf(duplicate, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+      ),
+    );
+    expect(duplicateRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
+
+    // A stale byte token refuses before any pointer moves.
+    const stale = makePrepareFixture();
+    await ensurePrepareCoordinator(stale);
+    const staleView = await prepareViewOf(stale);
+    const staleBefore = protectedBytes(stale);
+    const staleRefusal = await prepareRefusalOf(() =>
+      amendWith(
+        stale,
+        preparePatchOf(stale, {
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(stale.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+        { snapshotVersion: `sha256:${"0".repeat(64)}`, compassVersion: staleView.view.compassVersion },
+      ),
+    );
+    expect(staleRefusal.code).toBe("coordination.prepare-amendment.stale");
+    expect(protectedBytes(stale)).toEqual(staleBefore);
+
+    // A prepared/sealed row is never repointed: the whole-workflow admission
+    // refuses before the patch is even read, with the state named.
+    const admissionCases: ReadonlyArray<{
+      name: string;
+      patch: (
+        doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>,
+        fixture: PrepareFixture,
+      ) => void;
+    }> = [
+      { name: "prepared-row", patch: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; } },
+      {
+        name: "sealed-row-lease",
+        patch: (doc, fixture) => {
+          doc.plans[0]!.execution_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            worktree_path: join(fixture.root, "wt-row"),
+            working_branch: `feature/${PREPARE_ROW}`,
+          };
+        },
+      },
+    ];
+
+    for (const admissionCase of admissionCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const doc = prepareSnapshotOf(fixture);
+      admissionCase.patch(doc, fixture);
+      writeJson(fixture.snapshotPath, doc);
+      const before = protectedBytes(fixture);
+
+      const refusal = await prepareRefusalOf(() =>
+        amendPrepare(
+          fixture,
+          preparePatchOf(fixture, {
+            appendPlans: [],
+            correctPlanFiles: [
+              { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+            ],
+          }),
+        ),
+      );
+
+      expect(`${admissionCase.name}: ${refusal.code}`).toBe(
+        `${admissionCase.name}: coordination.prepare-amendment.execution-started`,
+      );
+      expect(protectedBytes(fixture)).toEqual(before);
+    }
+  }, 30000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * JSON Prepare coordinator recovery (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** The replacement coordinator identity every single-recovery case acquires. */
+const RECOVERED_COORDINATOR_ID = "recovered-coordinator";
+/** A second, distinct replacement identity (the supersede/concurrency cases). */
+const RECOVERED_COORDINATOR_ID_2 = "recovered-coordinator-2";
+
+/** The recovery view of the fixture's workflow, read without any session envelope. */
+function recoveryViewOf(fixture: PrepareFixture): Promise<PrepareCoordinatorRecoveryView> {
+  return showPrepareCoordinatorRecovery({
+    cwd: fixture.root,
+    harnessDir: fixture.harness,
+    workflowId: PREPARE_WORKFLOW,
+  });
+}
+
+/** One recovery request carrying this workflow's own reviewed tokens. */
+function recoveryInputOf(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string },
+  overrides: Record<string, unknown> = {},
+): Parameters<typeof recoverPrepareCoordinator>[0] {
+  return {
+    cwd: fixture.root,
+    harnessDir: fixture.harness,
+    identity: {
+      source: "local",
+      sessionId: RECOVERED_COORDINATOR_ID,
+      workflowId: PREPARE_WORKFLOW,
+      role: "coordinator",
+      planId: null,
+    },
+    priorSessionPath: fixture.coordinatorSession,
+    priorSessionId: FIXTURE_COORDINATOR_ID,
+    expectedSnapshotVersion: tokens.snapshot,
+    expectedCompassVersion: tokens.compass,
+    operationId: "op-recover-1",
+    reason: "the prior host session was cancelled and cannot authenticate",
+    authorizationRef: "PM-authorization-20260921",
+    stoppedSessionIds: [FIXTURE_COORDINATOR_ID],
+    ...overrides,
+  } as Parameters<typeof recoverPrepareCoordinator>[0];
+}
+
+/** One replacement identity for the multi-recovery cases. */
+function recoveredIdentity(sessionId: string): Record<string, unknown> {
+  return { source: "local", sessionId, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: null };
+}
+
+/** Where the engine keeps one coordinator envelope (the session-path contract). */
+function coordinatorEnvelopeOf(fixture: PrepareFixture, sessionId: string): string {
+  return join(fixture.harness, "workflows", PREPARE_WORKFLOW, "sessions", `coordinator-${sessionId}.json`);
+}
+
+/**
+ * The stored top-level `coordination` block, narrowed by `typeof` before any
+ * member is read (the snapshot JSON is `unknown` at this boundary).
+ */
+function coordinationBlockOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordination = (prepareSnapshotOf(fixture) as Record<string, unknown>).coordination;
+  // Narrowed above; the block is a plain object when present.
+  return typeof coordination === "object" && coordination !== null && !Array.isArray(coordination)
+    ? (coordination as Record<string, unknown>)
+    : {};
+}
+
+/** The stored recovery audit of the fixture's workflow. */
+function recoveryAuditOf(fixture: PrepareFixture): Array<Record<string, unknown>> {
+  const recoveries = coordinationBlockOf(fixture).identity_recoveries;
+  // Narrowed above; the audit is an array when present.
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** The stored coordinator binding of the fixture's workflow. */
+function recordedCoordinatorOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordinator = coordinationBlockOf(fixture).coordinator;
+  // Narrowed above; the binding is a plain object when present.
+  return typeof coordinator === "object" && coordinator !== null && !Array.isArray(coordinator)
+    ? (coordinator as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * A store that fails the next SNAPSHOT put once: the exact envelope-before-
+ * snapshot window §3.3 requires an injectable proof for. Everything else (the
+ * envelope file creation, which does not go through the store) proceeds.
+ */
+class FailOnceSnapshotStore implements ArtifactStore {
+  readonly root: string;
+  private failing = true;
+
+  constructor(private readonly inner: ArtifactStore & { root: string }) {
+    this.root = inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    if (doc.kind === "snapshot" && this.failing) {
+      this.failing = false;
+      throw new Error("injected store failure between the envelope and the snapshot commit");
+    }
+    await this.inner.put(doc);
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+}
+
+/**
+ * A store that fails the next snapshot put once AND replaces the recovery's
+ * newly created envelope with an unrelated session file first — the exact
+ * "path replaced between exclusive creation and cleanup" window. Cleanup must
+ * prove ownership by bytes before it unlinks anything.
+ */
+class ReplaceEnvelopeOnFailureStore implements ArtifactStore {
+  readonly root: string;
+  private failing = true;
+
+  constructor(
+    private readonly inner: ArtifactStore & { root: string },
+    private readonly envelopePath: string,
+    private readonly replacement: string,
+  ) {
+    this.root = inner.root;
+  }
+
+  async put(doc: ArtifactDoc): Promise<void> {
+    if (doc.kind === "snapshot" && this.failing) {
+      this.failing = false;
+      writeText(this.envelopePath, this.replacement);
+      throw new Error("injected store failure between the envelope and the snapshot commit");
+    }
+    await this.inner.put(doc);
+  }
+
+  async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
+    return this.inner.get<T>(ref);
+  }
+}
+
+describe("prepare coordinator recovery", () => {
+  test("prepare coordinator recovery view reports the recorded owner and both versions without envelope bytes", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+
+    const view = await recoveryViewOf(fixture);
+
+    expect(view.workflowId).toBe(PREPARE_WORKFLOW);
+    expect(view.priorSessionId).toBe(FIXTURE_COORDINATOR_ID);
+    expect(view.snapshotVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(view.compassVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(view.allowed).toBe(true);
+    expect(view.blockers).toEqual([]);
+    // The read is owner-neutral: no envelope path, body or credential in it.
+    expect(Object.keys(view).sort()).toEqual([
+      "allowed",
+      "blockers",
+      "compassVersion",
+      "priorSessionId",
+      "snapshotVersion",
+      "workflowId",
+    ]);
+    expect(JSON.stringify(view)).not.toContain(`sessions${sep}`);
+    // Read-only: nothing moved.
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 30000);
+
+  test("prepare coordinator recovery replaces the binding under explicit authorization and the old reference refuses", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const planRows = stableJson(prepareSnapshotOf(fixture).plans);
+    const branch = stableJson(prepareSnapshotOf(fixture).branch);
+
+    const result = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.operation).toBe("recover-coordinator");
+    expect(result.recovery.replay).toBe(false);
+    expect(result.recovery.priorSessionId).toBe(FIXTURE_COORDINATOR_ID);
+    expect(result.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID);
+    expect(result.session.session_id).toBe(RECOVERED_COORDINATOR_ID);
+    // The new envelope is role-scoped and exclusive; the old one stays as history.
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    expect(result.session_file).toBe(newEnvelope);
+    expect(readJson(newEnvelope)).toMatchObject({
+      schema_version: 1,
+      role: "coordinator",
+      session_id: RECOVERED_COORDINATOR_ID,
+      workflow_id: PREPARE_WORKFLOW,
+    });
+    expect(existsSync(fixture.coordinatorSession)).toBe(true);
+    expect(recordedCoordinatorOf(fixture)).toMatchObject({
+      session_id: RECOVERED_COORDINATOR_ID,
+      session_file: newEnvelope,
+    });
+
+    // The immutable audit record carries exactly the contract's required fields.
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(1);
+    expect(Object.keys(audit[0]!).sort()).toEqual([
+      "authorization_ref",
+      "compass_version",
+      "operation_id",
+      "prior_session_id",
+      "reason",
+      "recovered_at",
+      "request_hash",
+      "session_id",
+      "snapshot_version_before",
+      "stopped_session_ids",
+      "workflow_id",
+    ]);
+    expect(audit[0]).toMatchObject({
+      operation_id: "op-recover-1",
+      workflow_id: PREPARE_WORKFLOW,
+      prior_session_id: FIXTURE_COORDINATOR_ID,
+      session_id: RECOVERED_COORDINATOR_ID,
+      authorization_ref: "PM-authorization-20260921",
+      reason: "the prior host session was cancelled and cannot authenticate",
+      stopped_session_ids: [FIXTURE_COORDINATOR_ID],
+      compass_version: tokens.compassVersion,
+      snapshot_version_before: tokens.snapshotVersion,
+    });
+    expect(audit[0]!.request_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(audit[0]!.recovered_at).toBe(result.recovery.recoveredAt);
+
+    // Every row, branch anchor and the sibling workflow survive byte-for-byte;
+    // the prior envelope file is retained (never deleted, never rewritten).
+    expect(stableJson(prepareSnapshotOf(fixture).plans)).toBe(planRows);
+    expect(stableJson(prepareSnapshotOf(fixture).branch)).toBe(branch);
+    expect(readFileSync(fixture.statusPath, "utf8")).toBe(before.status);
+    expect(readFileSync(fixture.compassPath, "utf8")).toBe(before.compass);
+    expect(readFileSync(fixture.peerSnapshotPath, "utf8")).toBe(before.peer);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+
+    // The old reference is historical: its envelope still names the old owner,
+    // and every Prepare verb now refuses it because the BINDING moved.
+    const oldUse = await prepareRefusalOf(() => prepareViewOf(fixture, fixture.coordinatorSession));
+    expect(oldUse.code).toBe("coordination.session-mismatch");
+    // The replacement session is the live coordinator.
+    const live = await prepareViewOf(fixture, newEnvelope);
+    expect(live.view.allowed).toBe(true);
+    expect(live.session.session_id).toBe(RECOVERED_COORDINATOR_ID);
+  }, 30000);
+
+  test("prepare coordinator recovery refuses foreign, unauthorized, stale and executed requests without mutating", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const before = protectedBytes(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    // A second coordinator envelope that exists but is NOT the recorded binding:
+    // a valid file the caller could point at, which still proves nothing.
+    const impostorEnvelope = coordinatorEnvelopeOf(fixture, "impostor-session");
+    writeJson(impostorEnvelope, {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "impostor-session",
+      workflow_id: PREPARE_WORKFLOW,
+      harness_root: fixture.harness,
+    });
+
+    const cases: ReadonlyArray<{ name: string; overrides: Record<string, unknown>; code: string }> = [
+      {
+        name: "a prior session id the workflow does not record",
+        overrides: { priorSessionId: "someone-else" },
+        code: "coordination.identity-recovery.foreign-owner",
+      },
+      {
+        name: "a prior envelope that is not the recorded binding",
+        overrides: { priorSessionPath: impostorEnvelope, priorSessionId: "impostor-session" },
+        code: "coordination.identity-recovery.foreign-owner",
+      },
+      {
+        name: "a stop assertion that does not name the recorded holder",
+        overrides: { stoppedSessionIds: ["some-other-session"] },
+        code: "coordination.identity-recovery.unauthorized",
+      },
+      {
+        name: "no stop assertion at all",
+        overrides: { stoppedSessionIds: [] },
+        code: "coordination.identity-recovery.unauthorized",
+      },
+      {
+        name: "no authorization reference",
+        overrides: { authorizationRef: "" },
+        code: "coordination.identity-recovery.invalid-request",
+      },
+      { name: "no reason", overrides: { reason: "" }, code: "coordination.identity-recovery.invalid-request" },
+      { name: "no operation id", overrides: { operationId: "" }, code: "coordination.identity-recovery.invalid-request" },
+      {
+        name: "a stale snapshot token",
+        overrides: { expectedSnapshotVersion: `sha256:${"0".repeat(64)}` },
+        code: "coordination.identity-recovery.stale",
+      },
+      {
+        name: "a stale compass token",
+        overrides: { expectedCompassVersion: `sha256:${"0".repeat(64)}` },
+        code: "coordination.identity-recovery.stale",
+      },
+      {
+        name: "an identity addressing a workflow that records no coordinator binding",
+        overrides: {
+          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_PEER, role: "coordinator", planId: null },
+        },
+        code: "coordination.identity-recovery.not-prepare",
+      },
+      {
+        name: "a plan-scoped identity",
+        overrides: {
+          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: "plan-a" },
+        },
+        code: "coordination.identity-mismatch",
+      },
+      {
+        name: "the recorded owner itself",
+        overrides: { identity: recoveredIdentity(FIXTURE_COORDINATOR_ID) },
+        code: "coordination.identity-recovery.invalid-request",
+      },
+      {
+        name: "an unknown input field",
+        overrides: { force: true },
+        code: "coordination.forbidden-field",
+      },
+    ];
+    for (const recoveryCase of cases) {
+      const failure = await failureOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }, recoveryCase.overrides),
+        ),
+      );
+      const refusal = failure instanceof CoordinationError ? failure : undefined;
+      expect(`${recoveryCase.name}: ${refusal?.code}`).toBe(`${recoveryCase.name}: ${recoveryCase.code}`);
+      // §3.3/§5: a recovery refusal repeats neither a rejected value nor an
+      // envelope path — it carries the code, the already-public ids and the
+      // canonical base. The two foreign-owner cases below are the ones that once
+      // interpolated both envelope paths; the invariant is pinned over every case.
+      const projected = `${failure.message} ${JSON.stringify(refusal?.details ?? {})}`;
+      expect(`${recoveryCase.name}: ${projected.includes(impostorEnvelope)}`).toBe(`${recoveryCase.name}: false`);
+      expect(`${recoveryCase.name}: ${projected.includes(fixture.coordinatorSession)}`).toBe(`${recoveryCase.name}: false`);
+      // The rejected prior session id of the first foreign-owner case is a value
+      // the caller named, not a public record: it is never echoed back either.
+      expect(`${recoveryCase.name}: ${projected.includes("someone-else")}`).toBe(`${recoveryCase.name}: false`);
+      expect(protectedBytes(fixture)).toEqual(before);
+      expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    }
+
+    // An executed row (any row coordination block) is never recovered: the
+    // ORIGINAL all-row admission decides, and nothing is written.
+    const snapshot = prepareSnapshotOf(fixture);
+    (snapshot.plans[0] as Record<string, unknown>).coordination = { revision: 1 };
+    writeJson(fixture.snapshotPath, snapshot);
+    const executed = protectedBytes(fixture);
+    const activeRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(fixture, {
+          snapshot: readArtifactBytes(fixture.snapshotPath)!.version,
+          compass: tokens.compassVersion,
+        }),
+      ),
+    );
+    expect(activeRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    expect(protectedBytes(fixture)).toEqual(executed);
+  }, 60000);
+
+  test("prepare coordinator recovery refuses a concurrent second attempt and a replayed different request", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+
+    const [first, second] = await Promise.allSettled([
+      recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { operationId: "op-recover-2", identity: recoveredIdentity(RECOVERED_COORDINATOR_ID_2) },
+        ),
+      ),
+    ]);
+
+    expect([first, second].filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    const rejected = [first, second].find((entry) => entry.status === "rejected");
+    if (rejected?.status !== "rejected") throw new Error("expected exactly one refused concurrent recovery");
+    // The loser reviewed the pre-recovery bytes, so it is refused as stale (the
+    // same optimistic-concurrency verdict the amendment reports) and writes
+    // nothing at all.
+    expect((rejected.reason as CoordinationError).code).toBe("coordination.identity-recovery.stale");
+    // Exactly one owner and exactly one audit entry: the loser wrote nothing.
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(1);
+    expect(recordedCoordinatorOf(fixture).session_id).toBe(audit[0]!.session_id);
+    const loserId = audit[0]!.session_id === RECOVERED_COORDINATOR_ID ? RECOVERED_COORDINATOR_ID_2 : RECOVERED_COORDINATOR_ID;
+    expect(existsSync(coordinatorEnvelopeOf(fixture, loserId))).toBe(false);
+
+    // A replayed operation id with a DIFFERENT request is not the same
+    // operation: it refuses without moving anything.
+    const boundBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const boundFile = recordedCoordinatorOf(fixture).session_file;
+    const replayDifferent = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          {
+            operationId: audit[0]!.operation_id as string,
+            reason: "a different reason entirely",
+            priorSessionId: audit[0]!.prior_session_id as string,
+          },
+        ),
+      ),
+    );
+    expect(replayDifferent.code).toBe("coordination.identity-recovery.operation-conflict");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(boundBytes);
+    expect(recordedCoordinatorOf(fixture).session_file).toBe(boundFile);
+  }, 60000);
+
+  test("prepare coordinator recovery returns the recorded receipt on an exact retry without revision churn", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const request = recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion });
+
+    const first = await recoverPrepareCoordinator(request);
+    const committedBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const committedVersion = readArtifactBytes(fixture.snapshotPath)!.version;
+    const firstEntry = recoveryAuditOf(fixture)[0]!;
+
+    // The SAME request again — with the tokens it was authorized against, which
+    // its own commit has since superseded.
+    const retry = await recoverPrepareCoordinator(request);
+
+    expect(retry.ok).toBe(true);
+    expect(retry.recovery.replay).toBe(true);
+    expect(retry.recovery.operationId).toBe(first.recovery.operationId);
+    expect(retry.recovery.requestHash).toBe(first.recovery.requestHash);
+    expect(retry.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID);
+    expect(retry.session_file).toBe(first.session_file);
+    // No revision churn: the snapshot bytes are still the winner's.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(committedBytes);
+    expect(readArtifactBytes(fixture.snapshotPath)!.version).toBe(committedVersion);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+
+    // A second, distinct recovery appends EXACTLY one entry and preserves the
+    // whole previous prefix by value.
+    const second = await recoverPrepareCoordinator(
+      recoveryInputOf(
+        fixture,
+        { snapshot: committedVersion, compass: tokens.compassVersion },
+        {
+          operationId: "op-recover-3",
+          identity: recoveredIdentity(RECOVERED_COORDINATOR_ID_2),
+          priorSessionId: RECOVERED_COORDINATOR_ID,
+          priorSessionPath: first.session_file,
+          stoppedSessionIds: [RECOVERED_COORDINATOR_ID],
+        },
+      ),
+    );
+    expect(second.recovery.replay).toBe(false);
+    expect(second.recovery.sessionId).toBe(RECOVERED_COORDINATOR_ID_2);
+    const audit = recoveryAuditOf(fixture);
+    expect(audit).toHaveLength(2);
+    expect(audit[0]).toEqual(firstEntry);
+
+    // The first operation's replay is no longer this workflow's state.
+    const superseded = await prepareRefusalOf(() => recoverPrepareCoordinator(request));
+    expect(superseded.code).toBe("coordination.identity-recovery.operation-conflict");
+  }, 60000);
+
+  test("prepare coordinator recovery reclaims only its own envelope after an envelope-before-snapshot failure", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    const before = protectedBytes(fixture);
+    const request = recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion });
+
+    // An IO failure between the exclusive envelope creation and the snapshot
+    // commit is NOT a semantic refusal: the call reports failure, never a
+    // success receipt, and reclaims exactly the envelope it created.
+    instrumentLocalStore(fixture.harness, (inner) => new FailOnceSnapshotStore(inner));
+    await expect(recoverPrepareCoordinator(request)).rejects.toThrow(/injected store failure/);
+    expect(existsSync(newEnvelope)).toBe(false);
+    expect(protectedBytes(fixture)).toEqual(before);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+
+    // The retry is lawful: nothing was left behind, and the reviewed tokens
+    // still describe the same authorized request.
+    setArtifactStore(createFsStore(fixture.harness));
+    const retry = await recoverPrepareCoordinator(request);
+    expect(retry.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+
+    // A leftover envelope is reclaimed ONLY when its bytes are exactly the ones
+    // this call would write. Those bytes are the session JSON, so they prove the
+    // same TARGET SESSION — not the same operation.
+    const crashed = makePrepareFixture();
+    await ensurePrepareCoordinator(crashed);
+    const crashedTokens = await recoveryViewOf(crashed);
+    writeText(
+      coordinatorEnvelopeOf(crashed, RECOVERED_COORDINATOR_ID),
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          role: "coordinator",
+          session_id: RECOVERED_COORDINATOR_ID,
+          workflow_id: PREPARE_WORKFLOW,
+          harness_root: crashed.harness,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const reclaimed = await recoverPrepareCoordinator(
+      recoveryInputOf(crashed, { snapshot: crashedTokens.snapshotVersion, compass: crashedTokens.compassVersion }),
+    );
+    expect(reclaimed.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(crashed)).toHaveLength(1);
+
+    // A file that is NOT this operation's envelope is never overwritten.
+    const alien = makePrepareFixture();
+    await ensurePrepareCoordinator(alien);
+    const alienTokens = await recoveryViewOf(alien);
+    const alienEnvelope = coordinatorEnvelopeOf(alien, RECOVERED_COORDINATOR_ID);
+    writeText(alienEnvelope, `${JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "someone-else" })}\n`);
+    const alienBytes = readFileSync(alienEnvelope, "utf8");
+    const refusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(alien, { snapshot: alienTokens.snapshotVersion, compass: alienTokens.compassVersion }),
+      ),
+    );
+    expect(refusal.code).toBe("coordination.identity-recovery.invalid-request");
+    expect(readFileSync(alienEnvelope, "utf8")).toBe(alienBytes);
+    expect(recoveryAuditOf(alien)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery re-checks the reviewed compass before committing and reclaims only its own envelope", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+
+    // A concurrent compass edit lands in the window between this recovery's
+    // exclusive envelope creation and its commit CAS. The snapshot write lock
+    // does not lock the compass file, so without the final recheck the recovery
+    // would commit and record a `compass_version` that was no longer current.
+    setPrepareRecoveryEnvelopeGapForTest(() => {
+      writeText(fixture.compassPath, `${readFileSync(fixture.compassPath, "utf8")}\n`);
+    });
+    let refusal: { code: string; details: Record<string, unknown> };
+    try {
+      refusal = await prepareRefusalOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion }),
+        ),
+      );
+    } finally {
+      setPrepareRecoveryEnvelopeGapForTest(undefined);
+    }
+
+    expect(refusal.code).toBe("coordination.identity-recovery.stale");
+    // No snapshot mutation, no audit entry, and only THIS operation's envelope
+    // reclaimed; the prior envelope stays as history.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+    expect(existsSync(newEnvelope)).toBe(false);
+    expect(readdirSync(join(fixture.workflowDir, "sessions"))).toEqual([basename(fixture.coordinatorSession)]);
+
+    // The refusal wrote nothing, so a re-reviewed recovery is lawful.
+    const fresh = await recoveryViewOf(fixture);
+    const retry = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { snapshot: fresh.snapshotVersion, compass: fresh.compassVersion }),
+    );
+    expect(retry.recovery.replay).toBe(false);
+    expect(recoveryAuditOf(fixture)).toHaveLength(1);
+  }, 60000);
+
+  test("prepare coordinator recovery never unlinks an envelope that was replaced after its exclusive creation", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+    const newEnvelope = coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID);
+    const alien = `${JSON.stringify({ schema_version: 1, role: "plan-pm", session_id: "somebody-else" })}\n`;
+
+    // The snapshot commit fails AND the path this call created exclusively has
+    // since been replaced by an unrelated session file: `created` is only a
+    // historical boolean, so cleanup must compare the CURRENT bytes before it
+    // unlinks anything, and leave the replacement untouched.
+    instrumentLocalStore(
+      fixture.harness,
+      (inner) => new ReplaceEnvelopeOnFailureStore(inner, newEnvelope, alien),
+    );
+    await expect(
+      recoverPrepareCoordinator(recoveryInputOf(fixture, { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion })),
+    ).rejects.toThrow(/injected store failure/);
+    setArtifactStore(createFsStore(fixture.harness));
+
+    expect(readFileSync(newEnvelope, "utf8")).toBe(alien);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before.snapshot);
+    expect(readFileSync(fixture.coordinatorSession, "utf8")).toBe(before.session);
+    expect(recoveryAuditOf(fixture)).toEqual([]);
+  }, 60000);
+
+  test("prepare coordinator recovery refuses a malformed stop-list entry before hashing, storing or echoing it", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    // A stop entry is hashed into the request digest and persisted in the
+    // immutable audit: only public session ids are acceptable, never an
+    // arbitrary string (path-like or credential-like). The refusal is itself a
+    // PUBLIC diagnostic (§5), so it must not repeat the rejected value — the
+    // caller learns the rule and the entry's position/length instead.
+    const rejected = ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"];
+    for (const entry of rejected) {
+      const failure = await failureOf(() =>
+        recoverPrepareCoordinator(
+          recoveryInputOf(
+            fixture,
+            { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+            { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, entry] },
+          ),
+        ),
+      );
+      if (!(failure instanceof CoordinationError)) throw failure;
+      const label = `${JSON.stringify(entry).slice(0, 12)}:`;
+      expect(`${label} ${failure.code}`).toBe(`${label} coordination.identity-recovery.invalid-request`);
+      expect(failure.message).toContain("public session id");
+      expect(JSON.stringify({ message: failure.message, details: failure.details })).not.toContain(entry);
+      expect(failure.details).toMatchObject({ index: 1, length: entry.length });
+      expect(protectedBytes(fixture)).toEqual(before);
+      expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    }
+
+    // An empty entry is refused by the same field rule (it is not a session id
+    // at all), and a non-array stop assertion reports its SHAPE rather than the
+    // value it was given.
+    const blank = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: [FIXTURE_COORDINATOR_ID, ""] },
+        ),
+      ),
+    );
+    expect(blank.code).toBe("coordination.identity-recovery.invalid-request");
+    const notAList = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { stoppedSessionIds: "credential-like-secret" },
+        ),
+      ),
+    );
+    expect(notAList.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(JSON.stringify(notAList.details)).not.toContain("credential-like-secret");
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 60000);
+
+  test("prepare coordinator recovery never runs the JSON writer under an active execution authority", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const tokens = await recoveryViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    // A REAL active execution authority on a genuinely separate control root
+    // (its own Git repo and its own `.mstar`, so the store probe addresses it and
+    // not this fixture's root): the create-only empty-execution initializer needs
+    // an empty execution workspace, which is exactly what such a root is. The
+    // authority veto decides before any payload, token or path is inspected, so
+    // the fixture's reviewed tokens and recorded binding are never reached.
+    const activeRoot = realpathSync(mkdtempSync(join(tmpdir(), "mstar-recovery-active-")));
+    roots.push(activeRoot);
+    git(["init", "-q", "-b", "main"], activeRoot);
+    const activeHarness = join(activeRoot, ".mstar");
+    mkdirSync(activeHarness, { recursive: true });
+    const handle = await initializeStore({ harnessDir: activeHarness });
+    handle.close();
+    await initializeExecutionAuthority({ harnessDir: activeHarness });
+
+    const failure = await failureOf(() =>
+      recoverPrepareCoordinator(
+        recoveryInputOf(
+          fixture,
+          { snapshot: tokens.snapshotVersion, compass: tokens.compassVersion },
+          { cwd: activeRoot, harnessDir: activeHarness },
+        ),
+      ),
+    );
+    expect("code" in failure && typeof failure.code === "string" ? failure.code : "").toBe("execution.direct-write-refused");
+    // ... and it points at the existing DB recovery verb instead of aliasing it.
+    expect(failure.message).toContain("session recover");
+    expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 60000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * Catalog execution pin (state-projection contract §1)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Put a real catalog store behind the fixture's harness. The store context is
+ * the harness dir the scoped calls themselves resolve (`fixture.harness`), so
+ * the pin writer and the pin readers address the same database.
+ */
+async function storeBacked(fixture: Fixture, plans: string[] = [PLAN_ID]): Promise<StoreContext> {
+  const context: StoreContext = { harnessDir: fixture.harness };
+  const handle = await initializeStore(context);
+  handle.close();
+  for (const [index, planId] of plans.entries()) {
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: planId, title: `Plan ${planId}`, rootKind: "plans", relativePath: `${planId}.md` },
+      { operationId: `reg-${planId}-${index}`, actor: "project-manager" },
+    );
+  }
+  return context;
+}
+
+/**
+ * Read the fixture store once in THIS process before a child process reads it.
+ * Workflow-boundary difference, not an engine behavior: under `bun test` a
+ * child's first read-only open of a store whose last writer ran in the runner
+ * intermittently fails `store.corrupt` (driver `SQLITE_CANTOPEN`), while the
+ * same file opens fine from a plain-script parent (task-3 report §observations).
+ * A reader in this process leaves the file readable for the children below, so
+ * the child under test exercises the case it was written for and still opens
+ * the store query-only through the engine.
+ */
+async function sealStoreForReaders(fixture: Fixture): Promise<void> {
+  const handle = await openStore({ harnessDir: fixture.harness }, "read");
+  handle.close();
+}
+
+/**
+ * The refusal of a call expected to hit the frozen-input pin. The pin conflict
+ * is its own documented code (`catalog.execution-pin-conflict`, contract §1),
+ * not a coordination-surface error, so this narrows on the stable `code` field
+ * exactly as a CLI consumer does.
+ */
+async function pinConflictOf(run: () => Promise<unknown>): Promise<{ code?: string; message: string }> {
+  try {
+    await run();
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return { ...(typeof code === "string" ? { code } : {}), message: error instanceof Error ? error.message : String(error) };
+  }
+  throw new Error("expected the coordination call to fail");
+}
+
+/** The plan row as stored on disk (the frozen execution input). */
+function storedRow(fixture: Fixture, planId: string): Record<string, unknown> {
+  const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+  return snapshot.plans.find((row) => row.id === planId || row.plan_id === planId)!;
+}
+
+function pinOf(row: Record<string, unknown>): CatalogExecutionPin {
+  return (row.metadata as Record<string, unknown>).catalog_pin as CatalogExecutionPin;
+}
+
+describe("catalog pin — frozen prepare inputs (state-projection contract §1)", () => {
+  test("catalog pin: prepare records the pin, and a later catalog move leaves the prepared execution stable", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+
+    const row = storedRow(fixture, PLAN_ID);
+    const pin = pinOf(row);
+    const handle = await openStore(context, "read");
+    const storeId = handle.storeId;
+    handle.close();
+    expect(pin.store_id).toBe(storeId);
+    expect(pin.entity_revision).toBe(1);
+    expect(pin.document_hash).toBe(executionInputHash(row, PLAN_ID));
+
+    // The current catalog moves (a renamed title bumps the entity revision).
+    await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title",
+      actor: "project-manager",
+    });
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.pin).toEqual(pin);
+    expect(view.catalog_pin?.catalog_moved).toBe(true);
+    expect(view.catalog_pin?.current_revision).toBe(2);
+    expect(view.catalog_pin?.conflict).toBeNull();
+    // The frozen row itself never follows the catalog.
+    const after = storedRow(fixture, PLAN_ID);
+    expect(after.file).toBe(row.file);
+    expect(pinOf(after)).toEqual(pin);
+    // Execution may start on the pinned input.
+    const bound = await bindPlan(fixture, PLAN_ID);
+    expect(bound.outcome).toBe("claimed");
+  });
+
+  test("catalog pin: an authorized prepare records the new catalog revision, while the earlier pin stays frozen", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
+    await preparePlan(fixture, PLAN_ID);
+    const first = pinOf(storedRow(fixture, PLAN_ID));
+    // Both plan entities move on: their revisions (the pin's selection pointer)
+    // are now 2.
+    await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title-a",
+      actor: "project-manager",
+    });
+    await updateCatalogEntity(context, { kind: "plan", id: PEER_PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-title-b",
+      actor: "project-manager",
+    });
+
+    // The authorized prepare is the pin writer: a later prepare (another plan
+    // row of the same workflow) selects the CURRENT catalog revision.
+    await preparePlan(fixture, PEER_PLAN_ID);
+    const second = pinOf(storedRow(fixture, PEER_PLAN_ID));
+    expect(second.entity_revision).toBe(2);
+    expect(second.store_id).toBe(first.store_id);
+    expect(second.entity_revision).not.toBe(first.entity_revision);
+
+    // The already-prepared row keeps its own pin: a re-prepare of that row is
+    // refused (the frozen input is immutable), so the move cannot be applied
+    // retroactively.
+    const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
+    expect(refused).toBe("coordination.invalid-transition");
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.pin).toEqual(first);
+    expect(view.catalog_pin?.catalog_moved).toBe(true);
+    expect(view.catalog_pin?.conflict).toBeNull();
+  });
+
+  test("catalog pin: a frozen input edited after preparation refuses and is never overwritten", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const pinned = pinOf(storedRow(fixture, PLAN_ID));
+
+    // A generic snapshot metadata update (NOT an authorized prepare) re-points
+    // the row's document: the pin and the frozen input now disagree.
+    const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
+    snapshot.plans = snapshot.plans.map((row) =>
+      row.id === PLAN_ID || row.plan_id === PLAN_ID ? { ...row, file: `.mstar/plans/elsewhere.md` } : row,
+    );
+    writeJson(fixture.snapshotPath, snapshot);
+    const tamperedBytes = readFileSync(fixture.snapshotPath, "utf8");
+
+    const refusal = await pinConflictOf(() => bindPlan(fixture, PLAN_ID));
+    expect(refusal.code).toBe(EXECUTION_PIN_CONFLICT_CODE);
+    // Neither side is overwritten: the row keeps its edited bytes and the
+    // catalog keeps its own revision.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(tamperedBytes);
+    const handle = await openStore(context, "read");
+    const catalogRevision = handle.db.prepare("select catalog_revision from store_meta where id = 1").get() as {
+      catalog_revision: number;
+    };
+    handle.close();
+    expect(catalogRevision.catalog_revision).toBe(1);
+    expect(pinned.entity_revision).toBe(1);
+
+    // The view discloses the conflict instead of hiding it.
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.conflict).not.toBeNull();
+    expect(view.catalog_pin?.pin).toEqual(pinned);
+  });
+
+  test("catalog pin: progress reporting does not invalidate the pin", async () => {
+    const fixture = makeFixture();
+    await storeBacked(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const pinned = pinOf(storedRow(fixture, PLAN_ID));
+
+    const view = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      expectedRevision: view.revision,
+      operation: {
+        kind: "progress",
+        progress: { status: "InProgress", summary: "executing", evidence_paths: [] },
+      },
+    });
+
+    const after = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
+    expect(after.catalog_pin?.conflict).toBeNull();
+    expect(after.catalog_pin?.pin).toEqual(pinned);
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
+  });
+});
+
+describe("catalog registration gate — prepare/bind/selection refuse a pending workflow (state-projection contract §3)", () => {
+  /**
+   * Reconstructs the crash state a dispatch reader must refuse: a journal row
+   * for the fixture's root-visible workflow that is NOT committed. The gate
+   * only reads the pending row's workflow id, so a minimal delta suffices.
+   */
+  async function seedPendingRegistration(fixture: Fixture, context: StoreContext, phase: "prepared" | "execution-written"): Promise<void> {
+    const handle = await openStore(context, "write");
+    const at = new Date().toISOString();
+    handle.db
+      .prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+          "values ('op-pending-gate', 'gate-fixture', ?, ?, '{}', '{}', null, ?, ?)",
+      )
+      .run(phase, JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), at, at);
+    handle.close();
+  }
+
+  test("bind refuses a root-visible workflow whose registration is pending (prepared phase)", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await seedPendingRegistration(fixture, context, "prepared");
+    const refusal = await pinConflictOf(() =>
+      bindPlanSession({
+        coordinator: true,
+        workflowId: WORKFLOW_ID,
+        harnessDir: fixture.harness,
+        cwd: fixture.root,
+        sessionId: FIXTURE_COORDINATOR_ID,
+      }),
+    );
+    expect(refusal.code).toBe("catalog.registration-pending");
+    // The refusal is not a repair: nothing moved.
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "session-"))).toBe(false);
+  });
+
+  test("prepare refuses a root-visible workflow whose registration is pending (execution-written phase)", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    // The coordinator binds BEFORE the pending operation exists — the gate is
+    // evaluated per reader call, not amortized into a one-time check.
+    await ensureCoordinator(fixture);
+    await seedPendingRegistration(fixture, context, "execution-written");
+    const refusal = await pinConflictOf(() => preparePlan(fixture, PLAN_ID));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    // No prepared block was written.
+    const view = readJson(fixture.snapshotPath);
+    const row = (view.plans as Array<Record<string, unknown>>).find((r) => r.id === PLAN_ID)!;
+    expect(row.coordination).toBeUndefined();
+  });
+
+  test("the selection view refuses the same pending workflow", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await ensureCoordinator(fixture);
+    await seedPendingRegistration(fixture, context, "execution-written");
+    const refusal = await pinConflictOf(() => readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root));
+    expect(refusal.code).toBe("catalog.registration-pending");
+  });
+
+  test("a root-visible workflow with NO journal row keeps the pass-through", async () => {
+    const fixture = makeFixture();
+    await storeBacked(fixture);
+    // Active store, root-visible workflow, no catalog_operations row at all:
+    // prepare and bind succeed unchanged (pre-activation/registered-excluded
+    // workspaces are never retro-refused).
+    await preparePlan(fixture, PLAN_ID);
+    const bound = await bindPlan(fixture, PLAN_ID);
+    expect(bound.outcome).toBe("claimed");
   });
 });
