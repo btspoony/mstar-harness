@@ -53,6 +53,7 @@ export {
   replaceRoadmapAuthority,
   reviewRoadmapImport,
 } from "./roadmap-store.js";
+export { parseRoadmapContent } from "./roadmap-content.js";
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { DSH_LLM_FALLBACKS_VERSION, SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {

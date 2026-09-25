@@ -157,7 +157,7 @@ export async function listRoadmapAuthority(context: StoreContext): Promise<Roadm
 
 function validateContent(projectId: string, content: string): void {
   if (typeof content !== "string") throw new RoadmapError("roadmap.invalid-content", "Roadmap content must be a UTF-8 string.");
-  if (new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(content)) !== content) {
+  if (new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new TextEncoder().encode(content)) !== content) {
     throw new RoadmapError("roadmap.invalid-content", "Roadmap content contains invalid UTF-8 text.");
   }
   const result = validateRoadmapContent(content, "roadmap content");

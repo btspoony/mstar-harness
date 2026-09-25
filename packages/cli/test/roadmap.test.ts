@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -81,8 +82,19 @@ describe("roadmap CLI", () => {
     const receipt = data(applied);
     const shown = data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir));
     const shownRoadmap = object(shown.roadmap);
+    const derived = object(shown.content);
     expect(shownRoadmap.contentMarkdown).toBe(MARKDOWN);
     expect(shownRoadmap.revision).toBe(receipt.revision);
+    expect(derived).toMatchObject({
+      frontmatter: { project_id: "proj-roadmap", title: "Proof roadmap", status: "active" },
+      direction: expect.stringContaining("Keep the full source document."),
+      goals: [
+        { ordinal: 0, parentOrdinal: null, checked: false, title: "parent" },
+        { ordinal: 1, parentOrdinal: 0, checked: true, title: "nested goal" },
+      ],
+      milestones: ["M1"],
+      sections: expect.arrayContaining([expect.objectContaining({ level: 2, heading: "Explanation", body: expect.stringContaining("Visible prose not represented by summary fields.") })]),
+    });
 
     const markdown = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     expect(markdown.stdout).toBe(MARKDOWN);
@@ -96,7 +108,7 @@ describe("roadmap CLI", () => {
     });
   });
 
-  test("replacement uses observed revisions and rejects stale revisions and drifted reviewed sources", async () => {
+  test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
     const { dir } = await fixture("cas-");
     const source = join(dir, "roadmap.md");
     const reviewFile = join(dir, "review.json");
@@ -114,6 +126,20 @@ describe("roadmap CLI", () => {
       "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "create", "--json",
     ], dir);
     expect(created.status).toBe(0);
+    const bomMarkdown = `\uFEFF${MARKDOWN}`;
+    const bomFile = join(dir, "bom-roadmap.md");
+    writeFileSync(bomFile, bomMarkdown);
+    const replaced = run([
+      "roadmap", "replace", "--project", "proj-roadmap", "--file", bomFile,
+      "--expect-project", "1", "--expect-roadmap", "1", "--operation", "replace-bom", "--json",
+    ], dir);
+    expect(replaced).toMatchObject({ status: 0 });
+    const bomRead = object(data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir)).roadmap);
+    expect(bomRead.contentMarkdown).toBe(bomMarkdown);
+    expect(bomRead.contentHash).toBe(createHash("sha256").update(Buffer.from(bomMarkdown, "utf8")).digest("hex"));
+    const bomExport = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
+    expect(bomExport.stdout).toBe(bomMarkdown);
+
     const stale = run([
       "roadmap", "replace", "--project", "proj-roadmap", "--file", source,
       "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "stale", "--json",

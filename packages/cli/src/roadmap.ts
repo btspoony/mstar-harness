@@ -7,6 +7,7 @@ import {
   SddScriptError,
   StoreError,
   importRoadmapAuthority,
+  parseRoadmapContent,
   readRoadmapAuthority,
   replaceRoadmapAuthority,
   resolveProcessHarnessDir,
@@ -128,8 +129,11 @@ export function registerRoadmapCommands(program: Command): void {
     .addHelpText("after", [
       "",
       "Payload contracts:",
-      "  show.data = { projectId:string, projectRevision:integer, roadmap:RoadmapRecord|null }",
+      "  show.data = { projectId:string, projectRevision:integer, roadmap:RoadmapRecord|null, content:RoadmapContent|null }",
       "  RoadmapRecord = { projectId:string, revision:positive integer, contentHash:sha256 hex, updatedAt:string, contentMarkdown:string }",
+      "  RoadmapContent = { contentMarkdown:string, frontmatter:RoadmapFrontmatter, direction:string|null, goals:RoadmapGoal[], milestones:string[], sections:RoadmapSection[] }",
+      "  RoadmapFrontmatter = { project_id:string, title:string, status:'active'|'paused'|'completed', created_at:string, milestones?:string[]|null, residuals_ref?:string|null, [key:string]:unknown }",
+      "  RoadmapGoal = { ordinal:integer, parentOrdinal:integer|null, checked:boolean, title:string, body:string }; RoadmapSection = { level:0|1|2|3|4|5|6, heading:string, body:string }",
       "  preview.data = { version:1, projectId:string, expectedProjectRevision:integer, expectedRoadmapRevision:positive integer|'absent', sourcePath:absolute string, sourceHash:sha256 hex }",
       "  write.data = { projectId:string, revision:positive integer, contentHash:sha256 hex, storeRevision:integer }",
       "  JSON export.data = { version:1, projectId:string, revision:positive integer, contentHash:sha256 hex, contentMarkdown:string }",
@@ -143,7 +147,8 @@ export function registerRoadmapCommands(program: Command): void {
     .option("--json", "Machine-readable {ok:true,data} envelope")
     .action((options: RoadmapOptions) => run("show", options, async (json) => {
       const read = await readRoadmapAuthority(context(options), required(options, "project"));
-      success({ projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap }, json);
+      const content = read.roadmap === null ? null : parseRoadmapContent(read.roadmap.contentMarkdown);
+      success({ projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content }, json);
     }));
 
   roadmap.command("import")
@@ -180,7 +185,8 @@ export function registerRoadmapCommands(program: Command): void {
     .action((options: RoadmapOptions) => run("replace", options, async (json) => {
       let contentMarkdown: string;
       try {
-        contentMarkdown = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(absolute(required(options, "file"), "--file")));
+        // TextDecoder strips a leading UTF-8 BOM by default; retain it as document content.
+        contentMarkdown = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(absolute(required(options, "file"), "--file")));
       } catch (error) {
         if (error instanceof TypeError) throw new RoadmapError("roadmap.invalid-content", "Replacement file is not valid UTF-8.");
         throw error;
