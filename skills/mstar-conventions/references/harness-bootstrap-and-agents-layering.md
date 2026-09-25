@@ -13,7 +13,7 @@
 ## Bootstrap 最小步骤
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
-2. 初始化 `status.json`：从 **`mstar-artifacts/templates/status.empty.json`** 复制（**v2 形状**：`version: 2` + `workflows: []`）；residual canonical 见 **`mstar-artifacts` SKILL.md**；字段与生命周期见 **`mstar-artifacts/references/status-and-residuals.md`**。`projects/_default/`（`roadmap.md` + 空 `residuals.json`）由 **`scaffoldHarness` / `mstar harness scaffold` 预建**；其余 project id 与 `workflows/` 子目录由 engine writers 按需创建（**不**在 bootstrap 预建）。
+2. 初始化 `status.json`：从 **`mstar-artifacts/templates/status.empty.json`** 复制（**v2 形状**：`version: 2` + `workflows: []`）；residual canonical 见 **`mstar-artifacts` SKILL.md**；字段与生命周期见 **`mstar-artifacts/references/status-and-residuals.md`**。`scaffoldHarness` / `mstar harness scaffold` 建立 `projects/_default/` 目录并在可用的 catalog 中登记项目；不产出 `roadmap.md` 或新 register。遗留 Markdown 仅是 reviewed import 的候选；内容权威与读写规则 → `mstar-project-governance`。
 3. `sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
 5. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
@@ -21,7 +21,7 @@
 7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
 8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
-**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）一次性完成步骤 1–2（含 `projects/_default/`）、4 与 6 —— 调用 engine `scaffoldHarness`、追加 canonical gitignore snippet（已存在则跳过）、写最小 `{HARNESS_DIR}/AGENTS.md`（已存在则跳过）；幂等，重跑只补缺失件。步骤 3、5、7、8 仍按需手工。 scaffold 遵循 `.mstarc` 的 `harness_dir` / `project_dir` 覆盖（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
+**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）一次性完成步骤 1–2（含 `_default` 项目登记）、4 与 6 —— 调用 engine `scaffoldHarness`、追加 canonical gitignore snippet（已存在则跳过）、写最小 `{HARNESS_DIR}/AGENTS.md`（已存在则跳过）；幂等，重跑只补缺失件，不从既有 `roadmap.md` 自动创建内容权威。步骤 3、5、7、8 仍按需手工。scaffold 遵循 `.mstarc` 的 `harness_dir` / `project_dir` 覆盖（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
 
 **gitignore 归一化契约**：scaffold 对默认布局的根 `.gitignore` 仅做四类收敛——分区（用户针对性 `.mstar/…` 规则整体移到 fence 之后、相对顺序不变）、去重冗余宽规则、错位主宽规则前移至首个 canonical negation 之前（仅当跨越行全部为 scaffold 自有语义）、补齐 canonical negation 使其出现在最后一条宽规则之后。保证：① tracked 结果（AGENTS/knowledge/specs）不因错序 fence 被忽略；② 用户针对性规则的字面意图最后生效（`!x` 即 track `x`）。自我否定的规则序列（先 `!x` 后被宽规则压制）按字面意图解析；每次变更均在 scaffold 输出中报告。
 

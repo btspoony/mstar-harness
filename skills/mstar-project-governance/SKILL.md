@@ -1,6 +1,6 @@
 ---
 name: mstar-project-governance
-description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md` 编写约定（frontmatter schema + body 约定）与 `projects/<id>/residuals.json` register 生命周期（open → verified close in place、severity 枚举、provenance 字段）、`_default` 项目回退规则。写/审 roadmap、登记或关闭 residual、判断项目归属（含无项目流程的 `_default` fallback）、或对齐 roadmap/register 与 engine 校验时 Read。schema 事实与 `packages/engine/src/project.ts` 逐字一致；字段语义 SSOT → `mstar-artifacts`；路径符号 → `mstar-conventions`。
+description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写、reviewed Markdown import / export、revision-guarded replace 与 legacy `roadmap.md` transport；issue capture、迁移历史 residual register、`_default` 项目归属。写/审 roadmap、迭代收口更新项目目标、登记或关闭 issue、判断项目归属时 Read。CLI flags 以 `mstar roadmap --help` 为准；路径符号 → `mstar-conventions`。
 ---
 
 # mstar-project-governance（项目治理层：roadmap + register）
@@ -17,49 +17,21 @@ description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md
 
 | 文件 | 内容 |
 |------|------|
-| `roadmap.md` | 项目方向与目标（frontmatter machine-checkable + body 约定） |
+| `roadmap.md` | 遗留文件 / Markdown import、export 候选与历史；不是项目 roadmap 的实时读写权威 |
 | `residuals.json` | 项目 register（`entries[<plan-id>]` 数组）：**迁移历史** —— open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue（→ § Issue capture）；保留为契约 §7 迁移映射的来源 |
 | `references/` | 主题化研究语料（surveys / epic 备注 / 第三方 notes）。与 `{SPECS_DIR}`（冻结规格/ADR）、`{KNOWLEDGE_DIR}`（compound 结晶实现 SSOT）、`{ITERATION_DIR}`（迭代 package）**不同**；engine 只列文件名（`listProjectReferenceFiles`），**不做** markdown schema 校验 |
 
 - **`_default` 回退**：无项目流程（未指定 project id 的 plan / 单 plan / hotfix）落到 **`projects/_default/`**（engine `_DEFAULT_PROJECT`）。项目归属由 plan 的 project id 决定；未归属即 `_default`。
-- 本 skill 的 schema 事实与 **`packages/engine/src/project.ts`** 逐字一致（`validateRoadmap` / `validateProjectRegister` / `findingsCleanupGate`）；技能文本是语义 SSOT，engine 是确定性校验。
+- Roadmap 正文的唯一权威是 `{HARNESS_DIR}/store.db` 中按 catalog project id 唯一定位的 `project_roadmaps` 记录；catalog 存项目身份与路径，不把文件路径或 Markdown 当正文权威。下述 frontmatter 与 body 约定仍由 engine 内容校验，读写/迁移走 roadmap 域边界。
 
-## Roadmap 编写约定（`projects/<id>/roadmap.md`）
+## Roadmap 内容权威与编写约定
 
-### Frontmatter schema（machine-checkable；engine `validateRoadmap`）
+- **读**：先确定 catalog project id（未指定项目的流程使用 `_default`）；通过 roadmap 域读取该项目的内容、project revision、roadmap revision 与 hash。已知项目无 roadmap 记录是明确的 absence，不从 `projects/<id>/roadmap.md`、catalog 路径或其他文件静默回退；未知项目是拒绝，不当作空内容。
+- **首次导入**：`mstar roadmap import` 先对绝对路径 Markdown 候选做只读 preview，检查内容并保存含 source hash 与所见 project/roadmap revisions 的 review；仅在 review 后 apply，源字节漂移或 revision 冲突整单拒绝。遗留 v1 `roadmap.md` 是可 review 的 transport 候选，不是自动生效的 seed；不因 scaffold / migration 文件存在就让读者改读它。
+- **日常修改**：先读 store 的当前内容与版本；有记录时用 `mstar roadmap export` 导出**独立 Markdown 候选**，无记录时明确创建候选并预期 absent。编辑、复核候选后用 `mstar roadmap replace` 做整份正文的 revision-guarded replacement（同时校验 project 与 roadmap revision）。冲突重新读权威并复核候选，绝不覆盖 live `roadmap.md` 代替写入。export 也可输出 JSON transport，供跨环境 handoff；导出文件不随写入自动同步，也不反向成为权威。具体命令选项与 payload → built `mstar roadmap --help` 及各动词 `--help`，本 skill 不复写 flags。
+- **校验**：engine 统一校验 import/replace 的 Markdown 正文；frontmatter `project_id`（非空且与目标 catalog project 一致）、`title`（非空）、`status`（`active | paused | completed`）、`created_at`（`YYYY-MM-DD`）为 machine-checkable；`milestones` 可选非空字符串列表（空字段按缺省），`residuals_ref` 可选非空字符串（如迁移 register 文件名）。正文宜有 `## Direction` 与目标 task-list（`- [ ]` / `- [x]`）；缺少正文约定只报 warnings，不将 `ok` 翻成 false。目标与 residual 不自动关联；`residuals_ref` 只是迁移文件引用，不恢复 register 写权威。
 
-```markdown
----
-project_id: <id>
-title: <title>
-status: active | paused | completed
-created_at: YYYY-MM-DD
-milestones: [ ... ]        # optional
-residuals_ref: residuals.json  # optional
----
-
-# <title>
-
-## Direction
-...
-```
-
-| 字段 | 必填 | 规则 |
-|------|------|------|
-| `project_id` | 是 | 非空字符串 |
-| `title` | 是 | 非空字符串 |
-| `status` | 是 | 枚举 `active | paused | completed`（其他值 = violation） |
-| `created_at` | 是 | `YYYY-MM-DD` |
-| `milestones` | 否 | 非空字符串列表（空 `milestones:` 视同缺省） |
-| `residuals_ref` | 否 | 非空字符串（指向 register 文件，如 `residuals.json`） |
-
-### Body 约定（warnings only —— 永不翻转 `ok`）
-
-- 应有 **`## Direction`** 小节陈述项目方向。
-- 目标项以 markdown task-list 列出：`- [ ]` 计划/进行中，`- [x]` 已交付。
-- **无 residual→goal 自动链接**（本迭代 Non-Goal）：goal items 不携带 register id；residual 与目标的对齐是人工约定，不是硬门禁。
-
-> **Engine check (when available):** import `validateRoadmap` from `@mstar-harness/engine` in a host hook（无 CLI 命令）校验 `projects/<id>/roadmap.md`。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议。项目归属和路径解析 → `mstar-conventions`；执行态仍是 workflow snapshot；open findings → 下文 Issue capture。
 
 ## Issue capture（`{HARNESS_DIR}/store.db`）
 
@@ -112,8 +84,8 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 ## Workflow
 
-1. 确定项目归属：plan 的 project id（无 → `_default`）。
-2. 写/审 roadmap：frontmatter 过 `validateRoadmap`（schema violations 决定 `ok`；body 约定缺失只出 warnings）。
+1. 确定 catalog 项目归属（无项目 → `_default`）；从 roadmap 域读现有内容与版本，absence 不走文件 fallback。
+2. 首次文件导入走 preview → review → apply；后续编辑走独立候选 → revision-guarded replace；文件只作为 transport。校验 frontmatter 及 body warnings 按上文。
 3. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
 4. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
 5. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
@@ -127,7 +99,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 ## Evidence
 
-正确结果 = 可复核产物：`projects/<id>/roadmap.md` 过 `validateRoadmap`（0 violations；warnings 可接受）、register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
+正确结果 = roadmap 域读取当前内容或明确 absence；reviewed import / replacement 返回新 revision 与 hash（冲突拒绝，无 live 文件覆盖）；register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
 
 ## References
 
