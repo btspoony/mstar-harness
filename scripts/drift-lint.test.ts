@@ -281,7 +281,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 50 Engine-check callouts / 51 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 49 Engine-check callouts / 51 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
@@ -307,10 +307,9 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     const cliSrc = readFileSync(join(REPO_ROOT, "packages", "cli", "src", "index.ts"), "utf8");
     const { cliCommands, failures: cliFailures } = buildCliCommandInventory(cliSrc);
     expect(cliFailures).toEqual([]);
-    // Same inventory the executable guard runs: index.ts plus the registrars
-    // that live outside it (`plan`/`workflow` verb tables, `sdd evidence`,
-    // `issue`, `catalog`), so a citation of a real group verb is not a false
-    // red here.
+    // Same inventory as the executable guard: index.ts plus registrars
+    // outside it (`plan`/`workflow` verb tables, `sdd evidence`, `issue`,
+    // `catalog`, and `roadmap`), so real group verbs are not false reds.
     expect(supplementCliCommandInventory(cliCommands, REPO_ROOT).failures).toEqual([]);
     const engineExports = buildEngineExportNames(
       readFileSync(join(REPO_ROOT, "packages", "engine", "src", "index.ts"), "utf8"),
@@ -327,7 +326,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(50);
+    expect(calloutsChecked).toBe(49);
     expect(cliCitationsChecked).toBe(51);
     expect(failures).toEqual([]);
   });

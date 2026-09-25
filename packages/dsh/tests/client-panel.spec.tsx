@@ -569,7 +569,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
 
     const absent = await panelHtml(projectSource({ kind: 'absent', absentProjectIds: ['project-a'], diagnostic: null }), undefined, undefined, 'zh')
     expect(absent).toContain('data-mstar-roadmap="absent"')
-    expect(absent).toContain('路线图 authority 中没有项目记录')
+    expect(absent).toContain('以下项目没有路线图：project-a')
 
     const unavailable = await panelHtml(projectSource({ kind: 'unavailable', absentProjectIds: [], diagnostic: '<img src=x onerror=alert(1)>' }))
     expect(unavailable).toContain('data-mstar-roadmap="unavailable"')

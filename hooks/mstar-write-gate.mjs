@@ -4,152 +4,714 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync3, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
-import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative4, resolve } from "node:path";
+import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
+import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative4, resolve as resolve3 } from "node:path";
 
 // packages/engine/dist/engine.js
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname2, isAbsolute, join as join2, relative, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync15, mkdirSync as mkdirSync6, readdirSync as readdirSync8, readFileSync as readFileSync11, realpathSync as realpathSync5, statSync as statSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { execFileSync as execFileSync4 } from "node:child_process";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join18, relative as relative3, resolve as resolve13 } from "node:path";
-import { dirname as dirname8, join as join17, resolve as resolvePath, sep as sep7 } from "node:path";
+import { createRequire as createRequire2 } from "node:module";
+import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
+import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync3, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync5 } from "node:fs";
+import { createRequire as createRequire22 } from "node:module";
+import { join as join18, resolve as resolve13 } from "node:path";
 import {
-  existsSync as existsSync13,
+  existsSync as existsSync14,
   lstatSync as lstatSync2,
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync10,
-  readdirSync as readdirSync7,
+  mkdirSync as mkdirSync6,
+  readFileSync as readFileSync11,
+  readdirSync as readdirSync8,
   readlinkSync,
   statSync as statSync5,
-  unlinkSync as unlinkSync5,
+  unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename6, dirname as dirname7, isAbsolute as isAbsolute10, join as join16, relative as relative2, resolve as resolve12, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative3, resolve as resolve12, sep as sep7 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "node:path";
-import { dirname as dirname4, isAbsolute as isAbsolute3, join as join4, resolve as resolve4 } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative2, resolve as resolve8 } from "node:path";
+import { dirname as dirname2, join as join2, resolve as resolvePath, sep } from "node:path";
+import { readFileSync as readFileSync2, statSync } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { readFileSync as readFileSync8, readdirSync as readdirSync5 } from "node:fs";
-import { createHash as createHash2 } from "node:crypto";
-import { closeSync, existsSync as existsSync3, fstatSync, lstatSync, openSync, readSync, statSync as statSync3, unlinkSync as unlinkSync3 } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import { join as join5, resolve as resolve5 } from "node:path";
-import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname6, join as join9, resolve as resolve8, sep as sep3 } from "node:path";
-import { isAbsolute as isAbsolute6, join as join8, resolve as resolve7 } from "node:path";
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync12, realpathSync as realpathSync3 } from "node:fs";
+import { isAbsolute as isAbsolute6, join as join8, resolve as resolve6 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
 import { basename as basename10, dirname as dirname13, join as join21, relative as relative5, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash15 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync20 } from "node:fs";
+import { createHash as createHash16 } from "node:crypto";
+import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
 import { join as join32 } from "node:path";
-var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-function readJson(filePath) {
-  if (!existsSync(filePath))
-    return {};
-  const content = readFileSync(filePath, "utf8").trim();
-  if (!content)
-    return {};
-  try {
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
 }
-var MSTARC_FILE = ".mstarc";
-var MSTARC_SECTION = "config";
-var MSTARC_HARNESS_DIR_KEY = "harness_dir";
-var MSTARC_PLAN_DIR_KEY = "plan_dir";
-var MSTARC_SDD_DIR_KEY = "sdd_dir";
-var MSTARC_ITERATION_DIR_KEY = "iteration_dir";
-var MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
-var MSTARC_SPECS_DIR_KEY = "specs_dir";
-var MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
-var MSTARC_PROJECT_DIR_KEY = "project_dir";
-var MSTARC_ENFORCEMENT_KEY = "enforcement";
-var CONFIG_KEYS = {
-  [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
-  [MSTARC_PLAN_DIR_KEY]: "planDir",
-  [MSTARC_SDD_DIR_KEY]: "sddDir",
-  [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
-  [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
-  [MSTARC_SPECS_DIR_KEY]: "specsDir",
-  [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
-  [MSTARC_PROJECT_DIR_KEY]: "projectDir",
-  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
-  jev_mode: "jevMode",
-  jev_transport: "jevTransport"
+var __toESMCache_node;
+var __toESMCache_esm;
+var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
+  if (canCache)
+    cache.set(mod, to);
+  return to;
 };
-function parseMstarc(text) {
-  let section = null;
-  const out = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";"))
-      continue;
-    const header = /^\[([^\]]+)\]$/.exec(line);
-    if (header !== null) {
-      section = header[1].trim();
-      continue;
-    }
-    if (section !== MSTARC_SECTION)
-      continue;
-    const eq = line.indexOf("=");
-    if (eq === -1)
-      continue;
-    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
-    if (field === undefined)
-      continue;
-    const value = line.slice(eq + 1).trim();
-    if (value === "") {
-      if (field === "jevMode" || field === "jevTransport")
-        delete out[field];
-      continue;
-    }
-    if (field === "enforcement" && value !== "hard" && value !== "soft")
-      continue;
-    out[field] = value;
-  }
-  return out;
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
 }
-function isFile(file) {
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
+var __require2 = /* @__PURE__ */ createRequire2(import.meta.url);
+var require_ms = __commonJS(function(exports, module) {
+  var s = 1000;
+  var m = s * 60;
+  var h = m * 60;
+  var d = h * 24;
+  var w = d * 7;
+  var y = d * 365.25;
+  module.exports = function(val, options) {
+    options = options || {};
+    var type = typeof val;
+    if (type === "string" && val.length > 0) {
+      return parse(val);
+    } else if (type === "number" && isFinite(val)) {
+      return options.long ? fmtLong(val) : fmtShort(val);
+    }
+    throw new Error("val is not a non-empty string or a valid number. val=" + JSON.stringify(val));
+  };
+  function parse(str) {
+    str = String(str);
+    if (str.length > 100) {
+      return;
+    }
+    var match = /^(-?(?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)?$/i.exec(str);
+    if (!match) {
+      return;
+    }
+    var n = parseFloat(match[1]);
+    var type = (match[2] || "ms").toLowerCase();
+    switch (type) {
+      case "years":
+      case "year":
+      case "yrs":
+      case "yr":
+      case "y":
+        return n * y;
+      case "weeks":
+      case "week":
+      case "w":
+        return n * w;
+      case "days":
+      case "day":
+      case "d":
+        return n * d;
+      case "hours":
+      case "hour":
+      case "hrs":
+      case "hr":
+      case "h":
+        return n * h;
+      case "minutes":
+      case "minute":
+      case "mins":
+      case "min":
+      case "m":
+        return n * m;
+      case "seconds":
+      case "second":
+      case "secs":
+      case "sec":
+      case "s":
+        return n * s;
+      case "milliseconds":
+      case "millisecond":
+      case "msecs":
+      case "msec":
+      case "ms":
+        return n;
+      default:
+        return;
+    }
+  }
+  function fmtShort(ms) {
+    var msAbs = Math.abs(ms);
+    if (msAbs >= d) {
+      return Math.round(ms / d) + "d";
+    }
+    if (msAbs >= h) {
+      return Math.round(ms / h) + "h";
+    }
+    if (msAbs >= m) {
+      return Math.round(ms / m) + "m";
+    }
+    if (msAbs >= s) {
+      return Math.round(ms / s) + "s";
+    }
+    return ms + "ms";
+  }
+  function fmtLong(ms) {
+    var msAbs = Math.abs(ms);
+    if (msAbs >= d) {
+      return plural(ms, msAbs, d, "day");
+    }
+    if (msAbs >= h) {
+      return plural(ms, msAbs, h, "hour");
+    }
+    if (msAbs >= m) {
+      return plural(ms, msAbs, m, "minute");
+    }
+    if (msAbs >= s) {
+      return plural(ms, msAbs, s, "second");
+    }
+    return ms + " ms";
+  }
+  function plural(ms, msAbs, n, name) {
+    var isPlural = msAbs >= n * 1.5;
+    return Math.round(ms / n) + " " + name + (isPlural ? "s" : "");
+  }
+});
+var require_common = __commonJS(function(exports, module) {
+  function setup(env) {
+    createDebug.debug = createDebug;
+    createDebug.default = createDebug;
+    createDebug.coerce = coerce;
+    createDebug.disable = disable2;
+    createDebug.enable = enable;
+    createDebug.enabled = enabled;
+    createDebug.humanize = require_ms();
+    createDebug.destroy = destroy;
+    Object.keys(env).forEach((key) => {
+      createDebug[key] = env[key];
+    });
+    createDebug.names = [];
+    createDebug.skips = [];
+    createDebug.formatters = {};
+    function selectColor(namespace) {
+      let hash = 0;
+      for (let i = 0;i < namespace.length; i++) {
+        hash = (hash << 5) - hash + namespace.charCodeAt(i);
+        hash |= 0;
+      }
+      return createDebug.colors[Math.abs(hash) % createDebug.colors.length];
+    }
+    createDebug.selectColor = selectColor;
+    function createDebug(namespace) {
+      let prevTime;
+      let enableOverride = null;
+      let namespacesCache;
+      let enabledCache;
+      function debug(...args) {
+        if (!debug.enabled) {
+          return;
+        }
+        const self = debug;
+        const curr = Number(new Date);
+        const ms = curr - (prevTime || curr);
+        self.diff = ms;
+        self.prev = prevTime;
+        self.curr = curr;
+        prevTime = curr;
+        args[0] = createDebug.coerce(args[0]);
+        if (typeof args[0] !== "string") {
+          args.unshift("%O");
+        }
+        let index = 0;
+        args[0] = args[0].replace(/%([a-zA-Z%])/g, (match, format) => {
+          if (match === "%%") {
+            return "%";
+          }
+          index++;
+          const formatter = createDebug.formatters[format];
+          if (typeof formatter === "function") {
+            const val = args[index];
+            match = formatter.call(self, val);
+            args.splice(index, 1);
+            index--;
+          }
+          return match;
+        });
+        createDebug.formatArgs.call(self, args);
+        const logFn = self.log || createDebug.log;
+        logFn.apply(self, args);
+      }
+      debug.namespace = namespace;
+      debug.useColors = createDebug.useColors();
+      debug.color = createDebug.selectColor(namespace);
+      debug.extend = extend;
+      debug.destroy = createDebug.destroy;
+      Object.defineProperty(debug, "enabled", {
+        enumerable: true,
+        configurable: false,
+        get: () => {
+          if (enableOverride !== null) {
+            return enableOverride;
+          }
+          if (namespacesCache !== createDebug.namespaces) {
+            namespacesCache = createDebug.namespaces;
+            enabledCache = createDebug.enabled(namespace);
+          }
+          return enabledCache;
+        },
+        set: (v) => {
+          enableOverride = v;
+        }
+      });
+      if (typeof createDebug.init === "function") {
+        createDebug.init(debug);
+      }
+      return debug;
+    }
+    function extend(namespace, delimiter) {
+      const newDebug = createDebug(this.namespace + (typeof delimiter === "undefined" ? ":" : delimiter) + namespace);
+      newDebug.log = this.log;
+      return newDebug;
+    }
+    function enable(namespaces) {
+      createDebug.save(namespaces);
+      createDebug.namespaces = namespaces;
+      createDebug.names = [];
+      createDebug.skips = [];
+      const split = (typeof namespaces === "string" ? namespaces : "").trim().replace(/\s+/g, ",").split(",").filter(Boolean);
+      for (const ns of split) {
+        if (ns[0] === "-") {
+          createDebug.skips.push(ns.slice(1));
+        } else {
+          createDebug.names.push(ns);
+        }
+      }
+    }
+    function matchesTemplate(search, template) {
+      let searchIndex = 0;
+      let templateIndex = 0;
+      let starIndex = -1;
+      let matchIndex = 0;
+      while (searchIndex < search.length) {
+        if (templateIndex < template.length && (template[templateIndex] === search[searchIndex] || template[templateIndex] === "*")) {
+          if (template[templateIndex] === "*") {
+            starIndex = templateIndex;
+            matchIndex = searchIndex;
+            templateIndex++;
+          } else {
+            searchIndex++;
+            templateIndex++;
+          }
+        } else if (starIndex !== -1) {
+          templateIndex = starIndex + 1;
+          matchIndex++;
+          searchIndex = matchIndex;
+        } else {
+          return false;
+        }
+      }
+      while (templateIndex < template.length && template[templateIndex] === "*") {
+        templateIndex++;
+      }
+      return templateIndex === template.length;
+    }
+    function disable2() {
+      const namespaces = [
+        ...createDebug.names,
+        ...createDebug.skips.map((namespace) => "-" + namespace)
+      ].join(",");
+      createDebug.enable("");
+      return namespaces;
+    }
+    function enabled(name) {
+      for (const skip of createDebug.skips) {
+        if (matchesTemplate(name, skip)) {
+          return false;
+        }
+      }
+      for (const ns of createDebug.names) {
+        if (matchesTemplate(name, ns)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function coerce(val) {
+      if (val instanceof Error) {
+        return val.stack || val.message;
+      }
+      return val;
+    }
+    function destroy() {
+      console.warn("Instance method `debug.destroy()` is deprecated and no longer does anything. It will be removed in the next major version of `debug`.");
+    }
+    createDebug.enable(createDebug.load());
+    return createDebug;
+  }
+  module.exports = setup;
+});
+var require_browser = __commonJS(function(exports, module) {
+  exports.formatArgs = formatArgs;
+  exports.save = save;
+  exports.load = load;
+  exports.useColors = useColors;
+  exports.storage = localstorage();
+  exports.destroy = (() => {
+    let warned = false;
+    return () => {
+      if (!warned) {
+        warned = true;
+        console.warn("Instance method `debug.destroy()` is deprecated and no longer does anything. It will be removed in the next major version of `debug`.");
+      }
+    };
+  })();
+  exports.colors = [
+    "#0000CC",
+    "#0000FF",
+    "#0033CC",
+    "#0033FF",
+    "#0066CC",
+    "#0066FF",
+    "#0099CC",
+    "#0099FF",
+    "#00CC00",
+    "#00CC33",
+    "#00CC66",
+    "#00CC99",
+    "#00CCCC",
+    "#00CCFF",
+    "#3300CC",
+    "#3300FF",
+    "#3333CC",
+    "#3333FF",
+    "#3366CC",
+    "#3366FF",
+    "#3399CC",
+    "#3399FF",
+    "#33CC00",
+    "#33CC33",
+    "#33CC66",
+    "#33CC99",
+    "#33CCCC",
+    "#33CCFF",
+    "#6600CC",
+    "#6600FF",
+    "#6633CC",
+    "#6633FF",
+    "#66CC00",
+    "#66CC33",
+    "#9900CC",
+    "#9900FF",
+    "#9933CC",
+    "#9933FF",
+    "#99CC00",
+    "#99CC33",
+    "#CC0000",
+    "#CC0033",
+    "#CC0066",
+    "#CC0099",
+    "#CC00CC",
+    "#CC00FF",
+    "#CC3300",
+    "#CC3333",
+    "#CC3366",
+    "#CC3399",
+    "#CC33CC",
+    "#CC33FF",
+    "#CC6600",
+    "#CC6633",
+    "#CC9900",
+    "#CC9933",
+    "#CCCC00",
+    "#CCCC33",
+    "#FF0000",
+    "#FF0033",
+    "#FF0066",
+    "#FF0099",
+    "#FF00CC",
+    "#FF00FF",
+    "#FF3300",
+    "#FF3333",
+    "#FF3366",
+    "#FF3399",
+    "#FF33CC",
+    "#FF33FF",
+    "#FF6600",
+    "#FF6633",
+    "#FF9900",
+    "#FF9933",
+    "#FFCC00",
+    "#FFCC33"
+  ];
+  function useColors() {
+    if (typeof window !== "undefined" && window.process && (window.process.type === "renderer" || window.process.__nwjs)) {
+      return true;
+    }
+    if (typeof navigator !== "undefined" && navigator.userAgent && navigator.userAgent.toLowerCase().match(/(edge|trident)\/(\d+)/)) {
+      return false;
+    }
+    let m;
+    return typeof document !== "undefined" && document.documentElement && document.documentElement.style && document.documentElement.style.WebkitAppearance || typeof window !== "undefined" && window.console && (window.console.firebug || window.console.exception && window.console.table) || typeof navigator !== "undefined" && navigator.userAgent && (m = navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/)) && parseInt(m[1], 10) >= 31 || typeof navigator !== "undefined" && navigator.userAgent && navigator.userAgent.toLowerCase().match(/applewebkit\/(\d+)/);
+  }
+  function formatArgs(args) {
+    args[0] = (this.useColors ? "%c" : "") + this.namespace + (this.useColors ? " %c" : " ") + args[0] + (this.useColors ? "%c " : " ") + "+" + module.exports.humanize(this.diff);
+    if (!this.useColors) {
+      return;
+    }
+    const c = "color: " + this.color;
+    args.splice(1, 0, c, "color: inherit");
+    let index = 0;
+    let lastC = 0;
+    args[0].replace(/%[a-zA-Z%]/g, (match) => {
+      if (match === "%%") {
+        return;
+      }
+      index++;
+      if (match === "%c") {
+        lastC = index;
+      }
+    });
+    args.splice(lastC, 0, c);
+  }
+  exports.log = console.debug || console.log || (() => {});
+  function save(namespaces) {
+    try {
+      if (namespaces) {
+        exports.storage.setItem("debug", namespaces);
+      } else {
+        exports.storage.removeItem("debug");
+      }
+    } catch (error) {}
+  }
+  function load() {
+    let r;
+    try {
+      r = exports.storage.getItem("debug") || exports.storage.getItem("DEBUG");
+    } catch (error) {}
+    if (!r && typeof process !== "undefined" && "env" in process) {
+      r = process.env.DEBUG;
+    }
+    return r;
+  }
+  function localstorage() {
+    try {
+      return localStorage;
+    } catch (error) {}
+  }
+  module.exports = require_common()(exports);
+  var { formatters } = module.exports;
+  formatters.j = function(v) {
+    try {
+      return JSON.stringify(v);
+    } catch (error) {
+      return "[UnexpectedJSONParseError]: " + error.message;
+    }
+  };
+});
+var require_node = __commonJS(function(exports, module) {
+  var tty = __require2("tty");
+  var util = __require2("util");
+  exports.init = init;
+  exports.log = log;
+  exports.formatArgs = formatArgs;
+  exports.save = save;
+  exports.load = load;
+  exports.useColors = useColors;
+  exports.destroy = util.deprecate(() => {}, "Instance method `debug.destroy()` is deprecated and no longer does anything. It will be removed in the next major version of `debug`.");
+  exports.colors = [6, 2, 3, 4, 5, 1];
   try {
-    return statSync(file).isFile();
-  } catch {
-    return false;
+    const supportsColor = (() => {
+      throw new Error("Cannot require module " + "supports-color");
+    })();
+    if (supportsColor && (supportsColor.stderr || supportsColor).level >= 2) {
+      exports.colors = [
+        20,
+        21,
+        26,
+        27,
+        32,
+        33,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        56,
+        57,
+        62,
+        63,
+        68,
+        69,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        92,
+        93,
+        98,
+        99,
+        112,
+        113,
+        128,
+        129,
+        134,
+        135,
+        148,
+        149,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        169,
+        170,
+        171,
+        172,
+        173,
+        178,
+        179,
+        184,
+        185,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        214,
+        215,
+        220,
+        221
+      ];
+    }
+  } catch (error) {}
+  exports.inspectOpts = Object.keys(process.env).filter((key) => {
+    return /^debug_/i.test(key);
+  }).reduce((obj, key) => {
+    const prop = key.substring(6).toLowerCase().replace(/_([a-z])/g, (_, k) => {
+      return k.toUpperCase();
+    });
+    let val = process.env[key];
+    if (/^(yes|on|true|enabled)$/i.test(val)) {
+      val = true;
+    } else if (/^(no|off|false|disabled)$/i.test(val)) {
+      val = false;
+    } else if (val === "null") {
+      val = null;
+    } else {
+      val = Number(val);
+    }
+    obj[prop] = val;
+    return obj;
+  }, {});
+  function useColors() {
+    return "colors" in exports.inspectOpts ? Boolean(exports.inspectOpts.colors) : tty.isatty(process.stderr.fd);
   }
-}
-function findMstarc(startDir, boundary) {
-  let dir = resolve2(startDir);
-  const bound = resolve2(boundary);
-  for (;; ) {
-    if (!isAtOrBelow(dir, bound))
-      return null;
-    const candidate = join2(dir, MSTARC_FILE);
-    if (isFile(candidate))
-      return candidate;
-    if (dir === bound)
-      return null;
-    const parent = dirname2(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
+  function formatArgs(args) {
+    const { namespace: name, useColors: useColors2 } = this;
+    if (useColors2) {
+      const c = this.color;
+      const colorCode = "\x1B[3" + (c < 8 ? c : "8;5;" + c);
+      const prefix = `  ${colorCode};1m${name} \x1B[0m`;
+      args[0] = prefix + args[0].split(`
+`).join(`
+` + prefix);
+      args.push(colorCode + "m+" + module.exports.humanize(this.diff) + "\x1B[0m");
+    } else {
+      args[0] = getDate() + name + " " + args[0];
+    }
   }
-}
-function loadMstarc(startDir, boundary) {
-  const file = findMstarc(startDir, boundary);
-  if (file === null)
-    return null;
-  return { file, dir: dirname2(file), config: parseMstarc(readFileSync2(file, "utf8")) };
-}
-function isAtOrBelow(dir, root) {
-  const rel = relative(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
-}
+  function getDate() {
+    if (exports.inspectOpts.hideDate) {
+      return "";
+    }
+    return new Date().toISOString() + " ";
+  }
+  function log(...args) {
+    return process.stderr.write(util.formatWithOptions(exports.inspectOpts, ...args) + `
+`);
+  }
+  function save(namespaces) {
+    if (namespaces) {
+      process.env.DEBUG = namespaces;
+    } else {
+      delete process.env.DEBUG;
+    }
+  }
+  function load() {
+    return process.env.DEBUG;
+  }
+  function init(debug) {
+    debug.inspectOpts = {};
+    const keys = Object.keys(exports.inspectOpts);
+    for (let i = 0;i < keys.length; i++) {
+      debug.inspectOpts[keys[i]] = exports.inspectOpts[keys[i]];
+    }
+  }
+  module.exports = require_common()(exports);
+  var { formatters } = module.exports;
+  formatters.o = function(v) {
+    this.inspectOpts.colors = this.useColors;
+    return util.inspect(v, this.inspectOpts).split(`
+`).map((str) => str.trim()).join(" ");
+  };
+  formatters.O = function(v) {
+    this.inspectOpts.colors = this.useColors;
+    return util.inspect(v, this.inspectOpts);
+  };
+});
+var require_src = __commonJS(function(exports, module) {
+  if (typeof process === "undefined" || process.type === "renderer" || false || process.__nwjs) {
+    module.exports = require_browser();
+  } else {
+    module.exports = require_node();
+  }
+});
 
 class CoordinationError extends Error {
   code;
@@ -194,7 +756,7 @@ function validateBinding(value, what) {
   if (!isNonEmptyString(value.session_id)) {
     violations.push(invalid("coordination.row.binding-field", `${what}.session_id must be a non-empty string`));
   }
-  if (!isNonEmptyString(value.session_file) || !isAbsolute2(String(value.session_file))) {
+  if (!isNonEmptyString(value.session_file) || !isAbsolute(String(value.session_file))) {
     violations.push(invalid("coordination.row.binding-field", `${what}.session_file must be an absolute path`));
   }
   if (!isNonEmptyString(value.bound_at)) {
@@ -210,7 +772,7 @@ function validateEvidenceRef(value, what) {
   if (extra.length > 0) {
     violations.push(invalid("coordination.row.evidence-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
-  if (!isNonEmptyString(value.path) || !isAbsolute2(String(value.path))) {
+  if (!isNonEmptyString(value.path) || !isAbsolute(String(value.path))) {
     violations.push(invalid("coordination.row.evidence-field", `${what}.path must be an absolute path`));
   }
   if (!isNonEmptyString(value.sha256) || !SHA256_HEX.test(String(value.sha256))) {
@@ -306,7 +868,7 @@ function validatePlanHandoff(value, what = "coordination.handoff", route = "inte
       violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a timestamp`));
     }
   }
-  if (value.worktree_path !== undefined && (!isNonEmptyString(value.worktree_path) || !isAbsolute2(String(value.worktree_path)))) {
+  if (value.worktree_path !== undefined && (!isNonEmptyString(value.worktree_path) || !isAbsolute(String(value.worktree_path)))) {
     violations.push(invalid("coordination.row.handoff-field", `${what}.worktree_path must be an absolute path`));
   }
   if (value.qc !== undefined) {
@@ -426,7 +988,7 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
     }
   }
-  if (value.assignment_path !== undefined && !isAbsolute2(String(value.assignment_path))) {
+  if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
     violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_path must be absolute`));
   }
   for (const key of ["assignment_sha256", "plan_sha256"]) {
@@ -536,11 +1098,8966 @@ function validateSnapshotCoordination(value, what = "coordination") {
   }
   return violations;
 }
+var ROOT_KINDS = {
+  repository: true,
+  harness: true,
+  plans: true,
+  iterations: true,
+  specs: true,
+  knowledge: true,
+  projects: true
+};
+class CatalogError extends Error {
+  code;
+  constructor(code, message) {
+    super(`[${code}] ${message}`);
+    this.name = "CatalogError";
+    this.code = code;
+  }
+}
+function catalogRootDir(context, rootKind) {
+  if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
+    throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
+  }
+  const start = resolvePath(context.harnessDir);
+  const harness = resolveProcessHarnessDir(start) ?? start;
+  switch (rootKind) {
+    case "repository":
+      return dirname2(harness);
+    case "harness":
+      return harness;
+    case "plans":
+      return resolvePlanDir(harness);
+    case "iterations":
+      return resolveIterationDir(harness);
+    case "specs":
+      return resolveSpecsDir(harness, { create: false });
+    case "knowledge":
+      return resolveKnowledgeDir(harness);
+    case "projects":
+      return resolveProjectDir(harness, { harnessDir: harness });
+  }
+}
+var MSTARC_FILE = ".mstarc";
+var MSTARC_SECTION = "config";
+var MSTARC_HARNESS_DIR_KEY = "harness_dir";
+var MSTARC_PLAN_DIR_KEY = "plan_dir";
+var MSTARC_SDD_DIR_KEY = "sdd_dir";
+var MSTARC_ITERATION_DIR_KEY = "iteration_dir";
+var MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
+var MSTARC_SPECS_DIR_KEY = "specs_dir";
+var MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
+var MSTARC_PROJECT_DIR_KEY = "project_dir";
+var MSTARC_ENFORCEMENT_KEY = "enforcement";
+var CONFIG_KEYS = {
+  [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
+  [MSTARC_PLAN_DIR_KEY]: "planDir",
+  [MSTARC_SDD_DIR_KEY]: "sddDir",
+  [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
+  [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
+  [MSTARC_SPECS_DIR_KEY]: "specsDir",
+  [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
+  [MSTARC_PROJECT_DIR_KEY]: "projectDir",
+  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
+  jev_mode: "jevMode",
+  jev_transport: "jevTransport"
+};
+function parseMstarc(text) {
+  let section = null;
+  const out = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";"))
+      continue;
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header !== null) {
+      section = header[1].trim();
+      continue;
+    }
+    if (section !== MSTARC_SECTION)
+      continue;
+    const eq = line.indexOf("=");
+    if (eq === -1)
+      continue;
+    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
+    if (field === undefined)
+      continue;
+    const value = line.slice(eq + 1).trim();
+    if (value === "") {
+      if (field === "jevMode" || field === "jevTransport")
+        delete out[field];
+      continue;
+    }
+    if (field === "enforcement" && value !== "hard" && value !== "soft")
+      continue;
+    out[field] = value;
+  }
+  return out;
+}
+function isFile(file) {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function findMstarc(startDir, boundary) {
+  let dir = resolve2(startDir);
+  const bound = resolve2(boundary);
+  for (;; ) {
+    if (!isAtOrBelow(dir, bound))
+      return null;
+    const candidate = join3(dir, MSTARC_FILE);
+    if (isFile(candidate))
+      return candidate;
+    if (dir === bound)
+      return null;
+    const parent = dirname3(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function loadMstarc(startDir, boundary) {
+  const file = findMstarc(startDir, boundary);
+  if (file === null)
+    return null;
+  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+}
+function isAtOrBelow(dir, root) {
+  const rel = relative(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
+}
+var codesWarned = new Set;
+
+class AssertionError extends Error {
+  name = "Assertion";
+  code = "ERR_ASSERTION";
+  constructor(message, actual, expected, operator, generated) {
+    super(message);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+    this.actual = actual;
+    this.expected = expected;
+    this.generated = generated;
+    this.operator = operator;
+  }
+}
+function ok(value, message) {
+  assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
+}
+function assert(bool, actual, expected, operator, defaultMessage, userMessage) {
+  if (!bool) {
+    throw userMessage instanceof Error ? userMessage : new AssertionError(userMessage || defaultMessage, actual, expected, operator, !userMessage);
+  }
+}
+var emptyOptions = {};
+function toString(value, options) {
+  const settings = options || emptyOptions;
+  const includeImageAlt = typeof settings.includeImageAlt === "boolean" ? settings.includeImageAlt : true;
+  const includeHtml = typeof settings.includeHtml === "boolean" ? settings.includeHtml : true;
+  return one(value, includeImageAlt, includeHtml);
+}
+function one(value, includeImageAlt, includeHtml) {
+  if (node(value)) {
+    if ("value" in value) {
+      return value.type === "html" && !includeHtml ? "" : value.value;
+    }
+    if (includeImageAlt && "alt" in value && value.alt) {
+      return value.alt;
+    }
+    if ("children" in value) {
+      return all(value.children, includeImageAlt, includeHtml);
+    }
+  }
+  if (Array.isArray(value)) {
+    return all(value, includeImageAlt, includeHtml);
+  }
+  return "";
+}
+function all(values, includeImageAlt, includeHtml) {
+  const result = [];
+  let index = -1;
+  while (++index < values.length) {
+    result[index] = one(values[index], includeImageAlt, includeHtml);
+  }
+  return result.join("");
+}
+function node(value) {
+  return Boolean(value && typeof value === "object");
+}
+var characterEntities = {
+  AElig: "Æ",
+  AMP: "&",
+  Aacute: "Á",
+  Abreve: "Ă",
+  Acirc: "Â",
+  Acy: "А",
+  Afr: "\uD835\uDD04",
+  Agrave: "À",
+  Alpha: "Α",
+  Amacr: "Ā",
+  And: "⩓",
+  Aogon: "Ą",
+  Aopf: "\uD835\uDD38",
+  ApplyFunction: "⁡",
+  Aring: "Å",
+  Ascr: "\uD835\uDC9C",
+  Assign: "≔",
+  Atilde: "Ã",
+  Auml: "Ä",
+  Backslash: "∖",
+  Barv: "⫧",
+  Barwed: "⌆",
+  Bcy: "Б",
+  Because: "∵",
+  Bernoullis: "ℬ",
+  Beta: "Β",
+  Bfr: "\uD835\uDD05",
+  Bopf: "\uD835\uDD39",
+  Breve: "˘",
+  Bscr: "ℬ",
+  Bumpeq: "≎",
+  CHcy: "Ч",
+  COPY: "©",
+  Cacute: "Ć",
+  Cap: "⋒",
+  CapitalDifferentialD: "ⅅ",
+  Cayleys: "ℭ",
+  Ccaron: "Č",
+  Ccedil: "Ç",
+  Ccirc: "Ĉ",
+  Cconint: "∰",
+  Cdot: "Ċ",
+  Cedilla: "¸",
+  CenterDot: "·",
+  Cfr: "ℭ",
+  Chi: "Χ",
+  CircleDot: "⊙",
+  CircleMinus: "⊖",
+  CirclePlus: "⊕",
+  CircleTimes: "⊗",
+  ClockwiseContourIntegral: "∲",
+  CloseCurlyDoubleQuote: "”",
+  CloseCurlyQuote: "’",
+  Colon: "∷",
+  Colone: "⩴",
+  Congruent: "≡",
+  Conint: "∯",
+  ContourIntegral: "∮",
+  Copf: "ℂ",
+  Coproduct: "∐",
+  CounterClockwiseContourIntegral: "∳",
+  Cross: "⨯",
+  Cscr: "\uD835\uDC9E",
+  Cup: "⋓",
+  CupCap: "≍",
+  DD: "ⅅ",
+  DDotrahd: "⤑",
+  DJcy: "Ђ",
+  DScy: "Ѕ",
+  DZcy: "Џ",
+  Dagger: "‡",
+  Darr: "↡",
+  Dashv: "⫤",
+  Dcaron: "Ď",
+  Dcy: "Д",
+  Del: "∇",
+  Delta: "Δ",
+  Dfr: "\uD835\uDD07",
+  DiacriticalAcute: "´",
+  DiacriticalDot: "˙",
+  DiacriticalDoubleAcute: "˝",
+  DiacriticalGrave: "`",
+  DiacriticalTilde: "˜",
+  Diamond: "⋄",
+  DifferentialD: "ⅆ",
+  Dopf: "\uD835\uDD3B",
+  Dot: "¨",
+  DotDot: "⃜",
+  DotEqual: "≐",
+  DoubleContourIntegral: "∯",
+  DoubleDot: "¨",
+  DoubleDownArrow: "⇓",
+  DoubleLeftArrow: "⇐",
+  DoubleLeftRightArrow: "⇔",
+  DoubleLeftTee: "⫤",
+  DoubleLongLeftArrow: "⟸",
+  DoubleLongLeftRightArrow: "⟺",
+  DoubleLongRightArrow: "⟹",
+  DoubleRightArrow: "⇒",
+  DoubleRightTee: "⊨",
+  DoubleUpArrow: "⇑",
+  DoubleUpDownArrow: "⇕",
+  DoubleVerticalBar: "∥",
+  DownArrow: "↓",
+  DownArrowBar: "⤓",
+  DownArrowUpArrow: "⇵",
+  DownBreve: "̑",
+  DownLeftRightVector: "⥐",
+  DownLeftTeeVector: "⥞",
+  DownLeftVector: "↽",
+  DownLeftVectorBar: "⥖",
+  DownRightTeeVector: "⥟",
+  DownRightVector: "⇁",
+  DownRightVectorBar: "⥗",
+  DownTee: "⊤",
+  DownTeeArrow: "↧",
+  Downarrow: "⇓",
+  Dscr: "\uD835\uDC9F",
+  Dstrok: "Đ",
+  ENG: "Ŋ",
+  ETH: "Ð",
+  Eacute: "É",
+  Ecaron: "Ě",
+  Ecirc: "Ê",
+  Ecy: "Э",
+  Edot: "Ė",
+  Efr: "\uD835\uDD08",
+  Egrave: "È",
+  Element: "∈",
+  Emacr: "Ē",
+  EmptySmallSquare: "◻",
+  EmptyVerySmallSquare: "▫",
+  Eogon: "Ę",
+  Eopf: "\uD835\uDD3C",
+  Epsilon: "Ε",
+  Equal: "⩵",
+  EqualTilde: "≂",
+  Equilibrium: "⇌",
+  Escr: "ℰ",
+  Esim: "⩳",
+  Eta: "Η",
+  Euml: "Ë",
+  Exists: "∃",
+  ExponentialE: "ⅇ",
+  Fcy: "Ф",
+  Ffr: "\uD835\uDD09",
+  FilledSmallSquare: "◼",
+  FilledVerySmallSquare: "▪",
+  Fopf: "\uD835\uDD3D",
+  ForAll: "∀",
+  Fouriertrf: "ℱ",
+  Fscr: "ℱ",
+  GJcy: "Ѓ",
+  GT: ">",
+  Gamma: "Γ",
+  Gammad: "Ϝ",
+  Gbreve: "Ğ",
+  Gcedil: "Ģ",
+  Gcirc: "Ĝ",
+  Gcy: "Г",
+  Gdot: "Ġ",
+  Gfr: "\uD835\uDD0A",
+  Gg: "⋙",
+  Gopf: "\uD835\uDD3E",
+  GreaterEqual: "≥",
+  GreaterEqualLess: "⋛",
+  GreaterFullEqual: "≧",
+  GreaterGreater: "⪢",
+  GreaterLess: "≷",
+  GreaterSlantEqual: "⩾",
+  GreaterTilde: "≳",
+  Gscr: "\uD835\uDCA2",
+  Gt: "≫",
+  HARDcy: "Ъ",
+  Hacek: "ˇ",
+  Hat: "^",
+  Hcirc: "Ĥ",
+  Hfr: "ℌ",
+  HilbertSpace: "ℋ",
+  Hopf: "ℍ",
+  HorizontalLine: "─",
+  Hscr: "ℋ",
+  Hstrok: "Ħ",
+  HumpDownHump: "≎",
+  HumpEqual: "≏",
+  IEcy: "Е",
+  IJlig: "Ĳ",
+  IOcy: "Ё",
+  Iacute: "Í",
+  Icirc: "Î",
+  Icy: "И",
+  Idot: "İ",
+  Ifr: "ℑ",
+  Igrave: "Ì",
+  Im: "ℑ",
+  Imacr: "Ī",
+  ImaginaryI: "ⅈ",
+  Implies: "⇒",
+  Int: "∬",
+  Integral: "∫",
+  Intersection: "⋂",
+  InvisibleComma: "⁣",
+  InvisibleTimes: "⁢",
+  Iogon: "Į",
+  Iopf: "\uD835\uDD40",
+  Iota: "Ι",
+  Iscr: "ℐ",
+  Itilde: "Ĩ",
+  Iukcy: "І",
+  Iuml: "Ï",
+  Jcirc: "Ĵ",
+  Jcy: "Й",
+  Jfr: "\uD835\uDD0D",
+  Jopf: "\uD835\uDD41",
+  Jscr: "\uD835\uDCA5",
+  Jsercy: "Ј",
+  Jukcy: "Є",
+  KHcy: "Х",
+  KJcy: "Ќ",
+  Kappa: "Κ",
+  Kcedil: "Ķ",
+  Kcy: "К",
+  Kfr: "\uD835\uDD0E",
+  Kopf: "\uD835\uDD42",
+  Kscr: "\uD835\uDCA6",
+  LJcy: "Љ",
+  LT: "<",
+  Lacute: "Ĺ",
+  Lambda: "Λ",
+  Lang: "⟪",
+  Laplacetrf: "ℒ",
+  Larr: "↞",
+  Lcaron: "Ľ",
+  Lcedil: "Ļ",
+  Lcy: "Л",
+  LeftAngleBracket: "⟨",
+  LeftArrow: "←",
+  LeftArrowBar: "⇤",
+  LeftArrowRightArrow: "⇆",
+  LeftCeiling: "⌈",
+  LeftDoubleBracket: "⟦",
+  LeftDownTeeVector: "⥡",
+  LeftDownVector: "⇃",
+  LeftDownVectorBar: "⥙",
+  LeftFloor: "⌊",
+  LeftRightArrow: "↔",
+  LeftRightVector: "⥎",
+  LeftTee: "⊣",
+  LeftTeeArrow: "↤",
+  LeftTeeVector: "⥚",
+  LeftTriangle: "⊲",
+  LeftTriangleBar: "⧏",
+  LeftTriangleEqual: "⊴",
+  LeftUpDownVector: "⥑",
+  LeftUpTeeVector: "⥠",
+  LeftUpVector: "↿",
+  LeftUpVectorBar: "⥘",
+  LeftVector: "↼",
+  LeftVectorBar: "⥒",
+  Leftarrow: "⇐",
+  Leftrightarrow: "⇔",
+  LessEqualGreater: "⋚",
+  LessFullEqual: "≦",
+  LessGreater: "≶",
+  LessLess: "⪡",
+  LessSlantEqual: "⩽",
+  LessTilde: "≲",
+  Lfr: "\uD835\uDD0F",
+  Ll: "⋘",
+  Lleftarrow: "⇚",
+  Lmidot: "Ŀ",
+  LongLeftArrow: "⟵",
+  LongLeftRightArrow: "⟷",
+  LongRightArrow: "⟶",
+  Longleftarrow: "⟸",
+  Longleftrightarrow: "⟺",
+  Longrightarrow: "⟹",
+  Lopf: "\uD835\uDD43",
+  LowerLeftArrow: "↙",
+  LowerRightArrow: "↘",
+  Lscr: "ℒ",
+  Lsh: "↰",
+  Lstrok: "Ł",
+  Lt: "≪",
+  Map: "⤅",
+  Mcy: "М",
+  MediumSpace: " ",
+  Mellintrf: "ℳ",
+  Mfr: "\uD835\uDD10",
+  MinusPlus: "∓",
+  Mopf: "\uD835\uDD44",
+  Mscr: "ℳ",
+  Mu: "Μ",
+  NJcy: "Њ",
+  Nacute: "Ń",
+  Ncaron: "Ň",
+  Ncedil: "Ņ",
+  Ncy: "Н",
+  NegativeMediumSpace: "​",
+  NegativeThickSpace: "​",
+  NegativeThinSpace: "​",
+  NegativeVeryThinSpace: "​",
+  NestedGreaterGreater: "≫",
+  NestedLessLess: "≪",
+  NewLine: `
+`,
+  Nfr: "\uD835\uDD11",
+  NoBreak: "⁠",
+  NonBreakingSpace: " ",
+  Nopf: "ℕ",
+  Not: "⫬",
+  NotCongruent: "≢",
+  NotCupCap: "≭",
+  NotDoubleVerticalBar: "∦",
+  NotElement: "∉",
+  NotEqual: "≠",
+  NotEqualTilde: "≂̸",
+  NotExists: "∄",
+  NotGreater: "≯",
+  NotGreaterEqual: "≱",
+  NotGreaterFullEqual: "≧̸",
+  NotGreaterGreater: "≫̸",
+  NotGreaterLess: "≹",
+  NotGreaterSlantEqual: "⩾̸",
+  NotGreaterTilde: "≵",
+  NotHumpDownHump: "≎̸",
+  NotHumpEqual: "≏̸",
+  NotLeftTriangle: "⋪",
+  NotLeftTriangleBar: "⧏̸",
+  NotLeftTriangleEqual: "⋬",
+  NotLess: "≮",
+  NotLessEqual: "≰",
+  NotLessGreater: "≸",
+  NotLessLess: "≪̸",
+  NotLessSlantEqual: "⩽̸",
+  NotLessTilde: "≴",
+  NotNestedGreaterGreater: "⪢̸",
+  NotNestedLessLess: "⪡̸",
+  NotPrecedes: "⊀",
+  NotPrecedesEqual: "⪯̸",
+  NotPrecedesSlantEqual: "⋠",
+  NotReverseElement: "∌",
+  NotRightTriangle: "⋫",
+  NotRightTriangleBar: "⧐̸",
+  NotRightTriangleEqual: "⋭",
+  NotSquareSubset: "⊏̸",
+  NotSquareSubsetEqual: "⋢",
+  NotSquareSuperset: "⊐̸",
+  NotSquareSupersetEqual: "⋣",
+  NotSubset: "⊂⃒",
+  NotSubsetEqual: "⊈",
+  NotSucceeds: "⊁",
+  NotSucceedsEqual: "⪰̸",
+  NotSucceedsSlantEqual: "⋡",
+  NotSucceedsTilde: "≿̸",
+  NotSuperset: "⊃⃒",
+  NotSupersetEqual: "⊉",
+  NotTilde: "≁",
+  NotTildeEqual: "≄",
+  NotTildeFullEqual: "≇",
+  NotTildeTilde: "≉",
+  NotVerticalBar: "∤",
+  Nscr: "\uD835\uDCA9",
+  Ntilde: "Ñ",
+  Nu: "Ν",
+  OElig: "Œ",
+  Oacute: "Ó",
+  Ocirc: "Ô",
+  Ocy: "О",
+  Odblac: "Ő",
+  Ofr: "\uD835\uDD12",
+  Ograve: "Ò",
+  Omacr: "Ō",
+  Omega: "Ω",
+  Omicron: "Ο",
+  Oopf: "\uD835\uDD46",
+  OpenCurlyDoubleQuote: "“",
+  OpenCurlyQuote: "‘",
+  Or: "⩔",
+  Oscr: "\uD835\uDCAA",
+  Oslash: "Ø",
+  Otilde: "Õ",
+  Otimes: "⨷",
+  Ouml: "Ö",
+  OverBar: "‾",
+  OverBrace: "⏞",
+  OverBracket: "⎴",
+  OverParenthesis: "⏜",
+  PartialD: "∂",
+  Pcy: "П",
+  Pfr: "\uD835\uDD13",
+  Phi: "Φ",
+  Pi: "Π",
+  PlusMinus: "±",
+  Poincareplane: "ℌ",
+  Popf: "ℙ",
+  Pr: "⪻",
+  Precedes: "≺",
+  PrecedesEqual: "⪯",
+  PrecedesSlantEqual: "≼",
+  PrecedesTilde: "≾",
+  Prime: "″",
+  Product: "∏",
+  Proportion: "∷",
+  Proportional: "∝",
+  Pscr: "\uD835\uDCAB",
+  Psi: "Ψ",
+  QUOT: '"',
+  Qfr: "\uD835\uDD14",
+  Qopf: "ℚ",
+  Qscr: "\uD835\uDCAC",
+  RBarr: "⤐",
+  REG: "®",
+  Racute: "Ŕ",
+  Rang: "⟫",
+  Rarr: "↠",
+  Rarrtl: "⤖",
+  Rcaron: "Ř",
+  Rcedil: "Ŗ",
+  Rcy: "Р",
+  Re: "ℜ",
+  ReverseElement: "∋",
+  ReverseEquilibrium: "⇋",
+  ReverseUpEquilibrium: "⥯",
+  Rfr: "ℜ",
+  Rho: "Ρ",
+  RightAngleBracket: "⟩",
+  RightArrow: "→",
+  RightArrowBar: "⇥",
+  RightArrowLeftArrow: "⇄",
+  RightCeiling: "⌉",
+  RightDoubleBracket: "⟧",
+  RightDownTeeVector: "⥝",
+  RightDownVector: "⇂",
+  RightDownVectorBar: "⥕",
+  RightFloor: "⌋",
+  RightTee: "⊢",
+  RightTeeArrow: "↦",
+  RightTeeVector: "⥛",
+  RightTriangle: "⊳",
+  RightTriangleBar: "⧐",
+  RightTriangleEqual: "⊵",
+  RightUpDownVector: "⥏",
+  RightUpTeeVector: "⥜",
+  RightUpVector: "↾",
+  RightUpVectorBar: "⥔",
+  RightVector: "⇀",
+  RightVectorBar: "⥓",
+  Rightarrow: "⇒",
+  Ropf: "ℝ",
+  RoundImplies: "⥰",
+  Rrightarrow: "⇛",
+  Rscr: "ℛ",
+  Rsh: "↱",
+  RuleDelayed: "⧴",
+  SHCHcy: "Щ",
+  SHcy: "Ш",
+  SOFTcy: "Ь",
+  Sacute: "Ś",
+  Sc: "⪼",
+  Scaron: "Š",
+  Scedil: "Ş",
+  Scirc: "Ŝ",
+  Scy: "С",
+  Sfr: "\uD835\uDD16",
+  ShortDownArrow: "↓",
+  ShortLeftArrow: "←",
+  ShortRightArrow: "→",
+  ShortUpArrow: "↑",
+  Sigma: "Σ",
+  SmallCircle: "∘",
+  Sopf: "\uD835\uDD4A",
+  Sqrt: "√",
+  Square: "□",
+  SquareIntersection: "⊓",
+  SquareSubset: "⊏",
+  SquareSubsetEqual: "⊑",
+  SquareSuperset: "⊐",
+  SquareSupersetEqual: "⊒",
+  SquareUnion: "⊔",
+  Sscr: "\uD835\uDCAE",
+  Star: "⋆",
+  Sub: "⋐",
+  Subset: "⋐",
+  SubsetEqual: "⊆",
+  Succeeds: "≻",
+  SucceedsEqual: "⪰",
+  SucceedsSlantEqual: "≽",
+  SucceedsTilde: "≿",
+  SuchThat: "∋",
+  Sum: "∑",
+  Sup: "⋑",
+  Superset: "⊃",
+  SupersetEqual: "⊇",
+  Supset: "⋑",
+  THORN: "Þ",
+  TRADE: "™",
+  TSHcy: "Ћ",
+  TScy: "Ц",
+  Tab: "\t",
+  Tau: "Τ",
+  Tcaron: "Ť",
+  Tcedil: "Ţ",
+  Tcy: "Т",
+  Tfr: "\uD835\uDD17",
+  Therefore: "∴",
+  Theta: "Θ",
+  ThickSpace: "  ",
+  ThinSpace: " ",
+  Tilde: "∼",
+  TildeEqual: "≃",
+  TildeFullEqual: "≅",
+  TildeTilde: "≈",
+  Topf: "\uD835\uDD4B",
+  TripleDot: "⃛",
+  Tscr: "\uD835\uDCAF",
+  Tstrok: "Ŧ",
+  Uacute: "Ú",
+  Uarr: "↟",
+  Uarrocir: "⥉",
+  Ubrcy: "Ў",
+  Ubreve: "Ŭ",
+  Ucirc: "Û",
+  Ucy: "У",
+  Udblac: "Ű",
+  Ufr: "\uD835\uDD18",
+  Ugrave: "Ù",
+  Umacr: "Ū",
+  UnderBar: "_",
+  UnderBrace: "⏟",
+  UnderBracket: "⎵",
+  UnderParenthesis: "⏝",
+  Union: "⋃",
+  UnionPlus: "⊎",
+  Uogon: "Ų",
+  Uopf: "\uD835\uDD4C",
+  UpArrow: "↑",
+  UpArrowBar: "⤒",
+  UpArrowDownArrow: "⇅",
+  UpDownArrow: "↕",
+  UpEquilibrium: "⥮",
+  UpTee: "⊥",
+  UpTeeArrow: "↥",
+  Uparrow: "⇑",
+  Updownarrow: "⇕",
+  UpperLeftArrow: "↖",
+  UpperRightArrow: "↗",
+  Upsi: "ϒ",
+  Upsilon: "Υ",
+  Uring: "Ů",
+  Uscr: "\uD835\uDCB0",
+  Utilde: "Ũ",
+  Uuml: "Ü",
+  VDash: "⊫",
+  Vbar: "⫫",
+  Vcy: "В",
+  Vdash: "⊩",
+  Vdashl: "⫦",
+  Vee: "⋁",
+  Verbar: "‖",
+  Vert: "‖",
+  VerticalBar: "∣",
+  VerticalLine: "|",
+  VerticalSeparator: "❘",
+  VerticalTilde: "≀",
+  VeryThinSpace: " ",
+  Vfr: "\uD835\uDD19",
+  Vopf: "\uD835\uDD4D",
+  Vscr: "\uD835\uDCB1",
+  Vvdash: "⊪",
+  Wcirc: "Ŵ",
+  Wedge: "⋀",
+  Wfr: "\uD835\uDD1A",
+  Wopf: "\uD835\uDD4E",
+  Wscr: "\uD835\uDCB2",
+  Xfr: "\uD835\uDD1B",
+  Xi: "Ξ",
+  Xopf: "\uD835\uDD4F",
+  Xscr: "\uD835\uDCB3",
+  YAcy: "Я",
+  YIcy: "Ї",
+  YUcy: "Ю",
+  Yacute: "Ý",
+  Ycirc: "Ŷ",
+  Ycy: "Ы",
+  Yfr: "\uD835\uDD1C",
+  Yopf: "\uD835\uDD50",
+  Yscr: "\uD835\uDCB4",
+  Yuml: "Ÿ",
+  ZHcy: "Ж",
+  Zacute: "Ź",
+  Zcaron: "Ž",
+  Zcy: "З",
+  Zdot: "Ż",
+  ZeroWidthSpace: "​",
+  Zeta: "Ζ",
+  Zfr: "ℨ",
+  Zopf: "ℤ",
+  Zscr: "\uD835\uDCB5",
+  aacute: "á",
+  abreve: "ă",
+  ac: "∾",
+  acE: "∾̳",
+  acd: "∿",
+  acirc: "â",
+  acute: "´",
+  acy: "а",
+  aelig: "æ",
+  af: "⁡",
+  afr: "\uD835\uDD1E",
+  agrave: "à",
+  alefsym: "ℵ",
+  aleph: "ℵ",
+  alpha: "α",
+  amacr: "ā",
+  amalg: "⨿",
+  amp: "&",
+  and: "∧",
+  andand: "⩕",
+  andd: "⩜",
+  andslope: "⩘",
+  andv: "⩚",
+  ang: "∠",
+  ange: "⦤",
+  angle: "∠",
+  angmsd: "∡",
+  angmsdaa: "⦨",
+  angmsdab: "⦩",
+  angmsdac: "⦪",
+  angmsdad: "⦫",
+  angmsdae: "⦬",
+  angmsdaf: "⦭",
+  angmsdag: "⦮",
+  angmsdah: "⦯",
+  angrt: "∟",
+  angrtvb: "⊾",
+  angrtvbd: "⦝",
+  angsph: "∢",
+  angst: "Å",
+  angzarr: "⍼",
+  aogon: "ą",
+  aopf: "\uD835\uDD52",
+  ap: "≈",
+  apE: "⩰",
+  apacir: "⩯",
+  ape: "≊",
+  apid: "≋",
+  apos: "'",
+  approx: "≈",
+  approxeq: "≊",
+  aring: "å",
+  ascr: "\uD835\uDCB6",
+  ast: "*",
+  asymp: "≈",
+  asympeq: "≍",
+  atilde: "ã",
+  auml: "ä",
+  awconint: "∳",
+  awint: "⨑",
+  bNot: "⫭",
+  backcong: "≌",
+  backepsilon: "϶",
+  backprime: "‵",
+  backsim: "∽",
+  backsimeq: "⋍",
+  barvee: "⊽",
+  barwed: "⌅",
+  barwedge: "⌅",
+  bbrk: "⎵",
+  bbrktbrk: "⎶",
+  bcong: "≌",
+  bcy: "б",
+  bdquo: "„",
+  becaus: "∵",
+  because: "∵",
+  bemptyv: "⦰",
+  bepsi: "϶",
+  bernou: "ℬ",
+  beta: "β",
+  beth: "ℶ",
+  between: "≬",
+  bfr: "\uD835\uDD1F",
+  bigcap: "⋂",
+  bigcirc: "◯",
+  bigcup: "⋃",
+  bigodot: "⨀",
+  bigoplus: "⨁",
+  bigotimes: "⨂",
+  bigsqcup: "⨆",
+  bigstar: "★",
+  bigtriangledown: "▽",
+  bigtriangleup: "△",
+  biguplus: "⨄",
+  bigvee: "⋁",
+  bigwedge: "⋀",
+  bkarow: "⤍",
+  blacklozenge: "⧫",
+  blacksquare: "▪",
+  blacktriangle: "▴",
+  blacktriangledown: "▾",
+  blacktriangleleft: "◂",
+  blacktriangleright: "▸",
+  blank: "␣",
+  blk12: "▒",
+  blk14: "░",
+  blk34: "▓",
+  block: "█",
+  bne: "=⃥",
+  bnequiv: "≡⃥",
+  bnot: "⌐",
+  bopf: "\uD835\uDD53",
+  bot: "⊥",
+  bottom: "⊥",
+  bowtie: "⋈",
+  boxDL: "╗",
+  boxDR: "╔",
+  boxDl: "╖",
+  boxDr: "╓",
+  boxH: "═",
+  boxHD: "╦",
+  boxHU: "╩",
+  boxHd: "╤",
+  boxHu: "╧",
+  boxUL: "╝",
+  boxUR: "╚",
+  boxUl: "╜",
+  boxUr: "╙",
+  boxV: "║",
+  boxVH: "╬",
+  boxVL: "╣",
+  boxVR: "╠",
+  boxVh: "╫",
+  boxVl: "╢",
+  boxVr: "╟",
+  boxbox: "⧉",
+  boxdL: "╕",
+  boxdR: "╒",
+  boxdl: "┐",
+  boxdr: "┌",
+  boxh: "─",
+  boxhD: "╥",
+  boxhU: "╨",
+  boxhd: "┬",
+  boxhu: "┴",
+  boxminus: "⊟",
+  boxplus: "⊞",
+  boxtimes: "⊠",
+  boxuL: "╛",
+  boxuR: "╘",
+  boxul: "┘",
+  boxur: "└",
+  boxv: "│",
+  boxvH: "╪",
+  boxvL: "╡",
+  boxvR: "╞",
+  boxvh: "┼",
+  boxvl: "┤",
+  boxvr: "├",
+  bprime: "‵",
+  breve: "˘",
+  brvbar: "¦",
+  bscr: "\uD835\uDCB7",
+  bsemi: "⁏",
+  bsim: "∽",
+  bsime: "⋍",
+  bsol: "\\",
+  bsolb: "⧅",
+  bsolhsub: "⟈",
+  bull: "•",
+  bullet: "•",
+  bump: "≎",
+  bumpE: "⪮",
+  bumpe: "≏",
+  bumpeq: "≏",
+  cacute: "ć",
+  cap: "∩",
+  capand: "⩄",
+  capbrcup: "⩉",
+  capcap: "⩋",
+  capcup: "⩇",
+  capdot: "⩀",
+  caps: "∩︀",
+  caret: "⁁",
+  caron: "ˇ",
+  ccaps: "⩍",
+  ccaron: "č",
+  ccedil: "ç",
+  ccirc: "ĉ",
+  ccups: "⩌",
+  ccupssm: "⩐",
+  cdot: "ċ",
+  cedil: "¸",
+  cemptyv: "⦲",
+  cent: "¢",
+  centerdot: "·",
+  cfr: "\uD835\uDD20",
+  chcy: "ч",
+  check: "✓",
+  checkmark: "✓",
+  chi: "χ",
+  cir: "○",
+  cirE: "⧃",
+  circ: "ˆ",
+  circeq: "≗",
+  circlearrowleft: "↺",
+  circlearrowright: "↻",
+  circledR: "®",
+  circledS: "Ⓢ",
+  circledast: "⊛",
+  circledcirc: "⊚",
+  circleddash: "⊝",
+  cire: "≗",
+  cirfnint: "⨐",
+  cirmid: "⫯",
+  cirscir: "⧂",
+  clubs: "♣",
+  clubsuit: "♣",
+  colon: ":",
+  colone: "≔",
+  coloneq: "≔",
+  comma: ",",
+  commat: "@",
+  comp: "∁",
+  compfn: "∘",
+  complement: "∁",
+  complexes: "ℂ",
+  cong: "≅",
+  congdot: "⩭",
+  conint: "∮",
+  copf: "\uD835\uDD54",
+  coprod: "∐",
+  copy: "©",
+  copysr: "℗",
+  crarr: "↵",
+  cross: "✗",
+  cscr: "\uD835\uDCB8",
+  csub: "⫏",
+  csube: "⫑",
+  csup: "⫐",
+  csupe: "⫒",
+  ctdot: "⋯",
+  cudarrl: "⤸",
+  cudarrr: "⤵",
+  cuepr: "⋞",
+  cuesc: "⋟",
+  cularr: "↶",
+  cularrp: "⤽",
+  cup: "∪",
+  cupbrcap: "⩈",
+  cupcap: "⩆",
+  cupcup: "⩊",
+  cupdot: "⊍",
+  cupor: "⩅",
+  cups: "∪︀",
+  curarr: "↷",
+  curarrm: "⤼",
+  curlyeqprec: "⋞",
+  curlyeqsucc: "⋟",
+  curlyvee: "⋎",
+  curlywedge: "⋏",
+  curren: "¤",
+  curvearrowleft: "↶",
+  curvearrowright: "↷",
+  cuvee: "⋎",
+  cuwed: "⋏",
+  cwconint: "∲",
+  cwint: "∱",
+  cylcty: "⌭",
+  dArr: "⇓",
+  dHar: "⥥",
+  dagger: "†",
+  daleth: "ℸ",
+  darr: "↓",
+  dash: "‐",
+  dashv: "⊣",
+  dbkarow: "⤏",
+  dblac: "˝",
+  dcaron: "ď",
+  dcy: "д",
+  dd: "ⅆ",
+  ddagger: "‡",
+  ddarr: "⇊",
+  ddotseq: "⩷",
+  deg: "°",
+  delta: "δ",
+  demptyv: "⦱",
+  dfisht: "⥿",
+  dfr: "\uD835\uDD21",
+  dharl: "⇃",
+  dharr: "⇂",
+  diam: "⋄",
+  diamond: "⋄",
+  diamondsuit: "♦",
+  diams: "♦",
+  die: "¨",
+  digamma: "ϝ",
+  disin: "⋲",
+  div: "÷",
+  divide: "÷",
+  divideontimes: "⋇",
+  divonx: "⋇",
+  djcy: "ђ",
+  dlcorn: "⌞",
+  dlcrop: "⌍",
+  dollar: "$",
+  dopf: "\uD835\uDD55",
+  dot: "˙",
+  doteq: "≐",
+  doteqdot: "≑",
+  dotminus: "∸",
+  dotplus: "∔",
+  dotsquare: "⊡",
+  doublebarwedge: "⌆",
+  downarrow: "↓",
+  downdownarrows: "⇊",
+  downharpoonleft: "⇃",
+  downharpoonright: "⇂",
+  drbkarow: "⤐",
+  drcorn: "⌟",
+  drcrop: "⌌",
+  dscr: "\uD835\uDCB9",
+  dscy: "ѕ",
+  dsol: "⧶",
+  dstrok: "đ",
+  dtdot: "⋱",
+  dtri: "▿",
+  dtrif: "▾",
+  duarr: "⇵",
+  duhar: "⥯",
+  dwangle: "⦦",
+  dzcy: "џ",
+  dzigrarr: "⟿",
+  eDDot: "⩷",
+  eDot: "≑",
+  eacute: "é",
+  easter: "⩮",
+  ecaron: "ě",
+  ecir: "≖",
+  ecirc: "ê",
+  ecolon: "≕",
+  ecy: "э",
+  edot: "ė",
+  ee: "ⅇ",
+  efDot: "≒",
+  efr: "\uD835\uDD22",
+  eg: "⪚",
+  egrave: "è",
+  egs: "⪖",
+  egsdot: "⪘",
+  el: "⪙",
+  elinters: "⏧",
+  ell: "ℓ",
+  els: "⪕",
+  elsdot: "⪗",
+  emacr: "ē",
+  empty: "∅",
+  emptyset: "∅",
+  emptyv: "∅",
+  emsp13: " ",
+  emsp14: " ",
+  emsp: " ",
+  eng: "ŋ",
+  ensp: " ",
+  eogon: "ę",
+  eopf: "\uD835\uDD56",
+  epar: "⋕",
+  eparsl: "⧣",
+  eplus: "⩱",
+  epsi: "ε",
+  epsilon: "ε",
+  epsiv: "ϵ",
+  eqcirc: "≖",
+  eqcolon: "≕",
+  eqsim: "≂",
+  eqslantgtr: "⪖",
+  eqslantless: "⪕",
+  equals: "=",
+  equest: "≟",
+  equiv: "≡",
+  equivDD: "⩸",
+  eqvparsl: "⧥",
+  erDot: "≓",
+  erarr: "⥱",
+  escr: "ℯ",
+  esdot: "≐",
+  esim: "≂",
+  eta: "η",
+  eth: "ð",
+  euml: "ë",
+  euro: "€",
+  excl: "!",
+  exist: "∃",
+  expectation: "ℰ",
+  exponentiale: "ⅇ",
+  fallingdotseq: "≒",
+  fcy: "ф",
+  female: "♀",
+  ffilig: "ﬃ",
+  fflig: "ﬀ",
+  ffllig: "ﬄ",
+  ffr: "\uD835\uDD23",
+  filig: "ﬁ",
+  fjlig: "fj",
+  flat: "♭",
+  fllig: "ﬂ",
+  fltns: "▱",
+  fnof: "ƒ",
+  fopf: "\uD835\uDD57",
+  forall: "∀",
+  fork: "⋔",
+  forkv: "⫙",
+  fpartint: "⨍",
+  frac12: "½",
+  frac13: "⅓",
+  frac14: "¼",
+  frac15: "⅕",
+  frac16: "⅙",
+  frac18: "⅛",
+  frac23: "⅔",
+  frac25: "⅖",
+  frac34: "¾",
+  frac35: "⅗",
+  frac38: "⅜",
+  frac45: "⅘",
+  frac56: "⅚",
+  frac58: "⅝",
+  frac78: "⅞",
+  frasl: "⁄",
+  frown: "⌢",
+  fscr: "\uD835\uDCBB",
+  gE: "≧",
+  gEl: "⪌",
+  gacute: "ǵ",
+  gamma: "γ",
+  gammad: "ϝ",
+  gap: "⪆",
+  gbreve: "ğ",
+  gcirc: "ĝ",
+  gcy: "г",
+  gdot: "ġ",
+  ge: "≥",
+  gel: "⋛",
+  geq: "≥",
+  geqq: "≧",
+  geqslant: "⩾",
+  ges: "⩾",
+  gescc: "⪩",
+  gesdot: "⪀",
+  gesdoto: "⪂",
+  gesdotol: "⪄",
+  gesl: "⋛︀",
+  gesles: "⪔",
+  gfr: "\uD835\uDD24",
+  gg: "≫",
+  ggg: "⋙",
+  gimel: "ℷ",
+  gjcy: "ѓ",
+  gl: "≷",
+  glE: "⪒",
+  gla: "⪥",
+  glj: "⪤",
+  gnE: "≩",
+  gnap: "⪊",
+  gnapprox: "⪊",
+  gne: "⪈",
+  gneq: "⪈",
+  gneqq: "≩",
+  gnsim: "⋧",
+  gopf: "\uD835\uDD58",
+  grave: "`",
+  gscr: "ℊ",
+  gsim: "≳",
+  gsime: "⪎",
+  gsiml: "⪐",
+  gt: ">",
+  gtcc: "⪧",
+  gtcir: "⩺",
+  gtdot: "⋗",
+  gtlPar: "⦕",
+  gtquest: "⩼",
+  gtrapprox: "⪆",
+  gtrarr: "⥸",
+  gtrdot: "⋗",
+  gtreqless: "⋛",
+  gtreqqless: "⪌",
+  gtrless: "≷",
+  gtrsim: "≳",
+  gvertneqq: "≩︀",
+  gvnE: "≩︀",
+  hArr: "⇔",
+  hairsp: " ",
+  half: "½",
+  hamilt: "ℋ",
+  hardcy: "ъ",
+  harr: "↔",
+  harrcir: "⥈",
+  harrw: "↭",
+  hbar: "ℏ",
+  hcirc: "ĥ",
+  hearts: "♥",
+  heartsuit: "♥",
+  hellip: "…",
+  hercon: "⊹",
+  hfr: "\uD835\uDD25",
+  hksearow: "⤥",
+  hkswarow: "⤦",
+  hoarr: "⇿",
+  homtht: "∻",
+  hookleftarrow: "↩",
+  hookrightarrow: "↪",
+  hopf: "\uD835\uDD59",
+  horbar: "―",
+  hscr: "\uD835\uDCBD",
+  hslash: "ℏ",
+  hstrok: "ħ",
+  hybull: "⁃",
+  hyphen: "‐",
+  iacute: "í",
+  ic: "⁣",
+  icirc: "î",
+  icy: "и",
+  iecy: "е",
+  iexcl: "¡",
+  iff: "⇔",
+  ifr: "\uD835\uDD26",
+  igrave: "ì",
+  ii: "ⅈ",
+  iiiint: "⨌",
+  iiint: "∭",
+  iinfin: "⧜",
+  iiota: "℩",
+  ijlig: "ĳ",
+  imacr: "ī",
+  image: "ℑ",
+  imagline: "ℐ",
+  imagpart: "ℑ",
+  imath: "ı",
+  imof: "⊷",
+  imped: "Ƶ",
+  in: "∈",
+  incare: "℅",
+  infin: "∞",
+  infintie: "⧝",
+  inodot: "ı",
+  int: "∫",
+  intcal: "⊺",
+  integers: "ℤ",
+  intercal: "⊺",
+  intlarhk: "⨗",
+  intprod: "⨼",
+  iocy: "ё",
+  iogon: "į",
+  iopf: "\uD835\uDD5A",
+  iota: "ι",
+  iprod: "⨼",
+  iquest: "¿",
+  iscr: "\uD835\uDCBE",
+  isin: "∈",
+  isinE: "⋹",
+  isindot: "⋵",
+  isins: "⋴",
+  isinsv: "⋳",
+  isinv: "∈",
+  it: "⁢",
+  itilde: "ĩ",
+  iukcy: "і",
+  iuml: "ï",
+  jcirc: "ĵ",
+  jcy: "й",
+  jfr: "\uD835\uDD27",
+  jmath: "ȷ",
+  jopf: "\uD835\uDD5B",
+  jscr: "\uD835\uDCBF",
+  jsercy: "ј",
+  jukcy: "є",
+  kappa: "κ",
+  kappav: "ϰ",
+  kcedil: "ķ",
+  kcy: "к",
+  kfr: "\uD835\uDD28",
+  kgreen: "ĸ",
+  khcy: "х",
+  kjcy: "ќ",
+  kopf: "\uD835\uDD5C",
+  kscr: "\uD835\uDCC0",
+  lAarr: "⇚",
+  lArr: "⇐",
+  lAtail: "⤛",
+  lBarr: "⤎",
+  lE: "≦",
+  lEg: "⪋",
+  lHar: "⥢",
+  lacute: "ĺ",
+  laemptyv: "⦴",
+  lagran: "ℒ",
+  lambda: "λ",
+  lang: "⟨",
+  langd: "⦑",
+  langle: "⟨",
+  lap: "⪅",
+  laquo: "«",
+  larr: "←",
+  larrb: "⇤",
+  larrbfs: "⤟",
+  larrfs: "⤝",
+  larrhk: "↩",
+  larrlp: "↫",
+  larrpl: "⤹",
+  larrsim: "⥳",
+  larrtl: "↢",
+  lat: "⪫",
+  latail: "⤙",
+  late: "⪭",
+  lates: "⪭︀",
+  lbarr: "⤌",
+  lbbrk: "❲",
+  lbrace: "{",
+  lbrack: "[",
+  lbrke: "⦋",
+  lbrksld: "⦏",
+  lbrkslu: "⦍",
+  lcaron: "ľ",
+  lcedil: "ļ",
+  lceil: "⌈",
+  lcub: "{",
+  lcy: "л",
+  ldca: "⤶",
+  ldquo: "“",
+  ldquor: "„",
+  ldrdhar: "⥧",
+  ldrushar: "⥋",
+  ldsh: "↲",
+  le: "≤",
+  leftarrow: "←",
+  leftarrowtail: "↢",
+  leftharpoondown: "↽",
+  leftharpoonup: "↼",
+  leftleftarrows: "⇇",
+  leftrightarrow: "↔",
+  leftrightarrows: "⇆",
+  leftrightharpoons: "⇋",
+  leftrightsquigarrow: "↭",
+  leftthreetimes: "⋋",
+  leg: "⋚",
+  leq: "≤",
+  leqq: "≦",
+  leqslant: "⩽",
+  les: "⩽",
+  lescc: "⪨",
+  lesdot: "⩿",
+  lesdoto: "⪁",
+  lesdotor: "⪃",
+  lesg: "⋚︀",
+  lesges: "⪓",
+  lessapprox: "⪅",
+  lessdot: "⋖",
+  lesseqgtr: "⋚",
+  lesseqqgtr: "⪋",
+  lessgtr: "≶",
+  lesssim: "≲",
+  lfisht: "⥼",
+  lfloor: "⌊",
+  lfr: "\uD835\uDD29",
+  lg: "≶",
+  lgE: "⪑",
+  lhard: "↽",
+  lharu: "↼",
+  lharul: "⥪",
+  lhblk: "▄",
+  ljcy: "љ",
+  ll: "≪",
+  llarr: "⇇",
+  llcorner: "⌞",
+  llhard: "⥫",
+  lltri: "◺",
+  lmidot: "ŀ",
+  lmoust: "⎰",
+  lmoustache: "⎰",
+  lnE: "≨",
+  lnap: "⪉",
+  lnapprox: "⪉",
+  lne: "⪇",
+  lneq: "⪇",
+  lneqq: "≨",
+  lnsim: "⋦",
+  loang: "⟬",
+  loarr: "⇽",
+  lobrk: "⟦",
+  longleftarrow: "⟵",
+  longleftrightarrow: "⟷",
+  longmapsto: "⟼",
+  longrightarrow: "⟶",
+  looparrowleft: "↫",
+  looparrowright: "↬",
+  lopar: "⦅",
+  lopf: "\uD835\uDD5D",
+  loplus: "⨭",
+  lotimes: "⨴",
+  lowast: "∗",
+  lowbar: "_",
+  loz: "◊",
+  lozenge: "◊",
+  lozf: "⧫",
+  lpar: "(",
+  lparlt: "⦓",
+  lrarr: "⇆",
+  lrcorner: "⌟",
+  lrhar: "⇋",
+  lrhard: "⥭",
+  lrm: "‎",
+  lrtri: "⊿",
+  lsaquo: "‹",
+  lscr: "\uD835\uDCC1",
+  lsh: "↰",
+  lsim: "≲",
+  lsime: "⪍",
+  lsimg: "⪏",
+  lsqb: "[",
+  lsquo: "‘",
+  lsquor: "‚",
+  lstrok: "ł",
+  lt: "<",
+  ltcc: "⪦",
+  ltcir: "⩹",
+  ltdot: "⋖",
+  lthree: "⋋",
+  ltimes: "⋉",
+  ltlarr: "⥶",
+  ltquest: "⩻",
+  ltrPar: "⦖",
+  ltri: "◃",
+  ltrie: "⊴",
+  ltrif: "◂",
+  lurdshar: "⥊",
+  luruhar: "⥦",
+  lvertneqq: "≨︀",
+  lvnE: "≨︀",
+  mDDot: "∺",
+  macr: "¯",
+  male: "♂",
+  malt: "✠",
+  maltese: "✠",
+  map: "↦",
+  mapsto: "↦",
+  mapstodown: "↧",
+  mapstoleft: "↤",
+  mapstoup: "↥",
+  marker: "▮",
+  mcomma: "⨩",
+  mcy: "м",
+  mdash: "—",
+  measuredangle: "∡",
+  mfr: "\uD835\uDD2A",
+  mho: "℧",
+  micro: "µ",
+  mid: "∣",
+  midast: "*",
+  midcir: "⫰",
+  middot: "·",
+  minus: "−",
+  minusb: "⊟",
+  minusd: "∸",
+  minusdu: "⨪",
+  mlcp: "⫛",
+  mldr: "…",
+  mnplus: "∓",
+  models: "⊧",
+  mopf: "\uD835\uDD5E",
+  mp: "∓",
+  mscr: "\uD835\uDCC2",
+  mstpos: "∾",
+  mu: "μ",
+  multimap: "⊸",
+  mumap: "⊸",
+  nGg: "⋙̸",
+  nGt: "≫⃒",
+  nGtv: "≫̸",
+  nLeftarrow: "⇍",
+  nLeftrightarrow: "⇎",
+  nLl: "⋘̸",
+  nLt: "≪⃒",
+  nLtv: "≪̸",
+  nRightarrow: "⇏",
+  nVDash: "⊯",
+  nVdash: "⊮",
+  nabla: "∇",
+  nacute: "ń",
+  nang: "∠⃒",
+  nap: "≉",
+  napE: "⩰̸",
+  napid: "≋̸",
+  napos: "ŉ",
+  napprox: "≉",
+  natur: "♮",
+  natural: "♮",
+  naturals: "ℕ",
+  nbsp: " ",
+  nbump: "≎̸",
+  nbumpe: "≏̸",
+  ncap: "⩃",
+  ncaron: "ň",
+  ncedil: "ņ",
+  ncong: "≇",
+  ncongdot: "⩭̸",
+  ncup: "⩂",
+  ncy: "н",
+  ndash: "–",
+  ne: "≠",
+  neArr: "⇗",
+  nearhk: "⤤",
+  nearr: "↗",
+  nearrow: "↗",
+  nedot: "≐̸",
+  nequiv: "≢",
+  nesear: "⤨",
+  nesim: "≂̸",
+  nexist: "∄",
+  nexists: "∄",
+  nfr: "\uD835\uDD2B",
+  ngE: "≧̸",
+  nge: "≱",
+  ngeq: "≱",
+  ngeqq: "≧̸",
+  ngeqslant: "⩾̸",
+  nges: "⩾̸",
+  ngsim: "≵",
+  ngt: "≯",
+  ngtr: "≯",
+  nhArr: "⇎",
+  nharr: "↮",
+  nhpar: "⫲",
+  ni: "∋",
+  nis: "⋼",
+  nisd: "⋺",
+  niv: "∋",
+  njcy: "њ",
+  nlArr: "⇍",
+  nlE: "≦̸",
+  nlarr: "↚",
+  nldr: "‥",
+  nle: "≰",
+  nleftarrow: "↚",
+  nleftrightarrow: "↮",
+  nleq: "≰",
+  nleqq: "≦̸",
+  nleqslant: "⩽̸",
+  nles: "⩽̸",
+  nless: "≮",
+  nlsim: "≴",
+  nlt: "≮",
+  nltri: "⋪",
+  nltrie: "⋬",
+  nmid: "∤",
+  nopf: "\uD835\uDD5F",
+  not: "¬",
+  notin: "∉",
+  notinE: "⋹̸",
+  notindot: "⋵̸",
+  notinva: "∉",
+  notinvb: "⋷",
+  notinvc: "⋶",
+  notni: "∌",
+  notniva: "∌",
+  notnivb: "⋾",
+  notnivc: "⋽",
+  npar: "∦",
+  nparallel: "∦",
+  nparsl: "⫽⃥",
+  npart: "∂̸",
+  npolint: "⨔",
+  npr: "⊀",
+  nprcue: "⋠",
+  npre: "⪯̸",
+  nprec: "⊀",
+  npreceq: "⪯̸",
+  nrArr: "⇏",
+  nrarr: "↛",
+  nrarrc: "⤳̸",
+  nrarrw: "↝̸",
+  nrightarrow: "↛",
+  nrtri: "⋫",
+  nrtrie: "⋭",
+  nsc: "⊁",
+  nsccue: "⋡",
+  nsce: "⪰̸",
+  nscr: "\uD835\uDCC3",
+  nshortmid: "∤",
+  nshortparallel: "∦",
+  nsim: "≁",
+  nsime: "≄",
+  nsimeq: "≄",
+  nsmid: "∤",
+  nspar: "∦",
+  nsqsube: "⋢",
+  nsqsupe: "⋣",
+  nsub: "⊄",
+  nsubE: "⫅̸",
+  nsube: "⊈",
+  nsubset: "⊂⃒",
+  nsubseteq: "⊈",
+  nsubseteqq: "⫅̸",
+  nsucc: "⊁",
+  nsucceq: "⪰̸",
+  nsup: "⊅",
+  nsupE: "⫆̸",
+  nsupe: "⊉",
+  nsupset: "⊃⃒",
+  nsupseteq: "⊉",
+  nsupseteqq: "⫆̸",
+  ntgl: "≹",
+  ntilde: "ñ",
+  ntlg: "≸",
+  ntriangleleft: "⋪",
+  ntrianglelefteq: "⋬",
+  ntriangleright: "⋫",
+  ntrianglerighteq: "⋭",
+  nu: "ν",
+  num: "#",
+  numero: "№",
+  numsp: " ",
+  nvDash: "⊭",
+  nvHarr: "⤄",
+  nvap: "≍⃒",
+  nvdash: "⊬",
+  nvge: "≥⃒",
+  nvgt: ">⃒",
+  nvinfin: "⧞",
+  nvlArr: "⤂",
+  nvle: "≤⃒",
+  nvlt: "<⃒",
+  nvltrie: "⊴⃒",
+  nvrArr: "⤃",
+  nvrtrie: "⊵⃒",
+  nvsim: "∼⃒",
+  nwArr: "⇖",
+  nwarhk: "⤣",
+  nwarr: "↖",
+  nwarrow: "↖",
+  nwnear: "⤧",
+  oS: "Ⓢ",
+  oacute: "ó",
+  oast: "⊛",
+  ocir: "⊚",
+  ocirc: "ô",
+  ocy: "о",
+  odash: "⊝",
+  odblac: "ő",
+  odiv: "⨸",
+  odot: "⊙",
+  odsold: "⦼",
+  oelig: "œ",
+  ofcir: "⦿",
+  ofr: "\uD835\uDD2C",
+  ogon: "˛",
+  ograve: "ò",
+  ogt: "⧁",
+  ohbar: "⦵",
+  ohm: "Ω",
+  oint: "∮",
+  olarr: "↺",
+  olcir: "⦾",
+  olcross: "⦻",
+  oline: "‾",
+  olt: "⧀",
+  omacr: "ō",
+  omega: "ω",
+  omicron: "ο",
+  omid: "⦶",
+  ominus: "⊖",
+  oopf: "\uD835\uDD60",
+  opar: "⦷",
+  operp: "⦹",
+  oplus: "⊕",
+  or: "∨",
+  orarr: "↻",
+  ord: "⩝",
+  order: "ℴ",
+  orderof: "ℴ",
+  ordf: "ª",
+  ordm: "º",
+  origof: "⊶",
+  oror: "⩖",
+  orslope: "⩗",
+  orv: "⩛",
+  oscr: "ℴ",
+  oslash: "ø",
+  osol: "⊘",
+  otilde: "õ",
+  otimes: "⊗",
+  otimesas: "⨶",
+  ouml: "ö",
+  ovbar: "⌽",
+  par: "∥",
+  para: "¶",
+  parallel: "∥",
+  parsim: "⫳",
+  parsl: "⫽",
+  part: "∂",
+  pcy: "п",
+  percnt: "%",
+  period: ".",
+  permil: "‰",
+  perp: "⊥",
+  pertenk: "‱",
+  pfr: "\uD835\uDD2D",
+  phi: "φ",
+  phiv: "ϕ",
+  phmmat: "ℳ",
+  phone: "☎",
+  pi: "π",
+  pitchfork: "⋔",
+  piv: "ϖ",
+  planck: "ℏ",
+  planckh: "ℎ",
+  plankv: "ℏ",
+  plus: "+",
+  plusacir: "⨣",
+  plusb: "⊞",
+  pluscir: "⨢",
+  plusdo: "∔",
+  plusdu: "⨥",
+  pluse: "⩲",
+  plusmn: "±",
+  plussim: "⨦",
+  plustwo: "⨧",
+  pm: "±",
+  pointint: "⨕",
+  popf: "\uD835\uDD61",
+  pound: "£",
+  pr: "≺",
+  prE: "⪳",
+  prap: "⪷",
+  prcue: "≼",
+  pre: "⪯",
+  prec: "≺",
+  precapprox: "⪷",
+  preccurlyeq: "≼",
+  preceq: "⪯",
+  precnapprox: "⪹",
+  precneqq: "⪵",
+  precnsim: "⋨",
+  precsim: "≾",
+  prime: "′",
+  primes: "ℙ",
+  prnE: "⪵",
+  prnap: "⪹",
+  prnsim: "⋨",
+  prod: "∏",
+  profalar: "⌮",
+  profline: "⌒",
+  profsurf: "⌓",
+  prop: "∝",
+  propto: "∝",
+  prsim: "≾",
+  prurel: "⊰",
+  pscr: "\uD835\uDCC5",
+  psi: "ψ",
+  puncsp: " ",
+  qfr: "\uD835\uDD2E",
+  qint: "⨌",
+  qopf: "\uD835\uDD62",
+  qprime: "⁗",
+  qscr: "\uD835\uDCC6",
+  quaternions: "ℍ",
+  quatint: "⨖",
+  quest: "?",
+  questeq: "≟",
+  quot: '"',
+  rAarr: "⇛",
+  rArr: "⇒",
+  rAtail: "⤜",
+  rBarr: "⤏",
+  rHar: "⥤",
+  race: "∽̱",
+  racute: "ŕ",
+  radic: "√",
+  raemptyv: "⦳",
+  rang: "⟩",
+  rangd: "⦒",
+  range: "⦥",
+  rangle: "⟩",
+  raquo: "»",
+  rarr: "→",
+  rarrap: "⥵",
+  rarrb: "⇥",
+  rarrbfs: "⤠",
+  rarrc: "⤳",
+  rarrfs: "⤞",
+  rarrhk: "↪",
+  rarrlp: "↬",
+  rarrpl: "⥅",
+  rarrsim: "⥴",
+  rarrtl: "↣",
+  rarrw: "↝",
+  ratail: "⤚",
+  ratio: "∶",
+  rationals: "ℚ",
+  rbarr: "⤍",
+  rbbrk: "❳",
+  rbrace: "}",
+  rbrack: "]",
+  rbrke: "⦌",
+  rbrksld: "⦎",
+  rbrkslu: "⦐",
+  rcaron: "ř",
+  rcedil: "ŗ",
+  rceil: "⌉",
+  rcub: "}",
+  rcy: "р",
+  rdca: "⤷",
+  rdldhar: "⥩",
+  rdquo: "”",
+  rdquor: "”",
+  rdsh: "↳",
+  real: "ℜ",
+  realine: "ℛ",
+  realpart: "ℜ",
+  reals: "ℝ",
+  rect: "▭",
+  reg: "®",
+  rfisht: "⥽",
+  rfloor: "⌋",
+  rfr: "\uD835\uDD2F",
+  rhard: "⇁",
+  rharu: "⇀",
+  rharul: "⥬",
+  rho: "ρ",
+  rhov: "ϱ",
+  rightarrow: "→",
+  rightarrowtail: "↣",
+  rightharpoondown: "⇁",
+  rightharpoonup: "⇀",
+  rightleftarrows: "⇄",
+  rightleftharpoons: "⇌",
+  rightrightarrows: "⇉",
+  rightsquigarrow: "↝",
+  rightthreetimes: "⋌",
+  ring: "˚",
+  risingdotseq: "≓",
+  rlarr: "⇄",
+  rlhar: "⇌",
+  rlm: "‏",
+  rmoust: "⎱",
+  rmoustache: "⎱",
+  rnmid: "⫮",
+  roang: "⟭",
+  roarr: "⇾",
+  robrk: "⟧",
+  ropar: "⦆",
+  ropf: "\uD835\uDD63",
+  roplus: "⨮",
+  rotimes: "⨵",
+  rpar: ")",
+  rpargt: "⦔",
+  rppolint: "⨒",
+  rrarr: "⇉",
+  rsaquo: "›",
+  rscr: "\uD835\uDCC7",
+  rsh: "↱",
+  rsqb: "]",
+  rsquo: "’",
+  rsquor: "’",
+  rthree: "⋌",
+  rtimes: "⋊",
+  rtri: "▹",
+  rtrie: "⊵",
+  rtrif: "▸",
+  rtriltri: "⧎",
+  ruluhar: "⥨",
+  rx: "℞",
+  sacute: "ś",
+  sbquo: "‚",
+  sc: "≻",
+  scE: "⪴",
+  scap: "⪸",
+  scaron: "š",
+  sccue: "≽",
+  sce: "⪰",
+  scedil: "ş",
+  scirc: "ŝ",
+  scnE: "⪶",
+  scnap: "⪺",
+  scnsim: "⋩",
+  scpolint: "⨓",
+  scsim: "≿",
+  scy: "с",
+  sdot: "⋅",
+  sdotb: "⊡",
+  sdote: "⩦",
+  seArr: "⇘",
+  searhk: "⤥",
+  searr: "↘",
+  searrow: "↘",
+  sect: "§",
+  semi: ";",
+  seswar: "⤩",
+  setminus: "∖",
+  setmn: "∖",
+  sext: "✶",
+  sfr: "\uD835\uDD30",
+  sfrown: "⌢",
+  sharp: "♯",
+  shchcy: "щ",
+  shcy: "ш",
+  shortmid: "∣",
+  shortparallel: "∥",
+  shy: "­",
+  sigma: "σ",
+  sigmaf: "ς",
+  sigmav: "ς",
+  sim: "∼",
+  simdot: "⩪",
+  sime: "≃",
+  simeq: "≃",
+  simg: "⪞",
+  simgE: "⪠",
+  siml: "⪝",
+  simlE: "⪟",
+  simne: "≆",
+  simplus: "⨤",
+  simrarr: "⥲",
+  slarr: "←",
+  smallsetminus: "∖",
+  smashp: "⨳",
+  smeparsl: "⧤",
+  smid: "∣",
+  smile: "⌣",
+  smt: "⪪",
+  smte: "⪬",
+  smtes: "⪬︀",
+  softcy: "ь",
+  sol: "/",
+  solb: "⧄",
+  solbar: "⌿",
+  sopf: "\uD835\uDD64",
+  spades: "♠",
+  spadesuit: "♠",
+  spar: "∥",
+  sqcap: "⊓",
+  sqcaps: "⊓︀",
+  sqcup: "⊔",
+  sqcups: "⊔︀",
+  sqsub: "⊏",
+  sqsube: "⊑",
+  sqsubset: "⊏",
+  sqsubseteq: "⊑",
+  sqsup: "⊐",
+  sqsupe: "⊒",
+  sqsupset: "⊐",
+  sqsupseteq: "⊒",
+  squ: "□",
+  square: "□",
+  squarf: "▪",
+  squf: "▪",
+  srarr: "→",
+  sscr: "\uD835\uDCC8",
+  ssetmn: "∖",
+  ssmile: "⌣",
+  sstarf: "⋆",
+  star: "☆",
+  starf: "★",
+  straightepsilon: "ϵ",
+  straightphi: "ϕ",
+  strns: "¯",
+  sub: "⊂",
+  subE: "⫅",
+  subdot: "⪽",
+  sube: "⊆",
+  subedot: "⫃",
+  submult: "⫁",
+  subnE: "⫋",
+  subne: "⊊",
+  subplus: "⪿",
+  subrarr: "⥹",
+  subset: "⊂",
+  subseteq: "⊆",
+  subseteqq: "⫅",
+  subsetneq: "⊊",
+  subsetneqq: "⫋",
+  subsim: "⫇",
+  subsub: "⫕",
+  subsup: "⫓",
+  succ: "≻",
+  succapprox: "⪸",
+  succcurlyeq: "≽",
+  succeq: "⪰",
+  succnapprox: "⪺",
+  succneqq: "⪶",
+  succnsim: "⋩",
+  succsim: "≿",
+  sum: "∑",
+  sung: "♪",
+  sup1: "¹",
+  sup2: "²",
+  sup3: "³",
+  sup: "⊃",
+  supE: "⫆",
+  supdot: "⪾",
+  supdsub: "⫘",
+  supe: "⊇",
+  supedot: "⫄",
+  suphsol: "⟉",
+  suphsub: "⫗",
+  suplarr: "⥻",
+  supmult: "⫂",
+  supnE: "⫌",
+  supne: "⊋",
+  supplus: "⫀",
+  supset: "⊃",
+  supseteq: "⊇",
+  supseteqq: "⫆",
+  supsetneq: "⊋",
+  supsetneqq: "⫌",
+  supsim: "⫈",
+  supsub: "⫔",
+  supsup: "⫖",
+  swArr: "⇙",
+  swarhk: "⤦",
+  swarr: "↙",
+  swarrow: "↙",
+  swnwar: "⤪",
+  szlig: "ß",
+  target: "⌖",
+  tau: "τ",
+  tbrk: "⎴",
+  tcaron: "ť",
+  tcedil: "ţ",
+  tcy: "т",
+  tdot: "⃛",
+  telrec: "⌕",
+  tfr: "\uD835\uDD31",
+  there4: "∴",
+  therefore: "∴",
+  theta: "θ",
+  thetasym: "ϑ",
+  thetav: "ϑ",
+  thickapprox: "≈",
+  thicksim: "∼",
+  thinsp: " ",
+  thkap: "≈",
+  thksim: "∼",
+  thorn: "þ",
+  tilde: "˜",
+  times: "×",
+  timesb: "⊠",
+  timesbar: "⨱",
+  timesd: "⨰",
+  tint: "∭",
+  toea: "⤨",
+  top: "⊤",
+  topbot: "⌶",
+  topcir: "⫱",
+  topf: "\uD835\uDD65",
+  topfork: "⫚",
+  tosa: "⤩",
+  tprime: "‴",
+  trade: "™",
+  triangle: "▵",
+  triangledown: "▿",
+  triangleleft: "◃",
+  trianglelefteq: "⊴",
+  triangleq: "≜",
+  triangleright: "▹",
+  trianglerighteq: "⊵",
+  tridot: "◬",
+  trie: "≜",
+  triminus: "⨺",
+  triplus: "⨹",
+  trisb: "⧍",
+  tritime: "⨻",
+  trpezium: "⏢",
+  tscr: "\uD835\uDCC9",
+  tscy: "ц",
+  tshcy: "ћ",
+  tstrok: "ŧ",
+  twixt: "≬",
+  twoheadleftarrow: "↞",
+  twoheadrightarrow: "↠",
+  uArr: "⇑",
+  uHar: "⥣",
+  uacute: "ú",
+  uarr: "↑",
+  ubrcy: "ў",
+  ubreve: "ŭ",
+  ucirc: "û",
+  ucy: "у",
+  udarr: "⇅",
+  udblac: "ű",
+  udhar: "⥮",
+  ufisht: "⥾",
+  ufr: "\uD835\uDD32",
+  ugrave: "ù",
+  uharl: "↿",
+  uharr: "↾",
+  uhblk: "▀",
+  ulcorn: "⌜",
+  ulcorner: "⌜",
+  ulcrop: "⌏",
+  ultri: "◸",
+  umacr: "ū",
+  uml: "¨",
+  uogon: "ų",
+  uopf: "\uD835\uDD66",
+  uparrow: "↑",
+  updownarrow: "↕",
+  upharpoonleft: "↿",
+  upharpoonright: "↾",
+  uplus: "⊎",
+  upsi: "υ",
+  upsih: "ϒ",
+  upsilon: "υ",
+  upuparrows: "⇈",
+  urcorn: "⌝",
+  urcorner: "⌝",
+  urcrop: "⌎",
+  uring: "ů",
+  urtri: "◹",
+  uscr: "\uD835\uDCCA",
+  utdot: "⋰",
+  utilde: "ũ",
+  utri: "▵",
+  utrif: "▴",
+  uuarr: "⇈",
+  uuml: "ü",
+  uwangle: "⦧",
+  vArr: "⇕",
+  vBar: "⫨",
+  vBarv: "⫩",
+  vDash: "⊨",
+  vangrt: "⦜",
+  varepsilon: "ϵ",
+  varkappa: "ϰ",
+  varnothing: "∅",
+  varphi: "ϕ",
+  varpi: "ϖ",
+  varpropto: "∝",
+  varr: "↕",
+  varrho: "ϱ",
+  varsigma: "ς",
+  varsubsetneq: "⊊︀",
+  varsubsetneqq: "⫋︀",
+  varsupsetneq: "⊋︀",
+  varsupsetneqq: "⫌︀",
+  vartheta: "ϑ",
+  vartriangleleft: "⊲",
+  vartriangleright: "⊳",
+  vcy: "в",
+  vdash: "⊢",
+  vee: "∨",
+  veebar: "⊻",
+  veeeq: "≚",
+  vellip: "⋮",
+  verbar: "|",
+  vert: "|",
+  vfr: "\uD835\uDD33",
+  vltri: "⊲",
+  vnsub: "⊂⃒",
+  vnsup: "⊃⃒",
+  vopf: "\uD835\uDD67",
+  vprop: "∝",
+  vrtri: "⊳",
+  vscr: "\uD835\uDCCB",
+  vsubnE: "⫋︀",
+  vsubne: "⊊︀",
+  vsupnE: "⫌︀",
+  vsupne: "⊋︀",
+  vzigzag: "⦚",
+  wcirc: "ŵ",
+  wedbar: "⩟",
+  wedge: "∧",
+  wedgeq: "≙",
+  weierp: "℘",
+  wfr: "\uD835\uDD34",
+  wopf: "\uD835\uDD68",
+  wp: "℘",
+  wr: "≀",
+  wreath: "≀",
+  wscr: "\uD835\uDCCC",
+  xcap: "⋂",
+  xcirc: "◯",
+  xcup: "⋃",
+  xdtri: "▽",
+  xfr: "\uD835\uDD35",
+  xhArr: "⟺",
+  xharr: "⟷",
+  xi: "ξ",
+  xlArr: "⟸",
+  xlarr: "⟵",
+  xmap: "⟼",
+  xnis: "⋻",
+  xodot: "⨀",
+  xopf: "\uD835\uDD69",
+  xoplus: "⨁",
+  xotime: "⨂",
+  xrArr: "⟹",
+  xrarr: "⟶",
+  xscr: "\uD835\uDCCD",
+  xsqcup: "⨆",
+  xuplus: "⨄",
+  xutri: "△",
+  xvee: "⋁",
+  xwedge: "⋀",
+  yacute: "ý",
+  yacy: "я",
+  ycirc: "ŷ",
+  ycy: "ы",
+  yen: "¥",
+  yfr: "\uD835\uDD36",
+  yicy: "ї",
+  yopf: "\uD835\uDD6A",
+  yscr: "\uD835\uDCCE",
+  yucy: "ю",
+  yuml: "ÿ",
+  zacute: "ź",
+  zcaron: "ž",
+  zcy: "з",
+  zdot: "ż",
+  zeetrf: "ℨ",
+  zeta: "ζ",
+  zfr: "\uD835\uDD37",
+  zhcy: "ж",
+  zigrarr: "⇝",
+  zopf: "\uD835\uDD6B",
+  zscr: "\uD835\uDCCF",
+  zwj: "‍",
+  zwnj: "‌"
+};
+var own = {}.hasOwnProperty;
+function decodeNamedCharacterReference(value) {
+  return own.call(characterEntities, value) ? characterEntities[value] : false;
+}
+var codes = {
+  carriageReturn: -5,
+  lineFeed: -4,
+  carriageReturnLineFeed: -3,
+  horizontalTab: -2,
+  virtualSpace: -1,
+  eof: null,
+  nul: 0,
+  soh: 1,
+  stx: 2,
+  etx: 3,
+  eot: 4,
+  enq: 5,
+  ack: 6,
+  bel: 7,
+  bs: 8,
+  ht: 9,
+  lf: 10,
+  vt: 11,
+  ff: 12,
+  cr: 13,
+  so: 14,
+  si: 15,
+  dle: 16,
+  dc1: 17,
+  dc2: 18,
+  dc3: 19,
+  dc4: 20,
+  nak: 21,
+  syn: 22,
+  etb: 23,
+  can: 24,
+  em: 25,
+  sub: 26,
+  esc: 27,
+  fs: 28,
+  gs: 29,
+  rs: 30,
+  us: 31,
+  space: 32,
+  exclamationMark: 33,
+  quotationMark: 34,
+  numberSign: 35,
+  dollarSign: 36,
+  percentSign: 37,
+  ampersand: 38,
+  apostrophe: 39,
+  leftParenthesis: 40,
+  rightParenthesis: 41,
+  asterisk: 42,
+  plusSign: 43,
+  comma: 44,
+  dash: 45,
+  dot: 46,
+  slash: 47,
+  digit0: 48,
+  digit1: 49,
+  digit2: 50,
+  digit3: 51,
+  digit4: 52,
+  digit5: 53,
+  digit6: 54,
+  digit7: 55,
+  digit8: 56,
+  digit9: 57,
+  colon: 58,
+  semicolon: 59,
+  lessThan: 60,
+  equalsTo: 61,
+  greaterThan: 62,
+  questionMark: 63,
+  atSign: 64,
+  uppercaseA: 65,
+  uppercaseB: 66,
+  uppercaseC: 67,
+  uppercaseD: 68,
+  uppercaseE: 69,
+  uppercaseF: 70,
+  uppercaseG: 71,
+  uppercaseH: 72,
+  uppercaseI: 73,
+  uppercaseJ: 74,
+  uppercaseK: 75,
+  uppercaseL: 76,
+  uppercaseM: 77,
+  uppercaseN: 78,
+  uppercaseO: 79,
+  uppercaseP: 80,
+  uppercaseQ: 81,
+  uppercaseR: 82,
+  uppercaseS: 83,
+  uppercaseT: 84,
+  uppercaseU: 85,
+  uppercaseV: 86,
+  uppercaseW: 87,
+  uppercaseX: 88,
+  uppercaseY: 89,
+  uppercaseZ: 90,
+  leftSquareBracket: 91,
+  backslash: 92,
+  rightSquareBracket: 93,
+  caret: 94,
+  underscore: 95,
+  graveAccent: 96,
+  lowercaseA: 97,
+  lowercaseB: 98,
+  lowercaseC: 99,
+  lowercaseD: 100,
+  lowercaseE: 101,
+  lowercaseF: 102,
+  lowercaseG: 103,
+  lowercaseH: 104,
+  lowercaseI: 105,
+  lowercaseJ: 106,
+  lowercaseK: 107,
+  lowercaseL: 108,
+  lowercaseM: 109,
+  lowercaseN: 110,
+  lowercaseO: 111,
+  lowercaseP: 112,
+  lowercaseQ: 113,
+  lowercaseR: 114,
+  lowercaseS: 115,
+  lowercaseT: 116,
+  lowercaseU: 117,
+  lowercaseV: 118,
+  lowercaseW: 119,
+  lowercaseX: 120,
+  lowercaseY: 121,
+  lowercaseZ: 122,
+  leftCurlyBrace: 123,
+  verticalBar: 124,
+  rightCurlyBrace: 125,
+  tilde: 126,
+  del: 127,
+  byteOrderMarker: 65279,
+  replacementCharacter: 65533
+};
+var constants = {
+  attentionSideAfter: 2,
+  attentionSideBefore: 1,
+  atxHeadingOpeningFenceSizeMax: 6,
+  autolinkDomainSizeMax: 63,
+  autolinkSchemeSizeMax: 32,
+  cdataOpeningString: "CDATA[",
+  characterGroupPunctuation: 2,
+  characterGroupWhitespace: 1,
+  characterReferenceDecimalSizeMax: 7,
+  characterReferenceHexadecimalSizeMax: 6,
+  characterReferenceNamedSizeMax: 31,
+  codeFencedSequenceSizeMin: 3,
+  contentTypeContent: "content",
+  contentTypeDocument: "document",
+  contentTypeFlow: "flow",
+  contentTypeString: "string",
+  contentTypeText: "text",
+  hardBreakPrefixSizeMin: 2,
+  htmlBasic: 6,
+  htmlCdata: 5,
+  htmlComment: 2,
+  htmlComplete: 7,
+  htmlDeclaration: 4,
+  htmlInstruction: 3,
+  htmlRawSizeMax: 8,
+  htmlRaw: 1,
+  linkResourceDestinationBalanceMax: 32,
+  linkReferenceSizeMax: 999,
+  listItemValueSizeMax: 10,
+  numericBaseDecimal: 10,
+  numericBaseHexadecimal: 16,
+  tabSize: 4,
+  thematicBreakMarkerCountMin: 3,
+  v8MaxSafeChunkSize: 1e4
+};
+var types = {
+  data: "data",
+  whitespace: "whitespace",
+  lineEnding: "lineEnding",
+  lineEndingBlank: "lineEndingBlank",
+  linePrefix: "linePrefix",
+  lineSuffix: "lineSuffix",
+  atxHeading: "atxHeading",
+  atxHeadingSequence: "atxHeadingSequence",
+  atxHeadingText: "atxHeadingText",
+  autolink: "autolink",
+  autolinkEmail: "autolinkEmail",
+  autolinkMarker: "autolinkMarker",
+  autolinkProtocol: "autolinkProtocol",
+  characterEscape: "characterEscape",
+  characterEscapeValue: "characterEscapeValue",
+  characterReference: "characterReference",
+  characterReferenceMarker: "characterReferenceMarker",
+  characterReferenceMarkerNumeric: "characterReferenceMarkerNumeric",
+  characterReferenceMarkerHexadecimal: "characterReferenceMarkerHexadecimal",
+  characterReferenceValue: "characterReferenceValue",
+  codeFenced: "codeFenced",
+  codeFencedFence: "codeFencedFence",
+  codeFencedFenceSequence: "codeFencedFenceSequence",
+  codeFencedFenceInfo: "codeFencedFenceInfo",
+  codeFencedFenceMeta: "codeFencedFenceMeta",
+  codeFlowValue: "codeFlowValue",
+  codeIndented: "codeIndented",
+  codeText: "codeText",
+  codeTextData: "codeTextData",
+  codeTextPadding: "codeTextPadding",
+  codeTextSequence: "codeTextSequence",
+  content: "content",
+  definition: "definition",
+  definitionDestination: "definitionDestination",
+  definitionDestinationLiteral: "definitionDestinationLiteral",
+  definitionDestinationLiteralMarker: "definitionDestinationLiteralMarker",
+  definitionDestinationRaw: "definitionDestinationRaw",
+  definitionDestinationString: "definitionDestinationString",
+  definitionLabel: "definitionLabel",
+  definitionLabelMarker: "definitionLabelMarker",
+  definitionLabelString: "definitionLabelString",
+  definitionMarker: "definitionMarker",
+  definitionTitle: "definitionTitle",
+  definitionTitleMarker: "definitionTitleMarker",
+  definitionTitleString: "definitionTitleString",
+  emphasis: "emphasis",
+  emphasisSequence: "emphasisSequence",
+  emphasisText: "emphasisText",
+  escapeMarker: "escapeMarker",
+  hardBreakEscape: "hardBreakEscape",
+  hardBreakTrailing: "hardBreakTrailing",
+  htmlFlow: "htmlFlow",
+  htmlFlowData: "htmlFlowData",
+  htmlText: "htmlText",
+  htmlTextData: "htmlTextData",
+  image: "image",
+  label: "label",
+  labelText: "labelText",
+  labelLink: "labelLink",
+  labelImage: "labelImage",
+  labelMarker: "labelMarker",
+  labelImageMarker: "labelImageMarker",
+  labelEnd: "labelEnd",
+  link: "link",
+  paragraph: "paragraph",
+  reference: "reference",
+  referenceMarker: "referenceMarker",
+  referenceString: "referenceString",
+  resource: "resource",
+  resourceDestination: "resourceDestination",
+  resourceDestinationLiteral: "resourceDestinationLiteral",
+  resourceDestinationLiteralMarker: "resourceDestinationLiteralMarker",
+  resourceDestinationRaw: "resourceDestinationRaw",
+  resourceDestinationString: "resourceDestinationString",
+  resourceMarker: "resourceMarker",
+  resourceTitle: "resourceTitle",
+  resourceTitleMarker: "resourceTitleMarker",
+  resourceTitleString: "resourceTitleString",
+  setextHeading: "setextHeading",
+  setextHeadingText: "setextHeadingText",
+  setextHeadingLine: "setextHeadingLine",
+  setextHeadingLineSequence: "setextHeadingLineSequence",
+  strong: "strong",
+  strongSequence: "strongSequence",
+  strongText: "strongText",
+  thematicBreak: "thematicBreak",
+  thematicBreakSequence: "thematicBreakSequence",
+  blockQuote: "blockQuote",
+  blockQuotePrefix: "blockQuotePrefix",
+  blockQuoteMarker: "blockQuoteMarker",
+  blockQuotePrefixWhitespace: "blockQuotePrefixWhitespace",
+  listOrdered: "listOrdered",
+  listUnordered: "listUnordered",
+  listItemIndent: "listItemIndent",
+  listItemMarker: "listItemMarker",
+  listItemPrefix: "listItemPrefix",
+  listItemPrefixWhitespace: "listItemPrefixWhitespace",
+  listItemValue: "listItemValue",
+  chunkDocument: "chunkDocument",
+  chunkContent: "chunkContent",
+  chunkFlow: "chunkFlow",
+  chunkText: "chunkText",
+  chunkString: "chunkString"
+};
+var values = {
+  ht: "\t",
+  lf: `
+`,
+  cr: "\r",
+  space: " ",
+  exclamationMark: "!",
+  quotationMark: '"',
+  numberSign: "#",
+  dollarSign: "$",
+  percentSign: "%",
+  ampersand: "&",
+  apostrophe: "'",
+  leftParenthesis: "(",
+  rightParenthesis: ")",
+  asterisk: "*",
+  plusSign: "+",
+  comma: ",",
+  dash: "-",
+  dot: ".",
+  slash: "/",
+  digit0: "0",
+  digit1: "1",
+  digit2: "2",
+  digit3: "3",
+  digit4: "4",
+  digit5: "5",
+  digit6: "6",
+  digit7: "7",
+  digit8: "8",
+  digit9: "9",
+  colon: ":",
+  semicolon: ";",
+  lessThan: "<",
+  equalsTo: "=",
+  greaterThan: ">",
+  questionMark: "?",
+  atSign: "@",
+  uppercaseA: "A",
+  uppercaseB: "B",
+  uppercaseC: "C",
+  uppercaseD: "D",
+  uppercaseE: "E",
+  uppercaseF: "F",
+  uppercaseG: "G",
+  uppercaseH: "H",
+  uppercaseI: "I",
+  uppercaseJ: "J",
+  uppercaseK: "K",
+  uppercaseL: "L",
+  uppercaseM: "M",
+  uppercaseN: "N",
+  uppercaseO: "O",
+  uppercaseP: "P",
+  uppercaseQ: "Q",
+  uppercaseR: "R",
+  uppercaseS: "S",
+  uppercaseT: "T",
+  uppercaseU: "U",
+  uppercaseV: "V",
+  uppercaseW: "W",
+  uppercaseX: "X",
+  uppercaseY: "Y",
+  uppercaseZ: "Z",
+  leftSquareBracket: "[",
+  backslash: "\\",
+  rightSquareBracket: "]",
+  caret: "^",
+  underscore: "_",
+  graveAccent: "`",
+  lowercaseA: "a",
+  lowercaseB: "b",
+  lowercaseC: "c",
+  lowercaseD: "d",
+  lowercaseE: "e",
+  lowercaseF: "f",
+  lowercaseG: "g",
+  lowercaseH: "h",
+  lowercaseI: "i",
+  lowercaseJ: "j",
+  lowercaseK: "k",
+  lowercaseL: "l",
+  lowercaseM: "m",
+  lowercaseN: "n",
+  lowercaseO: "o",
+  lowercaseP: "p",
+  lowercaseQ: "q",
+  lowercaseR: "r",
+  lowercaseS: "s",
+  lowercaseT: "t",
+  lowercaseU: "u",
+  lowercaseV: "v",
+  lowercaseW: "w",
+  lowercaseX: "x",
+  lowercaseY: "y",
+  lowercaseZ: "z",
+  leftCurlyBrace: "{",
+  verticalBar: "|",
+  rightCurlyBrace: "}",
+  tilde: "~",
+  replacementCharacter: "�"
+};
+function splice(list, start, remove, items) {
+  const end = list.length;
+  let chunkStart = 0;
+  let parameters;
+  if (start < 0) {
+    start = -start > end ? 0 : end + start;
+  } else {
+    start = start > end ? end : start;
+  }
+  remove = remove > 0 ? remove : 0;
+  if (items.length < constants.v8MaxSafeChunkSize) {
+    parameters = Array.from(items);
+    parameters.unshift(start, remove);
+    list.splice(...parameters);
+  } else {
+    if (remove)
+      list.splice(start, remove);
+    while (chunkStart < items.length) {
+      parameters = items.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize);
+      parameters.unshift(start, 0);
+      list.splice(...parameters);
+      chunkStart += constants.v8MaxSafeChunkSize;
+      start += constants.v8MaxSafeChunkSize;
+    }
+  }
+}
+function push(list, items) {
+  if (list.length > 0) {
+    splice(list, list.length, 0, items);
+    return list;
+  }
+  return items;
+}
+var hasOwnProperty = {}.hasOwnProperty;
+function combineExtensions(extensions) {
+  const all2 = {};
+  let index = -1;
+  while (++index < extensions.length) {
+    syntaxExtension(all2, extensions[index]);
+  }
+  return all2;
+}
+function syntaxExtension(all2, extension) {
+  let hook;
+  for (hook in extension) {
+    const maybe = hasOwnProperty.call(all2, hook) ? all2[hook] : undefined;
+    const left = maybe || (all2[hook] = {});
+    const right = extension[hook];
+    let code;
+    if (right) {
+      for (code in right) {
+        if (!hasOwnProperty.call(left, code))
+          left[code] = [];
+        const value = right[code];
+        constructs(left[code], Array.isArray(value) ? value : value ? [value] : []);
+      }
+    }
+  }
+}
+function constructs(existing, list) {
+  let index = -1;
+  const before = [];
+  while (++index < list.length) {
+    (list[index].add === "after" ? existing : before).push(list[index]);
+  }
+  splice(existing, 0, 0, before);
+}
+function decodeNumericCharacterReference(value, base) {
+  const code = Number.parseInt(value, base);
+  if (code < codes.ht || code === codes.vt || code > codes.cr && code < codes.space || code > codes.tilde && code < 160 || code > 55295 && code < 57344 || code > 64975 && code < 65008 || (code & 65535) === 65535 || (code & 65535) === 65534 || code > 1114111) {
+    return values.replacementCharacter;
+  }
+  return String.fromCodePoint(code);
+}
+function normalizeIdentifier(value) {
+  return value.replace(/[\t\n\r ]+/g, values.space).replace(/^ | $/g, "").toLowerCase().toUpperCase();
+}
+var asciiAlpha = regexCheck(/[A-Za-z]/);
+var asciiAlphanumeric = regexCheck(/[\dA-Za-z]/);
+var asciiAtext = regexCheck(/[#-'*+\--9=?A-Z^-~]/);
+function asciiControl(code) {
+  return code !== null && (code < codes.space || code === codes.del);
+}
+var asciiDigit = regexCheck(/\d/);
+var asciiHexDigit = regexCheck(/[\dA-Fa-f]/);
+var asciiPunctuation = regexCheck(/[!-/:-@[-`{-~]/);
+function markdownLineEnding(code) {
+  return code !== null && code < codes.horizontalTab;
+}
+function markdownLineEndingOrSpace(code) {
+  return code !== null && (code < codes.nul || code === codes.space);
+}
+function markdownSpace(code) {
+  return code === codes.horizontalTab || code === codes.virtualSpace || code === codes.space;
+}
+var unicodePunctuation = regexCheck(/\p{P}|\p{S}/u);
+var unicodeWhitespace = regexCheck(/\s/);
+function regexCheck(regex) {
+  return check;
+  function check(code) {
+    return code !== null && code > -1 && regex.test(String.fromCharCode(code));
+  }
+}
+function factorySpace(effects, ok2, type, max) {
+  const limit = max ? max - 1 : Number.POSITIVE_INFINITY;
+  let size = 0;
+  return start;
+  function start(code) {
+    if (markdownSpace(code)) {
+      effects.enter(type);
+      return prefix(code);
+    }
+    return ok2(code);
+  }
+  function prefix(code) {
+    if (markdownSpace(code) && size++ < limit) {
+      effects.consume(code);
+      return prefix;
+    }
+    effects.exit(type);
+    return ok2(code);
+  }
+}
+var content = { tokenize: initializeContent };
+function initializeContent(effects) {
+  const contentStart = effects.attempt(this.parser.constructs.contentInitial, afterContentStartConstruct, paragraphInitial);
+  let previous;
+  return contentStart;
+  function afterContentStartConstruct(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, contentStart, types.linePrefix);
+  }
+  function paragraphInitial(code) {
+    ok(code !== codes.eof && !markdownLineEnding(code), "expected anything other than a line ending or EOF");
+    effects.enter(types.paragraph);
+    return lineStart(code);
+  }
+  function lineStart(code) {
+    const token = effects.enter(types.chunkText, {
+      contentType: constants.contentTypeText,
+      previous
+    });
+    if (previous) {
+      previous.next = token;
+    }
+    previous = token;
+    return data(code);
+  }
+  function data(code) {
+    if (code === codes.eof) {
+      effects.exit(types.chunkText);
+      effects.exit(types.paragraph);
+      effects.consume(code);
+      return;
+    }
+    if (markdownLineEnding(code)) {
+      effects.consume(code);
+      effects.exit(types.chunkText);
+      return lineStart;
+    }
+    effects.consume(code);
+    return data;
+  }
+}
+var document2 = { tokenize: initializeDocument };
+var containerConstruct = { tokenize: tokenizeContainer };
+function initializeDocument(effects) {
+  const self = this;
+  const stack = [];
+  let continued = 0;
+  let childFlow;
+  let childToken;
+  let lineStartOffset;
+  return start;
+  function start(code) {
+    if (continued < stack.length) {
+      const item = stack[continued];
+      self.containerState = item[1];
+      ok(item[0].continuation, "expected `continuation` to be defined on container construct");
+      return effects.attempt(item[0].continuation, documentContinue, checkNewContainers)(code);
+    }
+    return checkNewContainers(code);
+  }
+  function documentContinue(code) {
+    ok(self.containerState, "expected `containerState` to be defined after continuation");
+    continued++;
+    if (self.containerState._closeFlow) {
+      self.containerState._closeFlow = undefined;
+      if (childFlow) {
+        closeFlow();
+      }
+      const indexBeforeExits = self.events.length;
+      let indexBeforeFlow = indexBeforeExits;
+      let point;
+      while (indexBeforeFlow--) {
+        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
+          point = self.events[indexBeforeFlow][1].end;
+          break;
+        }
+      }
+      ok(point, "could not find previous flow chunk");
+      exitContainers(continued);
+      let index = indexBeforeExits;
+      while (index < self.events.length) {
+        self.events[index][1].end = { ...point };
+        index++;
+      }
+      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      self.events.length = index;
+      return checkNewContainers(code);
+    }
+    return start(code);
+  }
+  function checkNewContainers(code) {
+    if (continued === stack.length) {
+      if (!childFlow) {
+        return documentContinued(code);
+      }
+      if (childFlow.currentConstruct && childFlow.currentConstruct.concrete) {
+        return flowStart(code);
+      }
+      self.interrupt = Boolean(childFlow.currentConstruct && !childFlow._gfmTableDynamicInterruptHack);
+    }
+    self.containerState = {};
+    return effects.check(containerConstruct, thereIsANewContainer, thereIsNoNewContainer)(code);
+  }
+  function thereIsANewContainer(code) {
+    if (childFlow)
+      closeFlow();
+    exitContainers(continued);
+    return documentContinued(code);
+  }
+  function thereIsNoNewContainer(code) {
+    self.parser.lazy[self.now().line] = continued !== stack.length;
+    lineStartOffset = self.now().offset;
+    return flowStart(code);
+  }
+  function documentContinued(code) {
+    self.containerState = {};
+    return effects.attempt(containerConstruct, containerContinue, flowStart)(code);
+  }
+  function containerContinue(code) {
+    ok(self.currentConstruct, "expected `currentConstruct` to be defined on tokenizer");
+    ok(self.containerState, "expected `containerState` to be defined on tokenizer");
+    continued++;
+    stack.push([self.currentConstruct, self.containerState]);
+    return documentContinued(code);
+  }
+  function flowStart(code) {
+    if (code === codes.eof) {
+      if (childFlow)
+        closeFlow();
+      exitContainers(0);
+      effects.consume(code);
+      return;
+    }
+    childFlow = childFlow || self.parser.flow(self.now());
+    effects.enter(types.chunkFlow, {
+      _tokenizer: childFlow,
+      contentType: constants.contentTypeFlow,
+      previous: childToken
+    });
+    return flowContinue(code);
+  }
+  function flowContinue(code) {
+    if (code === codes.eof) {
+      writeToChild(effects.exit(types.chunkFlow), true);
+      exitContainers(0);
+      effects.consume(code);
+      return;
+    }
+    if (markdownLineEnding(code)) {
+      effects.consume(code);
+      writeToChild(effects.exit(types.chunkFlow));
+      continued = 0;
+      self.interrupt = undefined;
+      return start;
+    }
+    effects.consume(code);
+    return flowContinue;
+  }
+  function writeToChild(token, endOfFile) {
+    ok(childFlow, "expected `childFlow` to be defined when continuing");
+    const stream = self.sliceStream(token);
+    if (endOfFile)
+      stream.push(null);
+    token.previous = childToken;
+    if (childToken)
+      childToken.next = token;
+    childToken = token;
+    childFlow.defineSkip(token.start);
+    childFlow.write(stream);
+    if (self.parser.lazy[token.start.line]) {
+      let index = childFlow.events.length;
+      while (index--) {
+        if (childFlow.events[index][1].start.offset < lineStartOffset && (!childFlow.events[index][1].end || childFlow.events[index][1].end.offset > lineStartOffset)) {
+          return;
+        }
+      }
+      const indexBeforeExits = self.events.length;
+      let indexBeforeFlow = indexBeforeExits;
+      let seen;
+      let point;
+      while (indexBeforeFlow--) {
+        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
+          if (seen) {
+            point = self.events[indexBeforeFlow][1].end;
+            break;
+          }
+          seen = true;
+        }
+      }
+      ok(point, "could not find previous flow chunk");
+      exitContainers(continued);
+      index = indexBeforeExits;
+      while (index < self.events.length) {
+        self.events[index][1].end = { ...point };
+        index++;
+      }
+      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      self.events.length = index;
+    }
+  }
+  function exitContainers(size) {
+    let index = stack.length;
+    while (index-- > size) {
+      const entry = stack[index];
+      self.containerState = entry[1];
+      ok(entry[0].exit, "expected `exit` to be defined on container construct");
+      entry[0].exit.call(self, effects);
+    }
+    stack.length = size;
+  }
+  function closeFlow() {
+    ok(self.containerState, "expected `containerState` to be defined when closing flow");
+    ok(childFlow, "expected `childFlow` to be defined when closing it");
+    childFlow.write([codes.eof]);
+    childToken = undefined;
+    childFlow = undefined;
+    self.containerState._closeFlow = undefined;
+  }
+}
+function tokenizeContainer(effects, ok2, nok) {
+  ok(this.parser.constructs.disable.null, "expected `disable.null` to be populated");
+  return factorySpace(effects, effects.attempt(this.parser.constructs.document, ok2, nok), types.linePrefix, this.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize);
+}
+function classifyCharacter(code) {
+  if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
+    return constants.characterGroupWhitespace;
+  }
+  if (unicodePunctuation(code)) {
+    return constants.characterGroupPunctuation;
+  }
+}
+function resolveAll(constructs2, events, context) {
+  const called = [];
+  let index = -1;
+  while (++index < constructs2.length) {
+    const resolve3 = constructs2[index].resolveAll;
+    if (resolve3 && !called.includes(resolve3)) {
+      events = resolve3(events, context);
+      called.push(resolve3);
+    }
+  }
+  return events;
+}
+var attention = {
+  name: "attention",
+  resolveAll: resolveAllAttention,
+  tokenize: tokenizeAttention
+};
+function resolveAllAttention(events, context) {
+  let index = -1;
+  let open;
+  let group;
+  let text;
+  let openingSequence;
+  let closingSequence;
+  let use;
+  let nextEvents;
+  let offset;
+  while (++index < events.length) {
+    if (events[index][0] === "enter" && events[index][1].type === "attentionSequence" && events[index][1]._close) {
+      open = index;
+      while (open--) {
+        if (events[open][0] === "exit" && events[open][1].type === "attentionSequence" && events[open][1]._open && context.sliceSerialize(events[open][1]).charCodeAt(0) === context.sliceSerialize(events[index][1]).charCodeAt(0)) {
+          if ((events[open][1]._close || events[index][1]._open) && (events[index][1].end.offset - events[index][1].start.offset) % 3 && !((events[open][1].end.offset - events[open][1].start.offset + events[index][1].end.offset - events[index][1].start.offset) % 3)) {
+            continue;
+          }
+          use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
+          const start = { ...events[open][1].end };
+          const end = { ...events[index][1].start };
+          movePoint(start, -use);
+          movePoint(end, use);
+          openingSequence = {
+            type: use > 1 ? types.strongSequence : types.emphasisSequence,
+            start,
+            end: { ...events[open][1].end }
+          };
+          closingSequence = {
+            type: use > 1 ? types.strongSequence : types.emphasisSequence,
+            start: { ...events[index][1].start },
+            end
+          };
+          text = {
+            type: use > 1 ? types.strongText : types.emphasisText,
+            start: { ...events[open][1].end },
+            end: { ...events[index][1].start }
+          };
+          group = {
+            type: use > 1 ? types.strong : types.emphasis,
+            start: { ...openingSequence.start },
+            end: { ...closingSequence.end }
+          };
+          events[open][1].end = { ...openingSequence.start };
+          events[index][1].start = { ...closingSequence.end };
+          nextEvents = [];
+          if (events[open][1].end.offset - events[open][1].start.offset) {
+            nextEvents = push(nextEvents, [
+              ["enter", events[open][1], context],
+              ["exit", events[open][1], context]
+            ]);
+          }
+          nextEvents = push(nextEvents, [
+            ["enter", group, context],
+            ["enter", openingSequence, context],
+            ["exit", openingSequence, context],
+            ["enter", text, context]
+          ]);
+          ok(context.parser.constructs.insideSpan.null, "expected `insideSpan` to be populated");
+          nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index), context));
+          nextEvents = push(nextEvents, [
+            ["exit", text, context],
+            ["enter", closingSequence, context],
+            ["exit", closingSequence, context],
+            ["exit", group, context]
+          ]);
+          if (events[index][1].end.offset - events[index][1].start.offset) {
+            offset = 2;
+            nextEvents = push(nextEvents, [
+              ["enter", events[index][1], context],
+              ["exit", events[index][1], context]
+            ]);
+          } else {
+            offset = 0;
+          }
+          splice(events, open - 1, index - open + 3, nextEvents);
+          index = open + nextEvents.length - offset - 2;
+          break;
+        }
+      }
+    }
+  }
+  index = -1;
+  while (++index < events.length) {
+    if (events[index][1].type === "attentionSequence") {
+      events[index][1].type = "data";
+    }
+  }
+  return events;
+}
+function tokenizeAttention(effects, ok2) {
+  const attentionMarkers = this.parser.constructs.attentionMarkers.null;
+  const previous = this.previous;
+  const before = classifyCharacter(previous);
+  let marker;
+  return start;
+  function start(code) {
+    ok(code === codes.asterisk || code === codes.underscore, "expected asterisk or underscore");
+    marker = code;
+    effects.enter("attentionSequence");
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker) {
+      effects.consume(code);
+      return inside;
+    }
+    const token = effects.exit("attentionSequence");
+    const after = classifyCharacter(code);
+    ok(attentionMarkers, "expected `attentionMarkers` to be populated");
+    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code);
+    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous);
+    token._open = Boolean(marker === codes.asterisk ? open : open && (before || !close));
+    token._close = Boolean(marker === codes.asterisk ? close : close && (after || !open));
+    return ok2(code);
+  }
+}
+function movePoint(point, offset) {
+  point.column += offset;
+  point.offset += offset;
+  point._bufferIndex += offset;
+}
+var autolink = { name: "autolink", tokenize: tokenizeAutolink };
+function tokenizeAutolink(effects, ok2, nok) {
+  let size = 0;
+  return start;
+  function start(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.autolink);
+    effects.enter(types.autolinkMarker);
+    effects.consume(code);
+    effects.exit(types.autolinkMarker);
+    effects.enter(types.autolinkProtocol);
+    return open;
+  }
+  function open(code) {
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return schemeOrEmailAtext;
+    }
+    if (code === codes.atSign) {
+      return nok(code);
+    }
+    return emailAtext(code);
+  }
+  function schemeOrEmailAtext(code) {
+    if (code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) {
+      size = 1;
+      return schemeInsideOrEmailAtext(code);
+    }
+    return emailAtext(code);
+  }
+  function schemeInsideOrEmailAtext(code) {
+    if (code === codes.colon) {
+      effects.consume(code);
+      size = 0;
+      return urlInside;
+    }
+    if ((code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) && size++ < constants.autolinkSchemeSizeMax) {
+      effects.consume(code);
+      return schemeInsideOrEmailAtext;
+    }
+    size = 0;
+    return emailAtext(code);
+  }
+  function urlInside(code) {
+    if (code === codes.greaterThan) {
+      effects.exit(types.autolinkProtocol);
+      effects.enter(types.autolinkMarker);
+      effects.consume(code);
+      effects.exit(types.autolinkMarker);
+      effects.exit(types.autolink);
+      return ok2;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.lessThan || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return urlInside;
+  }
+  function emailAtext(code) {
+    if (code === codes.atSign) {
+      effects.consume(code);
+      return emailAtSignOrDot;
+    }
+    if (asciiAtext(code)) {
+      effects.consume(code);
+      return emailAtext;
+    }
+    return nok(code);
+  }
+  function emailAtSignOrDot(code) {
+    return asciiAlphanumeric(code) ? emailLabel(code) : nok(code);
+  }
+  function emailLabel(code) {
+    if (code === codes.dot) {
+      effects.consume(code);
+      size = 0;
+      return emailAtSignOrDot;
+    }
+    if (code === codes.greaterThan) {
+      effects.exit(types.autolinkProtocol).type = types.autolinkEmail;
+      effects.enter(types.autolinkMarker);
+      effects.consume(code);
+      effects.exit(types.autolinkMarker);
+      effects.exit(types.autolink);
+      return ok2;
+    }
+    return emailValue(code);
+  }
+  function emailValue(code) {
+    if ((code === codes.dash || asciiAlphanumeric(code)) && size++ < constants.autolinkDomainSizeMax) {
+      const next = code === codes.dash ? emailValue : emailLabel;
+      effects.consume(code);
+      return next;
+    }
+    return nok(code);
+  }
+}
+var blankLine = { partial: true, tokenize: tokenizeBlankLine };
+function tokenizeBlankLine(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
+  }
+  function after(code) {
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
+  }
+}
+var blockQuote = {
+  continuation: { tokenize: tokenizeBlockQuoteContinuation },
+  exit,
+  name: "blockQuote",
+  tokenize: tokenizeBlockQuoteStart
+};
+function tokenizeBlockQuoteStart(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (code === codes.greaterThan) {
+      const state = self.containerState;
+      ok(state, "expected `containerState` to be defined in container");
+      if (!state.open) {
+        effects.enter(types.blockQuote, { _container: true });
+        state.open = true;
+      }
+      effects.enter(types.blockQuotePrefix);
+      effects.enter(types.blockQuoteMarker);
+      effects.consume(code);
+      effects.exit(types.blockQuoteMarker);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    if (markdownSpace(code)) {
+      effects.enter(types.blockQuotePrefixWhitespace);
+      effects.consume(code);
+      effects.exit(types.blockQuotePrefixWhitespace);
+      effects.exit(types.blockQuotePrefix);
+      return ok2;
+    }
+    effects.exit(types.blockQuotePrefix);
+    return ok2(code);
+  }
+}
+function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
+  const self = this;
+  return contStart;
+  function contStart(code) {
+    if (markdownSpace(code)) {
+      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+    }
+    return contBefore(code);
+  }
+  function contBefore(code) {
+    return effects.attempt(blockQuote, ok2, nok)(code);
+  }
+}
+function exit(effects) {
+  effects.exit(types.blockQuote);
+}
+var characterEscape = {
+  name: "characterEscape",
+  tokenize: tokenizeCharacterEscape
+};
+function tokenizeCharacterEscape(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(code === codes.backslash, "expected `\\`");
+    effects.enter(types.characterEscape);
+    effects.enter(types.escapeMarker);
+    effects.consume(code);
+    effects.exit(types.escapeMarker);
+    return inside;
+  }
+  function inside(code) {
+    if (asciiPunctuation(code)) {
+      effects.enter(types.characterEscapeValue);
+      effects.consume(code);
+      effects.exit(types.characterEscapeValue);
+      effects.exit(types.characterEscape);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+var characterReference = {
+  name: "characterReference",
+  tokenize: tokenizeCharacterReference
+};
+function tokenizeCharacterReference(effects, ok2, nok) {
+  const self = this;
+  let size = 0;
+  let max;
+  let test;
+  return start;
+  function start(code) {
+    ok(code === codes.ampersand, "expected `&`");
+    effects.enter(types.characterReference);
+    effects.enter(types.characterReferenceMarker);
+    effects.consume(code);
+    effects.exit(types.characterReferenceMarker);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.numberSign) {
+      effects.enter(types.characterReferenceMarkerNumeric);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarkerNumeric);
+      return numeric;
+    }
+    effects.enter(types.characterReferenceValue);
+    max = constants.characterReferenceNamedSizeMax;
+    test = asciiAlphanumeric;
+    return value(code);
+  }
+  function numeric(code) {
+    if (code === codes.uppercaseX || code === codes.lowercaseX) {
+      effects.enter(types.characterReferenceMarkerHexadecimal);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarkerHexadecimal);
+      effects.enter(types.characterReferenceValue);
+      max = constants.characterReferenceHexadecimalSizeMax;
+      test = asciiHexDigit;
+      return value;
+    }
+    effects.enter(types.characterReferenceValue);
+    max = constants.characterReferenceDecimalSizeMax;
+    test = asciiDigit;
+    return value(code);
+  }
+  function value(code) {
+    if (code === codes.semicolon && size) {
+      const token = effects.exit(types.characterReferenceValue);
+      if (test === asciiAlphanumeric && !decodeNamedCharacterReference(self.sliceSerialize(token))) {
+        return nok(code);
+      }
+      effects.enter(types.characterReferenceMarker);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarker);
+      effects.exit(types.characterReference);
+      return ok2;
+    }
+    if (test(code) && size++ < max) {
+      effects.consume(code);
+      return value;
+    }
+    return nok(code);
+  }
+}
+var nonLazyContinuation = {
+  partial: true,
+  tokenize: tokenizeNonLazyContinuation
+};
+var codeFenced = {
+  concrete: true,
+  name: "codeFenced",
+  tokenize: tokenizeCodeFenced
+};
+function tokenizeCodeFenced(effects, ok2, nok) {
+  const self = this;
+  const closeStart = { partial: true, tokenize: tokenizeCloseStart };
+  let initialPrefix = 0;
+  let sizeOpen = 0;
+  let marker;
+  return start;
+  function start(code) {
+    return beforeSequenceOpen(code);
+  }
+  function beforeSequenceOpen(code) {
+    ok(code === codes.graveAccent || code === codes.tilde, "expected `` ` `` or `~`");
+    const tail = self.events[self.events.length - 1];
+    initialPrefix = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
+    marker = code;
+    effects.enter(types.codeFenced);
+    effects.enter(types.codeFencedFence);
+    effects.enter(types.codeFencedFenceSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === marker) {
+      sizeOpen++;
+      effects.consume(code);
+      return sequenceOpen;
+    }
+    if (sizeOpen < constants.codeFencedSequenceSizeMin) {
+      return nok(code);
+    }
+    effects.exit(types.codeFencedFenceSequence);
+    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
+  }
+  function infoBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFencedFence);
+      return self.interrupt ? ok2(code) : effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
+    }
+    effects.enter(types.codeFencedFenceInfo);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return info(code);
+  }
+  function info(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceInfo);
+      return infoBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceInfo);
+      return factorySpace(effects, metaBefore, types.whitespace)(code);
+    }
+    if (code === codes.graveAccent && code === marker) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return info;
+  }
+  function metaBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return infoBefore(code);
+    }
+    effects.enter(types.codeFencedFenceMeta);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return meta(code);
+  }
+  function meta(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceMeta);
+      return infoBefore(code);
+    }
+    if (code === codes.graveAccent && code === marker) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return meta;
+  }
+  function atNonLazyBreak(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    return effects.attempt(closeStart, after, contentBefore)(code);
+  }
+  function contentBefore(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return contentStart;
+  }
+  function contentStart(code) {
+    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
+  }
+  function beforeContentChunk(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
+    }
+    effects.enter(types.codeFlowValue);
+    return contentChunk(code);
+  }
+  function contentChunk(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFlowValue);
+      return beforeContentChunk(code);
+    }
+    effects.consume(code);
+    return contentChunk;
+  }
+  function after(code) {
+    effects.exit(types.codeFenced);
+    return ok2(code);
+  }
+  function tokenizeCloseStart(effects2, ok3, nok2) {
+    let size = 0;
+    return startBefore;
+    function startBefore(code) {
+      ok(markdownLineEnding(code), "expected eol");
+      effects2.enter(types.lineEnding);
+      effects2.consume(code);
+      effects2.exit(types.lineEnding);
+      return start2;
+    }
+    function start2(code) {
+      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+      effects2.enter(types.codeFencedFence);
+      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
+    }
+    function beforeSequenceClose(code) {
+      if (code === marker) {
+        effects2.enter(types.codeFencedFenceSequence);
+        return sequenceClose(code);
+      }
+      return nok2(code);
+    }
+    function sequenceClose(code) {
+      if (code === marker) {
+        size++;
+        effects2.consume(code);
+        return sequenceClose;
+      }
+      if (size >= sizeOpen) {
+        effects2.exit(types.codeFencedFenceSequence);
+        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
+      }
+      return nok2(code);
+    }
+    function sequenceCloseAfter(code) {
+      if (code === codes.eof || markdownLineEnding(code)) {
+        effects2.exit(types.codeFencedFence);
+        return ok3(code);
+      }
+      return nok2(code);
+    }
+  }
+}
+function tokenizeNonLazyContinuation(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return lineStart;
+  }
+  function lineStart(code) {
+    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
+  }
+}
+var codeIndented = {
+  name: "codeIndented",
+  tokenize: tokenizeCodeIndented
+};
+var furtherStart = { partial: true, tokenize: tokenizeFurtherStart };
+function tokenizeCodeIndented(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(markdownSpace(code));
+    effects.enter(types.codeIndented);
+    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
+  }
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? atBreak(code) : nok(code);
+  }
+  function atBreak(code) {
+    if (code === codes.eof) {
+      return after(code);
+    }
+    if (markdownLineEnding(code)) {
+      return effects.attempt(furtherStart, atBreak, after)(code);
+    }
+    effects.enter(types.codeFlowValue);
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFlowValue);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return inside;
+  }
+  function after(code) {
+    effects.exit(types.codeIndented);
+    return ok2(code);
+  }
+}
+function tokenizeFurtherStart(effects, ok2, nok) {
+  const self = this;
+  return furtherStart2;
+  function furtherStart2(code) {
+    if (self.parser.lazy[self.now().line]) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return furtherStart2;
+    }
+    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
+  }
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? ok2(code) : markdownLineEnding(code) ? furtherStart2(code) : nok(code);
+  }
+}
+var codeText = {
+  name: "codeText",
+  previous,
+  resolve: resolveCodeText,
+  tokenize: tokenizeCodeText
+};
+function resolveCodeText(events) {
+  let tailExitIndex = events.length - 4;
+  let headEnterIndex = 3;
+  let index;
+  let enter;
+  if ((events[headEnterIndex][1].type === types.lineEnding || events[headEnterIndex][1].type === "space") && (events[tailExitIndex][1].type === types.lineEnding || events[tailExitIndex][1].type === "space")) {
+    index = headEnterIndex;
+    while (++index < tailExitIndex) {
+      if (events[index][1].type === types.codeTextData) {
+        events[headEnterIndex][1].type = types.codeTextPadding;
+        events[tailExitIndex][1].type = types.codeTextPadding;
+        headEnterIndex += 2;
+        tailExitIndex -= 2;
+        break;
+      }
+    }
+  }
+  index = headEnterIndex - 1;
+  tailExitIndex++;
+  while (++index <= tailExitIndex) {
+    if (enter === undefined) {
+      if (index !== tailExitIndex && events[index][1].type !== types.lineEnding) {
+        enter = index;
+      }
+    } else if (index === tailExitIndex || events[index][1].type === types.lineEnding) {
+      events[enter][1].type = types.codeTextData;
+      if (index !== enter + 2) {
+        events[enter][1].end = events[index - 1][1].end;
+        events.splice(enter + 2, index - enter - 2);
+        tailExitIndex -= index - enter - 2;
+        index = enter + 2;
+      }
+      enter = undefined;
+    }
+  }
+  return events;
+}
+function previous(code) {
+  return code !== codes.graveAccent || this.events[this.events.length - 1][1].type === types.characterEscape;
+}
+function tokenizeCodeText(effects, ok2, nok) {
+  const self = this;
+  let sizeOpen = 0;
+  let size;
+  let token;
+  return start;
+  function start(code) {
+    ok(code === codes.graveAccent, "expected `` ` ``");
+    ok(previous.call(self, self.previous), "expected correct previous");
+    effects.enter(types.codeText);
+    effects.enter(types.codeTextSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === codes.graveAccent) {
+      effects.consume(code);
+      sizeOpen++;
+      return sequenceOpen;
+    }
+    effects.exit(types.codeTextSequence);
+    return between(code);
+  }
+  function between(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.space) {
+      effects.enter("space");
+      effects.consume(code);
+      effects.exit("space");
+      return between;
+    }
+    if (code === codes.graveAccent) {
+      token = effects.enter(types.codeTextSequence);
+      size = 0;
+      return sequenceClose(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return between;
+    }
+    effects.enter(types.codeTextData);
+    return data(code);
+  }
+  function data(code) {
+    if (code === codes.eof || code === codes.space || code === codes.graveAccent || markdownLineEnding(code)) {
+      effects.exit(types.codeTextData);
+      return between(code);
+    }
+    effects.consume(code);
+    return data;
+  }
+  function sequenceClose(code) {
+    if (code === codes.graveAccent) {
+      effects.consume(code);
+      size++;
+      return sequenceClose;
+    }
+    if (size === sizeOpen) {
+      effects.exit(types.codeTextSequence);
+      effects.exit(types.codeText);
+      return ok2(code);
+    }
+    token.type = types.codeTextData;
+    return data(code);
+  }
+}
+
+class SpliceBuffer {
+  constructor(initial) {
+    this.left = initial ? [...initial] : [];
+    this.right = [];
+  }
+  get(index) {
+    if (index < 0 || index >= this.left.length + this.right.length) {
+      throw new RangeError("Cannot access index `" + index + "` in a splice buffer of size `" + (this.left.length + this.right.length) + "`");
+    }
+    if (index < this.left.length)
+      return this.left[index];
+    return this.right[this.right.length - index + this.left.length - 1];
+  }
+  get length() {
+    return this.left.length + this.right.length;
+  }
+  shift() {
+    this.setCursor(0);
+    return this.right.pop();
+  }
+  slice(start, end) {
+    const stop = end === null || end === undefined ? Number.POSITIVE_INFINITY : end;
+    if (stop < this.left.length) {
+      return this.left.slice(start, stop);
+    }
+    if (start > this.left.length) {
+      return this.right.slice(this.right.length - stop + this.left.length, this.right.length - start + this.left.length).reverse();
+    }
+    return this.left.slice(start).concat(this.right.slice(this.right.length - stop + this.left.length).reverse());
+  }
+  splice(start, deleteCount, items) {
+    const count = deleteCount || 0;
+    this.setCursor(Math.trunc(start));
+    const removed = this.right.splice(this.right.length - count, Number.POSITIVE_INFINITY);
+    if (items)
+      chunkedPush(this.left, items);
+    return removed.reverse();
+  }
+  pop() {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    return this.left.pop();
+  }
+  push(item) {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    this.left.push(item);
+  }
+  pushMany(items) {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    chunkedPush(this.left, items);
+  }
+  unshift(item) {
+    this.setCursor(0);
+    this.right.push(item);
+  }
+  unshiftMany(items) {
+    this.setCursor(0);
+    chunkedPush(this.right, items.reverse());
+  }
+  setCursor(n) {
+    if (n === this.left.length || n > this.left.length && this.right.length === 0 || n < 0 && this.left.length === 0)
+      return;
+    if (n < this.left.length) {
+      const removed = this.left.splice(n, Number.POSITIVE_INFINITY);
+      chunkedPush(this.right, removed.reverse());
+    } else {
+      const removed = this.right.splice(this.left.length + this.right.length - n, Number.POSITIVE_INFINITY);
+      chunkedPush(this.left, removed.reverse());
+    }
+  }
+}
+function chunkedPush(list, right) {
+  let chunkStart = 0;
+  if (right.length < constants.v8MaxSafeChunkSize) {
+    list.push(...right);
+  } else {
+    while (chunkStart < right.length) {
+      list.push(...right.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize));
+      chunkStart += constants.v8MaxSafeChunkSize;
+    }
+  }
+}
+function subtokenize(eventsArray) {
+  const jumps = {};
+  let index = -1;
+  let event;
+  let lineIndex;
+  let otherIndex;
+  let otherEvent;
+  let parameters;
+  let subevents;
+  let more;
+  const events = new SpliceBuffer(eventsArray);
+  while (++index < events.length) {
+    while (index in jumps) {
+      index = jumps[index];
+    }
+    event = events.get(index);
+    if (index && event[1].type === types.chunkFlow && events.get(index - 1)[1].type === types.listItemPrefix) {
+      ok(event[1]._tokenizer, "expected `_tokenizer` on subtokens");
+      subevents = event[1]._tokenizer.events;
+      otherIndex = 0;
+      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.lineEndingBlank) {
+        otherIndex += 2;
+      }
+      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.content) {
+        while (++otherIndex < subevents.length) {
+          if (subevents[otherIndex][1].type === types.content) {
+            break;
+          }
+          if (subevents[otherIndex][1].type === types.chunkText) {
+            subevents[otherIndex][1]._isInFirstContentOfListItem = true;
+            otherIndex++;
+          }
+        }
+      }
+    }
+    if (event[0] === "enter") {
+      if (event[1].contentType) {
+        Object.assign(jumps, subcontent(events, index));
+        index = jumps[index];
+        more = true;
+      }
+    } else if (event[1]._container) {
+      otherIndex = index;
+      lineIndex = undefined;
+      while (otherIndex--) {
+        otherEvent = events.get(otherIndex);
+        if (otherEvent[1].type === types.lineEnding || otherEvent[1].type === types.lineEndingBlank) {
+          if (otherEvent[0] === "enter") {
+            if (lineIndex) {
+              events.get(lineIndex)[1].type = types.lineEndingBlank;
+            }
+            otherEvent[1].type = types.lineEnding;
+            lineIndex = otherIndex;
+          }
+        } else if (otherEvent[1].type === types.linePrefix || otherEvent[1].type === types.listItemIndent) {} else {
+          break;
+        }
+      }
+      if (lineIndex) {
+        event[1].end = { ...events.get(lineIndex)[1].start };
+        parameters = events.slice(lineIndex, index);
+        parameters.unshift(event);
+        events.splice(lineIndex, index - lineIndex + 1, parameters);
+      }
+    }
+  }
+  splice(eventsArray, 0, Number.POSITIVE_INFINITY, events.slice(0));
+  return !more;
+}
+function subcontent(events, eventIndex) {
+  const token = events.get(eventIndex)[1];
+  const context = events.get(eventIndex)[2];
+  let startPosition = eventIndex - 1;
+  const startPositions = [];
+  ok(token.contentType, "expected `contentType` on subtokens");
+  let tokenizer = token._tokenizer;
+  if (!tokenizer) {
+    tokenizer = context.parser[token.contentType](token.start);
+    if (token._contentTypeTextTrailing) {
+      tokenizer._contentTypeTextTrailing = true;
+    }
+  }
+  const childEvents = tokenizer.events;
+  const jumps = [];
+  const gaps = {};
+  let stream;
+  let previous2;
+  let index = -1;
+  let current = token;
+  let adjust = 0;
+  let start = 0;
+  const breaks = [start];
+  while (current) {
+    while (events.get(++startPosition)[1] !== current) {}
+    ok(!previous2 || current.previous === previous2, "expected previous to match");
+    ok(!previous2 || previous2.next === current, "expected next to match");
+    startPositions.push(startPosition);
+    if (!current._tokenizer) {
+      stream = context.sliceStream(current);
+      if (!current.next) {
+        stream.push(codes.eof);
+      }
+      if (previous2) {
+        tokenizer.defineSkip(current.start);
+      }
+      if (current._isInFirstContentOfListItem) {
+        tokenizer._gfmTasklistFirstContentOfListItem = true;
+      }
+      tokenizer.write(stream);
+      if (current._isInFirstContentOfListItem) {
+        tokenizer._gfmTasklistFirstContentOfListItem = undefined;
+      }
+    }
+    previous2 = current;
+    current = current.next;
+  }
+  current = token;
+  while (++index < childEvents.length) {
+    if (childEvents[index][0] === "exit" && childEvents[index - 1][0] === "enter" && childEvents[index][1].type === childEvents[index - 1][1].type && childEvents[index][1].start.line !== childEvents[index][1].end.line) {
+      ok(current, "expected a current token");
+      start = index + 1;
+      breaks.push(start);
+      current._tokenizer = undefined;
+      current.previous = undefined;
+      current = current.next;
+    }
+  }
+  tokenizer.events = [];
+  if (current) {
+    current._tokenizer = undefined;
+    current.previous = undefined;
+    ok(!current.next, "expected no next token");
+  } else {
+    breaks.pop();
+  }
+  index = breaks.length;
+  while (index--) {
+    const slice = childEvents.slice(breaks[index], breaks[index + 1]);
+    const start2 = startPositions.pop();
+    ok(start2 !== undefined, "expected a start position when splicing");
+    jumps.push([start2, start2 + slice.length - 1]);
+    events.splice(start2, 2, slice);
+  }
+  jumps.reverse();
+  index = -1;
+  while (++index < jumps.length) {
+    gaps[adjust + jumps[index][0]] = adjust + jumps[index][1];
+    adjust += jumps[index][1] - jumps[index][0] - 1;
+  }
+  return gaps;
+}
+var content2 = { resolve: resolveContent, tokenize: tokenizeContent };
+var continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
+function resolveContent(events) {
+  subtokenize(events);
+  return events;
+}
+function tokenizeContent(effects, ok2) {
+  let previous2;
+  return chunkStart;
+  function chunkStart(code) {
+    ok(code !== codes.eof && !markdownLineEnding(code), "expected no eof or eol");
+    effects.enter(types.content);
+    previous2 = effects.enter(types.chunkContent, {
+      contentType: constants.contentTypeContent
+    });
+    return chunkInside(code);
+  }
+  function chunkInside(code) {
+    if (code === codes.eof) {
+      return contentEnd(code);
+    }
+    if (markdownLineEnding(code)) {
+      return effects.check(continuationConstruct, contentContinue, contentEnd)(code);
+    }
+    effects.consume(code);
+    return chunkInside;
+  }
+  function contentEnd(code) {
+    effects.exit(types.chunkContent);
+    effects.exit(types.content);
+    return ok2(code);
+  }
+  function contentContinue(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.consume(code);
+    effects.exit(types.chunkContent);
+    ok(previous2, "expected previous token");
+    previous2.next = effects.enter(types.chunkContent, {
+      contentType: constants.contentTypeContent,
+      previous: previous2
+    });
+    previous2 = previous2.next;
+    return chunkInside;
+  }
+}
+function tokenizeContinuation(effects, ok2, nok) {
+  const self = this;
+  return startLookahead;
+  function startLookahead(code) {
+    ok(markdownLineEnding(code), "expected a line ending");
+    effects.exit(types.chunkContent);
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, prefixed, types.linePrefix);
+  }
+  function prefixed(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    const tail = self.events[self.events.length - 1];
+    if (!self.parser.constructs.disable.null.includes("codeIndented") && tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize) {
+      return ok2(code);
+    }
+    return effects.interrupt(self.parser.constructs.flow, nok, ok2)(code);
+  }
+}
+function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
+  const limit = max || Number.POSITIVE_INFINITY;
+  let balance = 0;
+  return start;
+  function start(code) {
+    if (code === codes.lessThan) {
+      effects.enter(type);
+      effects.enter(literalType);
+      effects.enter(literalMarkerType);
+      effects.consume(code);
+      effects.exit(literalMarkerType);
+      return enclosedBefore;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.rightParenthesis || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.enter(type);
+    effects.enter(rawType);
+    effects.enter(stringType);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return raw(code);
+  }
+  function enclosedBefore(code) {
+    if (code === codes.greaterThan) {
+      effects.enter(literalMarkerType);
+      effects.consume(code);
+      effects.exit(literalMarkerType);
+      effects.exit(literalType);
+      effects.exit(type);
+      return ok2;
+    }
+    effects.enter(stringType);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return enclosed(code);
+  }
+  function enclosed(code) {
+    if (code === codes.greaterThan) {
+      effects.exit(types.chunkString);
+      effects.exit(stringType);
+      return enclosedBefore(code);
+    }
+    if (code === codes.eof || code === codes.lessThan || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? enclosedEscape : enclosed;
+  }
+  function enclosedEscape(code) {
+    if (code === codes.lessThan || code === codes.greaterThan || code === codes.backslash) {
+      effects.consume(code);
+      return enclosed;
+    }
+    return enclosed(code);
+  }
+  function raw(code) {
+    if (!balance && (code === codes.eof || code === codes.rightParenthesis || markdownLineEndingOrSpace(code))) {
+      effects.exit(types.chunkString);
+      effects.exit(stringType);
+      effects.exit(rawType);
+      effects.exit(type);
+      return ok2(code);
+    }
+    if (balance < limit && code === codes.leftParenthesis) {
+      effects.consume(code);
+      balance++;
+      return raw;
+    }
+    if (code === codes.rightParenthesis) {
+      effects.consume(code);
+      balance--;
+      return raw;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.leftParenthesis || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? rawEscape : raw;
+  }
+  function rawEscape(code) {
+    if (code === codes.leftParenthesis || code === codes.rightParenthesis || code === codes.backslash) {
+      effects.consume(code);
+      return raw;
+    }
+    return raw(code);
+  }
+}
+function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
+  const self = this;
+  let size = 0;
+  let seen;
+  return start;
+  function start(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    effects.enter(type);
+    effects.enter(markerType);
+    effects.consume(code);
+    effects.exit(markerType);
+    effects.enter(stringType);
+    return atBreak;
+  }
+  function atBreak(code) {
+    if (size > constants.linkReferenceSizeMax || code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket && !seen || code === codes.caret && !size && "_hiddenFootnoteSupport" in self.parser.constructs) {
+      return nok(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.exit(stringType);
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      effects.exit(type);
+      return ok2;
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return atBreak;
+    }
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return labelInside(code);
+  }
+  function labelInside(code) {
+    if (code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket || markdownLineEnding(code) || size++ > constants.linkReferenceSizeMax) {
+      effects.exit(types.chunkString);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    if (!seen)
+      seen = !markdownSpace(code);
+    return code === codes.backslash ? labelEscape : labelInside;
+  }
+  function labelEscape(code) {
+    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
+      effects.consume(code);
+      size++;
+      return labelInside;
+    }
+    return labelInside(code);
+  }
+}
+function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
+  let marker;
+  return start;
+  function start(code) {
+    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
+      effects.enter(type);
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      marker = code === codes.leftParenthesis ? codes.rightParenthesis : code;
+      return begin;
+    }
+    return nok(code);
+  }
+  function begin(code) {
+    if (code === marker) {
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      effects.exit(type);
+      return ok2;
+    }
+    effects.enter(stringType);
+    return atBreak(code);
+  }
+  function atBreak(code) {
+    if (code === marker) {
+      effects.exit(stringType);
+      return begin(marker);
+    }
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return factorySpace(effects, atBreak, types.linePrefix);
+    }
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker || code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? escape : inside;
+  }
+  function escape(code) {
+    if (code === marker || code === codes.backslash) {
+      effects.consume(code);
+      return inside;
+    }
+    return inside(code);
+  }
+}
+function factoryWhitespace(effects, ok2) {
+  let seen;
+  return start;
+  function start(code) {
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      seen = true;
+      return start;
+    }
+    if (markdownSpace(code)) {
+      return factorySpace(effects, start, seen ? types.linePrefix : types.lineSuffix)(code);
+    }
+    return ok2(code);
+  }
+}
+var definition = { name: "definition", tokenize: tokenizeDefinition };
+var titleBefore = { partial: true, tokenize: tokenizeTitleBefore };
+function tokenizeDefinition(effects, ok2, nok) {
+  const self = this;
+  let identifier;
+  return start;
+  function start(code) {
+    effects.enter(types.definition);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    return factoryLabel.call(self, effects, labelAfter, nok, types.definitionLabel, types.definitionLabelMarker, types.definitionLabelString)(code);
+  }
+  function labelAfter(code) {
+    identifier = normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1));
+    if (code === codes.colon) {
+      effects.enter(types.definitionMarker);
+      effects.consume(code);
+      effects.exit(types.definitionMarker);
+      return markerAfter;
+    }
+    return nok(code);
+  }
+  function markerAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, destinationBefore)(code) : destinationBefore(code);
+  }
+  function destinationBefore(code) {
+    return factoryDestination(effects, destinationAfter, nok, types.definitionDestination, types.definitionDestinationLiteral, types.definitionDestinationLiteralMarker, types.definitionDestinationRaw, types.definitionDestinationString)(code);
+  }
+  function destinationAfter(code) {
+    return effects.attempt(titleBefore, after, after)(code);
+  }
+  function after(code) {
+    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
+  }
+  function afterWhitespace(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.definition);
+      self.parser.defined.push(identifier);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+function tokenizeTitleBefore(effects, ok2, nok) {
+  return titleBefore2;
+  function titleBefore2(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
+  }
+  function beforeMarker(code) {
+    return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
+  }
+  function titleAfter(code) {
+    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
+  }
+  function titleAfterOptionalWhitespace(code) {
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
+  }
+}
+var hardBreakEscape = {
+  name: "hardBreakEscape",
+  tokenize: tokenizeHardBreakEscape
+};
+function tokenizeHardBreakEscape(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(code === codes.backslash, "expected `\\`");
+    effects.enter(types.hardBreakEscape);
+    effects.consume(code);
+    return after;
+  }
+  function after(code) {
+    if (markdownLineEnding(code)) {
+      effects.exit(types.hardBreakEscape);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+var headingAtx = {
+  name: "headingAtx",
+  resolve: resolveHeadingAtx,
+  tokenize: tokenizeHeadingAtx
+};
+function resolveHeadingAtx(events, context) {
+  let contentEnd = events.length - 2;
+  let contentStart = 3;
+  let content3;
+  let text;
+  if (events[contentStart][1].type === types.whitespace) {
+    contentStart += 2;
+  }
+  if (contentEnd - 2 > contentStart && events[contentEnd][1].type === types.whitespace) {
+    contentEnd -= 2;
+  }
+  if (events[contentEnd][1].type === types.atxHeadingSequence && (contentStart === contentEnd - 1 || contentEnd - 4 > contentStart && events[contentEnd - 2][1].type === types.whitespace)) {
+    contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
+  }
+  if (contentEnd > contentStart) {
+    content3 = {
+      type: types.atxHeadingText,
+      start: events[contentStart][1].start,
+      end: events[contentEnd][1].end
+    };
+    text = {
+      type: types.chunkText,
+      start: events[contentStart][1].start,
+      end: events[contentEnd][1].end,
+      contentType: constants.contentTypeText
+    };
+    splice(events, contentStart, contentEnd - contentStart + 1, [
+      ["enter", content3, context],
+      ["enter", text, context],
+      ["exit", text, context],
+      ["exit", content3, context]
+    ]);
+  }
+  return events;
+}
+function tokenizeHeadingAtx(effects, ok2, nok) {
+  let size = 0;
+  return start;
+  function start(code) {
+    effects.enter(types.atxHeading);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.numberSign, "expected `#`");
+    effects.enter(types.atxHeadingSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === codes.numberSign && size++ < constants.atxHeadingOpeningFenceSizeMax) {
+      effects.consume(code);
+      return sequenceOpen;
+    }
+    if (code === codes.eof || markdownLineEndingOrSpace(code)) {
+      effects.exit(types.atxHeadingSequence);
+      return atBreak(code);
+    }
+    return nok(code);
+  }
+  function atBreak(code) {
+    if (code === codes.numberSign) {
+      effects.enter(types.atxHeadingSequence);
+      return sequenceFurther(code);
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.atxHeading);
+      return ok2(code);
+    }
+    if (markdownSpace(code)) {
+      return factorySpace(effects, atBreak, types.whitespace)(code);
+    }
+    effects.enter(types.atxHeadingText);
+    return data(code);
+  }
+  function sequenceFurther(code) {
+    if (code === codes.numberSign) {
+      effects.consume(code);
+      return sequenceFurther;
+    }
+    effects.exit(types.atxHeadingSequence);
+    return atBreak(code);
+  }
+  function data(code) {
+    if (code === codes.eof || code === codes.numberSign || markdownLineEndingOrSpace(code)) {
+      effects.exit(types.atxHeadingText);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return data;
+  }
+}
+var htmlBlockNames = [
+  "address",
+  "article",
+  "aside",
+  "base",
+  "basefont",
+  "blockquote",
+  "body",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frame",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "html",
+  "iframe",
+  "legend",
+  "li",
+  "link",
+  "main",
+  "menu",
+  "menuitem",
+  "nav",
+  "noframes",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "param",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "track",
+  "ul"
+];
+var htmlRawNames = ["pre", "script", "style", "textarea"];
+var htmlFlow = {
+  concrete: true,
+  name: "htmlFlow",
+  resolveTo: resolveToHtmlFlow,
+  tokenize: tokenizeHtmlFlow
+};
+var blankLineBefore = { partial: true, tokenize: tokenizeBlankLineBefore };
+var nonLazyContinuationStart = {
+  partial: true,
+  tokenize: tokenizeNonLazyContinuationStart
+};
+function resolveToHtmlFlow(events) {
+  let index = events.length;
+  while (index--) {
+    if (events[index][0] === "enter" && events[index][1].type === types.htmlFlow) {
+      break;
+    }
+  }
+  if (index > 1 && events[index - 2][1].type === types.linePrefix) {
+    events[index][1].start = events[index - 2][1].start;
+    events[index + 1][1].start = events[index - 2][1].start;
+    events.splice(index - 2, 2);
+  }
+  return events;
+}
+function tokenizeHtmlFlow(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  let closingTag;
+  let buffer;
+  let index;
+  let markerB;
+  return start;
+  function start(code) {
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.htmlFlow);
+    effects.enter(types.htmlFlowData);
+    effects.consume(code);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.exclamationMark) {
+      effects.consume(code);
+      return declarationOpen;
+    }
+    if (code === codes.slash) {
+      effects.consume(code);
+      closingTag = true;
+      return tagCloseStart;
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      marker = constants.htmlInstruction;
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    if (asciiAlpha(code)) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer = String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function declarationOpen(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      marker = constants.htmlComment;
+      return commentOpenInside;
+    }
+    if (code === codes.leftSquareBracket) {
+      effects.consume(code);
+      marker = constants.htmlCdata;
+      index = 0;
+      return cdataOpenInside;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      marker = constants.htmlDeclaration;
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    return nok(code);
+  }
+  function commentOpenInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    return nok(code);
+  }
+  function cdataOpenInside(code) {
+    const value = constants.cdataOpeningString;
+    if (code === value.charCodeAt(index++)) {
+      effects.consume(code);
+      if (index === value.length) {
+        return self.interrupt ? ok2 : continuation;
+      }
+      return cdataOpenInside;
+    }
+    return nok(code);
+  }
+  function tagCloseStart(code) {
+    if (asciiAlpha(code)) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer = String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function tagName(code) {
+    if (code === codes.eof || code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      const slash = code === codes.slash;
+      const name = buffer.toLowerCase();
+      if (!slash && !closingTag && htmlRawNames.includes(name)) {
+        marker = constants.htmlRaw;
+        return self.interrupt ? ok2(code) : continuation(code);
+      }
+      if (htmlBlockNames.includes(buffer.toLowerCase())) {
+        marker = constants.htmlBasic;
+        if (slash) {
+          effects.consume(code);
+          return basicSelfClosing;
+        }
+        return self.interrupt ? ok2(code) : continuation(code);
+      }
+      marker = constants.htmlComplete;
+      return self.interrupt && !self.parser.lazy[self.now().line] ? nok(code) : closingTag ? completeClosingTagAfter(code) : completeAttributeNameBefore(code);
+    }
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      buffer += String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function basicSelfClosing(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return self.interrupt ? ok2 : continuation;
+    }
+    return nok(code);
+  }
+  function completeClosingTagAfter(code) {
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeClosingTagAfter;
+    }
+    return completeEnd(code);
+  }
+  function completeAttributeNameBefore(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      return completeEnd;
+    }
+    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
+      effects.consume(code);
+      return completeAttributeName;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeNameBefore;
+    }
+    return completeEnd(code);
+  }
+  function completeAttributeName(code) {
+    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return completeAttributeName;
+    }
+    return completeAttributeNameAfter(code);
+  }
+  function completeAttributeNameAfter(code) {
+    if (code === codes.equalsTo) {
+      effects.consume(code);
+      return completeAttributeValueBefore;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeNameAfter;
+    }
+    return completeAttributeNameBefore(code);
+  }
+  function completeAttributeValueBefore(code) {
+    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.quotationMark || code === codes.apostrophe) {
+      effects.consume(code);
+      markerB = code;
+      return completeAttributeValueQuoted;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeValueBefore;
+    }
+    return completeAttributeValueUnquoted(code);
+  }
+  function completeAttributeValueQuoted(code) {
+    if (code === markerB) {
+      effects.consume(code);
+      markerB = null;
+      return completeAttributeValueQuotedAfter;
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return completeAttributeValueQuoted;
+  }
+  function completeAttributeValueUnquoted(code) {
+    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.slash || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent || markdownLineEndingOrSpace(code)) {
+      return completeAttributeNameAfter(code);
+    }
+    effects.consume(code);
+    return completeAttributeValueUnquoted;
+  }
+  function completeAttributeValueQuotedAfter(code) {
+    if (code === codes.slash || code === codes.greaterThan || markdownSpace(code)) {
+      return completeAttributeNameBefore(code);
+    }
+    return nok(code);
+  }
+  function completeEnd(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return completeAfter;
+    }
+    return nok(code);
+  }
+  function completeAfter(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return continuation(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAfter;
+    }
+    return nok(code);
+  }
+  function continuation(code) {
+    if (code === codes.dash && marker === constants.htmlComment) {
+      effects.consume(code);
+      return continuationCommentInside;
+    }
+    if (code === codes.lessThan && marker === constants.htmlRaw) {
+      effects.consume(code);
+      return continuationRawTagOpen;
+    }
+    if (code === codes.greaterThan && marker === constants.htmlDeclaration) {
+      effects.consume(code);
+      return continuationClose;
+    }
+    if (code === codes.questionMark && marker === constants.htmlInstruction) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    if (code === codes.rightSquareBracket && marker === constants.htmlCdata) {
+      effects.consume(code);
+      return continuationCdataInside;
+    }
+    if (markdownLineEnding(code) && (marker === constants.htmlBasic || marker === constants.htmlComplete)) {
+      effects.exit(types.htmlFlowData);
+      return effects.check(blankLineBefore, continuationAfter, continuationStart)(code);
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.htmlFlowData);
+      return continuationStart(code);
+    }
+    effects.consume(code);
+    return continuation;
+  }
+  function continuationStart(code) {
+    return effects.check(nonLazyContinuationStart, continuationStartNonLazy, continuationAfter)(code);
+  }
+  function continuationStartNonLazy(code) {
+    ok(markdownLineEnding(code));
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return continuationBefore;
+  }
+  function continuationBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return continuationStart(code);
+    }
+    effects.enter(types.htmlFlowData);
+    return continuation(code);
+  }
+  function continuationCommentInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationRawTagOpen(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      buffer = "";
+      return continuationRawEndTag;
+    }
+    return continuation(code);
+  }
+  function continuationRawEndTag(code) {
+    if (code === codes.greaterThan) {
+      const name = buffer.toLowerCase();
+      if (htmlRawNames.includes(name)) {
+        effects.consume(code);
+        return continuationClose;
+      }
+      return continuation(code);
+    }
+    if (asciiAlpha(code) && buffer.length < constants.htmlRawSizeMax) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer += String.fromCharCode(code);
+      return continuationRawEndTag;
+    }
+    return continuation(code);
+  }
+  function continuationCdataInside(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationDeclarationInside(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return continuationClose;
+    }
+    if (code === codes.dash && marker === constants.htmlComment) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationClose(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.htmlFlowData);
+      return continuationAfter(code);
+    }
+    effects.consume(code);
+    return continuationClose;
+  }
+  function continuationAfter(code) {
+    effects.exit(types.htmlFlow);
+    return ok2(code);
+  }
+}
+function tokenizeNonLazyContinuationStart(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
+  }
+}
+function tokenizeBlankLineBefore(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(markdownLineEnding(code), "expected a line ending");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return effects.attempt(blankLine, ok2, nok);
+  }
+}
+var htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
+function tokenizeHtmlText(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  let index;
+  let returnState;
+  return start;
+  function start(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.htmlText);
+    effects.enter(types.htmlTextData);
+    effects.consume(code);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.exclamationMark) {
+      effects.consume(code);
+      return declarationOpen;
+    }
+    if (code === codes.slash) {
+      effects.consume(code);
+      return tagCloseStart;
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      return instruction;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return tagOpen;
+    }
+    return nok(code);
+  }
+  function declarationOpen(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentOpenInside;
+    }
+    if (code === codes.leftSquareBracket) {
+      effects.consume(code);
+      index = 0;
+      return cdataOpenInside;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return declaration;
+    }
+    return nok(code);
+  }
+  function commentOpenInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentEnd;
+    }
+    return nok(code);
+  }
+  function comment(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = comment;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return comment;
+  }
+  function commentClose(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentEnd;
+    }
+    return comment(code);
+  }
+  function commentEnd(code) {
+    return code === codes.greaterThan ? end(code) : code === codes.dash ? commentClose(code) : comment(code);
+  }
+  function cdataOpenInside(code) {
+    const value = constants.cdataOpeningString;
+    if (code === value.charCodeAt(index++)) {
+      effects.consume(code);
+      return index === value.length ? cdata : cdataOpenInside;
+    }
+    return nok(code);
+  }
+  function cdata(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = cdata;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return cdata;
+  }
+  function cdataClose(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataEnd;
+    }
+    return cdata(code);
+  }
+  function cdataEnd(code) {
+    if (code === codes.greaterThan) {
+      return end(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataEnd;
+    }
+    return cdata(code);
+  }
+  function declaration(code) {
+    if (code === codes.eof || code === codes.greaterThan) {
+      return end(code);
+    }
+    if (markdownLineEnding(code)) {
+      returnState = declaration;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return declaration;
+  }
+  function instruction(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      return instructionClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = instruction;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return instruction;
+  }
+  function instructionClose(code) {
+    return code === codes.greaterThan ? end(code) : instruction(code);
+  }
+  function tagCloseStart(code) {
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return tagClose;
+    }
+    return nok(code);
+  }
+  function tagClose(code) {
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagClose;
+    }
+    return tagCloseBetween(code);
+  }
+  function tagCloseBetween(code) {
+    if (markdownLineEnding(code)) {
+      returnState = tagCloseBetween;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagCloseBetween;
+    }
+    return end(code);
+  }
+  function tagOpen(code) {
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagOpen;
+    }
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    return nok(code);
+  }
+  function tagOpenBetween(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      return end;
+    }
+    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
+      effects.consume(code);
+      return tagOpenAttributeName;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenBetween;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenBetween;
+    }
+    return end(code);
+  }
+  function tagOpenAttributeName(code) {
+    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagOpenAttributeName;
+    }
+    return tagOpenAttributeNameAfter(code);
+  }
+  function tagOpenAttributeNameAfter(code) {
+    if (code === codes.equalsTo) {
+      effects.consume(code);
+      return tagOpenAttributeValueBefore;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeNameAfter;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenAttributeNameAfter;
+    }
+    return tagOpenBetween(code);
+  }
+  function tagOpenAttributeValueBefore(code) {
+    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.quotationMark || code === codes.apostrophe) {
+      effects.consume(code);
+      marker = code;
+      return tagOpenAttributeValueQuoted;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeValueBefore;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenAttributeValueBefore;
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueUnquoted;
+  }
+  function tagOpenAttributeValueQuoted(code) {
+    if (code === marker) {
+      effects.consume(code);
+      marker = undefined;
+      return tagOpenAttributeValueQuotedAfter;
+    }
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeValueQuoted;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueQuoted;
+  }
+  function tagOpenAttributeValueUnquoted(code) {
+    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.lessThan || code === codes.equalsTo || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueUnquoted;
+  }
+  function tagOpenAttributeValueQuotedAfter(code) {
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    return nok(code);
+  }
+  function end(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      effects.exit(types.htmlTextData);
+      effects.exit(types.htmlText);
+      return ok2;
+    }
+    return nok(code);
+  }
+  function lineEndingBefore(code) {
+    ok(returnState, "expected return state");
+    ok(markdownLineEnding(code), "expected eol");
+    effects.exit(types.htmlTextData);
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return lineEndingAfter;
+  }
+  function lineEndingAfter(code) {
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
+  }
+  function lineEndingAfterPrefix(code) {
+    effects.enter(types.htmlTextData);
+    return returnState(code);
+  }
+}
+var labelEnd = {
+  name: "labelEnd",
+  resolveAll: resolveAllLabelEnd,
+  resolveTo: resolveToLabelEnd,
+  tokenize: tokenizeLabelEnd
+};
+var resourceConstruct = { tokenize: tokenizeResource };
+var referenceFullConstruct = { tokenize: tokenizeReferenceFull };
+var referenceCollapsedConstruct = { tokenize: tokenizeReferenceCollapsed };
+function resolveAllLabelEnd(events) {
+  let index = -1;
+  const newEvents = [];
+  while (++index < events.length) {
+    const token = events[index][1];
+    newEvents.push(events[index]);
+    if (token.type === types.labelImage || token.type === types.labelLink || token.type === types.labelEnd) {
+      const offset = token.type === types.labelImage ? 4 : 2;
+      token.type = types.data;
+      index += offset;
+    }
+  }
+  if (events.length !== newEvents.length) {
+    splice(events, 0, events.length, newEvents);
+  }
+  return events;
+}
+function resolveToLabelEnd(events, context) {
+  let index = events.length;
+  let offset = 0;
+  let token;
+  let open;
+  let close;
+  let media;
+  while (index--) {
+    token = events[index][1];
+    if (open) {
+      if (token.type === types.link || token.type === types.labelLink && token._inactive) {
+        break;
+      }
+      if (events[index][0] === "enter" && token.type === types.labelLink) {
+        token._inactive = true;
+      }
+    } else if (close) {
+      if (events[index][0] === "enter" && (token.type === types.labelImage || token.type === types.labelLink) && !token._balanced) {
+        open = index;
+        if (token.type !== types.labelLink) {
+          offset = 2;
+          break;
+        }
+      }
+    } else if (token.type === types.labelEnd) {
+      close = index;
+    }
+  }
+  ok(open !== undefined, "`open` is supposed to be found");
+  ok(close !== undefined, "`close` is supposed to be found");
+  const group = {
+    type: events[open][1].type === types.labelLink ? types.link : types.image,
+    start: { ...events[open][1].start },
+    end: { ...events[events.length - 1][1].end }
+  };
+  const label = {
+    type: types.label,
+    start: { ...events[open][1].start },
+    end: { ...events[close][1].end }
+  };
+  const text = {
+    type: types.labelText,
+    start: { ...events[open + offset + 2][1].end },
+    end: { ...events[close - 2][1].start }
+  };
+  media = [
+    ["enter", group, context],
+    ["enter", label, context]
+  ];
+  media = push(media, events.slice(open + 1, open + offset + 3));
+  media = push(media, [["enter", text, context]]);
+  ok(context.parser.constructs.insideSpan.null, "expected `insideSpan.null` to be populated");
+  media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
+  media = push(media, [
+    ["exit", text, context],
+    events[close - 2],
+    events[close - 1],
+    ["exit", label, context]
+  ]);
+  media = push(media, events.slice(close + 1));
+  media = push(media, [["exit", group, context]]);
+  splice(events, open, events.length, media);
+  return events;
+}
+function tokenizeLabelEnd(effects, ok2, nok) {
+  const self = this;
+  let index = self.events.length;
+  let labelStart;
+  let defined;
+  while (index--) {
+    if ((self.events[index][1].type === types.labelImage || self.events[index][1].type === types.labelLink) && !self.events[index][1]._balanced) {
+      labelStart = self.events[index][1];
+      break;
+    }
+  }
+  return start;
+  function start(code) {
+    ok(code === codes.rightSquareBracket, "expected `]`");
+    if (!labelStart) {
+      return nok(code);
+    }
+    if (labelStart._inactive) {
+      return labelEndNok(code);
+    }
+    defined = self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() })));
+    effects.enter(types.labelEnd);
+    effects.enter(types.labelMarker);
+    effects.consume(code);
+    effects.exit(types.labelMarker);
+    effects.exit(types.labelEnd);
+    return after;
+  }
+  function after(code) {
+    if (code === codes.leftParenthesis) {
+      return effects.attempt(resourceConstruct, labelEndOk, defined ? labelEndOk : labelEndNok)(code);
+    }
+    if (code === codes.leftSquareBracket) {
+      return effects.attempt(referenceFullConstruct, labelEndOk, defined ? referenceNotFull : labelEndNok)(code);
+    }
+    return defined ? labelEndOk(code) : labelEndNok(code);
+  }
+  function referenceNotFull(code) {
+    return effects.attempt(referenceCollapsedConstruct, labelEndOk, labelEndNok)(code);
+  }
+  function labelEndOk(code) {
+    return ok2(code);
+  }
+  function labelEndNok(code) {
+    labelStart._balanced = true;
+    return nok(code);
+  }
+}
+function tokenizeResource(effects, ok2, nok) {
+  return resourceStart;
+  function resourceStart(code) {
+    ok(code === codes.leftParenthesis, "expected left paren");
+    effects.enter(types.resource);
+    effects.enter(types.resourceMarker);
+    effects.consume(code);
+    effects.exit(types.resourceMarker);
+    return resourceBefore;
+  }
+  function resourceBefore(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceOpen)(code) : resourceOpen(code);
+  }
+  function resourceOpen(code) {
+    if (code === codes.rightParenthesis) {
+      return resourceEnd(code);
+    }
+    return factoryDestination(effects, resourceDestinationAfter, resourceDestinationMissing, types.resourceDestination, types.resourceDestinationLiteral, types.resourceDestinationLiteralMarker, types.resourceDestinationRaw, types.resourceDestinationString, constants.linkResourceDestinationBalanceMax)(code);
+  }
+  function resourceDestinationAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceBetween)(code) : resourceEnd(code);
+  }
+  function resourceDestinationMissing(code) {
+    return nok(code);
+  }
+  function resourceBetween(code) {
+    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
+      return factoryTitle(effects, resourceTitleAfter, nok, types.resourceTitle, types.resourceTitleMarker, types.resourceTitleString)(code);
+    }
+    return resourceEnd(code);
+  }
+  function resourceTitleAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceEnd)(code) : resourceEnd(code);
+  }
+  function resourceEnd(code) {
+    if (code === codes.rightParenthesis) {
+      effects.enter(types.resourceMarker);
+      effects.consume(code);
+      effects.exit(types.resourceMarker);
+      effects.exit(types.resource);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+function tokenizeReferenceFull(effects, ok2, nok) {
+  const self = this;
+  return referenceFull;
+  function referenceFull(code) {
+    ok(code === codes.leftSquareBracket, "expected left bracket");
+    return factoryLabel.call(self, effects, referenceFullAfter, referenceFullMissing, types.reference, types.referenceMarker, types.referenceString)(code);
+  }
+  function referenceFullAfter(code) {
+    return self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1))) ? ok2(code) : nok(code);
+  }
+  function referenceFullMissing(code) {
+    return nok(code);
+  }
+}
+function tokenizeReferenceCollapsed(effects, ok2, nok) {
+  return referenceCollapsedStart;
+  function referenceCollapsedStart(code) {
+    ok(code === codes.leftSquareBracket, "expected left bracket");
+    effects.enter(types.reference);
+    effects.enter(types.referenceMarker);
+    effects.consume(code);
+    effects.exit(types.referenceMarker);
+    return referenceCollapsedOpen;
+  }
+  function referenceCollapsedOpen(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.enter(types.referenceMarker);
+      effects.consume(code);
+      effects.exit(types.referenceMarker);
+      effects.exit(types.reference);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+var labelStartImage = {
+  name: "labelStartImage",
+  resolveAll: labelEnd.resolveAll,
+  tokenize: tokenizeLabelStartImage
+};
+function tokenizeLabelStartImage(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(code === codes.exclamationMark, "expected `!`");
+    effects.enter(types.labelImage);
+    effects.enter(types.labelImageMarker);
+    effects.consume(code);
+    effects.exit(types.labelImageMarker);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.leftSquareBracket) {
+      effects.enter(types.labelMarker);
+      effects.consume(code);
+      effects.exit(types.labelMarker);
+      effects.exit(types.labelImage);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+  }
+}
+var labelStartLink = {
+  name: "labelStartLink",
+  resolveAll: labelEnd.resolveAll,
+  tokenize: tokenizeLabelStartLink
+};
+function tokenizeLabelStartLink(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    effects.enter(types.labelLink);
+    effects.enter(types.labelMarker);
+    effects.consume(code);
+    effects.exit(types.labelMarker);
+    effects.exit(types.labelLink);
+    return after;
+  }
+  function after(code) {
+    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+  }
+}
+var lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
+function tokenizeLineEnding(effects, ok2) {
+  return start;
+  function start(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, ok2, types.linePrefix);
+  }
+}
+var thematicBreak = {
+  name: "thematicBreak",
+  tokenize: tokenizeThematicBreak
+};
+function tokenizeThematicBreak(effects, ok2, nok) {
+  let size = 0;
+  let marker;
+  return start;
+  function start(code) {
+    effects.enter(types.thematicBreak);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.asterisk || code === codes.dash || code === codes.underscore, "expected `*`, `-`, or `_`");
+    marker = code;
+    return atBreak(code);
+  }
+  function atBreak(code) {
+    if (code === marker) {
+      effects.enter(types.thematicBreakSequence);
+      return sequence(code);
+    }
+    if (size >= constants.thematicBreakMarkerCountMin && (code === codes.eof || markdownLineEnding(code))) {
+      effects.exit(types.thematicBreak);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+  function sequence(code) {
+    if (code === marker) {
+      effects.consume(code);
+      size++;
+      return sequence;
+    }
+    effects.exit(types.thematicBreakSequence);
+    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
+  }
+}
+var list = {
+  continuation: { tokenize: tokenizeListContinuation },
+  exit: tokenizeListEnd,
+  name: "list",
+  tokenize: tokenizeListStart
+};
+var listItemPrefixWhitespaceConstruct = {
+  partial: true,
+  tokenize: tokenizeListItemPrefixWhitespace
+};
+var indentConstruct = { partial: true, tokenize: tokenizeIndent };
+function tokenizeListStart(effects, ok2, nok) {
+  const self = this;
+  const tail = self.events[self.events.length - 1];
+  let initialSize = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
+  let size = 0;
+  return start;
+  function start(code) {
+    ok(self.containerState, "expected state");
+    const kind = self.containerState.type || (code === codes.asterisk || code === codes.plusSign || code === codes.dash ? types.listUnordered : types.listOrdered);
+    if (kind === types.listUnordered ? !self.containerState.marker || code === self.containerState.marker : asciiDigit(code)) {
+      if (!self.containerState.type) {
+        self.containerState.type = kind;
+        effects.enter(kind, { _container: true });
+      }
+      if (kind === types.listUnordered) {
+        effects.enter(types.listItemPrefix);
+        return code === codes.asterisk || code === codes.dash ? effects.check(thematicBreak, nok, atMarker)(code) : atMarker(code);
+      }
+      if (!self.interrupt || code === codes.digit1) {
+        effects.enter(types.listItemPrefix);
+        effects.enter(types.listItemValue);
+        return inside(code);
+      }
+    }
+    return nok(code);
+  }
+  function inside(code) {
+    ok(self.containerState, "expected state");
+    if (asciiDigit(code) && ++size < constants.listItemValueSizeMax) {
+      effects.consume(code);
+      return inside;
+    }
+    if ((!self.interrupt || size < 2) && (self.containerState.marker ? code === self.containerState.marker : code === codes.rightParenthesis || code === codes.dot)) {
+      effects.exit(types.listItemValue);
+      return atMarker(code);
+    }
+    return nok(code);
+  }
+  function atMarker(code) {
+    ok(self.containerState, "expected state");
+    ok(code !== codes.eof, "eof (`null`) is not a marker");
+    effects.enter(types.listItemMarker);
+    effects.consume(code);
+    effects.exit(types.listItemMarker);
+    self.containerState.marker = self.containerState.marker || code;
+    return effects.check(blankLine, self.interrupt ? nok : onBlank, effects.attempt(listItemPrefixWhitespaceConstruct, endOfPrefix, otherPrefix));
+  }
+  function onBlank(code) {
+    ok(self.containerState, "expected state");
+    self.containerState.initialBlankLine = true;
+    initialSize++;
+    return endOfPrefix(code);
+  }
+  function otherPrefix(code) {
+    if (markdownSpace(code)) {
+      effects.enter(types.listItemPrefixWhitespace);
+      effects.consume(code);
+      effects.exit(types.listItemPrefixWhitespace);
+      return endOfPrefix;
+    }
+    return nok(code);
+  }
+  function endOfPrefix(code) {
+    ok(self.containerState, "expected state");
+    self.containerState.size = initialSize + self.sliceSerialize(effects.exit(types.listItemPrefix), true).length;
+    return ok2(code);
+  }
+}
+function tokenizeListContinuation(effects, ok2, nok) {
+  const self = this;
+  ok(self.containerState, "expected state");
+  self.containerState._closeFlow = undefined;
+  return effects.check(blankLine, onBlank, notBlank);
+  function onBlank(code) {
+    ok(self.containerState, "expected state");
+    ok(typeof self.containerState.size === "number", "expected size");
+    self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
+    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
+  }
+  function notBlank(code) {
+    ok(self.containerState, "expected state");
+    if (self.containerState.furtherBlankLines || !markdownSpace(code)) {
+      self.containerState.furtherBlankLines = undefined;
+      self.containerState.initialBlankLine = undefined;
+      return notInCurrentItem(code);
+    }
+    self.containerState.furtherBlankLines = undefined;
+    self.containerState.initialBlankLine = undefined;
+    return effects.attempt(indentConstruct, ok2, notInCurrentItem)(code);
+  }
+  function notInCurrentItem(code) {
+    ok(self.containerState, "expected state");
+    self.containerState._closeFlow = true;
+    self.interrupt = undefined;
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+  }
+}
+function tokenizeIndent(effects, ok2, nok) {
+  const self = this;
+  ok(self.containerState, "expected state");
+  ok(typeof self.containerState.size === "number", "expected size");
+  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
+  function afterPrefix(code) {
+    ok(self.containerState, "expected state");
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.listItemIndent && tail[2].sliceSerialize(tail[1], true).length === self.containerState.size ? ok2(code) : nok(code);
+  }
+}
+function tokenizeListEnd(effects) {
+  ok(this.containerState, "expected state");
+  ok(typeof this.containerState.type === "string", "expected type");
+  effects.exit(this.containerState.type);
+}
+function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
+  const self = this;
+  ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
+  }
+}
+var setextUnderline = {
+  name: "setextUnderline",
+  resolveTo: resolveToSetextUnderline,
+  tokenize: tokenizeSetextUnderline
+};
+function resolveToSetextUnderline(events, context) {
+  let index = events.length;
+  let content3;
+  let text;
+  let definition2;
+  while (index--) {
+    if (events[index][0] === "enter") {
+      if (events[index][1].type === types.content) {
+        content3 = index;
+        break;
+      }
+      if (events[index][1].type === types.paragraph) {
+        text = index;
+      }
+    } else {
+      if (events[index][1].type === types.content) {
+        events.splice(index, 1);
+      }
+      if (!definition2 && events[index][1].type === types.definition) {
+        definition2 = index;
+      }
+    }
+  }
+  ok(text !== undefined, "expected a `text` index to be found");
+  ok(content3 !== undefined, "expected a `text` index to be found");
+  ok(events[content3][2] === context, "enter context should be same");
+  ok(events[events.length - 1][2] === context, "enter context should be same");
+  const heading = {
+    type: types.setextHeading,
+    start: { ...events[content3][1].start },
+    end: { ...events[events.length - 1][1].end }
+  };
+  events[text][1].type = types.setextHeadingText;
+  if (definition2) {
+    events.splice(text, 0, ["enter", heading, context]);
+    events.splice(definition2 + 1, 0, ["exit", events[content3][1], context]);
+    events[content3][1].end = { ...events[definition2][1].end };
+  } else {
+    events[content3][1] = heading;
+  }
+  events.push(["exit", heading, context]);
+  return events;
+}
+function tokenizeSetextUnderline(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  return start;
+  function start(code) {
+    let index = self.events.length;
+    let paragraph;
+    ok(code === codes.dash || code === codes.equalsTo, "expected `=` or `-`");
+    while (index--) {
+      if (self.events[index][1].type !== types.lineEnding && self.events[index][1].type !== types.linePrefix && self.events[index][1].type !== types.content) {
+        paragraph = self.events[index][1].type === types.paragraph;
+        break;
+      }
+    }
+    if (!self.parser.lazy[self.now().line] && (self.interrupt || paragraph)) {
+      effects.enter(types.setextHeadingLine);
+      marker = code;
+      return before(code);
+    }
+    return nok(code);
+  }
+  function before(code) {
+    effects.enter(types.setextHeadingLineSequence);
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker) {
+      effects.consume(code);
+      return inside;
+    }
+    effects.exit(types.setextHeadingLineSequence);
+    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
+  }
+  function after(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.setextHeadingLine);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+var flow = { tokenize: initializeFlow };
+function initializeFlow(effects) {
+  const self = this;
+  const initial = effects.attempt(blankLine, atBlankEnding, effects.attempt(this.parser.constructs.flowInitial, afterConstruct, factorySpace(effects, effects.attempt(this.parser.constructs.flow, afterConstruct, effects.attempt(content2, afterConstruct)), types.linePrefix)));
+  return initial;
+  function atBlankEnding(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEndingBlank);
+    effects.consume(code);
+    effects.exit(types.lineEndingBlank);
+    self.currentConstruct = undefined;
+    return initial;
+  }
+  function afterConstruct(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    self.currentConstruct = undefined;
+    return initial;
+  }
+}
+var resolver = { resolveAll: createResolver() };
+var string = initializeFactory("string");
+var text = initializeFactory("text");
+function initializeFactory(field) {
+  return {
+    resolveAll: createResolver(field === "text" ? resolveAllLineSuffixes : undefined),
+    tokenize: initializeText
+  };
+  function initializeText(effects) {
+    const self = this;
+    const constructs2 = this.parser.constructs[field];
+    const text2 = effects.attempt(constructs2, start, notText);
+    return start;
+    function start(code) {
+      return atBreak(code) ? text2(code) : notText(code);
+    }
+    function notText(code) {
+      if (code === codes.eof) {
+        effects.consume(code);
+        return;
+      }
+      effects.enter(types.data);
+      effects.consume(code);
+      return data;
+    }
+    function data(code) {
+      if (atBreak(code)) {
+        effects.exit(types.data);
+        return text2(code);
+      }
+      effects.consume(code);
+      return data;
+    }
+    function atBreak(code) {
+      if (code === codes.eof) {
+        return true;
+      }
+      const list2 = constructs2[code];
+      let index = -1;
+      if (list2) {
+        ok(Array.isArray(list2), "expected `disable.null` to be populated");
+        while (++index < list2.length) {
+          const item = list2[index];
+          if (!item.previous || item.previous.call(self, self.previous)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+  }
+}
+function createResolver(extraResolver) {
+  return resolveAllText;
+  function resolveAllText(events, context) {
+    let index = -1;
+    let enter;
+    while (++index <= events.length) {
+      if (enter === undefined) {
+        if (events[index] && events[index][1].type === types.data) {
+          enter = index;
+          index++;
+        }
+      } else if (!events[index] || events[index][1].type !== types.data) {
+        if (index !== enter + 2) {
+          events[enter][1].end = events[index - 1][1].end;
+          events.splice(enter + 2, index - enter - 2);
+          index = enter + 2;
+        }
+        enter = undefined;
+      }
+    }
+    return extraResolver ? extraResolver(events, context) : events;
+  }
+}
+function resolveAllLineSuffixes(events, context) {
+  let eventIndex = 0;
+  while (++eventIndex <= events.length) {
+    if ((eventIndex === events.length || events[eventIndex][1].type === types.lineEnding) && events[eventIndex - 1][1].type === types.data) {
+      const data = events[eventIndex - 1][1];
+      const chunks = context.sliceStream(data);
+      let index = chunks.length;
+      let bufferIndex = -1;
+      let size = 0;
+      let tabs;
+      while (index--) {
+        const chunk = chunks[index];
+        if (typeof chunk === "string") {
+          bufferIndex = chunk.length;
+          while (chunk.charCodeAt(bufferIndex - 1) === codes.space) {
+            size++;
+            bufferIndex--;
+          }
+          if (bufferIndex)
+            break;
+          bufferIndex = -1;
+        } else if (chunk === codes.horizontalTab) {
+          tabs = true;
+          size++;
+        } else if (chunk === codes.virtualSpace) {} else {
+          index++;
+          break;
+        }
+      }
+      if (context._contentTypeTextTrailing && eventIndex === events.length) {
+        size = 0;
+      }
+      if (size) {
+        const token = {
+          type: eventIndex === events.length || tabs || size < constants.hardBreakPrefixSizeMin ? types.lineSuffix : types.hardBreakTrailing,
+          start: {
+            _bufferIndex: index ? bufferIndex : data.start._bufferIndex + bufferIndex,
+            _index: data.start._index + index,
+            line: data.end.line,
+            column: data.end.column - size,
+            offset: data.end.offset - size
+          },
+          end: { ...data.end }
+        };
+        data.end = { ...token.start };
+        if (data.start.offset === data.end.offset) {
+          Object.assign(data, token);
+        } else {
+          events.splice(eventIndex, 0, ["enter", token, context], ["exit", token, context]);
+          eventIndex += 2;
+        }
+      }
+      eventIndex++;
+    }
+  }
+  return events;
+}
+var exports_constructs = {};
+__export(exports_constructs, {
+  attentionMarkers: () => attentionMarkers,
+  contentInitial: () => contentInitial,
+  disable: () => disable,
+  document: () => document3,
+  flow: () => flow2,
+  flowInitial: () => flowInitial,
+  insideSpan: () => insideSpan,
+  string: () => string2,
+  text: () => text2
+});
+var document3 = {
+  [codes.asterisk]: list,
+  [codes.plusSign]: list,
+  [codes.dash]: list,
+  [codes.digit0]: list,
+  [codes.digit1]: list,
+  [codes.digit2]: list,
+  [codes.digit3]: list,
+  [codes.digit4]: list,
+  [codes.digit5]: list,
+  [codes.digit6]: list,
+  [codes.digit7]: list,
+  [codes.digit8]: list,
+  [codes.digit9]: list,
+  [codes.greaterThan]: blockQuote
+};
+var contentInitial = {
+  [codes.leftSquareBracket]: definition
+};
+var flowInitial = {
+  [codes.horizontalTab]: codeIndented,
+  [codes.virtualSpace]: codeIndented,
+  [codes.space]: codeIndented
+};
+var flow2 = {
+  [codes.numberSign]: headingAtx,
+  [codes.asterisk]: thematicBreak,
+  [codes.dash]: [setextUnderline, thematicBreak],
+  [codes.lessThan]: htmlFlow,
+  [codes.equalsTo]: setextUnderline,
+  [codes.underscore]: thematicBreak,
+  [codes.graveAccent]: codeFenced,
+  [codes.tilde]: codeFenced
+};
+var string2 = {
+  [codes.ampersand]: characterReference,
+  [codes.backslash]: characterEscape
+};
+var text2 = {
+  [codes.carriageReturn]: lineEnding,
+  [codes.lineFeed]: lineEnding,
+  [codes.carriageReturnLineFeed]: lineEnding,
+  [codes.exclamationMark]: labelStartImage,
+  [codes.ampersand]: characterReference,
+  [codes.asterisk]: attention,
+  [codes.lessThan]: [autolink, htmlText],
+  [codes.leftSquareBracket]: labelStartLink,
+  [codes.backslash]: [hardBreakEscape, characterEscape],
+  [codes.rightSquareBracket]: labelEnd,
+  [codes.underscore]: attention,
+  [codes.graveAccent]: codeText
+};
+var insideSpan = { null: [attention, resolver] };
+var attentionMarkers = { null: [codes.asterisk, codes.underscore] };
+var disable = { null: [] };
+var import_debug = __toESM(require_src(), 1);
+var debug = import_debug.default("micromark");
+function createTokenizer(parser, initialize, from) {
+  let point = {
+    _bufferIndex: -1,
+    _index: 0,
+    line: from && from.line || 1,
+    column: from && from.column || 1,
+    offset: from && from.offset || 0
+  };
+  const columnStart = {};
+  const resolveAllConstructs = [];
+  let chunks = [];
+  let stack = [];
+  let consumed = true;
+  const effects = {
+    attempt: constructFactory(onsuccessfulconstruct),
+    check: constructFactory(onsuccessfulcheck),
+    consume,
+    enter,
+    exit: exit2,
+    interrupt: constructFactory(onsuccessfulcheck, { interrupt: true })
+  };
+  const context = {
+    code: codes.eof,
+    containerState: {},
+    defineSkip,
+    events: [],
+    now,
+    parser,
+    previous: codes.eof,
+    sliceSerialize,
+    sliceStream,
+    write
+  };
+  let state = initialize.tokenize.call(context, effects);
+  let expectedCode;
+  if (initialize.resolveAll) {
+    resolveAllConstructs.push(initialize);
+  }
+  return context;
+  function write(slice) {
+    chunks = push(chunks, slice);
+    main();
+    if (chunks[chunks.length - 1] !== codes.eof) {
+      return [];
+    }
+    addResult(initialize, 0);
+    context.events = resolveAll(resolveAllConstructs, context.events, context);
+    return context.events;
+  }
+  function sliceSerialize(token, expandTabs) {
+    return serializeChunks(sliceStream(token), expandTabs);
+  }
+  function sliceStream(token) {
+    return sliceChunks(chunks, token);
+  }
+  function now() {
+    const { _bufferIndex, _index, line, column, offset } = point;
+    return { _bufferIndex, _index, line, column, offset };
+  }
+  function defineSkip(value) {
+    columnStart[value.line] = value.column;
+    accountForPotentialSkip();
+    debug("position: define skip: `%j`", point);
+  }
+  function main() {
+    let chunkIndex;
+    while (point._index < chunks.length) {
+      const chunk = chunks[point._index];
+      if (typeof chunk === "string") {
+        chunkIndex = point._index;
+        if (point._bufferIndex < 0) {
+          point._bufferIndex = 0;
+        }
+        while (point._index === chunkIndex && point._bufferIndex < chunk.length) {
+          go(chunk.charCodeAt(point._bufferIndex));
+        }
+      } else {
+        go(chunk);
+      }
+    }
+  }
+  function go(code) {
+    ok(consumed === true, "expected character to be consumed");
+    consumed = undefined;
+    debug("main: passing `%s` to %s", code, state && state.name);
+    expectedCode = code;
+    ok(typeof state === "function", "expected state");
+    state = state(code);
+  }
+  function consume(code) {
+    ok(code === expectedCode, "expected given code to equal expected code");
+    debug("consume: `%s`", code);
+    ok(consumed === undefined, "expected code to not have been consumed: this might be because `return x(code)` instead of `return x` was used");
+    ok(code === null ? context.events.length === 0 || context.events[context.events.length - 1][0] === "exit" : context.events[context.events.length - 1][0] === "enter", "expected last token to be open");
+    if (markdownLineEnding(code)) {
+      point.line++;
+      point.column = 1;
+      point.offset += code === codes.carriageReturnLineFeed ? 2 : 1;
+      accountForPotentialSkip();
+      debug("position: after eol: `%j`", point);
+    } else if (code !== codes.virtualSpace) {
+      point.column++;
+      point.offset++;
+    }
+    if (point._bufferIndex < 0) {
+      point._index++;
+    } else {
+      point._bufferIndex++;
+      if (point._bufferIndex === chunks[point._index].length) {
+        point._bufferIndex = -1;
+        point._index++;
+      }
+    }
+    context.previous = code;
+    consumed = true;
+  }
+  function enter(type, fields) {
+    const token = fields || {};
+    token.type = type;
+    token.start = now();
+    ok(typeof type === "string", "expected string type");
+    ok(type.length > 0, "expected non-empty string");
+    debug("enter: `%s`", type);
+    context.events.push(["enter", token, context]);
+    stack.push(token);
+    return token;
+  }
+  function exit2(type) {
+    ok(typeof type === "string", "expected string type");
+    ok(type.length > 0, "expected non-empty string");
+    const token = stack.pop();
+    ok(token, "cannot close w/o open tokens");
+    token.end = now();
+    ok(type === token.type, "expected exit token to match current token");
+    ok(!(token.start._index === token.end._index && token.start._bufferIndex === token.end._bufferIndex), "expected non-empty token (`" + type + "`)");
+    debug("exit: `%s`", token.type);
+    context.events.push(["exit", token, context]);
+    return token;
+  }
+  function onsuccessfulconstruct(construct, info) {
+    addResult(construct, info.from);
+  }
+  function onsuccessfulcheck(_, info) {
+    info.restore();
+  }
+  function constructFactory(onreturn, fields) {
+    return hook;
+    function hook(constructs2, returnState, bogusState) {
+      let listOfConstructs;
+      let constructIndex;
+      let currentConstruct;
+      let info;
+      return Array.isArray(constructs2) ? handleListOfConstructs(constructs2) : ("tokenize" in constructs2) ? handleListOfConstructs([constructs2]) : handleMapOfConstructs(constructs2);
+      function handleMapOfConstructs(map) {
+        return start;
+        function start(code) {
+          const left = code !== null && map[code];
+          const all2 = code !== null && map.null;
+          const list2 = [
+            ...Array.isArray(left) ? left : left ? [left] : [],
+            ...Array.isArray(all2) ? all2 : all2 ? [all2] : []
+          ];
+          return handleListOfConstructs(list2)(code);
+        }
+      }
+      function handleListOfConstructs(list2) {
+        listOfConstructs = list2;
+        constructIndex = 0;
+        if (list2.length === 0) {
+          ok(bogusState, "expected `bogusState` to be given");
+          return bogusState;
+        }
+        return handleConstruct(list2[constructIndex]);
+      }
+      function handleConstruct(construct) {
+        return start;
+        function start(code) {
+          info = store();
+          currentConstruct = construct;
+          if (!construct.partial) {
+            context.currentConstruct = construct;
+          }
+          ok(context.parser.constructs.disable.null, "expected `disable.null` to be populated");
+          if (construct.name && context.parser.constructs.disable.null.includes(construct.name)) {
+            return nok(code);
+          }
+          return construct.tokenize.call(fields ? Object.assign(Object.create(context), fields) : context, effects, ok2, nok)(code);
+        }
+      }
+      function ok2(code) {
+        ok(code === expectedCode, "expected code");
+        consumed = true;
+        onreturn(currentConstruct, info);
+        return returnState;
+      }
+      function nok(code) {
+        ok(code === expectedCode, "expected code");
+        consumed = true;
+        info.restore();
+        if (++constructIndex < listOfConstructs.length) {
+          return handleConstruct(listOfConstructs[constructIndex]);
+        }
+        return bogusState;
+      }
+    }
+  }
+  function addResult(construct, from2) {
+    if (construct.resolveAll && !resolveAllConstructs.includes(construct)) {
+      resolveAllConstructs.push(construct);
+    }
+    if (construct.resolve) {
+      splice(context.events, from2, context.events.length - from2, construct.resolve(context.events.slice(from2), context));
+    }
+    if (construct.resolveTo) {
+      context.events = construct.resolveTo(context.events, context);
+    }
+    ok(construct.partial || context.events.length === 0 || context.events[context.events.length - 1][0] === "exit", "expected last token to end");
+  }
+  function store() {
+    const startPoint = now();
+    const startPrevious = context.previous;
+    const startCurrentConstruct = context.currentConstruct;
+    const startEventsIndex = context.events.length;
+    const startStack = Array.from(stack);
+    return { from: startEventsIndex, restore };
+    function restore() {
+      point = startPoint;
+      context.previous = startPrevious;
+      context.currentConstruct = startCurrentConstruct;
+      context.events.length = startEventsIndex;
+      stack = startStack;
+      accountForPotentialSkip();
+      debug("position: restore: `%j`", point);
+    }
+  }
+  function accountForPotentialSkip() {
+    if (point.line in columnStart && point.column < 2) {
+      point.column = columnStart[point.line];
+      point.offset += columnStart[point.line] - 1;
+    }
+  }
+}
+function sliceChunks(chunks, token) {
+  const startIndex = token.start._index;
+  const startBufferIndex = token.start._bufferIndex;
+  const endIndex = token.end._index;
+  const endBufferIndex = token.end._bufferIndex;
+  let view;
+  if (startIndex === endIndex) {
+    ok(endBufferIndex > -1, "expected non-negative end buffer index");
+    ok(startBufferIndex > -1, "expected non-negative start buffer index");
+    view = [chunks[startIndex].slice(startBufferIndex, endBufferIndex)];
+  } else {
+    view = chunks.slice(startIndex, endIndex);
+    if (startBufferIndex > -1) {
+      const head = view[0];
+      if (typeof head === "string") {
+        view[0] = head.slice(startBufferIndex);
+      } else {
+        ok(startBufferIndex === 0, "expected `startBufferIndex` to be `0`");
+        view.shift();
+      }
+    }
+    if (endBufferIndex > 0) {
+      view.push(chunks[endIndex].slice(0, endBufferIndex));
+    }
+  }
+  return view;
+}
+function serializeChunks(chunks, expandTabs) {
+  let index = -1;
+  const result = [];
+  let atTab;
+  while (++index < chunks.length) {
+    const chunk = chunks[index];
+    let value;
+    if (typeof chunk === "string") {
+      value = chunk;
+    } else
+      switch (chunk) {
+        case codes.carriageReturn: {
+          value = values.cr;
+          break;
+        }
+        case codes.lineFeed: {
+          value = values.lf;
+          break;
+        }
+        case codes.carriageReturnLineFeed: {
+          value = values.cr + values.lf;
+          break;
+        }
+        case codes.horizontalTab: {
+          value = expandTabs ? values.space : values.ht;
+          break;
+        }
+        case codes.virtualSpace: {
+          if (!expandTabs && atTab)
+            continue;
+          value = values.space;
+          break;
+        }
+        default: {
+          ok(typeof chunk === "number", "expected number");
+          value = String.fromCharCode(chunk);
+        }
+      }
+    atTab = chunk === codes.horizontalTab;
+    result.push(value);
+  }
+  return result.join("");
+}
+function parse(options) {
+  const settings = options || {};
+  const constructs2 = combineExtensions([exports_constructs, ...settings.extensions || []]);
+  const parser = {
+    constructs: constructs2,
+    content: create(content),
+    defined: [],
+    document: create(document2),
+    flow: create(flow),
+    lazy: {},
+    string: create(string),
+    text: create(text)
+  };
+  return parser;
+  function create(initial) {
+    return creator;
+    function creator(from) {
+      return createTokenizer(parser, initial, from);
+    }
+  }
+}
+function postprocess(events) {
+  while (!subtokenize(events)) {}
+  return events;
+}
+var search = /[\0\t\n\r]/g;
+function preprocess() {
+  let column = 1;
+  let buffer = "";
+  let start = true;
+  let atCarriageReturn;
+  return preprocessor;
+  function preprocessor(value, encoding, end) {
+    const chunks = [];
+    let match;
+    let next;
+    let startPosition;
+    let endPosition;
+    let code;
+    value = buffer + (typeof value === "string" ? value.toString() : new TextDecoder(encoding || undefined).decode(value));
+    startPosition = 0;
+    buffer = "";
+    if (start) {
+      if (value.charCodeAt(0) === codes.byteOrderMarker) {
+        startPosition++;
+      }
+      start = undefined;
+    }
+    while (startPosition < value.length) {
+      search.lastIndex = startPosition;
+      match = search.exec(value);
+      endPosition = match && match.index !== undefined ? match.index : value.length;
+      code = value.charCodeAt(endPosition);
+      if (!match) {
+        buffer = value.slice(startPosition);
+        break;
+      }
+      if (code === codes.lf && startPosition === endPosition && atCarriageReturn) {
+        chunks.push(codes.carriageReturnLineFeed);
+        atCarriageReturn = undefined;
+      } else {
+        if (atCarriageReturn) {
+          chunks.push(codes.carriageReturn);
+          atCarriageReturn = undefined;
+        }
+        if (startPosition < endPosition) {
+          chunks.push(value.slice(startPosition, endPosition));
+          column += endPosition - startPosition;
+        }
+        switch (code) {
+          case codes.nul: {
+            chunks.push(codes.replacementCharacter);
+            column++;
+            break;
+          }
+          case codes.ht: {
+            next = Math.ceil(column / constants.tabSize) * constants.tabSize;
+            chunks.push(codes.horizontalTab);
+            while (column++ < next)
+              chunks.push(codes.virtualSpace);
+            break;
+          }
+          case codes.lf: {
+            chunks.push(codes.lineFeed);
+            column = 1;
+            break;
+          }
+          default: {
+            atCarriageReturn = true;
+            column = 1;
+          }
+        }
+      }
+      startPosition = endPosition + 1;
+    }
+    if (end) {
+      if (atCarriageReturn)
+        chunks.push(codes.carriageReturn);
+      if (buffer)
+        chunks.push(buffer);
+      chunks.push(codes.eof);
+    }
+    return chunks;
+  }
+}
+var characterEscapeOrReference = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
+function decodeString(value) {
+  return value.replace(characterEscapeOrReference, decode);
+}
+function decode($0, $1, $2) {
+  if ($1) {
+    return $1;
+  }
+  const head = $2.charCodeAt(0);
+  if (head === codes.numberSign) {
+    const head2 = $2.charCodeAt(1);
+    const hex = head2 === codes.lowercaseX || head2 === codes.uppercaseX;
+    return decodeNumericCharacterReference($2.slice(hex ? 2 : 1), hex ? constants.numericBaseHexadecimal : constants.numericBaseDecimal);
+  }
+  return decodeNamedCharacterReference($2) || $0;
+}
+function stringifyPosition(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  if ("position" in value || "type" in value) {
+    return position(value.position);
+  }
+  if ("start" in value || "end" in value) {
+    return position(value);
+  }
+  if ("line" in value || "column" in value) {
+    return point(value);
+  }
+  return "";
+}
+function point(point2) {
+  return index(point2 && point2.line) + ":" + index(point2 && point2.column);
+}
+function position(pos) {
+  return point(pos && pos.start) + "-" + point(pos && pos.end);
+}
+function index(value) {
+  return value && typeof value === "number" ? value : 1;
+}
+var own2 = {}.hasOwnProperty;
+function fromMarkdown(value, encoding, options) {
+  if (encoding && typeof encoding === "object") {
+    options = encoding;
+    encoding = undefined;
+  }
+  return compiler(options)(postprocess(parse(options).document().write(preprocess()(value, encoding, true))));
+}
+function compiler(options) {
+  const config = {
+    transforms: [],
+    canContainEols: ["emphasis", "fragment", "heading", "paragraph", "strong"],
+    enter: {
+      autolink: opener(link),
+      autolinkProtocol: onenterdata,
+      autolinkEmail: onenterdata,
+      atxHeading: opener(heading),
+      blockQuote: opener(blockQuote2),
+      characterEscape: onenterdata,
+      characterReference: onenterdata,
+      codeFenced: opener(codeFlow),
+      codeFencedFenceInfo: buffer,
+      codeFencedFenceMeta: buffer,
+      codeIndented: opener(codeFlow, buffer),
+      codeText: opener(codeText2, buffer),
+      codeTextData: onenterdata,
+      data: onenterdata,
+      codeFlowValue: onenterdata,
+      definition: opener(definition2),
+      definitionDestinationString: buffer,
+      definitionLabelString: buffer,
+      definitionTitleString: buffer,
+      emphasis: opener(emphasis),
+      hardBreakEscape: opener(hardBreak),
+      hardBreakTrailing: opener(hardBreak),
+      htmlFlow: opener(html, buffer),
+      htmlFlowData: onenterdata,
+      htmlText: opener(html, buffer),
+      htmlTextData: onenterdata,
+      image: opener(image),
+      label: buffer,
+      link: opener(link),
+      listItem: opener(listItem),
+      listItemValue: onenterlistitemvalue,
+      listOrdered: opener(list2, onenterlistordered),
+      listUnordered: opener(list2),
+      paragraph: opener(paragraph),
+      reference: onenterreference,
+      referenceString: buffer,
+      resourceDestinationString: buffer,
+      resourceTitleString: buffer,
+      setextHeading: opener(heading),
+      strong: opener(strong),
+      thematicBreak: opener(thematicBreak2)
+    },
+    exit: {
+      atxHeading: closer(),
+      atxHeadingSequence: onexitatxheadingsequence,
+      autolink: closer(),
+      autolinkEmail: onexitautolinkemail,
+      autolinkProtocol: onexitautolinkprotocol,
+      blockQuote: closer(),
+      characterEscapeValue: onexitdata,
+      characterReferenceMarkerHexadecimal: onexitcharacterreferencemarker,
+      characterReferenceMarkerNumeric: onexitcharacterreferencemarker,
+      characterReferenceValue: onexitcharacterreferencevalue,
+      characterReference: onexitcharacterreference,
+      codeFenced: closer(onexitcodefenced),
+      codeFencedFence: onexitcodefencedfence,
+      codeFencedFenceInfo: onexitcodefencedfenceinfo,
+      codeFencedFenceMeta: onexitcodefencedfencemeta,
+      codeFlowValue: onexitdata,
+      codeIndented: closer(onexitcodeindented),
+      codeText: closer(onexitcodetext),
+      codeTextData: onexitdata,
+      data: onexitdata,
+      definition: closer(),
+      definitionDestinationString: onexitdefinitiondestinationstring,
+      definitionLabelString: onexitdefinitionlabelstring,
+      definitionTitleString: onexitdefinitiontitlestring,
+      emphasis: closer(),
+      hardBreakEscape: closer(onexithardbreak),
+      hardBreakTrailing: closer(onexithardbreak),
+      htmlFlow: closer(onexithtmlflow),
+      htmlFlowData: onexitdata,
+      htmlText: closer(onexithtmltext),
+      htmlTextData: onexitdata,
+      image: closer(onexitimage),
+      label: onexitlabel,
+      labelText: onexitlabeltext,
+      lineEnding: onexitlineending,
+      link: closer(onexitlink),
+      listItem: closer(),
+      listOrdered: closer(),
+      listUnordered: closer(),
+      paragraph: closer(),
+      referenceString: onexitreferencestring,
+      resourceDestinationString: onexitresourcedestinationstring,
+      resourceTitleString: onexitresourcetitlestring,
+      resource: onexitresource,
+      setextHeading: closer(onexitsetextheading),
+      setextHeadingLineSequence: onexitsetextheadinglinesequence,
+      setextHeadingText: onexitsetextheadingtext,
+      strong: closer(),
+      thematicBreak: closer()
+    }
+  };
+  configure(config, (options || {}).mdastExtensions || []);
+  const data = {};
+  return compile;
+  function compile(events) {
+    let tree = { type: "root", children: [] };
+    const context = {
+      stack: [tree],
+      tokenStack: [],
+      config,
+      enter,
+      exit: exit2,
+      buffer,
+      resume,
+      data
+    };
+    const listStack = [];
+    let index2 = -1;
+    while (++index2 < events.length) {
+      if (events[index2][1].type === types.listOrdered || events[index2][1].type === types.listUnordered) {
+        if (events[index2][0] === "enter") {
+          listStack.push(index2);
+        } else {
+          const tail = listStack.pop();
+          ok(typeof tail === "number", "expected list to be open");
+          index2 = prepareList(events, tail, index2);
+        }
+      }
+    }
+    index2 = -1;
+    while (++index2 < events.length) {
+      const handler = config[events[index2][0]];
+      if (own2.call(handler, events[index2][1].type)) {
+        handler[events[index2][1].type].call(Object.assign({ sliceSerialize: events[index2][2].sliceSerialize }, context), events[index2][1]);
+      }
+    }
+    if (context.tokenStack.length > 0) {
+      const tail = context.tokenStack[context.tokenStack.length - 1];
+      const handler = tail[1] || defaultOnError;
+      handler.call(context, undefined, tail[0]);
+    }
+    tree.position = {
+      start: point2(events.length > 0 ? events[0][1].start : { line: 1, column: 1, offset: 0 }),
+      end: point2(events.length > 0 ? events[events.length - 2][1].end : { line: 1, column: 1, offset: 0 })
+    };
+    index2 = -1;
+    while (++index2 < config.transforms.length) {
+      tree = config.transforms[index2](tree) || tree;
+    }
+    return tree;
+  }
+  function prepareList(events, start, length) {
+    let index2 = start - 1;
+    let containerBalance = -1;
+    let listSpread = false;
+    let listItem2;
+    let lineIndex;
+    let firstBlankLineIndex;
+    let atMarker;
+    while (++index2 <= length) {
+      const event = events[index2];
+      switch (event[1].type) {
+        case types.listUnordered:
+        case types.listOrdered:
+        case types.blockQuote: {
+          if (event[0] === "enter") {
+            containerBalance++;
+          } else {
+            containerBalance--;
+          }
+          atMarker = undefined;
+          break;
+        }
+        case types.lineEndingBlank: {
+          if (event[0] === "enter") {
+            if (listItem2 && !atMarker && !containerBalance && !firstBlankLineIndex) {
+              firstBlankLineIndex = index2;
+            }
+            atMarker = undefined;
+          }
+          break;
+        }
+        case types.linePrefix:
+        case types.listItemValue:
+        case types.listItemMarker:
+        case types.listItemPrefix:
+        case types.listItemPrefixWhitespace: {
+          break;
+        }
+        default: {
+          atMarker = undefined;
+        }
+      }
+      if (!containerBalance && event[0] === "enter" && event[1].type === types.listItemPrefix || containerBalance === -1 && event[0] === "exit" && (event[1].type === types.listUnordered || event[1].type === types.listOrdered)) {
+        if (listItem2) {
+          let tailIndex = index2;
+          lineIndex = undefined;
+          while (tailIndex--) {
+            const tailEvent = events[tailIndex];
+            if (tailEvent[1].type === types.lineEnding || tailEvent[1].type === types.lineEndingBlank) {
+              if (tailEvent[0] === "exit")
+                continue;
+              if (lineIndex) {
+                events[lineIndex][1].type = types.lineEndingBlank;
+                listSpread = true;
+              }
+              tailEvent[1].type = types.lineEnding;
+              lineIndex = tailIndex;
+            } else if (tailEvent[1].type === types.linePrefix || tailEvent[1].type === types.blockQuotePrefix || tailEvent[1].type === types.blockQuotePrefixWhitespace || tailEvent[1].type === types.blockQuoteMarker || tailEvent[1].type === types.listItemIndent) {} else {
+              break;
+            }
+          }
+          if (firstBlankLineIndex && (!lineIndex || firstBlankLineIndex < lineIndex)) {
+            listItem2._spread = true;
+          }
+          listItem2.end = Object.assign({}, lineIndex ? events[lineIndex][1].start : event[1].end);
+          events.splice(lineIndex || index2, 0, ["exit", listItem2, event[2]]);
+          index2++;
+          length++;
+        }
+        if (event[1].type === types.listItemPrefix) {
+          const item = {
+            type: "listItem",
+            _spread: false,
+            start: Object.assign({}, event[1].start),
+            end: undefined
+          };
+          listItem2 = item;
+          events.splice(index2, 0, ["enter", item, event[2]]);
+          index2++;
+          length++;
+          firstBlankLineIndex = undefined;
+          atMarker = true;
+        }
+      }
+    }
+    events[start][1]._spread = listSpread;
+    return length;
+  }
+  function opener(create, and) {
+    return open;
+    function open(token) {
+      enter.call(this, create(token), token);
+      if (and)
+        and.call(this, token);
+    }
+  }
+  function buffer() {
+    this.stack.push({ type: "fragment", children: [] });
+  }
+  function enter(node2, token, errorHandler) {
+    const parent = this.stack[this.stack.length - 1];
+    ok(parent, "expected `parent`");
+    ok("children" in parent, "expected `parent`");
+    const siblings = parent.children;
+    siblings.push(node2);
+    this.stack.push(node2);
+    this.tokenStack.push([token, errorHandler || undefined]);
+    node2.position = {
+      start: point2(token.start),
+      end: undefined
+    };
+  }
+  function closer(and) {
+    return close;
+    function close(token) {
+      if (and)
+        and.call(this, token);
+      exit2.call(this, token);
+    }
+  }
+  function exit2(token, onExitError) {
+    const node2 = this.stack.pop();
+    ok(node2, "expected `node`");
+    const open = this.tokenStack.pop();
+    if (!open) {
+      throw new Error("Cannot close `" + token.type + "` (" + stringifyPosition({ start: token.start, end: token.end }) + "): it’s not open");
+    } else if (open[0].type !== token.type) {
+      if (onExitError) {
+        onExitError.call(this, token, open[0]);
+      } else {
+        const handler = open[1] || defaultOnError;
+        handler.call(this, token, open[0]);
+      }
+    }
+    ok(node2.type !== "fragment", "unexpected fragment `exit`ed");
+    ok(node2.position, "expected `position` to be defined");
+    node2.position.end = point2(token.end);
+  }
+  function resume() {
+    return toString(this.stack.pop());
+  }
+  function onenterlistordered() {
+    this.data.expectingFirstListItemValue = true;
+  }
+  function onenterlistitemvalue(token) {
+    if (this.data.expectingFirstListItemValue) {
+      const ancestor = this.stack[this.stack.length - 2];
+      ok(ancestor, "expected nodes on stack");
+      ok(ancestor.type === "list", "expected list on stack");
+      ancestor.start = Number.parseInt(this.sliceSerialize(token), constants.numericBaseDecimal);
+      this.data.expectingFirstListItemValue = undefined;
+    }
+  }
+  function onexitcodefencedfenceinfo() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.lang = data2;
+  }
+  function onexitcodefencedfencemeta() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.meta = data2;
+  }
+  function onexitcodefencedfence() {
+    if (this.data.flowCodeInside)
+      return;
+    this.buffer();
+    this.data.flowCodeInside = true;
+  }
+  function onexitcodefenced() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.value = data2.replace(/^(\r?\n|\r)|(\r?\n|\r)$/g, "");
+    this.data.flowCodeInside = undefined;
+  }
+  function onexitcodeindented() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.value = data2.replace(/(\r?\n|\r)$/g, "");
+  }
+  function onexitdefinitionlabelstring(token) {
+    const label = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.label = label;
+    node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+  }
+  function onexitdefinitiontitlestring() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.title = data2;
+  }
+  function onexitdefinitiondestinationstring() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.url = data2;
+  }
+  function onexitatxheadingsequence(token) {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "heading", "expected heading on stack");
+    if (!node2.depth) {
+      const depth = this.sliceSerialize(token).length;
+      ok(depth === 1 || depth === 2 || depth === 3 || depth === 4 || depth === 5 || depth === 6, "expected `depth` between `1` and `6`");
+      node2.depth = depth;
+    }
+  }
+  function onexitsetextheadingtext() {
+    this.data.setextHeadingSlurpLineEnding = true;
+  }
+  function onexitsetextheadinglinesequence(token) {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "heading", "expected heading on stack");
+    node2.depth = this.sliceSerialize(token).codePointAt(0) === codes.equalsTo ? 1 : 2;
+  }
+  function onexitsetextheading() {
+    this.data.setextHeadingSlurpLineEnding = undefined;
+  }
+  function onenterdata(token) {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok("children" in node2, "expected parent on stack");
+    const siblings = node2.children;
+    let tail = siblings[siblings.length - 1];
+    if (!tail || tail.type !== "text") {
+      tail = text3();
+      tail.position = {
+        start: point2(token.start),
+        end: undefined
+      };
+      siblings.push(tail);
+    }
+    this.stack.push(tail);
+  }
+  function onexitdata(token) {
+    const tail = this.stack.pop();
+    ok(tail, "expected a `node` to be on the stack");
+    ok("value" in tail, "expected a `literal` to be on the stack");
+    ok(tail.position, "expected `node` to have an open position");
+    tail.value += this.sliceSerialize(token);
+    tail.position.end = point2(token.end);
+  }
+  function onexitlineending(token) {
+    const context = this.stack[this.stack.length - 1];
+    ok(context, "expected `node`");
+    if (this.data.atHardBreak) {
+      ok("children" in context, "expected `parent`");
+      const tail = context.children[context.children.length - 1];
+      ok(tail.position, "expected tail to have a starting position");
+      tail.position.end = point2(token.end);
+      this.data.atHardBreak = undefined;
+      return;
+    }
+    if (!this.data.setextHeadingSlurpLineEnding && config.canContainEols.includes(context.type)) {
+      onenterdata.call(this, token);
+      onexitdata.call(this, token);
+    }
+  }
+  function onexithardbreak() {
+    this.data.atHardBreak = true;
+  }
+  function onexithtmlflow() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "html", "expected html on stack");
+    node2.value = data2;
+  }
+  function onexithtmltext() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "html", "expected html on stack");
+    node2.value = data2;
+  }
+  function onexitcodetext() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "inlineCode", "expected inline code on stack");
+    node2.value = data2;
+  }
+  function onexitlink() {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
+    if (this.data.inReference) {
+      const referenceType = this.data.referenceType || "shortcut";
+      node2.type += "Reference";
+      node2.referenceType = referenceType;
+      delete node2.url;
+      delete node2.title;
+    } else {
+      delete node2.identifier;
+      delete node2.label;
+    }
+    this.data.referenceType = undefined;
+  }
+  function onexitimage() {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image", "expected image on stack");
+    if (this.data.inReference) {
+      const referenceType = this.data.referenceType || "shortcut";
+      node2.type += "Reference";
+      node2.referenceType = referenceType;
+      delete node2.url;
+      delete node2.title;
+    } else {
+      delete node2.identifier;
+      delete node2.label;
+    }
+    this.data.referenceType = undefined;
+  }
+  function onexitlabeltext(token) {
+    const string3 = this.sliceSerialize(token);
+    const ancestor = this.stack[this.stack.length - 2];
+    ok(ancestor, "expected ancestor on stack");
+    ok(ancestor.type === "image" || ancestor.type === "link", "expected image or link on stack");
+    ancestor.label = decodeString(string3);
+    ancestor.identifier = normalizeIdentifier(string3).toLowerCase();
+  }
+  function onexitlabel() {
+    const fragment = this.stack[this.stack.length - 1];
+    ok(fragment, "expected node on stack");
+    ok(fragment.type === "fragment", "expected fragment on stack");
+    const value = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
+    this.data.inReference = true;
+    if (node2.type === "link") {
+      const children = fragment.children;
+      node2.children = children;
+    } else {
+      node2.alt = value;
+    }
+  }
+  function onexitresourcedestinationstring() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
+    node2.url = data2;
+  }
+  function onexitresourcetitlestring() {
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
+    node2.title = data2;
+  }
+  function onexitresource() {
+    this.data.inReference = undefined;
+  }
+  function onenterreference() {
+    this.data.referenceType = "collapsed";
+  }
+  function onexitreferencestring(token) {
+    const label = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image reference or link reference on stack");
+    node2.label = label;
+    node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+    this.data.referenceType = "full";
+  }
+  function onexitcharacterreferencemarker(token) {
+    ok(token.type === "characterReferenceMarkerNumeric" || token.type === "characterReferenceMarkerHexadecimal");
+    this.data.characterReferenceType = token.type;
+  }
+  function onexitcharacterreferencevalue(token) {
+    const data2 = this.sliceSerialize(token);
+    const type = this.data.characterReferenceType;
+    let value;
+    if (type) {
+      value = decodeNumericCharacterReference(data2, type === types.characterReferenceMarkerNumeric ? constants.numericBaseDecimal : constants.numericBaseHexadecimal);
+      this.data.characterReferenceType = undefined;
+    } else {
+      const result = decodeNamedCharacterReference(data2);
+      ok(result !== false, "expected reference to decode");
+      value = result;
+    }
+    const tail = this.stack[this.stack.length - 1];
+    ok(tail, "expected `node`");
+    ok("value" in tail, "expected `node.value`");
+    tail.value += value;
+  }
+  function onexitcharacterreference(token) {
+    const tail = this.stack.pop();
+    ok(tail, "expected `node`");
+    ok(tail.position, "expected `node.position`");
+    tail.position.end = point2(token.end);
+  }
+  function onexitautolinkprotocol(token) {
+    onexitdata.call(this, token);
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
+    node2.url = this.sliceSerialize(token);
+  }
+  function onexitautolinkemail(token) {
+    onexitdata.call(this, token);
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
+    node2.url = "mailto:" + this.sliceSerialize(token);
+  }
+  function blockQuote2() {
+    return { type: "blockquote", children: [] };
+  }
+  function codeFlow() {
+    return { type: "code", lang: null, meta: null, value: "" };
+  }
+  function codeText2() {
+    return { type: "inlineCode", value: "" };
+  }
+  function definition2() {
+    return {
+      type: "definition",
+      identifier: "",
+      label: null,
+      title: null,
+      url: ""
+    };
+  }
+  function emphasis() {
+    return { type: "emphasis", children: [] };
+  }
+  function heading() {
+    return {
+      type: "heading",
+      depth: 0,
+      children: []
+    };
+  }
+  function hardBreak() {
+    return { type: "break" };
+  }
+  function html() {
+    return { type: "html", value: "" };
+  }
+  function image() {
+    return { type: "image", title: null, url: "", alt: null };
+  }
+  function link() {
+    return { type: "link", title: null, url: "", children: [] };
+  }
+  function list2(token) {
+    return {
+      type: "list",
+      ordered: token.type === "listOrdered",
+      start: null,
+      spread: token._spread,
+      children: []
+    };
+  }
+  function listItem(token) {
+    return {
+      type: "listItem",
+      spread: token._spread,
+      checked: null,
+      children: []
+    };
+  }
+  function paragraph() {
+    return { type: "paragraph", children: [] };
+  }
+  function strong() {
+    return { type: "strong", children: [] };
+  }
+  function text3() {
+    return { type: "text", value: "" };
+  }
+  function thematicBreak2() {
+    return { type: "thematicBreak" };
+  }
+}
+function point2(d) {
+  return { line: d.line, column: d.column, offset: d.offset };
+}
+function configure(combined, extensions) {
+  let index2 = -1;
+  while (++index2 < extensions.length) {
+    const value = extensions[index2];
+    if (Array.isArray(value)) {
+      configure(combined, value);
+    } else {
+      extension(combined, value);
+    }
+  }
+}
+function extension(combined, extension2) {
+  let key;
+  for (key in extension2) {
+    if (own2.call(extension2, key)) {
+      switch (key) {
+        case "canContainEols": {
+          const right = extension2[key];
+          if (right) {
+            combined[key].push(...right);
+          }
+          break;
+        }
+        case "transforms": {
+          const right = extension2[key];
+          if (right) {
+            combined[key].push(...right);
+          }
+          break;
+        }
+        case "enter":
+        case "exit": {
+          const right = extension2[key];
+          if (right) {
+            Object.assign(combined[key], right);
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+function defaultOnError(left, right) {
+  if (left) {
+    throw new Error("Cannot close `" + left.type + "` (" + stringifyPosition({ start: left.start, end: left.end }) + "): a different token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is open");
+  } else {
+    throw new Error("Cannot close document, a token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is still open");
+  }
+}
+function ccount(value, character) {
+  const source = String(value);
+  if (typeof character !== "string") {
+    throw new TypeError("Expected character");
+  }
+  let count = 0;
+  let index2 = source.indexOf(character);
+  while (index2 !== -1) {
+    count++;
+    index2 = source.indexOf(character, index2 + character.length);
+  }
+  return count;
+}
+function escapeStringRegexp(string3) {
+  if (typeof string3 !== "string") {
+    throw new TypeError("Expected a string");
+  }
+  return string3.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&").replace(/-/g, "\\x2d");
+}
+var convert = function(test) {
+  if (test === null || test === undefined) {
+    return ok2;
+  }
+  if (typeof test === "function") {
+    return castFactory(test);
+  }
+  if (typeof test === "object") {
+    return Array.isArray(test) ? anyFactory(test) : propertiesFactory(test);
+  }
+  if (typeof test === "string") {
+    return typeFactory(test);
+  }
+  throw new Error("Expected function, string, or object as test");
+};
+function anyFactory(tests) {
+  const checks = [];
+  let index2 = -1;
+  while (++index2 < tests.length) {
+    checks[index2] = convert(tests[index2]);
+  }
+  return castFactory(any);
+  function any(...parameters) {
+    let index3 = -1;
+    while (++index3 < checks.length) {
+      if (checks[index3].apply(this, parameters))
+        return true;
+    }
+    return false;
+  }
+}
+function propertiesFactory(check) {
+  const checkAsRecord = check;
+  return castFactory(all2);
+  function all2(node2) {
+    const nodeAsRecord = node2;
+    let key;
+    for (key in check) {
+      if (nodeAsRecord[key] !== checkAsRecord[key])
+        return false;
+    }
+    return true;
+  }
+}
+function typeFactory(check) {
+  return castFactory(type);
+  function type(node2) {
+    return node2 && node2.type === check;
+  }
+}
+function castFactory(testFunction) {
+  return check;
+  function check(value, index2, parent) {
+    return Boolean(looksLikeANode(value) && testFunction.call(this, value, typeof index2 === "number" ? index2 : undefined, parent || undefined));
+  }
+}
+function ok2() {
+  return true;
+}
+function looksLikeANode(value) {
+  return value !== null && typeof value === "object" && "type" in value;
+}
+function color(d) {
+  return "\x1B[33m" + d + "\x1B[39m";
+}
+var empty = [];
+var CONTINUE = true;
+var EXIT = false;
+var SKIP = "skip";
+function visitParents(tree, test, visitor, reverse) {
+  let check;
+  if (typeof test === "function" && typeof visitor !== "function") {
+    reverse = visitor;
+    visitor = test;
+  } else {
+    check = test;
+  }
+  const is2 = convert(check);
+  const step = reverse ? -1 : 1;
+  factory(tree, undefined, [])();
+  function factory(node2, index2, parents) {
+    const value = node2 && typeof node2 === "object" ? node2 : {};
+    if (typeof value.type === "string") {
+      const name = typeof value.tagName === "string" ? value.tagName : typeof value.name === "string" ? value.name : undefined;
+      Object.defineProperty(visit, "name", {
+        value: "node (" + color(node2.type + (name ? "<" + name + ">" : "")) + ")"
+      });
+    }
+    return visit;
+    function visit() {
+      let result = empty;
+      let subresult;
+      let offset;
+      let grandparents;
+      if (!test || is2(node2, index2, parents[parents.length - 1] || undefined)) {
+        result = toResult(visitor(node2, parents));
+        if (result[0] === EXIT) {
+          return result;
+        }
+      }
+      if ("children" in node2 && node2.children) {
+        const nodeAsParent = node2;
+        if (nodeAsParent.children && result[0] !== SKIP) {
+          offset = (reverse ? nodeAsParent.children.length : -1) + step;
+          grandparents = parents.concat(nodeAsParent);
+          while (offset > -1 && offset < nodeAsParent.children.length) {
+            const child = nodeAsParent.children[offset];
+            subresult = factory(child, offset, grandparents)();
+            if (subresult[0] === EXIT) {
+              return subresult;
+            }
+            offset = typeof subresult[1] === "number" ? subresult[1] : offset + step;
+          }
+        }
+      }
+      return result;
+    }
+  }
+}
+function toResult(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return [CONTINUE, value];
+  }
+  return value === null || value === undefined ? empty : [value];
+}
+function findAndReplace(tree, list2, options) {
+  const settings = options || {};
+  const ignored = convert(settings.ignore || []);
+  const pairs = toPairs(list2);
+  let pairIndex = -1;
+  while (++pairIndex < pairs.length) {
+    visitParents(tree, "text", visitor);
+  }
+  function visitor(node2, parents) {
+    let index2 = -1;
+    let grandparent;
+    while (++index2 < parents.length) {
+      const parent = parents[index2];
+      const siblings = grandparent ? grandparent.children : undefined;
+      if (ignored(parent, siblings ? siblings.indexOf(parent) : undefined, grandparent)) {
+        return;
+      }
+      grandparent = parent;
+    }
+    if (grandparent) {
+      return handler(node2, parents);
+    }
+  }
+  function handler(node2, parents) {
+    const parent = parents[parents.length - 1];
+    const find = pairs[pairIndex][0];
+    const replace = pairs[pairIndex][1];
+    let start = 0;
+    const siblings = parent.children;
+    const index2 = siblings.indexOf(node2);
+    let change = false;
+    let nodes = [];
+    find.lastIndex = 0;
+    let match = find.exec(node2.value);
+    while (match) {
+      const position2 = match.index;
+      const matchObject = {
+        index: match.index,
+        input: match.input,
+        stack: [...parents, node2]
+      };
+      let value = replace(...match, matchObject);
+      if (typeof value === "string") {
+        value = value.length > 0 ? { type: "text", value } : undefined;
+      }
+      if (value === false) {
+        find.lastIndex = position2 + 1;
+      } else {
+        if (start !== position2) {
+          nodes.push({
+            type: "text",
+            value: node2.value.slice(start, position2)
+          });
+        }
+        if (Array.isArray(value)) {
+          nodes.push(...value);
+        } else if (value) {
+          nodes.push(value);
+        }
+        start = position2 + match[0].length;
+        change = true;
+      }
+      if (!find.global) {
+        break;
+      }
+      match = find.exec(node2.value);
+    }
+    if (change) {
+      if (start < node2.value.length) {
+        nodes.push({ type: "text", value: node2.value.slice(start) });
+      }
+      parent.children.splice(index2, 1, ...nodes);
+    } else {
+      nodes = [node2];
+    }
+    return index2 + nodes.length;
+  }
+}
+function toPairs(tupleOrList) {
+  const result = [];
+  if (!Array.isArray(tupleOrList)) {
+    throw new TypeError("Expected find and replace tuple or list of tuples");
+  }
+  const list2 = !tupleOrList[0] || Array.isArray(tupleOrList[0]) ? tupleOrList : [tupleOrList];
+  let index2 = -1;
+  while (++index2 < list2.length) {
+    const tuple = list2[index2];
+    result.push([toExpression(tuple[0]), toFunction(tuple[1])]);
+  }
+  return result;
+}
+function toExpression(find) {
+  return typeof find === "string" ? new RegExp(escapeStringRegexp(find), "g") : find;
+}
+function toFunction(replace) {
+  return typeof replace === "function" ? replace : function() {
+    return replace;
+  };
+}
+function gfmAutolinkLiteralFromMarkdown() {
+  return {
+    transforms: [transformGfmAutolinkLiterals],
+    enter: {
+      literalAutolink: enterLiteralAutolink,
+      literalAutolinkEmail: enterLiteralAutolinkValue,
+      literalAutolinkHttp: enterLiteralAutolinkValue,
+      literalAutolinkWww: enterLiteralAutolinkValue
+    },
+    exit: {
+      literalAutolink: exitLiteralAutolink,
+      literalAutolinkEmail: exitLiteralAutolinkEmail,
+      literalAutolinkHttp: exitLiteralAutolinkHttp,
+      literalAutolinkWww: exitLiteralAutolinkWww
+    }
+  };
+}
+function enterLiteralAutolink(token) {
+  this.enter({ type: "link", title: null, url: "", children: [] }, token);
+}
+function enterLiteralAutolinkValue(token) {
+  this.config.enter.autolinkProtocol.call(this, token);
+}
+function exitLiteralAutolinkHttp(token) {
+  this.config.exit.autolinkProtocol.call(this, token);
+}
+function exitLiteralAutolinkWww(token) {
+  this.config.exit.data.call(this, token);
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "link");
+  node2.url = "http://" + this.sliceSerialize(token);
+}
+function exitLiteralAutolinkEmail(token) {
+  this.config.exit.autolinkEmail.call(this, token);
+}
+function exitLiteralAutolink(token) {
+  this.exit(token);
+}
+function transformGfmAutolinkLiterals(tree) {
+  findAndReplace(tree, [
+    [/(https?:\/\/|www(?=\.))([-.\w]+)([^ \t\r\n]*)/gi, findUrl],
+    [/(?<=^|\s|\p{P}|\p{S})([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)/gu, findEmail]
+  ], { ignore: ["link", "linkReference"] });
+}
+function findUrl(_, protocol, domain, path, match) {
+  let prefix = "";
+  if (!previous2(match)) {
+    return false;
+  }
+  if (/^w/i.test(protocol)) {
+    domain = protocol + domain;
+    protocol = "";
+    prefix = "http://";
+  }
+  if (!isCorrectDomain(domain)) {
+    return false;
+  }
+  const parts = splitUrl(domain + path);
+  if (!parts[0])
+    return false;
+  const result = {
+    type: "link",
+    title: null,
+    url: prefix + protocol + parts[0],
+    children: [{ type: "text", value: protocol + parts[0] }]
+  };
+  if (parts[1]) {
+    return [result, { type: "text", value: parts[1] }];
+  }
+  return result;
+}
+function findEmail(_, atext, label, match) {
+  if (!previous2(match, true) || /[-\d_]$/.test(label)) {
+    return false;
+  }
+  return {
+    type: "link",
+    title: null,
+    url: "mailto:" + atext + "@" + label,
+    children: [{ type: "text", value: atext + "@" + label }]
+  };
+}
+function isCorrectDomain(domain) {
+  const parts = domain.split(".");
+  if (parts.length < 2 || parts[parts.length - 1] && (/_/.test(parts[parts.length - 1]) || !/[a-zA-Z\d]/.test(parts[parts.length - 1])) || parts[parts.length - 2] && (/_/.test(parts[parts.length - 2]) || !/[a-zA-Z\d]/.test(parts[parts.length - 2]))) {
+    return false;
+  }
+  return true;
+}
+function splitUrl(url) {
+  const trailExec = /[!"&'),.:;<>?\]}]+$/.exec(url);
+  if (!trailExec) {
+    return [url, undefined];
+  }
+  url = url.slice(0, trailExec.index);
+  let trail = trailExec[0];
+  let closingParenIndex = trail.indexOf(")");
+  const openingParens = ccount(url, "(");
+  let closingParens = ccount(url, ")");
+  while (closingParenIndex !== -1 && openingParens > closingParens) {
+    url += trail.slice(0, closingParenIndex + 1);
+    trail = trail.slice(closingParenIndex + 1);
+    closingParenIndex = trail.indexOf(")");
+    closingParens++;
+  }
+  return [url, trail];
+}
+function previous2(match, email) {
+  const code = match.input.charCodeAt(match.index - 1);
+  return (match.index === 0 || unicodeWhitespace(code) || unicodePunctuation(code)) && (!email || code !== 47);
+}
+footnoteReference.peek = footnoteReferencePeek;
+function enterFootnoteCallString() {
+  this.buffer();
+}
+function enterFootnoteCall(token) {
+  this.enter({ type: "footnoteReference", identifier: "", label: "" }, token);
+}
+function enterFootnoteDefinitionLabelString() {
+  this.buffer();
+}
+function enterFootnoteDefinition(token) {
+  this.enter({ type: "footnoteDefinition", identifier: "", label: "", children: [] }, token);
+}
+function exitFootnoteCallString(token) {
+  const label = this.resume();
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "footnoteReference");
+  node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+  node2.label = label;
+}
+function exitFootnoteCall(token) {
+  this.exit(token);
+}
+function exitFootnoteDefinitionLabelString(token) {
+  const label = this.resume();
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "footnoteDefinition");
+  node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+  node2.label = label;
+}
+function exitFootnoteDefinition(token) {
+  this.exit(token);
+}
+function footnoteReferencePeek() {
+  return "[";
+}
+function footnoteReference(node2, _, state, info) {
+  const tracker = state.createTracker(info);
+  let value = tracker.move("[^");
+  const exit2 = state.enter("footnoteReference");
+  const subexit = state.enter("reference");
+  value += tracker.move(state.safe(state.associationId(node2), { after: "]", before: value }));
+  subexit();
+  exit2();
+  value += tracker.move("]");
+  return value;
+}
+function gfmFootnoteFromMarkdown() {
+  return {
+    enter: {
+      gfmFootnoteCallString: enterFootnoteCallString,
+      gfmFootnoteCall: enterFootnoteCall,
+      gfmFootnoteDefinitionLabelString: enterFootnoteDefinitionLabelString,
+      gfmFootnoteDefinition: enterFootnoteDefinition
+    },
+    exit: {
+      gfmFootnoteCallString: exitFootnoteCallString,
+      gfmFootnoteCall: exitFootnoteCall,
+      gfmFootnoteDefinitionLabelString: exitFootnoteDefinitionLabelString,
+      gfmFootnoteDefinition: exitFootnoteDefinition
+    }
+  };
+}
+handleDelete.peek = peekDelete;
+function gfmStrikethroughFromMarkdown() {
+  return {
+    canContainEols: ["delete"],
+    enter: { strikethrough: enterStrikethrough },
+    exit: { strikethrough: exitStrikethrough }
+  };
+}
+function enterStrikethrough(token) {
+  this.enter({ type: "delete", children: [] }, token);
+}
+function exitStrikethrough(token) {
+  this.exit(token);
+}
+function handleDelete(node2, _, state, info) {
+  const tracker = state.createTracker(info);
+  const exit2 = state.enter("strikethrough");
+  let value = tracker.move("~~");
+  value += state.containerPhrasing(node2, {
+    ...tracker.current(),
+    before: value,
+    after: "~"
+  });
+  value += tracker.move("~~");
+  exit2();
+  return value;
+}
+function peekDelete() {
+  return "~";
+}
+function gfmTableFromMarkdown() {
+  return {
+    enter: {
+      table: enterTable,
+      tableData: enterCell,
+      tableHeader: enterCell,
+      tableRow: enterRow
+    },
+    exit: {
+      codeText: exitCodeText,
+      table: exitTable,
+      tableData: exit2,
+      tableHeader: exit2,
+      tableRow: exit2
+    }
+  };
+}
+function enterTable(token) {
+  const align = token._align;
+  ok(align, "expected `_align` on table");
+  this.enter({
+    type: "table",
+    align: align.map(function(d) {
+      return d === "none" ? null : d;
+    }),
+    children: []
+  }, token);
+  this.data.inTable = true;
+}
+function exitTable(token) {
+  this.exit(token);
+  this.data.inTable = undefined;
+}
+function enterRow(token) {
+  this.enter({ type: "tableRow", children: [] }, token);
+}
+function exit2(token) {
+  this.exit(token);
+}
+function enterCell(token) {
+  this.enter({ type: "tableCell", children: [] }, token);
+}
+function exitCodeText(token) {
+  let value = this.resume();
+  if (this.data.inTable) {
+    value = value.replace(/\\([\\|])/g, replace);
+  }
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "inlineCode");
+  node2.value = value;
+  this.exit(token);
+}
+function replace($0, $1) {
+  return $1 === "|" ? $1 : $0;
+}
+function gfmTaskListItemFromMarkdown() {
+  return {
+    exit: {
+      taskListCheckValueChecked: exitCheck,
+      taskListCheckValueUnchecked: exitCheck,
+      paragraph: exitParagraphWithTaskListItem
+    }
+  };
+}
+function exitCheck(token) {
+  const node2 = this.stack[this.stack.length - 2];
+  ok(node2.type === "listItem");
+  node2.checked = token.type === "taskListCheckValueChecked";
+}
+function exitParagraphWithTaskListItem(token) {
+  const parent = this.stack[this.stack.length - 2];
+  if (parent && parent.type === "listItem" && typeof parent.checked === "boolean") {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2.type === "paragraph");
+    const head = node2.children[0];
+    if (head && head.type === "text") {
+      const siblings = parent.children;
+      let index2 = -1;
+      let firstParaghraph;
+      while (++index2 < siblings.length) {
+        const sibling = siblings[index2];
+        if (sibling.type === "paragraph") {
+          firstParaghraph = sibling;
+          break;
+        }
+      }
+      if (firstParaghraph === node2) {
+        head.value = head.value.slice(1);
+        if (head.value.length === 0) {
+          node2.children.shift();
+        } else if (node2.position && head.position && typeof head.position.start.offset === "number") {
+          head.position.start.column++;
+          head.position.start.offset++;
+          node2.position.start = Object.assign({}, head.position.start);
+        }
+      }
+    }
+  }
+  this.exit(token);
+}
+function gfmFromMarkdown() {
+  return [
+    gfmAutolinkLiteralFromMarkdown(),
+    gfmFootnoteFromMarkdown(),
+    gfmStrikethroughFromMarkdown(),
+    gfmTableFromMarkdown(),
+    gfmTaskListItemFromMarkdown()
+  ];
+}
+var wwwPrefix = { tokenize: tokenizeWwwPrefix, partial: true };
+var domain = { tokenize: tokenizeDomain, partial: true };
+var path = { tokenize: tokenizePath, partial: true };
+var trail = { tokenize: tokenizeTrail, partial: true };
+var emailDomainDotTrail = {
+  tokenize: tokenizeEmailDomainDotTrail,
+  partial: true
+};
+var wwwAutolink = {
+  name: "wwwAutolink",
+  tokenize: tokenizeWwwAutolink,
+  previous: previousWww
+};
+var protocolAutolink = {
+  name: "protocolAutolink",
+  tokenize: tokenizeProtocolAutolink,
+  previous: previousProtocol
+};
+var emailAutolink = {
+  name: "emailAutolink",
+  tokenize: tokenizeEmailAutolink,
+  previous: previousEmail
+};
+var text3 = {};
+function gfmAutolinkLiteral() {
+  return { text: text3 };
+}
+var code = codes.digit0;
+while (code < codes.leftCurlyBrace) {
+  text3[code] = emailAutolink;
+  code++;
+  if (code === codes.colon)
+    code = codes.uppercaseA;
+  else if (code === codes.leftSquareBracket)
+    code = codes.lowercaseA;
+}
+text3[codes.plusSign] = emailAutolink;
+text3[codes.dash] = emailAutolink;
+text3[codes.dot] = emailAutolink;
+text3[codes.underscore] = emailAutolink;
+text3[codes.uppercaseH] = [emailAutolink, protocolAutolink];
+text3[codes.lowercaseH] = [emailAutolink, protocolAutolink];
+text3[codes.uppercaseW] = [emailAutolink, wwwAutolink];
+text3[codes.lowercaseW] = [emailAutolink, wwwAutolink];
+function tokenizeEmailAutolink(effects, ok3, nok) {
+  const self = this;
+  let dot;
+  let data;
+  return start;
+  function start(code2) {
+    if (!gfmAtext(code2) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
+    }
+    effects.enter("literalAutolink");
+    effects.enter("literalAutolinkEmail");
+    return atext(code2);
+  }
+  function atext(code2) {
+    if (gfmAtext(code2)) {
+      effects.consume(code2);
+      return atext;
+    }
+    if (code2 === codes.atSign) {
+      effects.consume(code2);
+      return emailDomain;
+    }
+    return nok(code2);
+  }
+  function emailDomain(code2) {
+    if (code2 === codes.dot) {
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code2);
+    }
+    if (code2 === codes.dash || code2 === codes.underscore || asciiAlphanumeric(code2)) {
+      data = true;
+      effects.consume(code2);
+      return emailDomain;
+    }
+    return emailDomainAfter(code2);
+  }
+  function emailDomainDot(code2) {
+    effects.consume(code2);
+    dot = true;
+    return emailDomain;
+  }
+  function emailDomainAfter(code2) {
+    if (data && dot && asciiAlpha(self.previous)) {
+      effects.exit("literalAutolinkEmail");
+      effects.exit("literalAutolink");
+      return ok3(code2);
+    }
+    return nok(code2);
+  }
+}
+function tokenizeWwwAutolink(effects, ok3, nok) {
+  const self = this;
+  return wwwStart;
+  function wwwStart(code2) {
+    if (code2 !== codes.uppercaseW && code2 !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
+    }
+    effects.enter("literalAutolink");
+    effects.enter("literalAutolinkWww");
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code2);
+  }
+  function wwwAfter(code2) {
+    effects.exit("literalAutolinkWww");
+    effects.exit("literalAutolink");
+    return ok3(code2);
+  }
+}
+function tokenizeProtocolAutolink(effects, ok3, nok) {
+  const self = this;
+  let buffer = "";
+  let seen = false;
+  return protocolStart;
+  function protocolStart(code2) {
+    if ((code2 === codes.uppercaseH || code2 === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
+      effects.enter("literalAutolink");
+      effects.enter("literalAutolinkHttp");
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
+      return protocolPrefixInside;
+    }
+    return nok(code2);
+  }
+  function protocolPrefixInside(code2) {
+    if (asciiAlpha(code2) && buffer.length < 5) {
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
+      return protocolPrefixInside;
+    }
+    if (code2 === codes.colon) {
+      const protocol = buffer.toLowerCase();
+      if (protocol === "http" || protocol === "https") {
+        effects.consume(code2);
+        return protocolSlashesInside;
+      }
+    }
+    return nok(code2);
+  }
+  function protocolSlashesInside(code2) {
+    if (code2 === codes.slash) {
+      effects.consume(code2);
+      if (seen) {
+        return afterProtocol;
+      }
+      seen = true;
+      return protocolSlashesInside;
+    }
+    return nok(code2);
+  }
+  function afterProtocol(code2) {
+    return code2 === codes.eof || asciiControl(code2) || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || unicodePunctuation(code2) ? nok(code2) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code2);
+  }
+  function protocolAfter(code2) {
+    effects.exit("literalAutolinkHttp");
+    effects.exit("literalAutolink");
+    return ok3(code2);
+  }
+}
+function tokenizeWwwPrefix(effects, ok3, nok) {
+  let size = 0;
+  return wwwPrefixInside;
+  function wwwPrefixInside(code2) {
+    if ((code2 === codes.uppercaseW || code2 === codes.lowercaseW) && size < 3) {
+      size++;
+      effects.consume(code2);
+      return wwwPrefixInside;
+    }
+    if (code2 === codes.dot && size === 3) {
+      effects.consume(code2);
+      return wwwPrefixAfter;
+    }
+    return nok(code2);
+  }
+  function wwwPrefixAfter(code2) {
+    return code2 === codes.eof ? nok(code2) : ok3(code2);
+  }
+}
+function tokenizeDomain(effects, ok3, nok) {
+  let underscoreInLastSegment;
+  let underscoreInLastLastSegment;
+  let seen;
+  return domainInside;
+  function domainInside(code2) {
+    if (code2 === codes.dot || code2 === codes.underscore) {
+      return effects.check(trail, domainAfter, domainAtPunctuation)(code2);
+    }
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || code2 !== codes.dash && unicodePunctuation(code2)) {
+      return domainAfter(code2);
+    }
+    seen = true;
+    effects.consume(code2);
+    return domainInside;
+  }
+  function domainAtPunctuation(code2) {
+    if (code2 === codes.underscore) {
+      underscoreInLastSegment = true;
+    } else {
+      underscoreInLastLastSegment = underscoreInLastSegment;
+      underscoreInLastSegment = undefined;
+    }
+    effects.consume(code2);
+    return domainInside;
+  }
+  function domainAfter(code2) {
+    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
+      return nok(code2);
+    }
+    return ok3(code2);
+  }
+}
+function tokenizePath(effects, ok3) {
+  let sizeOpen = 0;
+  let sizeClose = 0;
+  return pathInside;
+  function pathInside(code2) {
+    if (code2 === codes.leftParenthesis) {
+      sizeOpen++;
+      effects.consume(code2);
+      return pathInside;
+    }
+    if (code2 === codes.rightParenthesis && sizeClose < sizeOpen) {
+      return pathAtPunctuation(code2);
+    }
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.ampersand || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.lessThan || code2 === codes.questionMark || code2 === codes.rightSquareBracket || code2 === codes.underscore || code2 === codes.tilde) {
+      return effects.check(trail, ok3, pathAtPunctuation)(code2);
+    }
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
+    }
+    effects.consume(code2);
+    return pathInside;
+  }
+  function pathAtPunctuation(code2) {
+    if (code2 === codes.rightParenthesis) {
+      sizeClose++;
+    }
+    effects.consume(code2);
+    return pathInside;
+  }
+}
+function tokenizeTrail(effects, ok3, nok) {
+  return trail2;
+  function trail2(code2) {
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.questionMark || code2 === codes.underscore || code2 === codes.tilde) {
+      effects.consume(code2);
+      return trail2;
+    }
+    if (code2 === codes.ampersand) {
+      effects.consume(code2);
+      return trailCharacterReferenceStart;
+    }
+    if (code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
+      return trailBracketAfter;
+    }
+    if (code2 === codes.lessThan || code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
+    }
+    return nok(code2);
+  }
+  function trailBracketAfter(code2) {
+    if (code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
+    }
+    return trail2(code2);
+  }
+  function trailCharacterReferenceStart(code2) {
+    return asciiAlpha(code2) ? trailCharacterReferenceInside(code2) : nok(code2);
+  }
+  function trailCharacterReferenceInside(code2) {
+    if (code2 === codes.semicolon) {
+      effects.consume(code2);
+      return trail2;
+    }
+    if (asciiAlpha(code2)) {
+      effects.consume(code2);
+      return trailCharacterReferenceInside;
+    }
+    return nok(code2);
+  }
+}
+function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
+  return start;
+  function start(code2) {
+    effects.consume(code2);
+    return after;
+  }
+  function after(code2) {
+    return asciiAlphanumeric(code2) ? nok(code2) : ok3(code2);
+  }
+}
+function previousWww(code2) {
+  return code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.asterisk || code2 === codes.underscore || code2 === codes.leftSquareBracket || code2 === codes.rightSquareBracket || code2 === codes.tilde || markdownLineEndingOrSpace(code2);
+}
+function previousProtocol(code2) {
+  return !asciiAlpha(code2);
+}
+function previousEmail(code2) {
+  return !(code2 === codes.slash || gfmAtext(code2));
+}
+function gfmAtext(code2) {
+  return code2 === codes.plusSign || code2 === codes.dash || code2 === codes.dot || code2 === codes.underscore || asciiAlphanumeric(code2);
+}
+function previousUnbalanced(events) {
+  let index2 = events.length;
+  let result = false;
+  while (index2--) {
+    const token = events[index2][1];
+    if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
+      result = true;
+      break;
+    }
+    if (token._gfmAutolinkLiteralWalkedInto) {
+      result = false;
+      break;
+    }
+  }
+  if (events.length > 0 && !result) {
+    events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
+  }
+  return result;
+}
+var indent = { tokenize: tokenizeIndent2, partial: true };
+function gfmFootnote() {
+  return {
+    document: {
+      [codes.leftSquareBracket]: {
+        name: "gfmFootnoteDefinition",
+        tokenize: tokenizeDefinitionStart,
+        continuation: { tokenize: tokenizeDefinitionContinuation },
+        exit: gfmFootnoteDefinitionEnd
+      }
+    },
+    text: {
+      [codes.leftSquareBracket]: {
+        name: "gfmFootnoteCall",
+        tokenize: tokenizeGfmFootnoteCall
+      },
+      [codes.rightSquareBracket]: {
+        name: "gfmPotentialFootnoteCall",
+        add: "after",
+        tokenize: tokenizePotentialGfmFootnoteCall,
+        resolveTo: resolveToPotentialGfmFootnoteCall
+      }
+    }
+  };
+}
+function tokenizePotentialGfmFootnoteCall(effects, ok3, nok) {
+  const self = this;
+  let index2 = self.events.length;
+  const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
+  let labelStart;
+  while (index2--) {
+    const token = self.events[index2][1];
+    if (token.type === types.labelImage) {
+      labelStart = token;
+      break;
+    }
+    if (token.type === "gfmFootnoteCall" || token.type === types.labelLink || token.type === types.label || token.type === types.image || token.type === types.link) {
+      break;
+    }
+  }
+  return start;
+  function start(code2) {
+    ok(code2 === codes.rightSquareBracket, "expected `]`");
+    if (!labelStart || !labelStart._balanced) {
+      return nok(code2);
+    }
+    const id = normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() }));
+    if (id.codePointAt(0) !== codes.caret || !defined.includes(id.slice(1))) {
+      return nok(code2);
+    }
+    effects.enter("gfmFootnoteCallLabelMarker");
+    effects.consume(code2);
+    effects.exit("gfmFootnoteCallLabelMarker");
+    return ok3(code2);
+  }
+}
+function resolveToPotentialGfmFootnoteCall(events, context) {
+  let index2 = events.length;
+  let labelStart;
+  while (index2--) {
+    if (events[index2][1].type === types.labelImage && events[index2][0] === "enter") {
+      labelStart = events[index2][1];
+      break;
+    }
+  }
+  ok(labelStart, "expected `labelStart` to resolve");
+  events[index2 + 1][1].type = types.data;
+  events[index2 + 3][1].type = "gfmFootnoteCallLabelMarker";
+  const call = {
+    type: "gfmFootnoteCall",
+    start: Object.assign({}, events[index2 + 3][1].start),
+    end: Object.assign({}, events[events.length - 1][1].end)
+  };
+  const marker = {
+    type: "gfmFootnoteCallMarker",
+    start: Object.assign({}, events[index2 + 3][1].end),
+    end: Object.assign({}, events[index2 + 3][1].end)
+  };
+  marker.end.column++;
+  marker.end.offset++;
+  marker.end._bufferIndex++;
+  const string3 = {
+    type: "gfmFootnoteCallString",
+    start: Object.assign({}, marker.end),
+    end: Object.assign({}, events[events.length - 1][1].start)
+  };
+  const chunk = {
+    type: types.chunkString,
+    contentType: "string",
+    start: Object.assign({}, string3.start),
+    end: Object.assign({}, string3.end)
+  };
+  const replacement = [
+    events[index2 + 1],
+    events[index2 + 2],
+    ["enter", call, context],
+    events[index2 + 3],
+    events[index2 + 4],
+    ["enter", marker, context],
+    ["exit", marker, context],
+    ["enter", string3, context],
+    ["enter", chunk, context],
+    ["exit", chunk, context],
+    ["exit", string3, context],
+    events[events.length - 2],
+    events[events.length - 1],
+    ["exit", call, context]
+  ];
+  events.splice(index2, events.length - index2 + 1, ...replacement);
+  return events;
+}
+function tokenizeGfmFootnoteCall(effects, ok3, nok) {
+  const self = this;
+  const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
+  let size = 0;
+  let data;
+  return start;
+  function start(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
+    effects.enter("gfmFootnoteCall");
+    effects.enter("gfmFootnoteCallLabelMarker");
+    effects.consume(code2);
+    effects.exit("gfmFootnoteCallLabelMarker");
+    return callStart;
+  }
+  function callStart(code2) {
+    if (code2 !== codes.caret)
+      return nok(code2);
+    effects.enter("gfmFootnoteCallMarker");
+    effects.consume(code2);
+    effects.exit("gfmFootnoteCallMarker");
+    effects.enter("gfmFootnoteCallString");
+    effects.enter("chunkString").contentType = "string";
+    return callData;
+  }
+  function callData(code2) {
+    if (size > constants.linkReferenceSizeMax || code2 === codes.rightSquareBracket && !data || code2 === codes.eof || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2)) {
+      return nok(code2);
+    }
+    if (code2 === codes.rightSquareBracket) {
+      effects.exit("chunkString");
+      const token = effects.exit("gfmFootnoteCallString");
+      if (!defined.includes(normalizeIdentifier(self.sliceSerialize(token)))) {
+        return nok(code2);
+      }
+      effects.enter("gfmFootnoteCallLabelMarker");
+      effects.consume(code2);
+      effects.exit("gfmFootnoteCallLabelMarker");
+      effects.exit("gfmFootnoteCall");
+      return ok3;
+    }
+    if (!markdownLineEndingOrSpace(code2)) {
+      data = true;
+    }
+    size++;
+    effects.consume(code2);
+    return code2 === codes.backslash ? callEscape : callData;
+  }
+  function callEscape(code2) {
+    if (code2 === codes.leftSquareBracket || code2 === codes.backslash || code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
+      size++;
+      return callData;
+    }
+    return callData(code2);
+  }
+}
+function tokenizeDefinitionStart(effects, ok3, nok) {
+  const self = this;
+  const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
+  let identifier;
+  let size = 0;
+  let data;
+  return start;
+  function start(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
+    effects.enter("gfmFootnoteDefinition")._container = true;
+    effects.enter("gfmFootnoteDefinitionLabel");
+    effects.enter("gfmFootnoteDefinitionLabelMarker");
+    effects.consume(code2);
+    effects.exit("gfmFootnoteDefinitionLabelMarker");
+    return labelAtMarker;
+  }
+  function labelAtMarker(code2) {
+    if (code2 === codes.caret) {
+      effects.enter("gfmFootnoteDefinitionMarker");
+      effects.consume(code2);
+      effects.exit("gfmFootnoteDefinitionMarker");
+      effects.enter("gfmFootnoteDefinitionLabelString");
+      effects.enter("chunkString").contentType = "string";
+      return labelInside;
+    }
+    return nok(code2);
+  }
+  function labelInside(code2) {
+    if (size > constants.linkReferenceSizeMax || code2 === codes.rightSquareBracket && !data || code2 === codes.eof || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2)) {
+      return nok(code2);
+    }
+    if (code2 === codes.rightSquareBracket) {
+      effects.exit("chunkString");
+      const token = effects.exit("gfmFootnoteDefinitionLabelString");
+      identifier = normalizeIdentifier(self.sliceSerialize(token));
+      effects.enter("gfmFootnoteDefinitionLabelMarker");
+      effects.consume(code2);
+      effects.exit("gfmFootnoteDefinitionLabelMarker");
+      effects.exit("gfmFootnoteDefinitionLabel");
+      return labelAfter;
+    }
+    if (!markdownLineEndingOrSpace(code2)) {
+      data = true;
+    }
+    size++;
+    effects.consume(code2);
+    return code2 === codes.backslash ? labelEscape : labelInside;
+  }
+  function labelEscape(code2) {
+    if (code2 === codes.leftSquareBracket || code2 === codes.backslash || code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
+      size++;
+      return labelInside;
+    }
+    return labelInside(code2);
+  }
+  function labelAfter(code2) {
+    if (code2 === codes.colon) {
+      effects.enter("definitionMarker");
+      effects.consume(code2);
+      effects.exit("definitionMarker");
+      if (!defined.includes(identifier)) {
+        defined.push(identifier);
+      }
+      return factorySpace(effects, whitespaceAfter, "gfmFootnoteDefinitionWhitespace");
+    }
+    return nok(code2);
+  }
+  function whitespaceAfter(code2) {
+    return ok3(code2);
+  }
+}
+function tokenizeDefinitionContinuation(effects, ok3, nok) {
+  return effects.check(blankLine, ok3, effects.attempt(indent, ok3, nok));
+}
+function gfmFootnoteDefinitionEnd(effects) {
+  effects.exit("gfmFootnoteDefinition");
+}
+function tokenizeIndent2(effects, ok3, nok) {
+  const self = this;
+  return factorySpace(effects, afterPrefix, "gfmFootnoteDefinitionIndent", constants.tabSize + 1);
+  function afterPrefix(code2) {
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === "gfmFootnoteDefinitionIndent" && tail[2].sliceSerialize(tail[1], true).length === constants.tabSize ? ok3(code2) : nok(code2);
+  }
+}
+function gfmStrikethrough(options) {
+  const options_ = options || {};
+  let single = options_.singleTilde;
+  const tokenizer = {
+    name: "strikethrough",
+    tokenize: tokenizeStrikethrough,
+    resolveAll: resolveAllStrikethrough
+  };
+  if (single === null || single === undefined) {
+    single = true;
+  }
+  return {
+    text: { [codes.tilde]: tokenizer },
+    insideSpan: { null: [tokenizer] },
+    attentionMarkers: { null: [codes.tilde] }
+  };
+  function resolveAllStrikethrough(events, context) {
+    let index2 = -1;
+    while (++index2 < events.length) {
+      if (events[index2][0] === "enter" && events[index2][1].type === "strikethroughSequenceTemporary" && events[index2][1]._close) {
+        let open = index2;
+        while (open--) {
+          if (events[open][0] === "exit" && events[open][1].type === "strikethroughSequenceTemporary" && events[open][1]._open && events[index2][1].end.offset - events[index2][1].start.offset === events[open][1].end.offset - events[open][1].start.offset) {
+            events[index2][1].type = "strikethroughSequence";
+            events[open][1].type = "strikethroughSequence";
+            const strikethrough = {
+              type: "strikethrough",
+              start: Object.assign({}, events[open][1].start),
+              end: Object.assign({}, events[index2][1].end)
+            };
+            const text4 = {
+              type: "strikethroughText",
+              start: Object.assign({}, events[open][1].end),
+              end: Object.assign({}, events[index2][1].start)
+            };
+            const nextEvents = [
+              ["enter", strikethrough, context],
+              ["enter", events[open][1], context],
+              ["exit", events[open][1], context],
+              ["enter", text4, context]
+            ];
+            const insideSpan2 = context.parser.constructs.insideSpan.null;
+            if (insideSpan2) {
+              splice(nextEvents, nextEvents.length, 0, resolveAll(insideSpan2, events.slice(open + 1, index2), context));
+            }
+            splice(nextEvents, nextEvents.length, 0, [
+              ["exit", text4, context],
+              ["enter", events[index2][1], context],
+              ["exit", events[index2][1], context],
+              ["exit", strikethrough, context]
+            ]);
+            splice(events, open - 1, index2 - open + 3, nextEvents);
+            index2 = open + nextEvents.length - 2;
+            break;
+          }
+        }
+      }
+    }
+    index2 = -1;
+    while (++index2 < events.length) {
+      if (events[index2][1].type === "strikethroughSequenceTemporary") {
+        events[index2][1].type = types.data;
+      }
+    }
+    return events;
+  }
+  function tokenizeStrikethrough(effects, ok3, nok) {
+    const previous3 = this.previous;
+    const events = this.events;
+    let size = 0;
+    return start;
+    function start(code2) {
+      ok(code2 === codes.tilde, "expected `~`");
+      if (previous3 === codes.tilde && events[events.length - 1][1].type !== types.characterEscape) {
+        return nok(code2);
+      }
+      effects.enter("strikethroughSequenceTemporary");
+      return more(code2);
+    }
+    function more(code2) {
+      const before = classifyCharacter(previous3);
+      if (code2 === codes.tilde) {
+        if (size > 1)
+          return nok(code2);
+        effects.consume(code2);
+        size++;
+        return more;
+      }
+      if (size < 2 && !single)
+        return nok(code2);
+      const token = effects.exit("strikethroughSequenceTemporary");
+      const after = classifyCharacter(code2);
+      token._open = !after || after === constants.attentionSideAfter && Boolean(before);
+      token._close = !before || before === constants.attentionSideAfter && Boolean(after);
+      return ok3(code2);
+    }
+  }
+}
+
+class EditMap {
+  constructor() {
+    this.map = [];
+    this.index = new Map;
+  }
+  add(index2, remove, add) {
+    addImplementation(this, index2, remove, add);
+  }
+  consume(events) {
+    this.map.sort(function(a, b) {
+      return a[0] - b[0];
+    });
+    if (this.map.length === 0) {
+      return;
+    }
+    let index2 = this.map.length;
+    const vecs = [];
+    while (index2 > 0) {
+      index2 -= 1;
+      vecs.push(events.slice(this.map[index2][0] + this.map[index2][1]), this.map[index2][2]);
+      events.length = this.map[index2][0];
+    }
+    vecs.push(events.slice());
+    events.length = 0;
+    let slice = vecs.pop();
+    while (slice) {
+      for (const element of slice) {
+        events.push(element);
+      }
+      slice = vecs.pop();
+    }
+    this.map.length = 0;
+    this.index.clear();
+  }
+}
+function addImplementation(editMap, at, remove, add) {
+  if (remove === 0 && add.length === 0) {
+    return;
+  }
+  const existing = editMap.index.get(at);
+  if (existing) {
+    existing[1] += remove;
+    existing[2].push(...add);
+    return;
+  }
+  const change = [at, remove, add];
+  editMap.map.push(change);
+  editMap.index.set(at, change);
+}
+function gfmTableAlign(events, index2) {
+  ok(events[index2][1].type === "table", "expected table");
+  let inDelimiterRow = false;
+  const align = [];
+  while (index2 < events.length) {
+    const event = events[index2];
+    if (inDelimiterRow) {
+      if (event[0] === "enter") {
+        if (event[1].type === "tableContent") {
+          align.push(events[index2 + 1][1].type === "tableDelimiterMarker" ? "left" : "none");
+        }
+      } else if (event[1].type === "tableContent") {
+        if (events[index2 - 1][1].type === "tableDelimiterMarker") {
+          const alignIndex = align.length - 1;
+          align[alignIndex] = align[alignIndex] === "left" ? "center" : "right";
+        }
+      } else if (event[1].type === "tableDelimiterRow") {
+        break;
+      }
+    } else if (event[0] === "enter" && event[1].type === "tableDelimiterRow") {
+      inDelimiterRow = true;
+    }
+    index2 += 1;
+  }
+  return align;
+}
+function gfmTable() {
+  return {
+    flow: {
+      null: { name: "table", tokenize: tokenizeTable, resolveAll: resolveTable }
+    }
+  };
+}
+function tokenizeTable(effects, ok3, nok) {
+  const self = this;
+  let size = 0;
+  let sizeB = 0;
+  let seen;
+  return start;
+  function start(code2) {
+    let index2 = self.events.length - 1;
+    while (index2 > -1) {
+      const { type } = self.events[index2][1];
+      if (type === types.lineEnding || type === types.linePrefix) {
+        index2--;
+      } else {
+        break;
+      }
+    }
+    const tail = index2 > -1 ? self.events[index2][1].type : null;
+    const next = tail === "tableHead" || tail === "tableRow" ? bodyRowStart : headRowBefore;
+    if (next === bodyRowStart && self.parser.lazy[self.now().line]) {
+      return nok(code2);
+    }
+    return next(code2);
+  }
+  function headRowBefore(code2) {
+    effects.enter("tableHead");
+    effects.enter("tableRow");
+    return headRowStart(code2);
+  }
+  function headRowStart(code2) {
+    if (code2 === codes.verticalBar) {
+      return headRowBreak(code2);
+    }
+    seen = true;
+    sizeB += 1;
+    return headRowBreak(code2);
+  }
+  function headRowBreak(code2) {
+    if (code2 === codes.eof) {
+      return nok(code2);
+    }
+    if (markdownLineEnding(code2)) {
+      if (sizeB > 1) {
+        sizeB = 0;
+        self.interrupt = true;
+        effects.exit("tableRow");
+        effects.enter(types.lineEnding);
+        effects.consume(code2);
+        effects.exit(types.lineEnding);
+        return headDelimiterStart;
+      }
+      return nok(code2);
+    }
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headRowBreak, types.whitespace)(code2);
+    }
+    sizeB += 1;
+    if (seen) {
+      seen = false;
+      size += 1;
+    }
+    if (code2 === codes.verticalBar) {
+      effects.enter("tableCellDivider");
+      effects.consume(code2);
+      effects.exit("tableCellDivider");
+      seen = true;
+      return headRowBreak;
+    }
+    effects.enter(types.data);
+    return headRowData(code2);
+  }
+  function headRowData(code2) {
+    if (code2 === codes.eof || code2 === codes.verticalBar || markdownLineEndingOrSpace(code2)) {
+      effects.exit(types.data);
+      return headRowBreak(code2);
+    }
+    effects.consume(code2);
+    return code2 === codes.backslash ? headRowEscape : headRowData;
+  }
+  function headRowEscape(code2) {
+    if (code2 === codes.backslash || code2 === codes.verticalBar) {
+      effects.consume(code2);
+      return headRowData;
+    }
+    return headRowData(code2);
+  }
+  function headDelimiterStart(code2) {
+    self.interrupt = false;
+    if (self.parser.lazy[self.now().line]) {
+      return nok(code2);
+    }
+    effects.enter("tableDelimiterRow");
+    seen = false;
+    if (markdownSpace(code2)) {
+      ok(self.parser.constructs.disable.null, "expected `disabled.null`");
+      return factorySpace(effects, headDelimiterBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code2);
+    }
+    return headDelimiterBefore(code2);
+  }
+  function headDelimiterBefore(code2) {
+    if (code2 === codes.dash || code2 === codes.colon) {
+      return headDelimiterValueBefore(code2);
+    }
+    if (code2 === codes.verticalBar) {
+      seen = true;
+      effects.enter("tableCellDivider");
+      effects.consume(code2);
+      effects.exit("tableCellDivider");
+      return headDelimiterCellBefore;
+    }
+    return headDelimiterNok(code2);
+  }
+  function headDelimiterCellBefore(code2) {
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headDelimiterValueBefore, types.whitespace)(code2);
+    }
+    return headDelimiterValueBefore(code2);
+  }
+  function headDelimiterValueBefore(code2) {
+    if (code2 === codes.colon) {
+      sizeB += 1;
+      seen = true;
+      effects.enter("tableDelimiterMarker");
+      effects.consume(code2);
+      effects.exit("tableDelimiterMarker");
+      return headDelimiterLeftAlignmentAfter;
+    }
+    if (code2 === codes.dash) {
+      sizeB += 1;
+      return headDelimiterLeftAlignmentAfter(code2);
+    }
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
+      return headDelimiterCellAfter(code2);
+    }
+    return headDelimiterNok(code2);
+  }
+  function headDelimiterLeftAlignmentAfter(code2) {
+    if (code2 === codes.dash) {
+      effects.enter("tableDelimiterFiller");
+      return headDelimiterFiller(code2);
+    }
+    return headDelimiterNok(code2);
+  }
+  function headDelimiterFiller(code2) {
+    if (code2 === codes.dash) {
+      effects.consume(code2);
+      return headDelimiterFiller;
+    }
+    if (code2 === codes.colon) {
+      seen = true;
+      effects.exit("tableDelimiterFiller");
+      effects.enter("tableDelimiterMarker");
+      effects.consume(code2);
+      effects.exit("tableDelimiterMarker");
+      return headDelimiterRightAlignmentAfter;
+    }
+    effects.exit("tableDelimiterFiller");
+    return headDelimiterRightAlignmentAfter(code2);
+  }
+  function headDelimiterRightAlignmentAfter(code2) {
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headDelimiterCellAfter, types.whitespace)(code2);
+    }
+    return headDelimiterCellAfter(code2);
+  }
+  function headDelimiterCellAfter(code2) {
+    if (code2 === codes.verticalBar) {
+      return headDelimiterBefore(code2);
+    }
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
+      if (!seen || size !== sizeB) {
+        return headDelimiterNok(code2);
+      }
+      effects.exit("tableDelimiterRow");
+      effects.exit("tableHead");
+      return ok3(code2);
+    }
+    return headDelimiterNok(code2);
+  }
+  function headDelimiterNok(code2) {
+    return nok(code2);
+  }
+  function bodyRowStart(code2) {
+    effects.enter("tableRow");
+    return bodyRowBreak(code2);
+  }
+  function bodyRowBreak(code2) {
+    if (code2 === codes.verticalBar) {
+      effects.enter("tableCellDivider");
+      effects.consume(code2);
+      effects.exit("tableCellDivider");
+      return bodyRowBreak;
+    }
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
+      effects.exit("tableRow");
+      return ok3(code2);
+    }
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, bodyRowBreak, types.whitespace)(code2);
+    }
+    effects.enter(types.data);
+    return bodyRowData(code2);
+  }
+  function bodyRowData(code2) {
+    if (code2 === codes.eof || code2 === codes.verticalBar || markdownLineEndingOrSpace(code2)) {
+      effects.exit(types.data);
+      return bodyRowBreak(code2);
+    }
+    effects.consume(code2);
+    return code2 === codes.backslash ? bodyRowEscape : bodyRowData;
+  }
+  function bodyRowEscape(code2) {
+    if (code2 === codes.backslash || code2 === codes.verticalBar) {
+      effects.consume(code2);
+      return bodyRowData;
+    }
+    return bodyRowData(code2);
+  }
+}
+function resolveTable(events, context) {
+  let index2 = -1;
+  let inFirstCellAwaitingPipe = true;
+  let rowKind = 0;
+  let lastCell = [0, 0, 0, 0];
+  let cell = [0, 0, 0, 0];
+  let afterHeadAwaitingFirstBodyRow = false;
+  let lastTableEnd = 0;
+  let currentTable;
+  let currentBody;
+  let currentCell;
+  const map = new EditMap;
+  while (++index2 < events.length) {
+    const event = events[index2];
+    const token = event[1];
+    if (event[0] === "enter") {
+      if (token.type === "tableHead") {
+        afterHeadAwaitingFirstBodyRow = false;
+        if (lastTableEnd !== 0) {
+          ok(currentTable, "there should be a table opening");
+          flushTableEnd(map, context, lastTableEnd, currentTable, currentBody);
+          currentBody = undefined;
+          lastTableEnd = 0;
+        }
+        currentTable = {
+          type: "table",
+          start: Object.assign({}, token.start),
+          end: Object.assign({}, token.end)
+        };
+        map.add(index2, 0, [["enter", currentTable, context]]);
+      } else if (token.type === "tableRow" || token.type === "tableDelimiterRow") {
+        inFirstCellAwaitingPipe = true;
+        currentCell = undefined;
+        lastCell = [0, 0, 0, 0];
+        cell = [0, index2 + 1, 0, 0];
+        if (afterHeadAwaitingFirstBodyRow) {
+          afterHeadAwaitingFirstBodyRow = false;
+          currentBody = {
+            type: "tableBody",
+            start: Object.assign({}, token.start),
+            end: Object.assign({}, token.end)
+          };
+          map.add(index2, 0, [["enter", currentBody, context]]);
+        }
+        rowKind = token.type === "tableDelimiterRow" ? 2 : currentBody ? 3 : 1;
+      } else if (rowKind && (token.type === types.data || token.type === "tableDelimiterMarker" || token.type === "tableDelimiterFiller")) {
+        inFirstCellAwaitingPipe = false;
+        if (cell[2] === 0) {
+          if (lastCell[1] !== 0) {
+            cell[0] = cell[1];
+            currentCell = flushCell(map, context, lastCell, rowKind, undefined, currentCell);
+            lastCell = [0, 0, 0, 0];
+          }
+          cell[2] = index2;
+        }
+      } else if (token.type === "tableCellDivider") {
+        if (inFirstCellAwaitingPipe) {
+          inFirstCellAwaitingPipe = false;
+        } else {
+          if (lastCell[1] !== 0) {
+            cell[0] = cell[1];
+            currentCell = flushCell(map, context, lastCell, rowKind, undefined, currentCell);
+          }
+          lastCell = cell;
+          cell = [lastCell[1], index2, 0, 0];
+        }
+      }
+    } else if (token.type === "tableHead") {
+      afterHeadAwaitingFirstBodyRow = true;
+      lastTableEnd = index2;
+    } else if (token.type === "tableRow" || token.type === "tableDelimiterRow") {
+      lastTableEnd = index2;
+      if (lastCell[1] !== 0) {
+        cell[0] = cell[1];
+        currentCell = flushCell(map, context, lastCell, rowKind, index2, currentCell);
+      } else if (cell[1] !== 0) {
+        currentCell = flushCell(map, context, cell, rowKind, index2, currentCell);
+      }
+      rowKind = 0;
+    } else if (rowKind && (token.type === types.data || token.type === "tableDelimiterMarker" || token.type === "tableDelimiterFiller")) {
+      cell[3] = index2;
+    }
+  }
+  if (lastTableEnd !== 0) {
+    ok(currentTable, "expected table opening");
+    flushTableEnd(map, context, lastTableEnd, currentTable, currentBody);
+  }
+  map.consume(context.events);
+  index2 = -1;
+  while (++index2 < context.events.length) {
+    const event = context.events[index2];
+    if (event[0] === "enter" && event[1].type === "table") {
+      event[1]._align = gfmTableAlign(context.events, index2);
+    }
+  }
+  return events;
+}
+function flushCell(map, context, range, rowKind, rowEnd, previousCell) {
+  const groupName = rowKind === 1 ? "tableHeader" : rowKind === 2 ? "tableDelimiter" : "tableData";
+  const valueName = "tableContent";
+  if (range[0] !== 0) {
+    ok(previousCell, "expected previous cell enter");
+    previousCell.end = Object.assign({}, getPoint(context.events, range[0]));
+    map.add(range[0], 0, [["exit", previousCell, context]]);
+  }
+  const now = getPoint(context.events, range[1]);
+  previousCell = {
+    type: groupName,
+    start: Object.assign({}, now),
+    end: Object.assign({}, now)
+  };
+  map.add(range[1], 0, [["enter", previousCell, context]]);
+  if (range[2] !== 0) {
+    const relatedStart = getPoint(context.events, range[2]);
+    const relatedEnd = getPoint(context.events, range[3]);
+    const valueToken = {
+      type: valueName,
+      start: Object.assign({}, relatedStart),
+      end: Object.assign({}, relatedEnd)
+    };
+    map.add(range[2], 0, [["enter", valueToken, context]]);
+    ok(range[3] !== 0);
+    if (rowKind !== 2) {
+      const start = context.events[range[2]];
+      const end = context.events[range[3]];
+      start[1].end = Object.assign({}, end[1].end);
+      start[1].type = types.chunkText;
+      start[1].contentType = constants.contentTypeText;
+      if (range[3] > range[2] + 1) {
+        const a = range[2] + 1;
+        const b = range[3] - range[2] - 1;
+        map.add(a, b, []);
+      }
+    }
+    map.add(range[3] + 1, 0, [["exit", valueToken, context]]);
+  }
+  if (rowEnd !== undefined) {
+    previousCell.end = Object.assign({}, getPoint(context.events, rowEnd));
+    map.add(rowEnd, 0, [["exit", previousCell, context]]);
+    previousCell = undefined;
+  }
+  return previousCell;
+}
+function flushTableEnd(map, context, index2, table, tableBody) {
+  const exits = [];
+  const related = getPoint(context.events, index2);
+  if (tableBody) {
+    tableBody.end = Object.assign({}, related);
+    exits.push(["exit", tableBody, context]);
+  }
+  table.end = Object.assign({}, related);
+  exits.push(["exit", table, context]);
+  map.add(index2 + 1, 0, exits);
+}
+function getPoint(events, index2) {
+  const event = events[index2];
+  const side = event[0] === "enter" ? "start" : "end";
+  return event[1][side];
+}
+var tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
+function gfmTaskListItem() {
+  return {
+    text: { [codes.leftSquareBracket]: tasklistCheck }
+  };
+}
+function tokenizeTasklistCheck(effects, ok3, nok) {
+  const self = this;
+  return open;
+  function open(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
+    if (self.previous !== codes.eof || !self._gfmTasklistFirstContentOfListItem) {
+      return nok(code2);
+    }
+    effects.enter("taskListCheck");
+    effects.enter("taskListCheckMarker");
+    effects.consume(code2);
+    effects.exit("taskListCheckMarker");
+    return inside;
+  }
+  function inside(code2) {
+    if (markdownLineEndingOrSpace(code2)) {
+      effects.enter("taskListCheckValueUnchecked");
+      effects.consume(code2);
+      effects.exit("taskListCheckValueUnchecked");
+      return close;
+    }
+    if (code2 === codes.uppercaseX || code2 === codes.lowercaseX) {
+      effects.enter("taskListCheckValueChecked");
+      effects.consume(code2);
+      effects.exit("taskListCheckValueChecked");
+      return close;
+    }
+    return nok(code2);
+  }
+  function close(code2) {
+    if (code2 === codes.rightSquareBracket) {
+      effects.enter("taskListCheckMarker");
+      effects.consume(code2);
+      effects.exit("taskListCheckMarker");
+      effects.exit("taskListCheck");
+      return after;
+    }
+    return nok(code2);
+  }
+  function after(code2) {
+    if (markdownLineEnding(code2)) {
+      return ok3(code2);
+    }
+    if (markdownSpace(code2)) {
+      return effects.check({ tokenize: spaceThenNonSpace }, ok3, nok)(code2);
+    }
+    return nok(code2);
+  }
+}
+function spaceThenNonSpace(effects, ok3, nok) {
+  return factorySpace(effects, after, types.whitespace);
+  function after(code2) {
+    return code2 === codes.eof ? nok(code2) : ok3(code2);
+  }
+}
+function gfm(options) {
+  return combineExtensions([
+    gfmAutolinkLiteral(),
+    gfmFootnote(),
+    gfmStrikethrough(options),
+    gfmTable(),
+    gfmTaskListItem()
+  ]);
+}
+var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+function readJson(filePath) {
+  if (!existsSync3(filePath))
+    return {};
+  const content3 = readFileSync3(filePath, "utf8").trim();
+  if (!content3)
+    return {};
+  try {
+    return JSON.parse(content3);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
 function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function violation(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
+function violation(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
@@ -609,16 +10126,1237 @@ function validateIntegrationMergeLease(lease) {
   return { ok: violations.length === 0, violations };
 }
 var heldLockDirs = new AsyncLocalStorage2;
+var fsStoreInstances = new WeakSet;
+var ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
+var ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
+var COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
+function enforcementValue(raw) {
+  const value = raw.trim();
+  const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
+  return unquoted.trim().toLowerCase();
+}
+function parseEnforcementFlag(text4) {
+  const bold = text4.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
+  if (bold !== null)
+    return { hard: enforcementValue(bold[1]) === "hard", source: "assignment" };
+  const plain = text4.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
+  if (plain !== null)
+    return { hard: enforcementValue(plain[1]) === "hard", source: "assignment" };
+  const compass = text4.match(COMPASS_ENFORCEMENT_RE);
+  if (compass !== null)
+    return { hard: enforcementValue(compass[1]) === "hard", source: "compass" };
+  return { hard: false, source: "none" };
+}
+var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
+var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
+var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
+var WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
+var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+function isStandaloneDevelopmentWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
+function isStandaloneReportOnlyWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "verification/report-only" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
+function rowValidationRoute(snapshot, row) {
+  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
+  }
+  return "integration";
+}
+function validateStandaloneCompletedCoherence(snapshot, row) {
+  const violations = [];
+  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
+  if (!standalone || row.id !== snapshot.plans[0]?.id)
+    return violations;
+  const coordination = row.coordination;
+  if (!isPlainObject(coordination))
+    return violations;
+  if (!isPlainObject(coordination.handoff)) {
+    if (row.status === "Done") {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff — a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`));
+    }
+    return violations;
+  }
+  const handoff = coordination.handoff;
+  const completed = handoff.state === "completed";
+  if (row.status !== "Done" && !completed)
+    return violations;
+  if (!completed) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
+  }
+  if (handoff.integration !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot)) {
+    if (snapshot.integration_worktree_path !== undefined) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry integration_worktree_path"));
+    }
+    if (isNonEmptyString(snapshot.branch?.integration)) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry branch.integration"));
+    }
+  }
+  if (row.status !== "Done") {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires row ${String(row.id)} to be Done`));
+  }
+  if (row.execution_lease !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires no execution lease on row ${String(row.id)}`));
+  }
+  if (snapshot.integration_merge_lease !== undefined) {
+    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires no integration_merge_lease on the snapshot"));
+  }
+  if (isStandaloneDevelopmentWorkflow(snapshot)) {
+    const source = snapshot.branch?.source;
+    const target = snapshot.branch?.target;
+    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
+      violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
+    } else if (handoff.source_branch !== source) {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
+    }
+  }
+  return violations;
+}
+function violation3(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateWorktreePathValue(violations, value, field) {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute6(value)) {
+    violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
+  }
+}
+function deliveryEvidenceViolations(value, what) {
+  const violations = [];
+  const invalid3 = (message) => {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+  };
+  if (!isPlainObject(value)) {
+    invalid3("must be an object");
+    return violations;
+  }
+  const members = ["compound", "pr", "merge", "completion"];
+  const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
+  if (unknownMembers.length > 0)
+    invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+  const compound = value.compound;
+  if (compound !== undefined) {
+    if (!isPlainObject(compound))
+      invalid3("compound must be an object");
+    else {
+      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
+      if (unknown.length > 0)
+        invalid3(`compound has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
+        invalid3(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
+      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid3("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
+      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid3("compound.reason must be a non-empty string when given");
+      }
+    }
+  }
+  const stringMembers = {
+    pr: ["repo", "head", "target"],
+    merge: ["provider", "evidence"],
+    completion: ["policy", "evidence"]
+  };
+  for (const member of ["pr", "merge", "completion"]) {
+    const block = value[member];
+    if (block === undefined)
+      continue;
+    if (!isPlainObject(block)) {
+      invalid3(`${member} must be an object`);
+      continue;
+    }
+    const fields = stringMembers[member];
+    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
+    if (unknown.length > 0)
+      invalid3(`${member} has unknown key(s) ${unknown.join(", ")}`);
+    for (const field of fields) {
+      if (typeof block[field] !== "string" || block[field].trim() === "") {
+        invalid3(`${member}.${field} must be a non-empty string`);
+      }
+    }
+  }
+  return violations;
+}
+function validateWorkflowSnapshot(doc) {
+  const violations = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation3("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
+    };
+  }
+  if (doc.schema_version === undefined) {
+    violations.push(violation3("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
+  } else if (doc.schema_version !== 1) {
+    violations.push(violation3("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
+  }
+  if (doc.version !== undefined) {
+    violations.push(violation3("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
+  }
+  validateNonEmptyString2(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
+  if (doc.type === undefined) {
+    violations.push(violation3("high", "workflow.snapshot.missing-type", "missing required field: type"));
+  } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
+  }
+  if (doc.status === undefined) {
+    violations.push(violation3("high", "workflow.snapshot.missing-status", "missing required field: status"));
+  } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+  }
+  validateNonEmptyString2(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
+  validateNonEmptyString2(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
+  if (doc.ended_at !== undefined) {
+    validateNonEmptyString2(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
+  }
+  if (doc.phase !== undefined && typeof doc.phase !== "string") {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
+  }
+  if (doc.plans === undefined) {
+    violations.push(violation3("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
+  } else if (!Array.isArray(doc.plans)) {
+    violations.push(violation3("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
+  } else {
+    const snapshotDoc = doc;
+    for (const row of doc.plans) {
+      violations.push(...validatePlanRow(row).violations);
+      if (isPlainObject(row) && row.execution_lease !== undefined) {
+        violations.push(...validateExecutionLease(row.execution_lease).violations);
+      }
+      if (isPlainObject(row) && row.coordination !== undefined) {
+        const planRow = row;
+        const route = rowValidationRoute(snapshotDoc, planRow);
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
+        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
+      }
+    }
+  }
+  if (doc.coordination !== undefined) {
+    violations.push(...validateSnapshotCoordination(doc.coordination));
+  }
+  if (doc.execution_policy !== undefined) {
+    if (!isPlainObject(doc.execution_policy)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
+    }
+  }
+  if (doc.integration_merge_lease !== undefined) {
+    violations.push(...validateIntegrationMergeLease(doc.integration_merge_lease).violations);
+  }
+  if (doc.branch !== undefined) {
+    if (!isPlainObject(doc.branch)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
+    } else {
+      for (const key of ["base", "source", "integration", "target"]) {
+        if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
+          violations.push(violation3("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
+        }
+      }
+    }
+  }
+  const legacyWorktreePath = doc.control_worktree_path;
+  const canonicalWorktreePath = doc.integration_worktree_path;
+  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
+    violations.push(violation3("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
+  } else {
+    if (canonicalWorktreePath !== undefined) {
+      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
+    }
+    if (legacyWorktreePath !== undefined) {
+      violations.push(violation3("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
+      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
+    }
+  }
+  if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
+    violations.push(violation3("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
+  }
+  if (doc.compass_ref !== undefined) {
+    validateNonEmptyString2(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
+  }
+  if (doc.delivery_kind !== undefined) {
+    if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
+      violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
+    }
+  }
+  if (doc.project !== undefined) {
+    validateNonEmptyString2(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+  }
+  if (doc.completion_policy !== undefined) {
+    validateNonEmptyString2(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
+  }
+  if (doc.delivery !== undefined) {
+    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
+  }
+  const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
+  if (terminal) {
+    if (doc.ended_at === undefined) {
+      violations.push(violation3("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
+    }
+    if (Array.isArray(doc.plans)) {
+      for (const row of doc.plans) {
+        if (isPlainObject(row) && row.execution_lease !== undefined) {
+          violations.push(violation3("high", "workflow.snapshot.terminal-dangling-execution-lease", `terminal snapshot must not carry a row execution_lease (dangling lease) — release every lease before the lifecycle ends`));
+        }
+      }
+    }
+    if (doc.integration_merge_lease !== undefined) {
+      violations.push(violation3("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
+var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function rowPlanIds(row) {
+  if (!isPlainObject(row))
+    return [];
+  const ids = [];
+  for (const value of [row.id, row.plan_id]) {
+    if (isNonEmptyString(value))
+      ids.push(value);
+  }
+  return [...new Set(ids)];
+}
+function rowPlanId(row) {
+  return rowPlanIds(row)[0];
+}
+var PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
+var RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
+var RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
+function violation4(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validatePlanRow(row) {
+  const violations = [];
+  if (!isPlainObject(row)) {
+    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
+  }
+  const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
+  if (id === undefined && planId === undefined) {
+    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+  } else {
+    if (id !== undefined) {
+      validateNonEmptyString3(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
+    }
+    if (planId !== undefined) {
+      validateNonEmptyString3(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
+    }
+    if (id !== undefined && planId !== undefined && id !== planId) {
+      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+    }
+  }
+  validateNonEmptyString3(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
+  validateNonEmptyString3(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
+  if (status === undefined) {
+    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
+  } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+  }
+  if (metadata !== undefined && !isPlainObject(metadata)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+  }
+  if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
+  }
+  if (status === "Done" && execution_lease !== undefined) {
+    violations.push(violation4("medium", "status.plan-row.done-with-lease", 'plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: "Done" (status-and-residuals.md § Hold, release, and override)', 'delete plans[].execution_lease in the same update that sets status: "Done"'));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function validateResidual(entry) {
+  const violations = [];
+  if (!isPlainObject(entry)) {
+    return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
+  }
+  const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
+  validateNonEmptyString3(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
+  validateNonEmptyString3(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
+  validateNonEmptyString3(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
+  validateNonEmptyString3(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
+  validateNonEmptyString3(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
+  if (severity === undefined) {
+    violations.push(violation4("high", "status.residual.missing-severity", "missing required field: severity"));
+  } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
+    violations.push(violation4("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+  } else if (severity === "warning") {
+    violations.push(violation4("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+  }
+  if (decision === undefined) {
+    violations.push(violation4("high", "status.residual.missing-decision", "missing required field: decision"));
+  } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
+    violations.push(violation4("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+  }
+  if (target === undefined) {
+    violations.push(violation4("high", "status.residual.missing-target", "missing required field: target"));
+  } else if (typeof target !== "string" && target !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-target", "target must be a string or null"));
+  }
+  if (tracking === undefined) {
+    violations.push(violation4("high", "status.residual.missing-tracking", "missing required field: tracking"));
+  } else if (typeof tracking !== "string" && tracking !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+  }
+  if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+  }
+  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
+    violations.push(violation4("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+  }
+  if (lifecycle !== undefined) {
+    if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
+      violations.push(violation4("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+    } else if (lifecycle !== "open") {
+      if (closed_at === undefined) {
+        violations.push(violation4("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+      }
+      if (entry.closure_note === undefined) {
+        violations.push(violation4("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+function isHarnessRelativePath(dir) {
+  if (dir.startsWith("/") || dir.startsWith("\\"))
+    return false;
+  if (/^[A-Za-z]:[\\/]/.test(dir))
+    return false;
+  return !dir.split(/[\\/]+/).includes("..");
+}
+function validateWorkflowEntry(entry) {
+  const violations = [];
+  if (!isPlainObject(entry)) {
+    return {
+      ok: false,
+      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
+    };
+  }
+  validateNonEmptyString3(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+  if (entry.type === undefined) {
+    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
+  } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
+    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+  }
+  validateNonEmptyString3(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
+  if (entry.dir === undefined) {
+    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
+  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
+    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+  } else if (!isHarnessRelativePath(entry.dir)) {
+    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function validateStatusV2(docOrPath, opts = {}) {
+  let doc;
+  let harnessDir = opts.harnessDir;
+  if (typeof docOrPath === "string") {
+    try {
+      doc = readJson(docOrPath);
+      harnessDir = dirname7(resolve7(docOrPath));
+    } catch (error) {
+      return {
+        ok: false,
+        violations: [violation4("high", "status.invalid-json", error.message)]
+      };
+    }
+  } else {
+    doc = docOrPath;
+  }
+  if (!isPlainObject(doc)) {
+    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
+  }
+  if (doc.version !== 2) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
+      ]
+    };
+  }
+  if (Array.isArray(doc.plans)) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+      ]
+    };
+  }
+  if (doc.residual_findings !== undefined) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+      ]
+    };
+  }
+  const violations = [];
+  if (doc.updated_at === undefined) {
+    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
+  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
+    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+  }
+  if (doc.workflows === undefined) {
+    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
+  } else if (!Array.isArray(doc.workflows)) {
+    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
+  } else {
+    const seen = new Set;
+    for (const entry of doc.workflows) {
+      violations.push(...validateWorkflowEntry(entry).violations);
+      if (isPlainObject(entry) && typeof entry.id === "string") {
+        if (seen.has(entry.id)) {
+          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+        }
+        seen.add(entry.id);
+      }
+    }
+  }
+  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
+    let realHarnessDir = null;
+    try {
+      realHarnessDir = realpathSync3(harnessDir);
+    } catch {}
+    for (const entry of doc.workflows) {
+      if (!isPlainObject(entry) || typeof entry.dir !== "string")
+        continue;
+      const relSnapshot = join9(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join9(harnessDir, relSnapshot);
+      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
+      let physical;
+      try {
+        physical = realpathSync3(snapshotPath);
+      } catch {
+        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        continue;
+      }
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep4}`)) {
+        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+        continue;
+      }
+      let snapshot;
+      try {
+        snapshot = readJson(snapshotPath);
+      } catch (error) {
+        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        continue;
+      }
+      if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
+        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+      }
+      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
+        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+      }
+      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
+        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+var validateStatus = validateStatusV2;
+function resolveCompassEnforcement(harnessDir) {
+  const iterationsDir = resolveIterationDir(harnessDir);
+  if (!existsSync7(iterationsDir))
+    return { hard: false, source: "none" };
+  let entries;
+  try {
+    entries = readdirSync3(iterationsDir, { withFileTypes: true });
+  } catch {
+    return { hard: false, source: "none" };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory())
+      continue;
+    const compassPath = join9(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync7(compassPath))
+      continue;
+    let content3;
+    try {
+      content3 = readFileSync6(compassPath, "utf8");
+    } catch {
+      continue;
+    }
+    const frontmatter = content3.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const fm = frontmatter !== null ? frontmatter[1] : "";
+    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm))
+      continue;
+    const flag = parseEnforcementFlag(fm);
+    if (flag.hard)
+      return flag;
+  }
+  return { hard: false, source: "none" };
+}
+function resolveMstarcEnforcement(harnessDir) {
+  const dir = resolve7(harnessDir);
+  const rc = loadMstarc(dir, dirname7(dir));
+  const value = rc?.config.enforcement;
+  if (value === "hard")
+    return { hard: true, source: "mstarc" };
+  if (value === "soft")
+    return { hard: false, source: "mstarc" };
+  return { hard: false, source: "none" };
+}
+function resolveRepoEnforcement(harnessDir) {
+  const rc = resolveMstarcEnforcement(harnessDir);
+  if (rc.source !== "none")
+    return rc;
+  return resolveCompassEnforcement(harnessDir);
+}
+var COMPASS_STATUSES = ["active", "locked", "completed"];
+var DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+function typeName(value) {
+  if (value === null)
+    return "null";
+  if (Array.isArray(value))
+    return "array";
+  return typeof value;
+}
+function validateCompassShape(doc) {
+  const issues = [];
+  const expectString = (key, opts = {}) => {
+    const value = doc[key];
+    if (typeof value !== "string") {
+      issues.push({ path: [key], message: `expected string, received ${typeName(value)}` });
+      return;
+    }
+    if (opts.min !== undefined && value.length < opts.min) {
+      issues.push({ path: [key], message: `string must contain at least ${opts.min} character(s)` });
+      return;
+    }
+    if (opts.regex !== undefined && !opts.regex.test(value)) {
+      issues.push({ path: [key], message: `string must match ${opts.regex}` });
+    }
+  };
+  expectString("iteration_id", { min: 1 });
+  expectString("start_date", { regex: DATE_RE2 });
+  const status = doc.status;
+  if (typeof status !== "string" || !COMPASS_STATUSES.includes(status)) {
+    issues.push({
+      path: ["status"],
+      message: `expected one of ${COMPASS_STATUSES.map((s) => `'${s}'`).join(" | ")}, received ${typeName(status)}`
+    });
+  }
+  expectString("iteration_base_branch", { min: 1 });
+  expectString("target_branch", { min: 1 });
+  const plans = doc.plans;
+  if (plans !== undefined) {
+    if (!Array.isArray(plans)) {
+      issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
+    } else {
+      plans.forEach((entry, index2) => {
+        if (typeof entry !== "string") {
+          issues.push({ path: ["plans", index2], message: `expected string, received ${typeName(entry)}` });
+        } else if (entry.length < 1) {
+          issues.push({ path: ["plans", index2], message: "string must contain at least 1 character(s)" });
+        }
+      });
+    }
+  }
+  const end_date = doc.end_date;
+  if (end_date !== undefined) {
+    if (typeof end_date !== "string") {
+      issues.push({ path: ["end_date"], message: `expected string, received ${typeName(end_date)}` });
+    } else if (!DATE_RE2.test(end_date)) {
+      issues.push({ path: ["end_date"], message: `string must match ${DATE_RE2}` });
+    }
+  }
+  if (issues.length > 0)
+    return { ok: false, issues };
+  return {
+    ok: true,
+    data: {
+      iteration_id: doc.iteration_id,
+      start_date: doc.start_date,
+      status,
+      iteration_base_branch: doc.iteration_base_branch,
+      target_branch: doc.target_branch,
+      ...plans !== undefined ? { plans } : {},
+      ...end_date !== undefined ? { end_date } : {}
+    }
+  };
+}
+function violation5(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function validateCompassFrontmatter(doc) {
+  if (!isPlainObject3(doc)) {
+    return {
+      ok: false,
+      violations: [
+        violation5("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
+      ]
+    };
+  }
+  const parsed = validateCompassShape(doc);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      violations: parsed.issues.map((issue) => {
+        const field = issue.path.join(".") || "(root)";
+        return violation5("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
+      })
+    };
+  }
+  const violations = [];
+  const { status, end_date } = parsed.data;
+  if (status === "completed" && end_date === undefined) {
+    violations.push(violation5("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
+  }
+  if (status !== "completed" && end_date !== undefined) {
+    violations.push(violation5("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function parseCompassFrontmatterText(content3, filePath) {
+  const lines = content3.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
+  }
+  const end = lines.indexOf("---", 1);
+  if (end === -1) {
+    throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
+  }
+  const doc = {};
+  let listKey = null;
+  for (let i = 1;i < end; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line.trim() || line.trim().startsWith("#"))
+      continue;
+    if (listKey !== null && /^\s*-\s+/.test(line)) {
+      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
+      if (!Array.isArray(doc[listKey]))
+        doc[listKey] = [];
+      doc[listKey].push(item);
+      continue;
+    }
+    listKey = null;
+    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (!kv) {
+      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
+    }
+    const value = kv[2].trim();
+    doc[kv[1]] = value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
+    listKey = value === "" ? kv[1] : null;
+  }
+  return doc;
+}
+function parseFlowArray(raw, filePath) {
+  const inner = raw.slice(1, -1);
+  if (/[[\]]/.test(inner)) {
+    throw new Error(`nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`);
+  }
+  let quote = null;
+  for (const ch of inner) {
+    if (ch === '"' || ch === "'") {
+      if (quote === null)
+        quote = ch;
+      else if (quote === ch)
+        quote = null;
+    } else if (ch === "," && quote !== null) {
+      throw new Error(`ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`);
+    }
+  }
+  if (quote !== null) {
+    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
+  }
+  const items = [];
+  for (const part of inner.split(",")) {
+    const item = part.trim().replace(/^["']|["']$/g, "");
+    if (item === "")
+      continue;
+    items.push(item);
+  }
+  return items;
+}
+var ROADMAP_STATUSES = ["active", "paused", "completed"];
+var DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
+function violation6(severity, code2, message) {
+  return { ok: false, severity, code: code2, message };
+}
+function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function frontmatterEnd(content3) {
+  const lines = content3.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---")
+    return 0;
+  let offset = lines[0].length;
+  const newlineWidth = content3.startsWith(`\r
+`, offset) ? 2 : content3[offset] === `
+` ? 1 : 0;
+  offset += newlineWidth;
+  for (let index2 = 1;index2 < lines.length; index2 += 1) {
+    const line = lines[index2];
+    const nextNewline = content3.indexOf(`
+`, offset);
+    const end = nextNewline === -1 ? content3.length : nextNewline;
+    const lineEnd = content3[end - 1] === "\r" ? end - 1 : end;
+    if (content3.slice(offset, lineEnd) === "---") {
+      return nextNewline === -1 ? content3.length : nextNewline + 1;
+    }
+    offset = nextNewline === -1 ? content3.length : nextNewline + 1;
+  }
+  return 0;
+}
+function plainText(node2) {
+  if (node2.type === "text" || node2.type === "inlineCode")
+    return node2.value ?? "";
+  if (node2.type === "break")
+    return " ";
+  return (node2.children ?? []).map(plainText).join("");
+}
+function isPositioned(node2) {
+  return node2.position !== undefined;
+}
+function validateRoadmapContent(content3, sourceLabel) {
+  const violations = [];
+  let doc;
+  try {
+    doc = parseCompassFrontmatterText(content3, sourceLabel);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
+    return { ok: false, violations: [violation6("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
+  }
+  validateNonEmptyString4(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
+  validateNonEmptyString4(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
+  if (doc.status === undefined) {
+    violations.push(violation6("high", "project.roadmap.missing-status", "missing required field: status"));
+  } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
+    violations.push(violation6("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+  }
+  if (doc.created_at === undefined) {
+    violations.push(violation6("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
+  } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
+    violations.push(violation6("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
+  }
+  if (doc.milestones !== undefined && doc.milestones !== null) {
+    if (!Array.isArray(doc.milestones)) {
+      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
+    } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
+      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
+    }
+  }
+  if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
+    violations.push(violation6("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
+  }
+  const warnings = [];
+  const end = frontmatterEnd(content3);
+  const body = content3.slice(end);
+  if (!/^##\s+Direction\s*$/m.test(body)) {
+    warnings.push(violation6("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+  }
+  if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
+    warnings.push(violation6("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+  }
+  return { ok: violations.length === 0, violations, warnings };
+}
+function parseRoadmapContent(contentMarkdown) {
+  const validation = validateRoadmapContent(contentMarkdown, "roadmap content");
+  if (!validation.ok) {
+    throw new Error(`invalid roadmap content: ${validation.violations.map((item) => item.code).join(", ")}`);
+  }
+  const rawFrontmatter = parseCompassFrontmatterText(contentMarkdown, "roadmap content");
+  const frontmatter = rawFrontmatter;
+  const bodyOffset = frontmatterEnd(contentMarkdown);
+  const bodySource = contentMarkdown.slice(bodyOffset);
+  const tree = fromMarkdown(bodySource, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
+  const sections = [];
+  const headings = [];
+  const blocks = tree.children ?? [];
+  for (const node2 of blocks) {
+    if (node2.type === "heading" && node2.depth !== undefined && isPositioned(node2))
+      headings.push(node2);
+  }
+  const firstHeadingOffset = headings[0]?.position.start.offset ?? bodySource.length;
+  if (firstHeadingOffset > 0)
+    sections.push({ level: 0, heading: "", body: bodySource.slice(0, firstHeadingOffset) });
+  for (let index2 = 0;index2 < headings.length; index2 += 1) {
+    const headingNode = headings[index2];
+    const nextHeading = headings.slice(index2 + 1).find((candidate) => candidate.depth <= headingNode.depth);
+    const endOffset = nextHeading?.position.start.offset ?? bodySource.length;
+    const heading = (headingNode.children ?? []).map(plainText).join("");
+    sections.push({ level: headingNode.depth, heading, body: bodySource.slice(headingNode.position.end.offset, endOffset) });
+  }
+  const goals = [];
+  const visit = (node2, parentOrdinal) => {
+    if (node2.type === "listItem" && node2.checked !== undefined && node2.checked !== null && isPositioned(node2)) {
+      const ordinal = goals.length;
+      const firstParagraph = (node2.children ?? []).find((child) => child.type === "paragraph");
+      goals.push({
+        ordinal,
+        parentOrdinal,
+        checked: node2.checked,
+        title: firstParagraph ? plainText(firstParagraph).trim() : "",
+        body: bodySource.slice(node2.position.start.offset, node2.position.end.offset)
+      });
+      for (const child of node2.children ?? [])
+        visit(child, ordinal);
+      return;
+    }
+    for (const child of node2.children ?? [])
+      visit(child, parentOrdinal);
+  };
+  visit(tree, null);
+  return {
+    contentMarkdown,
+    frontmatter,
+    direction: sections.find((section) => section.level === 2 && section.heading.trim() === "Direction")?.body ?? null,
+    goals,
+    milestones: Array.isArray(frontmatter.milestones) ? frontmatter.milestones : [],
+    sections
+  };
+}
+class IssueError extends Error {
+  code;
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
+    this.name = "IssueError";
+    this.code = code2;
+  }
+}
+var DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+function violation7(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateProjectRegister(doc) {
+  const violations = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation7("high", "project.register.invalid", "project register must be an object")]
+    };
+  }
+  if (doc.entries === undefined) {
+    violations.push(violation7("high", "project.register.missing-entries", "missing required field: entries"));
+  } else if (!isPlainObject(doc.entries)) {
+    violations.push(violation7("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
+  } else {
+    for (const [key, entries] of Object.entries(doc.entries)) {
+      if (key.trim() === "") {
+        violations.push(violation7("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
+      }
+      if (!Array.isArray(entries)) {
+        violations.push(violation7("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
+        continue;
+      }
+      for (const entry of entries) {
+        violations.push(...validateResidual(entry).violations);
+        if (!isPlainObject(entry))
+          continue;
+        validateNonEmptyString5(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
+        if (entry.registered_at === undefined) {
+          violations.push(violation7("high", "project.register.missing-registered-at", "missing required field: registered_at"));
+        } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
+          violations.push(violation7("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
+        }
+        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
+          violations.push(violation7("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
+        }
+        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
+          violations.push(violation7("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
+        }
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
+  const start = resolve8(startDir);
+  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  if (explicit)
+    return resolve8(start, explicit);
+  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+  const rc = loadMstarc(start, boundary);
+  if (rc !== null && rc.config.harnessDir)
+    return resolve8(rc.dir, rc.config.harnessDir);
+  let dir = start;
+  for (;; ) {
+    if (!isAtOrBelow2(dir, boundary))
+      return null;
+    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
+      if (isDirectory(candidate))
+        return candidate;
+    }
+    if (dir === boundary)
+      return null;
+    const parent = dirname8(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function defaultWorkspaceRoot(startDir) {
+  try {
+    const cdup = execFileSync("git", ["rev-parse", "--show-cdup"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (!cdup)
+      return startDir;
+    let boundary = startDir;
+    for (const segment of cdup.split(/[\\/]/)) {
+      if (segment && segment !== ".")
+        boundary = dirname8(boundary);
+    }
+    return resolve8(boundary);
+  } catch {}
+  return startDir;
+}
+function isAtOrBelow2(dir, root) {
+  const rel = relative2(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
+}
+function mstarcDirOverride(harnessDir, key) {
+  const dir = resolve8(harnessDir);
+  const rc = loadMstarc(dir, dirname8(dir));
+  const declared = rc?.config[key];
+  return declared ? resolve8(rc.dir, declared) : null;
+}
+function resolveSpecsDir(harnessDir, opts = {}) {
+  const declared = mstarcDirOverride(harnessDir, "specsDir");
+  if (declared !== null) {
+    if (opts.create !== false)
+      mkdirSync4(declared, { recursive: true });
+    return declared;
+  }
+  const harness = resolve8(harnessDir);
+  const repoRoot = dirname8(harness);
+  const candidates = [
+    join13(harness, "specs"),
+    join13(repoRoot, "docs", "specs"),
+    join13(repoRoot, "specs"),
+    join13(harness, "designs"),
+    join13(repoRoot, "designs")
+  ];
+  for (const candidate of candidates) {
+    if (isDirectory(candidate) && hasFiles(candidate))
+      return candidate;
+  }
+  const fallback = join13(harness, "specs");
+  if (opts.create !== false)
+    mkdirSync4(fallback, { recursive: true });
+  return fallback;
+}
+function resolvePlanDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "planDir");
+  if (declared !== null)
+    return declared;
+  const dir = resolve8(harnessDir);
+  const name = basename4(dir);
+  if (name === ".plans" || name === "plans")
+    return dir;
+  return join13(dir, "plans");
+}
+function resolveIterationDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "iterationDir");
+  if (declared !== null)
+    return declared;
+  return join13(resolve8(harnessDir), "iterations");
+}
+function resolveKnowledgeDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+  if (declared !== null)
+    return declared;
+  return join13(resolve8(harnessDir), "knowledge");
+}
+function resolveHarnessSubdir(startDir, opts, key, fallback) {
+  const harness = resolveHarnessDir(startDir, opts);
+  if (harness === null) {
+    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+  }
+  const declared = mstarcDirOverride(harness, key);
+  return declared !== null ? declared : join13(resolve8(harness), fallback);
+}
+function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
+}
+function resolveProjectDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
+}
+var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
+`;
+var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
+`;
+var GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
+`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
+var GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
+`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
+function isDirectory(dir) {
+  try {
+    return statSync4(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function hasFiles(dir) {
+  try {
+    for (const entry of readdirSync6(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (hasFiles(join13(dir, entry.name)))
+          return true;
+      } else if (entry.isFile()) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
+var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
+var AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
+var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function parseMainWorktree(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      if (ref === "")
+        return null;
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  if (branch === null)
+    return null;
+  try {
+    return { root: realpathSync5(rawPath), branch };
+  } catch {
+    return null;
+  }
+}
+function readMainWorktree(cwd) {
+  const start = cwd ?? process.cwd();
+  try {
+    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return parseMainWorktree(stdout);
+  } catch {
+    return null;
+  }
+}
+function errorCode(error) {
+  if (error !== null && typeof error === "object" && "code" in error) {
+    const code2 = error.code;
+    return typeof code2 === "string" ? code2 : undefined;
+  }
+  return;
+}
+function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
+  if (isNonEmptyString(harnessDir))
+    return resolve12(cwd, harnessDir);
+  const start = resolve12(cwd);
+  const main = readMainWorktree(start);
+  if (main !== null)
+    return resolveHarnessDir(main.root);
+  for (let dir = start;; dir = dirname9(dir)) {
+    let linked = false;
+    try {
+      linked = statSync5(join17(dir, ".git")).isFile();
+    } catch (error) {
+      const code2 = errorCode(error);
+      if (code2 !== "ENOENT" && code2 !== "ENOTDIR")
+        throw error;
+    }
+    if (linked) {
+      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join17(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join17(dir, ".git") });
+    }
+    const parent = dirname9(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  return resolveHarnessDir(start);
+}
 var MIN_BUN_VERSION = "1.4.0";
 var MIN_NODE_VERSION = "24.18.0";
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
 class StoreError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "StoreError";
-    this.code = code;
+    this.code = code2;
   }
 }
 function detectStoreRuntime() {
@@ -641,10 +11379,10 @@ function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
   const kind = info.isBun ? "Bun" : "Node";
   const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. ` + `The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime ` + `(https://bun.sh or https://nodejs.org). No fallback runtime or driver is supported.`);
+    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (https://bun.sh or https://nodejs.org). No fallback runtime or driver is supported.`);
   }
   if (compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native ` + `"node:sqlite" module on Bun >=${MIN_BUN_VERSION} or Node >=${MIN_NODE_VERSION}; found ${kind} ` + `${info.version}. Upgrade the runtime for this entrypoint (https://bun.sh or https://nodejs.org). ` + `No older-runtime fallback exists and Node 18 compatibility is not a supported contract.`);
+    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on Bun >=${MIN_BUN_VERSION} or Node >=${MIN_NODE_VERSION}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (https://bun.sh or https://nodejs.org). No older-runtime fallback exists and Node 18 compatibility is not a supported contract.`);
   }
 }
 async function loadSqliteDriver() {
@@ -658,13 +11396,13 @@ async function loadSqliteDriver() {
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
-var requireDriver = createRequire2(import.meta.url);
+var requireDriver = createRequire22(import.meta.url);
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve5(context.harnessDir);
+  const start = resolve13(context.harnessDir);
   const resolved = resolveProcessHarnessDir(start);
-  return join5(resolved ?? start, "store.db");
+  return join18(resolved ?? start, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -687,10 +11425,10 @@ function isBusyError(error) {
   const err = error;
   return err?.errcode === 5 || err?.errcode === "SQLITE_BUSY" || err?.code === "SQLITE_BUSY" || /database is locked|SQLITE_BUSY/.test(String(err?.message ?? ""));
 }
-function busyAware(db, path) {
+function busyAware(db, path2) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError("store.busy", `Another writer held ${path} past the bounded wait (${busyTimeoutMs()}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError("store.busy", `Another writer held ${path2} past the bounded wait (${busyTimeoutMs()}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -730,10 +11468,10 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   let stats;
   let examineError;
   try {
-    stats = lstatSync(dbPath);
+    stats = lstatSync3(dbPath);
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-    if (code === "ENOENT")
+    const code2 = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code2 === "ENOENT")
       return;
     examineError = error;
   }
@@ -762,7 +11500,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync3(`${dbPath}-wal`))
+  if (existsSync15(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -1194,12 +11932,25 @@ create table execution_migrations(
 var MIGRATION_5_SQL = `
 alter table execution_migrations add column coverage_json text;
 `;
+var MIGRATION_6_SQL = `
+create table project_roadmaps(
+  project_id text primary key,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  content_markdown text not null,
+  content_hash text not null,
+  revision integer not null check (revision > 0),
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+drop table projection_roadmaps;
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
-  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL }
+  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
+  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL }
 ];
 var EXECUTION_TABLE_NAMES = [
   "execution_meta",
@@ -1215,7 +11966,7 @@ var EXECUTION_TABLE_NAMES = [
 ];
 var EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
 function migrationChecksum(migration) {
-  return createHash2("sha256").update(migration.sql, "utf8").digest("hex");
+  return createHash6("sha256").update(migration.sql, "utf8").digest("hex");
 }
 function readAppliedMigrations(db, tolerateMissingTable) {
   const present = db.prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'").get();
@@ -1302,7 +12053,7 @@ async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync3(dbPath)) {
+  if (!existsSync15(dbPath)) {
     throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace (or the staged migration for an existing workspace). Nothing was created.`);
   }
   let db;
@@ -1329,1188 +12080,67 @@ async function openStore(context, mode) {
     refuseOpenFailure(error, dbPath);
   }
 }
-var fsStoreInstances = new WeakSet;
-var ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
-var ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
-var COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
-function enforcementValue(raw) {
-  const value = raw.trim();
-  const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
-  return unquoted.trim().toLowerCase();
-}
-function parseEnforcementFlag(text) {
-  const bold = text.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
-  if (bold !== null)
-    return { hard: enforcementValue(bold[1]) === "hard", source: "assignment" };
-  const plain = text.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
-  if (plain !== null)
-    return { hard: enforcementValue(plain[1]) === "hard", source: "assignment" };
-  const compass = text.match(COMPASS_ENFORCEMENT_RE);
-  if (compass !== null)
-    return { hard: enforcementValue(compass[1]) === "hard", source: "compass" };
-  return { hard: false, source: "none" };
-}
-var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
-var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
-var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
-var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
-var WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
-var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
-function isStandaloneDevelopmentWorkflow(snapshot) {
-  return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
-}
-function isStandaloneReportOnlyWorkflow(snapshot) {
-  return snapshot.type === "plan" && snapshot.delivery_kind === "verification/report-only" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
-}
-function rowValidationRoute(snapshot, row) {
-  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
-    return "standalone-development";
-  }
-  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
-    return "standalone-report-only";
-  }
-  return "integration";
-}
-function validateStandaloneCompletedCoherence(snapshot, row) {
-  const violations = [];
-  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
-  if (!standalone || row.id !== snapshot.plans[0]?.id)
-    return violations;
-  const coordination = row.coordination;
-  if (!isPlainObject(coordination))
-    return violations;
-  if (!isPlainObject(coordination.handoff)) {
-    if (row.status === "Done") {
-      violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff — a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`));
-    }
-    return violations;
-  }
-  const handoff = coordination.handoff;
-  const completed = handoff.state === "completed";
-  if (row.status !== "Done" && !completed)
-    return violations;
-  if (!completed) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
-  }
-  if (handoff.integration !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
-  }
-  if (isStandaloneReportOnlyWorkflow(snapshot)) {
-    if (snapshot.integration_worktree_path !== undefined) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry integration_worktree_path"));
-    }
-    if (isNonEmptyString(snapshot.branch?.integration)) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry branch.integration"));
-    }
-  }
-  if (row.status !== "Done") {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires row ${String(row.id)} to be Done`));
-  }
-  if (row.execution_lease !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires no execution lease on row ${String(row.id)}`));
-  }
-  if (snapshot.integration_merge_lease !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires no integration_merge_lease on the snapshot"));
-  }
-  if (isStandaloneDevelopmentWorkflow(snapshot)) {
-    const source = snapshot.branch?.source;
-    const target = snapshot.branch?.target;
-    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
-    } else if (handoff.source_branch !== source) {
-      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
-    }
-  }
-  return violations;
-}
-function violation3(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
-}
-function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
+class RoadmapError extends Error {
+  code;
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
+    this.name = "RoadmapError";
+    this.code = code2;
   }
 }
-function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute6(value)) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
+function sha2562(value) {
+  return createHash7("sha256").update(value).digest("hex");
+}
+function requireRoadmapSchema(db) {
+  const present = db.prepare("select count(*) as count from sqlite_master where type='table' and name='schema_version'").get();
+  if (present?.count !== 1)
+    throw new StoreError("store.corrupt", "The store database has no schema_version table.");
+  const row = db.prepare("select max(version) as version from schema_version").get();
+  if (typeof row?.version !== "number" || row.version < 6) {
+    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store upgrade" first.');
   }
 }
-function deliveryEvidenceViolations(value, what) {
-  const violations = [];
-  const invalid2 = (message) => {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
-  };
-  if (!isPlainObject(value)) {
-    invalid2("must be an object");
-    return violations;
-  }
-  const members = ["compound", "pr", "merge", "completion"];
-  const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
-  if (unknownMembers.length > 0)
-    invalid2(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
-  const compound = value.compound;
-  if (compound !== undefined) {
-    if (!isPlainObject(compound))
-      invalid2("compound must be an object");
-    else {
-      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
-      if (unknown.length > 0)
-        invalid2(`compound has unknown key(s) ${unknown.join(", ")}`);
-      if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
-        invalid2(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
-      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid2("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
-      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid2("compound.reason must be a non-empty string when given");
-      }
-    }
-  }
-  const stringMembers = {
-    pr: ["repo", "head", "target"],
-    merge: ["provider", "evidence"],
-    completion: ["policy", "evidence"]
-  };
-  for (const member of ["pr", "merge", "completion"]) {
-    const block = value[member];
-    if (block === undefined)
-      continue;
-    if (!isPlainObject(block)) {
-      invalid2(`${member} must be an object`);
-      continue;
-    }
-    const fields = stringMembers[member];
-    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
-    if (unknown.length > 0)
-      invalid2(`${member} has unknown key(s) ${unknown.join(", ")}`);
-    for (const field of fields) {
-      if (typeof block[field] !== "string" || block[field].trim() === "") {
-        invalid2(`${member}.${field} must be a non-empty string`);
-      }
-    }
-  }
-  return violations;
-}
-function validateWorkflowSnapshot(doc) {
-  const violations = [];
-  if (!isPlainObject(doc)) {
-    return {
-      ok: false,
-      violations: [violation3("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
-    };
-  }
-  if (doc.schema_version === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
-  } else if (doc.schema_version !== 1) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
-  }
-  if (doc.version !== undefined) {
-    violations.push(violation3("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
-  }
-  validateNonEmptyString2(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
-  if (doc.type === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-type", "missing required field: type"));
-  } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
-  }
-  if (doc.status === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-status", "missing required field: status"));
-  } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
-  }
-  validateNonEmptyString2(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
-  validateNonEmptyString2(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
-  if (doc.ended_at !== undefined) {
-    validateNonEmptyString2(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
-  }
-  if (doc.phase !== undefined && typeof doc.phase !== "string") {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
-  }
-  if (doc.plans === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
-  } else if (!Array.isArray(doc.plans)) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
-  } else {
-    const snapshotDoc = doc;
-    for (const row of doc.plans) {
-      violations.push(...validatePlanRow(row).violations);
-      if (isPlainObject(row) && row.execution_lease !== undefined) {
-        violations.push(...validateExecutionLease(row.execution_lease).violations);
-      }
-      if (isPlainObject(row) && row.coordination !== undefined) {
-        const planRow = row;
-        const route = rowValidationRoute(snapshotDoc, planRow);
-        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
-        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
-      }
-    }
-  }
-  if (doc.coordination !== undefined) {
-    violations.push(...validateSnapshotCoordination(doc.coordination));
-  }
-  if (doc.execution_policy !== undefined) {
-    if (!isPlainObject(doc.execution_policy)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
-    }
-  }
-  if (doc.integration_merge_lease !== undefined) {
-    violations.push(...validateIntegrationMergeLease(doc.integration_merge_lease).violations);
-  }
-  if (doc.branch !== undefined) {
-    if (!isPlainObject(doc.branch)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
-    } else {
-      for (const key of ["base", "source", "integration", "target"]) {
-        if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
-          violations.push(violation3("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
-        }
-      }
-    }
-  }
-  const legacyWorktreePath = doc.control_worktree_path;
-  const canonicalWorktreePath = doc.integration_worktree_path;
-  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
-    violations.push(violation3("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
-  } else {
-    if (canonicalWorktreePath !== undefined) {
-      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
-    }
-    if (legacyWorktreePath !== undefined) {
-      violations.push(violation3("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
-      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
-    }
-  }
-  if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
-  }
-  if (doc.compass_ref !== undefined) {
-    validateNonEmptyString2(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
-  }
-  if (doc.delivery_kind !== undefined) {
-    if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
-    }
-  }
-  if (doc.project !== undefined) {
-    validateNonEmptyString2(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
-  }
-  if (doc.completion_policy !== undefined) {
-    validateNonEmptyString2(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
-  }
-  if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
-  }
-  const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
-  if (terminal) {
-    if (doc.ended_at === undefined) {
-      violations.push(violation3("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
-    }
-    if (Array.isArray(doc.plans)) {
-      for (const row of doc.plans) {
-        if (isPlainObject(row) && row.execution_lease !== undefined) {
-          violations.push(violation3("high", "workflow.snapshot.terminal-dangling-execution-lease", `terminal snapshot must not carry a row execution_lease (dangling lease) — release every lease before the lifecycle ends`));
-        }
-      }
-    }
-    if (doc.integration_merge_lease !== undefined) {
-      violations.push(violation3("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
-var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-function rowPlanIds(row) {
-  if (!isPlainObject(row))
-    return [];
-  const ids = [];
-  for (const value of [row.id, row.plan_id]) {
-    if (isNonEmptyString(value))
-      ids.push(value);
-  }
-  return [...new Set(ids)];
-}
-function rowPlanId(row) {
-  return rowPlanIds(row)[0];
-}
-var PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
-var RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
-var RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
-function violation4(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
-}
-function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+function requireActive(db) {
+  const row = db.prepare("select authority_state from store_meta where id = 1").get();
+  if (row?.authority_state !== "active") {
+    throw new RoadmapError("roadmap.store-not-active", "Roadmap access requires an active store; staged stores are not readable or writable.");
   }
 }
-function validatePlanRow(row) {
-  const violations = [];
-  if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
+function projectRow(db, projectId) {
+  const row = db.prepare("select revision from catalog_entities where kind='project' and id=?").get(projectId);
+  if (typeof row?.revision !== "number" || !Number.isInteger(row.revision) || row.revision < 1) {
+    throw new RoadmapError("roadmap.project-not-found", `Catalog project ${projectId} does not exist.`);
   }
-  const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
-  if (id === undefined && planId === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
-  } else {
-    if (id !== undefined) {
-      validateNonEmptyString3(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
-    }
-    if (planId !== undefined) {
-      validateNonEmptyString3(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
-    }
-    if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
-    }
-  }
-  validateNonEmptyString3(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
-  validateNonEmptyString3(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
-  if (status === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
-  } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
-  }
-  if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
-  }
-  if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
-  }
-  if (status === "Done" && execution_lease !== undefined) {
-    violations.push(violation4("medium", "status.plan-row.done-with-lease", 'plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: "Done" (status-and-residuals.md § Hold, release, and override)', 'delete plans[].execution_lease in the same update that sets status: "Done"'));
-  }
-  return { ok: violations.length === 0, violations };
+  return { revision: row.revision };
 }
-function validateResidual(entry) {
-  const violations = [];
-  if (!isPlainObject(entry)) {
-    return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
+function readOn(db, projectId) {
+  requireRoadmapSchema(db);
+  requireActive(db);
+  const project = projectRow(db, projectId);
+  const row = db.prepare("select project_id, content_markdown, content_hash, revision, updated_at from project_roadmaps where project_id=?").get(projectId);
+  if (!row)
+    return { projectId, projectRevision: project.revision, roadmap: null };
+  if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string" || sha2562(row.content_markdown) !== row.content_hash) {
+    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed or has a mismatched content hash.`);
   }
-  const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
-  validateNonEmptyString3(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
-  validateNonEmptyString3(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
-  validateNonEmptyString3(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
-  validateNonEmptyString3(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
-  validateNonEmptyString3(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
-  if (severity === undefined) {
-    violations.push(violation4("high", "status.residual.missing-severity", "missing required field: severity"));
-  } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation4("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
-  } else if (severity === "warning") {
-    violations.push(violation4("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
-  }
-  if (decision === undefined) {
-    violations.push(violation4("high", "status.residual.missing-decision", "missing required field: decision"));
-  } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation4("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
-  }
-  if (target === undefined) {
-    violations.push(violation4("high", "status.residual.missing-target", "missing required field: target"));
-  } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-target", "target must be a string or null"));
-  }
-  if (tracking === undefined) {
-    violations.push(violation4("high", "status.residual.missing-tracking", "missing required field: tracking"));
-  } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
-  }
-  if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
-  }
-  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation4("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
-  }
-  if (lifecycle !== undefined) {
-    if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation4("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
-    } else if (lifecycle !== "open") {
-      if (closed_at === undefined) {
-        violations.push(violation4("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
-      }
-      if (entry.closure_note === undefined) {
-        violations.push(violation4("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-function isHarnessRelativePath(dir) {
-  if (dir.startsWith("/") || dir.startsWith("\\"))
-    return false;
-  if (/^[A-Za-z]:[\\/]/.test(dir))
-    return false;
-  return !dir.split(/[\\/]+/).includes("..");
-}
-function validateWorkflowEntry(entry) {
-  const violations = [];
-  if (!isPlainObject(entry)) {
-    return {
-      ok: false,
-      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
-    };
-  }
-  validateNonEmptyString3(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
-  if (entry.type === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
-  } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
-  }
-  validateNonEmptyString3(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
-  if (entry.dir === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
-  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
-  } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function validateStatusV2(docOrPath, opts = {}) {
-  let doc;
-  let harnessDir = opts.harnessDir;
-  if (typeof docOrPath === "string") {
-    try {
-      doc = readJson(docOrPath);
-      harnessDir = dirname6(resolve8(docOrPath));
-    } catch (error) {
-      return {
-        ok: false,
-        violations: [violation4("high", "status.invalid-json", error.message)]
-      };
-    }
-  } else {
-    doc = docOrPath;
-  }
-  if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
-  }
-  if (doc.version !== 2) {
-    return {
-      ok: false,
-      violations: [
-        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
-      ]
-    };
-  }
-  if (Array.isArray(doc.plans)) {
-    return {
-      ok: false,
-      violations: [
-        violation4("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
-      ]
-    };
-  }
-  if (doc.residual_findings !== undefined) {
-    return {
-      ok: false,
-      violations: [
-        violation4("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
-      ]
-    };
-  }
-  const violations = [];
-  if (doc.updated_at === undefined) {
-    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
-  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
-  }
-  if (doc.workflows === undefined) {
-    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
-  } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
-  } else {
-    const seen = new Set;
-    for (const entry of doc.workflows) {
-      violations.push(...validateWorkflowEntry(entry).violations);
-      if (isPlainObject(entry) && typeof entry.id === "string") {
-        if (seen.has(entry.id)) {
-          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
-        }
-        seen.add(entry.id);
-      }
-    }
-  }
-  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
-    let realHarnessDir = null;
-    try {
-      realHarnessDir = realpathSync2(harnessDir);
-    } catch {}
-    for (const entry of doc.workflows) {
-      if (!isPlainObject(entry) || typeof entry.dir !== "string")
-        continue;
-      const relSnapshot = join9(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join9(harnessDir, relSnapshot);
-      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
-      let physical;
-      try {
-        physical = realpathSync2(snapshotPath);
-      } catch {
-        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
-        continue;
-      }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
-        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
-        continue;
-      }
-      let snapshot;
-      try {
-        snapshot = readJson(snapshotPath);
-      } catch (error) {
-        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
-        continue;
-      }
-      if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
-      }
-      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
-      }
-      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var validateStatus = validateStatusV2;
-function resolveCompassEnforcement(harnessDir) {
-  const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync7(iterationsDir))
-    return { hard: false, source: "none" };
-  let entries;
   try {
-    entries = readdirSync3(iterationsDir, { withFileTypes: true });
-  } catch {
-    return { hard: false, source: "none" };
+    const content3 = parseRoadmapContent(row.content_markdown);
+    if (content3.frontmatter.project_id !== projectId) {
+      throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
+    }
+  } catch (error) {
+    if (error instanceof RoadmapError)
+      throw error;
+    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is invalid: ${error.message}`);
   }
-  for (const entry of entries) {
-    if (!entry.isDirectory())
-      continue;
-    const compassPath = join9(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync7(compassPath))
-      continue;
-    let content;
-    try {
-      content = readFileSync6(compassPath, "utf8");
-    } catch {
-      continue;
-    }
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const fm = frontmatter !== null ? frontmatter[1] : "";
-    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm))
-      continue;
-    const flag = parseEnforcementFlag(fm);
-    if (flag.hard)
-      return flag;
-  }
-  return { hard: false, source: "none" };
-}
-function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname6(dir));
-  const value = rc?.config.enforcement;
-  if (value === "hard")
-    return { hard: true, source: "mstarc" };
-  if (value === "soft")
-    return { hard: false, source: "mstarc" };
-  return { hard: false, source: "none" };
-}
-function resolveRepoEnforcement(harnessDir) {
-  const rc = resolveMstarcEnforcement(harnessDir);
-  if (rc.source !== "none")
-    return rc;
-  return resolveCompassEnforcement(harnessDir);
-}
-var COMPASS_STATUSES = ["active", "locked", "completed"];
-var DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
-function typeName(value) {
-  if (value === null)
-    return "null";
-  if (Array.isArray(value))
-    return "array";
-  return typeof value;
-}
-function validateCompassShape(doc) {
-  const issues = [];
-  const expectString = (key, opts = {}) => {
-    const value = doc[key];
-    if (typeof value !== "string") {
-      issues.push({ path: [key], message: `expected string, received ${typeName(value)}` });
-      return;
-    }
-    if (opts.min !== undefined && value.length < opts.min) {
-      issues.push({ path: [key], message: `string must contain at least ${opts.min} character(s)` });
-      return;
-    }
-    if (opts.regex !== undefined && !opts.regex.test(value)) {
-      issues.push({ path: [key], message: `string must match ${opts.regex}` });
-    }
-  };
-  expectString("iteration_id", { min: 1 });
-  expectString("start_date", { regex: DATE_RE2 });
-  const status = doc.status;
-  if (typeof status !== "string" || !COMPASS_STATUSES.includes(status)) {
-    issues.push({
-      path: ["status"],
-      message: `expected one of ${COMPASS_STATUSES.map((s) => `'${s}'`).join(" | ")}, received ${typeName(status)}`
-    });
-  }
-  expectString("iteration_base_branch", { min: 1 });
-  expectString("target_branch", { min: 1 });
-  const plans = doc.plans;
-  if (plans !== undefined) {
-    if (!Array.isArray(plans)) {
-      issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
-    } else {
-      plans.forEach((entry, index) => {
-        if (typeof entry !== "string") {
-          issues.push({ path: ["plans", index], message: `expected string, received ${typeName(entry)}` });
-        } else if (entry.length < 1) {
-          issues.push({ path: ["plans", index], message: "string must contain at least 1 character(s)" });
-        }
-      });
-    }
-  }
-  const end_date = doc.end_date;
-  if (end_date !== undefined) {
-    if (typeof end_date !== "string") {
-      issues.push({ path: ["end_date"], message: `expected string, received ${typeName(end_date)}` });
-    } else if (!DATE_RE2.test(end_date)) {
-      issues.push({ path: ["end_date"], message: `string must match ${DATE_RE2}` });
-    }
-  }
-  if (issues.length > 0)
-    return { ok: false, issues };
   return {
-    ok: true,
-    data: {
-      iteration_id: doc.iteration_id,
-      start_date: doc.start_date,
-      status,
-      iteration_base_branch: doc.iteration_base_branch,
-      target_branch: doc.target_branch,
-      ...plans !== undefined ? { plans } : {},
-      ...end_date !== undefined ? { end_date } : {}
-    }
+    projectId,
+    projectRevision: project.revision,
+    roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown }
   };
 }
-function violation5(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
-}
-function isPlainObject3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function validateCompassFrontmatter(doc) {
-  if (!isPlainObject3(doc)) {
-    return {
-      ok: false,
-      violations: [
-        violation5("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
-      ]
-    };
-  }
-  const parsed = validateCompassShape(doc);
-  if (!parsed.ok) {
-    return {
-      ok: false,
-      violations: parsed.issues.map((issue) => {
-        const field = issue.path.join(".") || "(root)";
-        return violation5("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
-      })
-    };
-  }
-  const violations = [];
-  const { status, end_date } = parsed.data;
-  if (status === "completed" && end_date === undefined) {
-    violations.push(violation5("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
-  }
-  if (status !== "completed" && end_date !== undefined) {
-    violations.push(violation5("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function parseCompassFrontmatterText(content, filePath) {
-  const lines = content.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") {
-    throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
-  }
-  const end = lines.indexOf("---", 1);
-  if (end === -1) {
-    throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
-  }
-  const doc = {};
-  let listKey = null;
-  for (let i = 1;i < end; i += 1) {
-    const line = lines[i] ?? "";
-    if (!line.trim() || line.trim().startsWith("#"))
-      continue;
-    if (listKey !== null && /^\s*-\s+/.test(line)) {
-      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!Array.isArray(doc[listKey]))
-        doc[listKey] = [];
-      doc[listKey].push(item);
-      continue;
-    }
-    listKey = null;
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) {
-      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
-    }
-    const value = kv[2].trim();
-    doc[kv[1]] = value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
-    listKey = value === "" ? kv[1] : null;
-  }
-  return doc;
-}
-function parseFlowArray(raw, filePath) {
-  const inner = raw.slice(1, -1);
-  if (/[[\]]/.test(inner)) {
-    throw new Error(`nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`);
-  }
-  let quote = null;
-  for (const ch of inner) {
-    if (ch === '"' || ch === "'") {
-      if (quote === null)
-        quote = ch;
-      else if (quote === ch)
-        quote = null;
-    } else if (ch === "," && quote !== null) {
-      throw new Error(`ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`);
-    }
-  }
-  if (quote !== null) {
-    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
-  }
-  const items = [];
-  for (const part of inner.split(",")) {
-    const item = part.trim().replace(/^["']|["']$/g, "");
-    if (item === "")
-      continue;
-    items.push(item);
-  }
-  return items;
-}
-class IssueError extends Error {
-  code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
-    this.name = "IssueError";
-    this.code = code;
-  }
-}
-var ROADMAP_STATUSES = ["active", "paused", "completed"];
-var DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
-function violation6(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
-}
-function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function validateRoadmap(filePath) {
-  const violations = [];
-  let content;
-  try {
-    content = readFileSync8(filePath, "utf8");
-  } catch {
-    return {
-      ok: false,
-      violations: [violation6("high", "project.roadmap.unreadable", `cannot read roadmap file: ${filePath}`)],
-      warnings: []
-    };
-  }
-  let doc;
-  try {
-    doc = parseCompassFrontmatterText(content, filePath);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${filePath}`;
-    return { ok: false, violations: [violation6("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
-  }
-  validateNonEmptyString4(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
-  validateNonEmptyString4(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
-  if (doc.status === undefined) {
-    violations.push(violation6("high", "project.roadmap.missing-status", "missing required field: status"));
-  } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
-    violations.push(violation6("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
-  }
-  if (doc.created_at === undefined) {
-    violations.push(violation6("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
-  } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
-    violations.push(violation6("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
-  }
-  if (doc.milestones !== undefined && doc.milestones !== null) {
-    if (!Array.isArray(doc.milestones)) {
-      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
-    } else {
-      for (const item of doc.milestones) {
-        if (typeof item !== "string" || item.trim() === "") {
-          violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
-          break;
-        }
-      }
-    }
-  }
-  if (doc.residuals_ref !== undefined && doc.residuals_ref !== null) {
-    if (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "") {
-      violations.push(violation6("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
-    }
-  }
-  const warnings = [];
-  const fenceEnd = linesIndexOfClosingFence(content);
-  const body = content.split(/\r?\n/).slice(fenceEnd + 1).join(`
-`);
-  if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation6("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
-  }
-  if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation6("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
-  }
-  return { ok: violations.length === 0, violations, warnings };
-}
-function linesIndexOfClosingFence(content) {
-  return content.split(/\r?\n/).indexOf("---", 1);
-}
-function validateProjectRegister(doc) {
-  const violations = [];
-  if (!isPlainObject(doc)) {
-    return {
-      ok: false,
-      violations: [violation6("high", "project.register.invalid", "project register must be an object")]
-    };
-  }
-  if (doc.entries === undefined) {
-    violations.push(violation6("high", "project.register.missing-entries", "missing required field: entries"));
-  } else if (!isPlainObject(doc.entries)) {
-    violations.push(violation6("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
-  } else {
-    for (const [key, entries] of Object.entries(doc.entries)) {
-      if (key.trim() === "") {
-        violations.push(violation6("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
-      }
-      if (!Array.isArray(entries)) {
-        violations.push(violation6("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
-        continue;
-      }
-      for (const entry of entries) {
-        violations.push(...validateResidual(entry).violations);
-        if (!isPlainObject(entry))
-          continue;
-        validateNonEmptyString4(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
-        if (entry.registered_at === undefined) {
-          violations.push(violation6("high", "project.register.missing-registered-at", "missing required field: registered_at"));
-        } else if (typeof entry.registered_at !== "string" || !DATE_RE3.test(entry.registered_at)) {
-          violations.push(violation6("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
-        }
-        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
-          violations.push(violation6("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
-        }
-        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
-          violations.push(violation6("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
-        }
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
-var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
-var AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
-var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
-function gitProbeTimeoutMs() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync3(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
-function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
-  try {
-    const stdout = execFileSync2("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
-    });
-    return parseMainWorktree(stdout);
-  } catch {
-    return null;
-  }
-}
-function errorCode(error) {
-  if (error !== null && typeof error === "object" && "code" in error) {
-    const code = error.code;
-    return typeof code === "string" ? code : undefined;
-  }
-  return;
-}
-function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
-  if (isNonEmptyString(harnessDir))
-    return resolve12(cwd, harnessDir);
-  const start = resolve12(cwd);
-  const main = readMainWorktree(start);
-  if (main !== null)
-    return resolveHarnessDir(main.root);
-  for (let dir = start;; dir = dirname7(dir)) {
-    let linked = false;
-    try {
-      linked = statSync5(join16(dir, ".git")).isFile();
-    } catch (error) {
-      const code = errorCode(error);
-      if (code !== "ENOENT" && code !== "ENOTDIR")
-        throw error;
-    }
-    if (linked) {
-      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join16(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join16(dir, ".git") });
-    }
-    const parent = dirname7(dir);
-    if (parent === dir)
-      break;
-    dir = parent;
-  }
-  return resolveHarnessDir(start);
-}
-var ROOT_KINDS2 = {
-  repository: true,
-  harness: true,
-  plans: true,
-  iterations: true,
-  specs: true,
-  knowledge: true,
-  projects: true
-};
-class CatalogError extends Error {
-  code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
-    this.name = "CatalogError";
-    this.code = code;
-  }
-}
-function catalogRootDir(context, rootKind) {
-  if (!Object.hasOwn(ROOT_KINDS2, rootKind)) {
-    throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS2).join(", ")}`);
-  }
-  const start = resolvePath(context.harnessDir);
-  const harness = resolveProcessHarnessDir(start) ?? start;
-  switch (rootKind) {
-    case "repository":
-      return dirname8(harness);
-    case "harness":
-      return harness;
-    case "plans":
-      return resolvePlanDir(harness);
-    case "iterations":
-      return resolveIterationDir(harness);
-    case "specs":
-      return resolveSpecsDir(harness, { create: false });
-    case "knowledge":
-      return resolveKnowledgeDir(harness);
-    case "projects":
-      return resolveProjectDir(harness, { harnessDir: harness });
-  }
-}
-function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve13(startDir);
-  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
-  if (explicit)
-    return resolve13(start, explicit);
-  const boundary = resolve13(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
-  if (rc !== null && rc.config.harnessDir)
-    return resolve13(rc.dir, rc.config.harnessDir);
-  let dir = start;
-  for (;; ) {
-    if (!isAtOrBelow2(dir, boundary))
-      return null;
-    for (const candidate of [join18(dir, ".mstar"), join18(dir, ".agents"), join18(dir, ".plans"), join18(dir, "plans")]) {
-      if (isDirectory(candidate))
-        return candidate;
-    }
-    if (dir === boundary)
-      return null;
-    const parent = dirname9(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function defaultWorkspaceRoot(startDir) {
-  try {
-    const cdup = execFileSync4("git", ["rev-parse", "--show-cdup"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-    if (!cdup)
-      return startDir;
-    let boundary = startDir;
-    for (const segment of cdup.split(/[\\/]/)) {
-      if (segment && segment !== ".")
-        boundary = dirname9(boundary);
-    }
-    return resolve13(boundary);
-  } catch {}
-  return startDir;
-}
-function isAtOrBelow2(dir, root) {
-  const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute11(rel);
-}
-function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve13(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
-  const declared = rc?.config[key];
-  return declared ? resolve13(rc.dir, declared) : null;
-}
-function resolveSpecsDir(harnessDir, opts = {}) {
-  const declared = mstarcDirOverride(harnessDir, "specsDir");
-  if (declared !== null) {
-    if (opts.create !== false)
-      mkdirSync6(declared, { recursive: true });
-    return declared;
-  }
-  const harness = resolve13(harnessDir);
-  const repoRoot = dirname9(harness);
-  const candidates = [
-    join18(harness, "specs"),
-    join18(repoRoot, "docs", "specs"),
-    join18(repoRoot, "specs"),
-    join18(harness, "designs"),
-    join18(repoRoot, "designs")
-  ];
-  for (const candidate of candidates) {
-    if (isDirectory(candidate) && hasFiles(candidate))
-      return candidate;
-  }
-  const fallback = join18(harness, "specs");
-  if (opts.create !== false)
-    mkdirSync6(fallback, { recursive: true });
-  return fallback;
-}
-function resolvePlanDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "planDir");
-  if (declared !== null)
-    return declared;
-  const dir = resolve13(harnessDir);
-  const name = basename7(dir);
-  if (name === ".plans" || name === "plans")
-    return dir;
-  return join18(dir, "plans");
-}
-function resolveIterationDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "iterationDir");
-  if (declared !== null)
-    return declared;
-  return join18(resolve13(harnessDir), "iterations");
-}
-function resolveKnowledgeDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
-  if (declared !== null)
-    return declared;
-  return join18(resolve13(harnessDir), "knowledge");
-}
-function resolveHarnessSubdir(startDir, opts, key, fallback) {
-  const harness = resolveHarnessDir(startDir, opts);
-  if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve13(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
-  }
-  const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join18(resolve13(harness), fallback);
-}
-function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
-}
-function resolveProjectDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
-}
-var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
-`;
-var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-`;
-var GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
-`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
-var GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
-`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
-function isDirectory(dir) {
-  try {
-    return statSync6(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function hasFiles(dir) {
-  try {
-    for (const entry of readdirSync8(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (hasFiles(join18(dir, entry.name)))
-          return true;
-      } else if (entry.isFile()) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
+function readRoadmapAuthorityOn(db, projectId) {
+  return readOn(db, projectId);
 }
 var INPUT_ENTRIES_CAP = 1e4;
 var MAX_RETAINED_ENTRIES = INPUT_ENTRIES_CAP / 2;
@@ -2597,8 +12227,8 @@ function harnessDocKindOfTarget(targetPath) {
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation10) {
-  return `[${violation10.severity}] ${violation10.code}: ${violation10.message}${violation10.fix ? ` (fix: ${violation10.fix})` : ""}`;
+function violationLine(violation11) {
+  return `[${violation11.severity}] ${violation11.code}: ${violation11.message}${violation11.fix ? ` (fix: ${violation11.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2097152;
 function oversizedViolation(filePath) {
@@ -2609,15 +12239,15 @@ function oversizedViolation(filePath) {
     message: `${basename10(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
-function validateStatusWriteDoc(content, filePath, kind, options = {}) {
+function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   const oversized = options.oversized ?? "pass";
-  if (typeof content === "string") {
-    if (content.length > MAX_STATUS_CONTENT_LENGTH) {
+  if (typeof content3 === "string") {
+    if (content3.length > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
     let doc2;
     try {
-      doc2 = JSON.parse(content);
+      doc2 = JSON.parse(content3);
     } catch (error) {
       return [
         {
@@ -2690,21 +12320,21 @@ var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 var ownedTransactions = new AsyncLocalStorage3;
 var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
-var PROJECTION_FORMAT_VERSION = 1;
+var PROJECTION_FORMAT_VERSION = 2;
 var PROJECTION_ROOT_FILE = "status.json";
 
 class ProjectionError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "ProjectionError";
-    this.code = code;
+    this.code = code2;
   }
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
 }
-function text(value) {
+function text4(value) {
   return typeof value === "string" && value !== "" ? value : null;
 }
 function churnAfterRead(spec) {
@@ -2719,23 +12349,23 @@ function churnAfterRead(spec) {
   } catch {}
 }
 function readSource(spec) {
-  let content;
+  let content3;
   try {
-    content = readFileSync20(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
-    const code = error.code ?? "";
-    if (code === "ENOENT" || code === "ENOTDIR") {
+    const code2 = error.code ?? "";
+    if (code2 === "ENOENT" || code2 === "ENOTDIR") {
       return { state: "missing", sha256: null, content: null, diagnostic: `missing: no file at ${spec.relativePath}` };
     }
     return {
       state: "inaccessible",
       sha256: null,
       content: null,
-      diagnostic: `inaccessible: read refused (${code === "" ? "unknown" : code}) at ${spec.relativePath}`
+      diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
   churnAfterRead(spec);
-  return { state: "ok", sha256: createHash15("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -2767,16 +12397,16 @@ async function readCatalogInputs(context) {
     const meta = db.prepare("select catalog_revision from store_meta where id = 1").get();
     const catalogRevision = typeof meta?.catalog_revision === "number" ? meta.catalog_revision : 0;
     const bindings = db.prepare("select workflow_id, workflow_root_kind, workflow_relative_path from catalog_execution_bindings order by workflow_id asc").all().flatMap((row) => {
-      const workflowId = text(row.workflow_id);
+      const workflowId = text4(row.workflow_id);
       const rootKind = asCatalogRootKind(row.workflow_root_kind);
-      const relativePath = text(row.workflow_relative_path);
+      const relativePath = text4(row.workflow_relative_path);
       return workflowId !== null && rootKind !== null && relativePath !== null ? [{ workflowId, rootKind, relativePath: relativePath.replace(/\/+$/, "") }] : [];
     });
-    const documents = db.prepare("select id, root_kind, relative_path, document_kind, lifecycle, revision from catalog_entities where kind = 'document' and document_kind in ('compass','roadmap')").all().flatMap((row) => {
-      const id = text(row.id);
+    const documents = db.prepare("select id, root_kind, relative_path, document_kind, lifecycle, revision from catalog_entities where kind = 'document' and document_kind = 'compass'").all().flatMap((row) => {
+      const id = text4(row.id);
       const rootKind = asCatalogRootKind(row.root_kind);
-      const relativePath = text(row.relative_path);
-      const documentKind = text(row.document_kind);
+      const relativePath = text4(row.relative_path);
+      const documentKind = text4(row.document_kind);
       if (id === null || rootKind === null || relativePath === null || documentKind === null)
         return [];
       return [
@@ -2785,16 +12415,16 @@ async function readCatalogInputs(context) {
           rootKind,
           relativePath,
           documentKind,
-          lifecycle: text(row.lifecycle) ?? "active",
+          lifecycle: text4(row.lifecycle) ?? "active",
           revision: typeof row.revision === "number" ? row.revision : 0
         }
       ];
     });
     const links = db.prepare("select from_kind, from_id, to_kind, to_id from catalog_links where relation = 'documents'").all();
-    const owners = db.prepare("select kind, id from catalog_entities where kind in ('iteration','project')").all();
+    const owners = db.prepare("select id from catalog_entities where kind = 'iteration'").all();
     const byId = new Map(documents.map((doc) => [doc.id, doc]));
-    const pick = (ownerKind, ownerId, documentKind) => {
-      const candidates = links.filter((link) => link.from_kind === ownerKind && link.from_id === ownerId && link.to_kind === "document" && typeof link.to_id === "string").map((link) => byId.get(link.to_id)).filter((doc) => doc !== undefined && doc.documentKind === documentKind).sort((a, b) => {
+    const pick = (ownerId) => {
+      const candidates = links.filter((link) => link.from_kind === "iteration" && link.from_id === ownerId && link.to_kind === "document" && typeof link.to_id === "string").map((link) => byId.get(link.to_id)).filter((doc) => doc !== undefined).sort((a, b) => {
         if (a.lifecycle !== b.lifecycle)
           return a.lifecycle === "active" ? -1 : 1;
         if (a.revision !== b.revision)
@@ -2804,22 +12434,15 @@ async function readCatalogInputs(context) {
       return candidates[0] ?? null;
     };
     const compassDocs = [];
-    const roadmapDocs = [];
     for (const owner of owners) {
-      const ownerId = text(owner.id);
+      const ownerId = text4(owner.id);
       if (ownerId === null)
         continue;
-      if (owner.kind === "iteration") {
-        const doc = pick("iteration", ownerId, "compass");
-        if (doc !== null)
-          compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
-      } else if (owner.kind === "project") {
-        const doc = pick("project", ownerId, "roadmap");
-        if (doc !== null)
-          roadmapDocs.push({ projectId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
-      }
+      const doc = pick(ownerId);
+      if (doc !== null)
+        compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
     }
-    return { catalogRevision, bindings, compassDocs, roadmapDocs };
+    return { catalogRevision, bindings, compassDocs };
   } finally {
     handle.close();
   }
@@ -2828,21 +12451,21 @@ var ROOT_WORKFLOW_SOURCE_CODES = {
   "status.workflow.snapshot-missing": true,
   "status.workflow.snapshot-invalid": true
 };
-function readRootSource(content, harnessDir) {
+function readRootSource(content3, harnessDir) {
   let doc;
   try {
-    doc = JSON.parse(content);
+    doc = JSON.parse(content3);
   } catch {
     return { entries: [], diagnostic: "invalid: status.json is not valid JSON" };
   }
   const gate2 = validateStatus(doc, { harnessDir });
-  const blocking = gate2.violations.filter((violation17) => ROOT_WORKFLOW_SOURCE_CODES[violation17.code] !== true);
+  const blocking = gate2.violations.filter((violation18) => ROOT_WORKFLOW_SOURCE_CODES[violation18.code] !== true);
   if (blocking.length > 0) {
-    return { entries: [], diagnostic: `invalid: ${blocking.map((violation17) => violation17.code).join(", ")}` };
+    return { entries: [], diagnostic: `invalid: ${blocking.map((violation18) => violation18.code).join(", ")}` };
   }
   const entries = [];
   for (const raw of doc.workflows) {
-    const id = text(raw.id);
+    const id = text4(raw.id);
     const dir = normalizeDeclaredDir(raw.dir);
     if (id === null || dir === null) {
       return {
@@ -2854,20 +12477,20 @@ function readRootSource(content, harnessDir) {
   }
   return { entries, diagnostic: null };
 }
-function deriveWorkflowRows(content, declared) {
+function deriveWorkflowRows(content3, declared) {
   let doc;
   try {
-    doc = JSON.parse(content);
+    doc = JSON.parse(content3);
   } catch {
     return { diagnostic: "invalid: snapshot is not valid JSON" };
   }
   const gate2 = validateWorkflowSnapshot(doc);
-  const blocking = gate2.violations.filter((violation17) => violation17.code !== LEGACY_WORKTREE_PATH_CODE);
+  const blocking = gate2.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE);
   if (blocking.length > 0) {
-    return { diagnostic: `invalid: ${blocking.map((violation17) => violation17.code).join(", ")}` };
+    return { diagnostic: `invalid: ${blocking.map((violation18) => violation18.code).join(", ")}` };
   }
   const snapshot = doc;
-  const phase = text(snapshot.phase);
+  const phase = text4(snapshot.phase);
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
   const workflows = [
     {
@@ -2875,13 +12498,13 @@ function deriveWorkflowRows(content, declared) {
       type: snapshot.type,
       status: snapshot.status,
       phase,
-      startedAt: text(snapshot.started_at),
-      endedAt: text(snapshot.ended_at),
-      updatedAt: text(snapshot.updated_at),
-      branchBase: text(branch.base),
-      branchSource: text(branch.source),
-      branchIntegration: text(branch.integration),
-      branchTarget: text(branch.target),
+      startedAt: text4(snapshot.started_at),
+      endedAt: text4(snapshot.ended_at),
+      updatedAt: text4(snapshot.updated_at),
+      branchBase: text4(branch.base),
+      branchSource: text4(branch.source),
+      branchIntegration: text4(branch.integration),
+      branchTarget: text4(branch.target),
       activeRegistration: declared
     }
   ];
@@ -2899,10 +12522,10 @@ function deriveWorkflowRows(content, declared) {
     plans.push({
       workflowId: snapshot.id,
       planId,
-      status: text(row.status),
-      progress: text(progress.summary),
+      status: text4(row.status),
+      progress: text4(progress.summary),
       phase,
-      doneAt: text(row.done_at),
+      doneAt: text4(row.done_at),
       catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null
     });
     if (isPlainObject(row.execution_lease)) {
@@ -2911,9 +12534,9 @@ function deriveWorkflowRows(content, declared) {
         workflowId: snapshot.id,
         planId,
         kind: "execution",
-        holder: text(lease.holder),
-        worktreePath: text(lease.worktree_path),
-        expiresAt: text(lease.expires_at)
+        holder: text4(lease.holder),
+        worktreePath: text4(lease.worktree_path),
+        expiresAt: text4(lease.expires_at)
       });
     }
   }
@@ -2921,19 +12544,19 @@ function deriveWorkflowRows(content, declared) {
     const lease = snapshot.integration_merge_lease;
     leases.push({
       workflowId: snapshot.id,
-      planId: text(lease.plan_id) ?? "",
+      planId: text4(lease.plan_id) ?? "",
       kind: "integration-merge",
-      holder: text(lease.holder),
+      holder: text4(lease.holder),
       worktreePath: null,
-      expiresAt: text(lease.expires_at)
+      expiresAt: text4(lease.expires_at)
     });
   }
   return { workflow: workflows[0], plans, leases };
 }
-function bodyOf(content) {
-  const lines = content.split(/\r?\n/);
+function bodyOf(content3) {
+  const lines = content3.split(/\r?\n/);
   if (lines[0]?.trim() !== "---")
-    return content;
+    return content3;
   const end = lines.indexOf("---", 1);
   return end === -1 ? "" : lines.slice(end + 1).join(`
 `);
@@ -2945,15 +12568,15 @@ function sectionText(body, heading) {
     return null;
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^##\s+/.test(line));
-  const text2 = (end === -1 ? rest : rest.slice(0, end)).join(`
+  const text5 = (end === -1 ? rest : rest.slice(0, end)).join(`
 `).trim();
-  return text2 === "" ? null : text2;
+  return text5 === "" ? null : text5;
 }
 function firstParagraph(body) {
   for (const block of body.split(/\r?\n\s*\r?\n/)) {
-    const text2 = block.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#")).join(" ");
-    if (text2 !== "")
-      return text2;
+    const text5 = block.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#")).join(" ");
+    if (text5 !== "")
+      return text5;
   }
   return null;
 }
@@ -2983,56 +12606,24 @@ function parseMilestoneTable(body) {
   }
   return rows;
 }
-function parseGoalItems(body) {
-  const goals = [];
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^\s*[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
-    if (match === null)
-      continue;
-    const label = match[2]?.trim() ?? "";
-    if (label === "")
-      continue;
-    goals.push({ text: label, checked: (match[1] ?? " ").toLowerCase() === "x" });
-  }
-  return goals;
-}
-function deriveCompass(iterationId, content, relativePath) {
+function deriveCompass(iterationId, content3, relativePath) {
   let frontmatter;
   try {
-    frontmatter = parseCompassFrontmatterText(content, relativePath);
+    frontmatter = parseCompassFrontmatterText(content3, relativePath);
   } catch {
     return { diagnostic: "invalid: compass frontmatter is not parseable" };
   }
   const gate2 = validateCompassFrontmatter(frontmatter);
   if (!gate2.ok)
-    return { diagnostic: `invalid: ${gate2.violations.map((violation17) => violation17.code).join(", ")}` };
-  const body = bodyOf(content);
+    return { diagnostic: `invalid: ${gate2.violations.map((violation18) => violation18.code).join(", ")}` };
+  const body = bodyOf(content3);
   return {
     iterationId,
     summary: firstParagraph(body),
     milestonesJson: JSON.stringify(parseMilestoneTable(body)),
-    startedAt: text(frontmatter.start_date),
-    endedAt: text(frontmatter.end_date),
-    status: text(frontmatter.status)
-  };
-}
-function deriveRoadmap(projectId, content, relativePath, absolutePath) {
-  const gate2 = validateRoadmap(absolutePath);
-  if (!gate2.ok)
-    return { diagnostic: `invalid: ${gate2.violations.map((violation17) => violation17.code).join(", ")}` };
-  let frontmatter;
-  try {
-    frontmatter = parseCompassFrontmatterText(content, relativePath);
-  } catch {
-    return { diagnostic: "invalid: roadmap frontmatter is not parseable" };
-  }
-  const body = bodyOf(content);
-  const milestones = Array.isArray(frontmatter.milestones) ? frontmatter.milestones.filter((item) => typeof item === "string" && item.trim() !== "") : [];
-  return {
-    projectId,
-    direction: sectionText(body, "Direction"),
-    goalsJson: JSON.stringify(parseGoalItems(body)),
-    milestonesJson: JSON.stringify(milestones)
+    startedAt: text4(frontmatter.start_date),
+    endedAt: text4(frontmatter.end_date),
+    status: text4(frontmatter.status)
   };
 }
 async function captureProjectionSources(context) {
@@ -3041,7 +12632,7 @@ async function captureProjectionSources(context) {
   const sources = [];
   const locations = [];
   const diagnostics = [];
-  const rows = { workflows: [], plans: [], leases: [], compasses: [], roadmaps: [] };
+  const rows = { workflows: [], plans: [], leases: [], compasses: [] };
   const record = (spec, read, state, diagnostic, options = {}) => {
     sources.push({
       sourceKey: spec.sourceKey,
@@ -3155,33 +12746,6 @@ async function captureProjectionSources(context) {
     record(spec, read, "ok", null);
     rows.compasses.push(derived);
   }
-  for (const doc of inputs.roadmapDocs) {
-    const spec = {
-      sourceKey: sourceKeyOf2("roadmap", doc.rootKind, doc.relativePath),
-      kind: "roadmap",
-      rootKind: doc.rootKind,
-      relativePath: doc.relativePath,
-      absolutePath: join32(catalogRootDir(context, doc.rootKind), doc.relativePath),
-      declared: true
-    };
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      record(spec, read, read.state, read.diagnostic);
-      continue;
-    }
-    const derived = deriveRoadmap(doc.projectId, read.content, spec.absolutePath, spec.absolutePath);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    const after = readSource(spec);
-    if (after.sha256 !== read.sha256 || after.state !== "ok") {
-      record(spec, read, "ok", "changed-during-read: the source moved between its digest and its validation");
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.roadmaps.push(derived);
-  }
   sources.sort((a, b) => a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0);
   locations.sort((a, b) => a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0);
   const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
@@ -3200,15 +12764,14 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash15("sha256").update(payload, "utf8").digest("hex");
+  return createHash16("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
   "projection_workflows",
   "projection_plans",
   "projection_leases",
-  "projection_compasses",
-  "projection_roadmaps"
+  "projection_compasses"
 ];
 function verifyCaptureStable(capture) {
   const mismatched = [];
@@ -3230,13 +12793,13 @@ function readProjectionMeta(db) {
   if (row === undefined) {
     throw new ProjectionError("projection.schema-outdated", "projection_meta has no current row; the store schema is incomplete");
   }
-  const freshness = text(row.freshness);
+  const freshness = text4(row.freshness);
   return {
     generation: typeof row.generation === "number" ? row.generation : null,
     formatVersion: typeof row.format_version === "number" ? row.format_version : 0,
-    sourceSetHash: text(row.source_set_hash),
-    builtAt: text(row.built_at),
-    checkedAt: text(row.checked_at) ?? "",
+    sourceSetHash: text4(row.source_set_hash),
+    builtAt: text4(row.built_at),
+    checkedAt: text4(row.checked_at) ?? "",
     freshness: freshness === "current" || freshness === "stale" || freshness === "unavailable" ? freshness : "unavailable"
   };
 }
@@ -3253,14 +12816,14 @@ function readPublishedFingerprints(db, generation) {
   if (generation === null)
     return [];
   return db.prepare("select source_key, state, sha256 from projection_sources where generation = ? order by source_key asc").all(generation).map((row) => ({
-    sourceKey: text(row.source_key) ?? "",
-    state: text(row.state) ?? "",
-    sha256: text(row.sha256)
+    sourceKey: text4(row.source_key) ?? "",
+    state: text4(row.state) ?? "",
+    sha256: text4(row.sha256)
   }));
 }
-function changedSourceKeys(previous, next) {
+function changedSourceKeys(previous3, next) {
   const fingerprint = (entry) => `${entry.state}\x00${entry.sha256 ?? "-"}`;
-  const before = new Map(previous.map((entry) => [entry.sourceKey, fingerprint(entry)]));
+  const before = new Map(previous3.map((entry) => [entry.sourceKey, fingerprint(entry)]));
   const after = new Map(next.map((entry) => [entry.sourceKey, fingerprint(entry)]));
   const keys = new Set([...before.keys(), ...after.keys()]);
   return [...keys].filter((key) => before.get(key) !== after.get(key)).sort();
@@ -3285,10 +12848,6 @@ function insertGeneration(db, generation, capture) {
   const compassStatement = db.prepare("insert into projection_compasses(generation, iteration_id, summary, milestones_json, started_at, ended_at, status) values (?, ?, ?, ?, ?, ?, ?)");
   for (const compass of capture.rows.compasses) {
     compassStatement.run(generation, compass.iterationId, compass.summary, compass.milestonesJson, compass.startedAt, compass.endedAt, compass.status);
-  }
-  const roadmapStatement = db.prepare("insert into projection_roadmaps(generation, project_id, direction, goals_json, milestones_json) values (?, ?, ?, ?, ?)");
-  for (const roadmap of capture.rows.roadmaps) {
-    roadmapStatement.run(generation, roadmap.projectId, roadmap.direction, roadmap.goalsJson, roadmap.milestonesJson);
   }
 }
 function reportOf(metadata, capture, changedKeys, published) {
@@ -3335,8 +12894,8 @@ function publishGeneration(db, capture) {
   db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
-    const previous = readPublishedFingerprints(db, meta.generation);
-    const changedKeys = changedSourceKeys(previous, capture.sources);
+    const previous3 = readPublishedFingerprints(db, meta.generation);
+    const changedKeys = changedSourceKeys(previous3, capture.sources);
     if (meta.generation !== null && meta.sourceSetHash === capture.sourceSetHash) {
       db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(checkedAt);
       db.exec("commit");
@@ -3398,10 +12957,10 @@ async function refreshProjections(context) {
 
 class StoreReadError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "StoreReadError";
-    this.code = code;
+    this.code = code2;
   }
 }
 var DASHBOARD_VIEWS = {
@@ -3411,10 +12970,10 @@ var DASHBOARD_VIEWS = {
   "workflow-detail": { needsProjection: true },
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
-  roadmap: { needsProjection: true },
+  roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false }
 };
-function text2(value) {
+function text5(value) {
   return typeof value === "string" && value !== "" ? value : null;
 }
 function integer(value) {
@@ -3434,7 +12993,7 @@ function paging(limit, offset) {
   return { limit: resolvedLimit, offset: resolvedOffset };
 }
 function requireId(filters, view) {
-  const id = text2(filters.id);
+  const id = text5(filters.id);
   if (id === null)
     usage(`the ${view} view requires filters.id`);
   return id;
@@ -3465,9 +13024,9 @@ function readProjectionBlock(db) {
   if (row === undefined) {
     throw new ProjectionError("projection.schema-outdated", "projection_meta has no current row; the store schema is incomplete");
   }
-  const freshness = text2(row.freshness);
+  const freshness = text5(row.freshness);
   let diagnostics = [];
-  const lastError = text2(row.last_error_json);
+  const lastError = text5(row.last_error_json);
   if (lastError !== null) {
     try {
       const parsed = JSON.parse(lastError);
@@ -3476,9 +13035,9 @@ function readProjectionBlock(db) {
           if (typeof entry !== "object" || entry === null)
             return [];
           const source = entry;
-          const sourceKey = text2(source.sourceKey);
-          const reason = text2(source.reason);
-          const message = text2(source.message);
+          const sourceKey = text5(source.sourceKey);
+          const reason = text5(source.reason);
+          const message = text5(source.message);
           return sourceKey !== null && reason !== null && message !== null ? [{ sourceKey, reason, message }] : [];
         });
       }
@@ -3489,8 +13048,8 @@ function readProjectionBlock(db) {
   return {
     generation: integer(row.generation),
     freshness: freshness === "current" || freshness === "stale" ? freshness : "unavailable",
-    builtAt: text2(row.built_at),
-    checkedAt: text2(row.checked_at) ?? "",
+    builtAt: text5(row.built_at),
+    checkedAt: text5(row.checked_at) ?? "",
     diagnostics
   };
 }
@@ -3569,7 +13128,7 @@ function dashboardView(view, handle, filters) {
     case "roadmap":
       return readRoadmap(handle.db, filters);
     case "issue-flow":
-      return readIssueFlow(handle.db, text2(filters.projectId) ?? undefined);
+      return readIssueFlow(handle.db, text5(filters.projectId) ?? undefined);
   }
 }
 var ISSUE_KINDS = {
@@ -3602,7 +13161,7 @@ function bindIssueFilter(filter) {
   const clauses = [];
   const params = [];
   if (filter.projectId !== undefined) {
-    if (text2(filter.projectId) === null)
+    if (text5(filter.projectId) === null)
       usage("projectId must be a non-empty id");
     clauses.push("issues.project_id = ?");
     params.push(filter.projectId);
@@ -3858,15 +13417,14 @@ function belongsTo(membership, kind, id, projectId) {
 function readGeneratedRows(db) {
   const generation = integer(db.prepare("select generation from projection_meta where id = 1").get()?.generation);
   if (generation === null) {
-    return { generation: null, workflows: [], plans: [], leases: [], compasses: [], roadmaps: [] };
+    return { generation: null, workflows: [], plans: [], leases: [], compasses: [] };
   }
   return {
     generation,
     workflows: db.prepare("select id, type, status, phase, started_at, ended_at, updated_at, branch_base, branch_source, branch_integration, branch_target, active_registration from projection_workflows where generation = ? order by id asc").all(generation),
     plans: db.prepare("select workflow_id, plan_id, status, progress, phase, done_at, catalog_pin_revision from projection_plans where generation = ? order by workflow_id asc, plan_id asc").all(generation),
     leases: db.prepare("select workflow_id, plan_id, kind, holder, worktree_path, expires_at from projection_leases where generation = ? order by workflow_id asc, plan_id asc, kind asc").all(generation),
-    compasses: db.prepare("select iteration_id, summary, milestones_json, started_at, ended_at, status from projection_compasses where generation = ? order by iteration_id asc").all(generation),
-    roadmaps: db.prepare("select project_id, direction, goals_json, milestones_json from projection_roadmaps where generation = ? order by project_id asc").all(generation)
+    compasses: db.prepare("select iteration_id, summary, milestones_json, started_at, ended_at, status from projection_compasses where generation = ? order by iteration_id asc").all(generation)
   };
 }
 function workflowCatalogKey(workflow) {
@@ -3931,12 +13489,12 @@ function readWorkflowList(db, filters) {
   const generated = readGeneratedRows(db);
   if (generated.generation === null)
     return { items: [], total: 0 };
-  const projectId = text2(filters.projectId);
+  const projectId = text5(filters.projectId);
   const plansByWorkflow = new Map;
   for (const plan of generated.plans) {
-    const list = plansByWorkflow.get(plan.workflow_id) ?? [];
-    list.push(plan);
-    plansByWorkflow.set(plan.workflow_id, list);
+    const list2 = plansByWorkflow.get(plan.workflow_id) ?? [];
+    list2.push(plan);
+    plansByWorkflow.set(plan.workflow_id, list2);
   }
   const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
@@ -3973,24 +13531,24 @@ function iterationPlanIds(db) {
   const rows = db.prepare("select from_id as planId, to_id as iterationId from catalog_links where relation = 'belongs-to' and from_kind = 'plan' and to_kind = 'iteration'").all();
   const byIteration = new Map;
   for (const row of rows) {
-    const list = byIteration.get(row.iterationId) ?? [];
-    list.push(row.planId);
-    byIteration.set(row.iterationId, list);
+    const list2 = byIteration.get(row.iterationId) ?? [];
+    list2.push(row.planId);
+    byIteration.set(row.iterationId, list2);
   }
-  for (const list of byIteration.values())
-    list.sort();
+  for (const list2 of byIteration.values())
+    list2.sort();
   return byIteration;
 }
 function iterationDocumentIds(db) {
   const rows = db.prepare("select from_id as iterationId, to_id as documentId from catalog_links where relation = 'documents' and from_kind = 'iteration' and to_kind = 'document'").all();
   const byIteration = new Map;
   for (const row of rows) {
-    const list = byIteration.get(row.iterationId) ?? [];
-    list.push(row.documentId);
-    byIteration.set(row.iterationId, list);
+    const list2 = byIteration.get(row.iterationId) ?? [];
+    list2.push(row.documentId);
+    byIteration.set(row.iterationId, list2);
   }
-  for (const list of byIteration.values())
-    list.sort();
+  for (const list2 of byIteration.values())
+    list2.sort();
   return byIteration;
 }
 function composeIteration(iterationId, catalog, generated, planIds, documentIds, identities) {
@@ -4049,8 +13607,8 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
     },
     plans,
     documents: documentIds.flatMap((documentId) => {
-      const document = identities.get(identityToken("document", documentId));
-      return document === undefined ? [] : [document];
+      const document4 = identities.get(identityToken("document", documentId));
+      return document4 === undefined ? [] : [document4];
     }),
     badges
   };
@@ -4058,7 +13616,7 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
 function readIterationList(db, filters) {
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
-  const projectId = text2(filters.projectId);
+  const projectId = text5(filters.projectId);
   const membership = projectMembership(db);
   const catalogRows = db.prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`).all().filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
   const planIds = iterationPlanIds(db);
@@ -4091,26 +13649,28 @@ function readIterationDetail(db, filters) {
   return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities);
 }
 function readRoadmap(db, filters) {
-  const projectId = text2(filters.projectId);
+  const projectId = text5(filters.projectId);
   if (projectId === null)
     usage("the roadmap view requires filters.projectId");
-  const generated = readGeneratedRows(db);
-  const row = generated.roadmaps.find((entry) => entry.project_id === projectId);
-  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId)) ?? null;
-  if (catalog === null && row === undefined)
+  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId));
+  if (catalog === undefined)
     return null;
-  const badges = [];
-  if (catalog === null)
-    badges.push("catalog-missing");
-  if (row === undefined)
-    badges.push("execution-unavailable");
+  let authority;
+  try {
+    authority = readRoadmapAuthorityOn(db, projectId);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found")
+      return null;
+    throw error;
+  }
+  if (authority.roadmap === null) {
+    return { projectId, catalog, authority: { state: "absent" }, content: null };
+  }
   return {
     projectId,
     catalog,
-    direction: row?.direction ?? null,
-    goals: parseJsonArray(row?.goals_json),
-    milestones: parseJsonArray(row?.milestones_json).filter((entry) => typeof entry === "string" && entry !== ""),
-    badges
+    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
+    content: parseRoadmapContent(authority.roadmap.contentMarkdown)
   };
 }
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
@@ -4138,8 +13698,8 @@ var PRE_ACTIVATION_CODES = ["store.not-initialized", "store.not-active"];
 var storeRuntimeProbe = { info: detectStoreRuntime };
 function refusalOf(error) {
   const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
-  return { code: code === "" ? "store.authority-unreadable" : code, message };
+  const code2 = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+  return { code: code2 === "" ? "store.authority-unreadable" : code2, message };
 }
 async function readAuthorityRoute(harnessDir) {
   try {
@@ -4157,7 +13717,7 @@ async function readAuthorityRoute(harnessDir) {
 }
 function hasEntry2(dir, name) {
   try {
-    statSync2(join(dir, name));
+    statSync2(join4(dir, name));
     return true;
   } catch {
     return false;
@@ -4173,22 +13733,22 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname(dir));
-  return parentResolved !== null && resolve(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname4(dir));
+  return parentResolved !== null && resolve3(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
   try {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve(dirname(resolved), readlinkSync2(resolved));
+      return resolve3(dirname4(resolved), readlinkSync2(resolved));
     } catch {
-      let dir = dirname(resolved);
+      let dir = dirname4(resolved);
       for (;; ) {
         try {
-          return join(realpathSync(dir), relative4(dir, resolved));
+          return join4(realpathSync(dir), relative4(dir, resolved));
         } catch {
-          const parent = dirname(dir);
+          const parent = dirname4(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -4198,27 +13758,27 @@ function landedPathOf(resolved) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase()))
+  if (!STORE_AUTHORITY_NAMES.includes(basename2(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname(target));
+  return isHarnessRootDir(dirname4(target));
 }
 function caseFoldedRegisterRoot(candidate) {
-  const target = resolve(candidate);
-  if (!REGISTER_BASENAME.test(basename(target)))
+  const target = resolve3(candidate);
+  if (!REGISTER_BASENAME.test(basename2(target)))
     return null;
-  let dir = dirname(target);
+  let dir = dirname4(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
       try {
         projectDir = resolveProjectDir(dir, { harnessDir: dir });
       } catch {
-        projectDir = join(dir, PROJECT_DIR_NAME);
+        projectDir = join4(dir, PROJECT_DIR_NAME);
       }
       if (REGISTER_SHAPE.test(relative4(projectDir, target)))
         return dir;
     }
-    const parent = dirname(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -4238,8 +13798,8 @@ function landedRegisterDirOf(resolved, landed) {
     return aliased.harnessDir;
   return caseFoldedRegisterRoot(landed);
 }
-function authorityViolation(code, message) {
-  return { ok: false, severity: "high", code, message };
+function authorityViolation(code2, message) {
+  return { ok: false, severity: "high", code: code2, message };
 }
 function storeDirectWriteRefusal(targetPath) {
   return authorityViolation(STORE_DIRECT_WRITE_CODE, `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` + "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " + "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " + "register|update`");
@@ -4271,8 +13831,8 @@ function blockAuthorityWrite(toolName, display, violations) {
   process.exit(2);
 }
 var MAX_GATED_TARGETS = 32;
-function displaySafe(text3) {
-  return text3.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
+function displaySafe(text6) {
+  return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
   const rel = relative4(harnessDir, targetPath);
@@ -4280,7 +13840,7 @@ function displayTarget(targetPath, harnessDir) {
 }
 function readStdinJson() {
   try {
-    const raw = readFileSync3(0, "utf8");
+    const raw = readFileSync(0, "utf8");
     if (!raw.trim())
       return {};
     const parsed = JSON.parse(raw);
@@ -4293,15 +13853,15 @@ function readStdinJson() {
 }
 function writeTargetPaths(toolInput) {
   const paths = [];
-  const push = (value) => {
+  const push2 = (value) => {
     if (typeof value === "string" && value.trim() !== "")
       paths.push(value);
   };
-  push(toolInput.file_path);
-  push(toolInput.path);
+  push2(toolInput.file_path);
+  push2(toolInput.path);
   if (Array.isArray(toolInput.paths)) {
     for (const value of toolInput.paths)
-      push(value);
+      push2(value);
   }
   return paths.slice(0, MAX_GATED_TARGETS);
 }
@@ -4317,7 +13877,7 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (statSync2(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
-    const current = readFileSync3(targetPath, "utf8");
+    const current = readFileSync(targetPath, "utf8");
     const first = current.indexOf(oldString);
     if (first === -1)
       return;
@@ -4344,11 +13904,11 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve(isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath));
+    const targetPath = resolve3(isAbsolute4(rawPath) ? rawPath : join4(cwd, rawPath));
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname4(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }
@@ -4406,8 +13966,8 @@ try {
       }
     }
     const gated = target ?? { harnessDir: registerDir, kind: "register" };
-    const content = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
-    const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
+    const content3 = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
+    const violations = validateStatusWriteDoc(content3, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0)
       continue;
     const enforcement = resolveRepoEnforcement(gated.harnessDir);

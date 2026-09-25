@@ -754,6 +754,10 @@ describe("roadmap", () => {
     expect(absent.content.kind).toBe("absent");
     expect(absent.disclosure).toBeNull();
 
+    const missingProject = roadmapState(envelope(null, UNAVAILABLE_PROJECTION));
+    expect(missingProject.content.kind).toBe("not-found");
+    expect(missingProject.disclosure).toBeNull();
+
     const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
     expect(ready.content.kind).toBe("ready");
     expect(ready.disclosure).toBeNull();

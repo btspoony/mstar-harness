@@ -1790,4 +1790,24 @@ describe("mstar worktree cleanup — candidate scope", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   }, 30000);
+  test("--apply keeps an otherwise eligible worktree that contains only ignored files", () => {
+    const fx = scopeFixture("mstar-cleanup-ignored-");
+    try {
+      writeFileSync(join(fx.root, ".git", "info", "exclude"), "ignored-only.txt\n");
+      writeFileSync(join(fx.wtA1, "ignored-only.txt"), "must survive\n");
+
+      const applied = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--apply", "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stdout).toContain(`refuse | worktree | ${fx.wtA1} | cleanup.refuse.dirty`);
+      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.wtA1}`);
+      expect(readFileSync(join(fx.wtA1, "ignored-only.txt"), "utf8")).toBe("must survive\n");
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtA1);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
 });

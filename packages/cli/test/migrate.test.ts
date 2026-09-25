@@ -202,6 +202,8 @@ describe("mstar migrate — real run", () => {
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("migrated");
+      expect(r.stdout).toContain("pending roadmap candidate (not written as authority)");
+      expect(r.stdout).toContain("- pi/dsh adapters (host APIs unknown)");
 
       const rootDoc = readJsonFile(join(root, "status.json"));
       expect(rootDoc).toEqual({ version: 2, updated_at: "2026-08-19", workflows: [] });
@@ -366,6 +368,10 @@ describe("mstar migrate --json — machine-readable output", () => {
       expect(doc.applied).toBe(false);
       expect(typeof doc.message).toBe("string");
       expect(Array.isArray(doc.steps)).toBe(true);
+      const candidate = doc.roadmapCandidate as { file: string; source: string; content: string };
+      expect(candidate.file).toBe("projects/_default/roadmap.md");
+      expect(candidate.source).toBe("status.json metadata.program_roadmap");
+      expect(candidate.content).toContain("- pi/dsh adapters (host APIs unknown)");
       const steps = doc.steps as { kind: string; source: string; destination: string }[];
       expect(steps.length).toBeGreaterThan(0);
       expect(steps[0]!.kind).toBe("archive-status-v1");

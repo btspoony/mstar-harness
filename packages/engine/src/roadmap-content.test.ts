@@ -13,7 +13,7 @@ residuals_ref: projects/_default/residuals.json
 custom_note: preserved metadata
 ---
 
-Opening context: café, 東京, and **Unicode** stay unchanged.
+Opening context: caf\u00e9, \u6771\u4eac, and **Unicode** stay unchanged.
 
 ## Direction
 
@@ -44,7 +44,7 @@ Issue R-17 is high severity prose, not an issue record. Workflow complete is onl
 
 ## Delivery Log
 
-- 2026-09-25 — candidate release noted.
+- 2026-09-25 \u2014 candidate release noted.
 
 
 a fenced task example remains prose:
@@ -71,7 +71,7 @@ describe("roadmap-content", () => {
     expect(content.direction).toContain("Deliver a useful roadmap");
     expect(content.direction).toContain("Keep nested explanatory content.");
     expect(content.sections.filter((section) => section.heading === "Goals")).toHaveLength(2);
-    expect(content.sections.find((section) => section.level === 0)?.body).toContain("Opening context: café, 東京");
+    expect(content.sections.find((section) => section.level === 0)?.body).toContain("Opening context: caf\u00e9, \u6771\u4eac");
     expect(content.sections.find((section) => section.heading === "Sync Notes")?.body).toContain("Issue R-17 is high severity prose");
     expect(content.sections.find((section) => section.heading === "Delivery Log")?.body).toContain("candidate release noted");
 

@@ -105,7 +105,7 @@ export function validateRoadmapContent(content: string, sourceLabel: string): Ro
   if (doc.status === undefined) {
     violations.push(violation("high", "project.roadmap.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !(ROADMAP_STATUSES as readonly string[]).includes(doc.status)) {
-    violations.push(violation("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(doc.status)}`));
   }
   if (doc.created_at === undefined) {
     violations.push(violation("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
@@ -127,10 +127,10 @@ export function validateRoadmapContent(content: string, sourceLabel: string): Ro
   const end = frontmatterEnd(content);
   const body = content.slice(end);
   if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+    warnings.push(violation("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) \u2014 state the project direction there"));
   }
   if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+    warnings.push(violation("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) \u2014 list goals as `- [ ]` / `- [x]` markdown task items"));
   }
   return { ok: violations.length === 0, violations, warnings };
 }

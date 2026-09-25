@@ -576,7 +576,12 @@ describe("migration 2", () => {
         [...migration.sql.matchAll(/create table ([a-z_][a-z0-9_]*)\s*\(/g)].map((match) => match[1]),
       )
       .reverse(); // dependents before the tables they reference (foreign_keys=ON)
-    for (const table of createdAfterV1) handle.db.exec(`drop table ${table}`);
+    const existingTables = new Set(
+      (handle.db.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map((row) => row.name),
+    );
+    for (const table of createdAfterV1) {
+      if (existingTables.has(table)) handle.db.exec(`drop table ${table}`);
+    }
     handle.db.prepare("delete from schema_version where version > 1").run();
     handle.close();
     expect((await openStore(context, "read")).schemaVersion).toBe(1);
