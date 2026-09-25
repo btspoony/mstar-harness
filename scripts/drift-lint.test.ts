@@ -1640,4 +1640,18 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  test("readTrackedFiles preserves filenames containing newlines via NUL-delimited Git output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-prov-newline-"));
+    const filename = "line\nbreak.md";
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, filename), "tracked content\n");
+      execFileSync("git", ["add", "--", filename], { cwd: dir });
+      const { tracked, failures } = readTrackedFiles(dir);
+      expect(failures).toEqual([]);
+      expect(tracked).toEqual(new Set([filename]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
