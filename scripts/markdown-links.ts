@@ -289,8 +289,9 @@ export function checkMarkdownLinks(repoRoot: string, tracked: ReadonlySet<string
           continue;
         }
         if (!fragment) {
-          if (![...tracked].some((path) => path.startsWith(`${targetPath.replace(/\/$/, "")}/`))) diagnostic(source, link.line, raw, "missing-target");
-          else result.linksChecked++;
+          if (targetPath ? ![...tracked].some((path) => path.startsWith(`${targetPath}/`)) : tracked.size === 0) {
+            diagnostic(source, link.line, raw, "missing-target");
+          } else result.linksChecked++;
           continue;
         }
         targetPath = canonical!;

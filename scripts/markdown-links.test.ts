@@ -129,6 +129,18 @@ describe("markdown-links behavior groups", () => {
     } finally { repo.close(); }
   });
 
+  test("markdown-links accepts no-fragment links to the repository root directory", () => {
+    const repo = fixture({
+      "index.md": "[root](/) [current](./)\n",
+      "docs/source.md": "[parent](../)\n",
+      "docs/child.md": "# Child\n",
+    });
+    try {
+      const result = checkMarkdownLinks(repo.root, repo.tracked);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.linksChecked).toBe(3);
+    } finally { repo.close(); }
+  });
   test("markdown-links classifies templates and skips external schemes without opening them", () => {
     const repo = fixture({
       "index.md": "[template]({TARGET}) [empty](<>) [real](<guide file.md>) [web](https://example.invalid/a) [skill](skill://topic) [root](/guide%20file.md)\n",
