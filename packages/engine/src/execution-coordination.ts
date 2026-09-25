@@ -1889,14 +1889,11 @@ function applyCompletion(input: {
 }): void {
   const { tx, witness, planId, handoff, at, what } = input;
   const plan = witness.view.plan as unknown as Record<string, unknown>;
-  const standalone = input.resultSha === null;
   const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-  if (standalone) {
-    // The retained metadata is what authorizes cleanup afterwards: the leases
-    // release, the scope record does not.
-    metadata.working_branch = handoff.source_branch;
-    metadata.worktree_path = handoff.worktree_path;
-  }
+  // The retained metadata is what authorizes cleanup afterwards: the leases
+  // release, the scope record does not.
+  metadata.working_branch = handoff.source_branch;
+  metadata.worktree_path = handoff.worktree_path;
   const integration = handoff.integration;
   const completed: PlanHandoff = {
     ...handoff,

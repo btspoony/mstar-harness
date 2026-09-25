@@ -1758,6 +1758,12 @@ describe("git-reconciliation", () => {
     expect(recordField(mergedHandoff, "integration").result_sha).toBe(mergeSha);
 
     // Complete is the one delta that releases both leases and sets Done.
+    updatePlanRow(fixture, PLAN_ID, (row) => {
+      const metadata = { ...(row.metadata as Record<string, unknown>), fixture_marker: "preserved" };
+      delete metadata.working_branch;
+      delete metadata.worktree_path;
+      return { ...row, metadata };
+    });
     const retainedBefore = retainedRow(fixture);
     const completed = await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
     expect(completed.outcome).toBe("completed");
@@ -1768,9 +1774,20 @@ describe("git-reconciliation", () => {
     const doneHandoff = handoffFields(doneRow);
     expect(doneHandoff.state).toBe("completed");
     expect(recordField(doneHandoff, "integration").result_sha).toBe(mergeSha);
+    expect(doneRow.metadata).toMatchObject({
+      working_branch: doneHandoff.source_branch,
+      worktree_path: doneHandoff.worktree_path,
+    });
     expect(typeof doneHandoff.completed_at).toBe("string");
-    // Branch and worktree metadata survive: that is what authorizes cleanup.
-    expect(retainedRow(fixture)).toEqual(retainedBefore);
+    // Existing metadata survives alongside the newly retained cleanup scope.
+    expect(retainedRow(fixture)).toEqual({
+      ...retainedBefore,
+      metadata: {
+        ...(retainedBefore.metadata as Record<string, unknown>),
+        working_branch: doneHandoff.source_branch,
+        worktree_path: doneHandoff.worktree_path,
+      },
+    });
 
     // Replay is read-only: nothing is re-acquired, nothing is rewritten.
     const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
@@ -1806,6 +1823,10 @@ describe("git-reconciliation", () => {
     expect(provenRow.execution_lease).toBeUndefined();
     expect(snapshotOf(retry).integration_merge_lease).toBeUndefined();
     expect(recordField(handoffFields(provenRow), "integration").result_sha).toBe(provenSha);
+    expect(provenRow.metadata).toMatchObject({
+      working_branch: handoffFields(provenRow).source_branch,
+      worktree_path: handoffFields(provenRow).worktree_path,
+    });
 
     // A base that moved without a merge of the pinned source is divergence.
     const diverged = await acceptedFixture();
