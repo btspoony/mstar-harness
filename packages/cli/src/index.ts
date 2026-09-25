@@ -3130,7 +3130,7 @@ function cleanupDistinctOwner(claims: CleanupOwner[]): { owner: CleanupOwner | n
   return { owner: null, ambiguous: distinct.size > 1 };
 }
 
-/** Snapshot rows/lifecycles that record `branch` (leases OR retained metadata). */
+/** Snapshot rows/lifecycles that record `branch` (leases, metadata OR a completed Done handoff). */
 function cleanupBranchClaims(branch: string, snapshots: readonly WorkflowSnapshot[]): CleanupOwner[] {
   const claims: CleanupOwner[] = [];
   for (const doc of snapshots) {
@@ -3139,17 +3139,27 @@ function cleanupBranchClaims(branch: string, snapshots: readonly WorkflowSnapsho
       if (!cleanupIsPlainRow(row)) continue;
       const lease = row.execution_lease;
       const meta = row.metadata;
+      const handoff = cleanupIsPlainRow(row.coordination) && cleanupIsPlainRow(row.coordination.handoff)
+        ? row.coordination.handoff
+        : undefined;
       const recorded =
         (cleanupIsPlainRow(lease) && lease.working_branch === branch) ||
         (cleanupIsPlainRow(meta) &&
-          (meta.working_branch === branch || (Array.isArray(meta.track_branches) && meta.track_branches.includes(branch))));
+          (meta.working_branch === branch || (Array.isArray(meta.track_branches) && meta.track_branches.includes(branch)))) ||
+        (row.status === "Done" &&
+          handoff?.state === "completed" &&
+          typeof handoff.source_branch === "string" &&
+          handoff.source_branch !== "" &&
+          typeof handoff.worktree_path === "string" &&
+          handoff.worktree_path !== "" &&
+          handoff.source_branch === branch);
       if (recorded) claims.push({ workflowId: doc.id, planId: cleanupRowId(row) });
     }
   }
   return claims;
 }
 
-/** Snapshot rows/lifecycles that record the worktree path (lease OR retained metadata). */
+/** Snapshot rows/lifecycles that record the worktree path (lease, metadata OR a completed Done handoff). */
 function cleanupWorktreeClaims(worktreePath: string, snapshots: readonly WorkflowSnapshot[]): CleanupOwner[] {
   const claims: CleanupOwner[] = [];
   const key = cleanupPathKey(worktreePath);
@@ -3161,9 +3171,22 @@ function cleanupWorktreeClaims(worktreePath: string, snapshots: readonly Workflo
       if (!cleanupIsPlainRow(row)) continue;
       const lease = row.execution_lease;
       const meta = row.metadata;
+      const handoff = cleanupIsPlainRow(row.coordination) && cleanupIsPlainRow(row.coordination.handoff)
+        ? row.coordination.handoff
+        : undefined;
       const recorded =
         (cleanupIsPlainRow(lease) && typeof lease.worktree_path === "string" && cleanupPathKey(lease.worktree_path) === key) ||
-        (cleanupIsPlainRow(meta) && typeof meta.worktree_path === "string" && cleanupPathKey(meta.worktree_path) === key);
+        (cleanupIsPlainRow(meta) &&
+          ((typeof meta.worktree_path === "string" && cleanupPathKey(meta.worktree_path) === key) ||
+            (Array.isArray(meta.cleanup_protective_worktree_paths) &&
+              meta.cleanup_protective_worktree_paths.some((value) => typeof value === "string" && cleanupPathKey(value) === key)))) ||
+        (row.status === "Done" &&
+          handoff?.state === "completed" &&
+          typeof handoff.source_branch === "string" &&
+          handoff.source_branch !== "" &&
+          typeof handoff.worktree_path === "string" &&
+          handoff.worktree_path !== "" &&
+          cleanupPathKey(handoff.worktree_path) === key);
       if (recorded) claims.push({ workflowId: doc.id, planId: cleanupRowId(row) });
     }
   }
@@ -3194,7 +3217,37 @@ function cleanupDegradeSiblingSnapshot(doc: Record<string, unknown>, id: string)
   const integrationWorktreePath = text(doc.integration_worktree_path) ?? text(doc.control_worktree_path);
   const plans = (Array.isArray(doc.plans) ? doc.plans : [])
     .filter(cleanupIsPlainRow)
-    .map((row) => ({ ...row, status: "InProgress" })); // a row state we cannot trust never authorizes a removal
+    .map((row) => {
+      const handoff = cleanupIsPlainRow(row.coordination) && cleanupIsPlainRow(row.coordination.handoff)
+        ? row.coordination.handoff
+        : undefined;
+      const sourceBranch = text(handoff?.source_branch);
+      const worktreePath = text(handoff?.worktree_path);
+      const metadata = cleanupIsPlainRow(row.metadata) ? row.metadata : {};
+      const trackBranches = Array.isArray(metadata.track_branches)
+        ? metadata.track_branches.filter((value): value is string => typeof value === "string" && value !== "")
+        : [];
+      const worktreePaths = Array.isArray(metadata.cleanup_protective_worktree_paths)
+        ? metadata.cleanup_protective_worktree_paths.filter((value): value is string => typeof value === "string" && value !== "")
+        : [];
+      if (sourceBranch !== undefined) trackBranches.push(sourceBranch);
+      if (worktreePath !== undefined) worktreePaths.push(worktreePath);
+      return {
+        ...row,
+        status: "InProgress", // a row state we cannot trust never authorizes a removal
+        ...(sourceBranch !== undefined || worktreePath !== undefined
+          ? {
+              metadata: {
+                ...metadata,
+                ...(sourceBranch !== undefined ? { track_branches: [...new Set(trackBranches)] } : {}),
+                ...(worktreePath !== undefined
+                  ? { cleanup_protective_worktree_paths: [...new Set(worktreePaths)] }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    });
   return {
     schema_version: 1,
     // The directory name IS the workflow identity (`resolveSnapshotPath`); a
@@ -3219,12 +3272,10 @@ function cleanupPrintDiagnostics(diagnostics: readonly ValidationResult[]): void
 
 /**
  * Porcelain worktree records + per-worktree cleanliness. Cleanliness uses
- * `git status --porcelain --ignored=matching` INSIDE the worktree: tracked
- * modifications, untracked files AND ignored files all count as dirty —
- * ignored user content has no git-side deletion backstop (`git worktree
- * remove` deletes it silently). A probe that cannot run (missing worktree
- * dir, broken git) throws — a probe failure aborts the command with exit 1;
- * it is never an empty-safe fact.
+ * ordinary `git status --porcelain` INSIDE each worktree: tracked modifications
+ * and untracked non-ignored files count as dirty; ignored-only content does not.
+ * A probe that cannot run (missing worktree dir, broken git) throws — a probe
+ * failure aborts the command with exit 1; it is never an empty-safe fact.
  */
 function cleanupProbeWorktrees(mainRoot: string): CleanupProbeWorktree[] {
   const raw = gitSync(["worktree", "list", "--porcelain"], mainRoot);
@@ -3251,10 +3302,8 @@ function cleanupProbeWorktrees(mainRoot: string): CleanupProbeWorktree[] {
   flush();
   records.forEach((record, index) => {
     record.isMain = index === 0; // porcelain lists the main worktree first
+    record.clean = gitSync(["status", "--porcelain"], record.path).trim() === "";
   });
-  for (const record of records) {
-    record.clean = gitSync(["status", "--porcelain", "--ignored=matching"], record.path).trim() === "";
-  }
   return records;
 }
 
