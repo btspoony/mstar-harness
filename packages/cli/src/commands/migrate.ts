@@ -229,6 +229,7 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
           alreadyMigrated: false,
           applied: result.applied,
           message: result.message,
+          steps: plan.steps,
           migrationNotes: plan.migrationNotes,
           roadmapCandidate: plan.roadmap,
         }),
