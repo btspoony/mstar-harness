@@ -35,6 +35,24 @@
  * artifact verification, input fingerprinting and reuse assessment —
  * values in, decisions out).
  */
+export type {
+  RoadmapContent,
+  RoadmapExpected,
+  RoadmapImportReview,
+  RoadmapRecord,
+  RoadmapRead,
+  RoadmapWriteReceipt,
+  RoadmapOperation,
+} from "./roadmap-store.js";
+export {
+  RoadmapError,
+  importRoadmapAuthority,
+  listRoadmapAuthority,
+  readRoadmapAuthority,
+  readRoadmapAuthorityOn,
+  replaceRoadmapAuthority,
+  reviewRoadmapImport,
+} from "./roadmap-store.js";
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { DSH_LLM_FALLBACKS_VERSION, SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
