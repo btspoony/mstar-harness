@@ -263,7 +263,7 @@ export function checkMarkdownLinks(repoRoot: string, tracked: ReadonlySet<string
         continue;
       }
       const sourcePath = join(root, source);
-      const joined = decodedPath.startsWith("/") ? resolve(root, `.${decodedPath}`) : resolve(root, dirname(sourcePath), decodedPath || source);
+      const joined = decodedPath.startsWith("/") ? resolve(root, `.${decodedPath}`) : decodedPath ? resolve(dirname(sourcePath), decodedPath) : sourcePath;
       if (!inside(root, joined)) {
         diagnostic(source, link.line, raw, "escapes-root");
         continue;

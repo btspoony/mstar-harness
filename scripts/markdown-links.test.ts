@@ -48,6 +48,20 @@ describe("markdown-links behavior groups", () => {
     } finally { repo.close(); }
   });
 
+  test("markdown-links resolves nested same-file fragments without duplicating their directory", () => {
+    const repo = fixture({
+      "docs/x.md": "## Heading\n\n[same](#heading)\n[missing](#absent)\n[sibling](./y.md#frag)\n",
+      "docs/y.md": "## Frag\n",
+    });
+    try {
+      const result = checkMarkdownLinks(repo.root, repo.tracked);
+      expect(result.diagnostics).toEqual([
+        { source: "docs/x.md", line: 4, rawTarget: "#absent", kind: "missing-anchor" },
+      ]);
+      expect(result.anchorsChecked).toBe(3);
+    } finally { repo.close(); }
+  });
+
   test("markdown-links resolves directories and encoded paths, and rejects malformed or escaping paths", () => {
     const outside = mkdtempSync(join(tmpdir(), "markdown-links-outside-"));
     const repo = fixture({
