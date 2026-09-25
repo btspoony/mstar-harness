@@ -32,6 +32,8 @@ import {
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
 import { IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
+import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
+import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
@@ -142,7 +144,6 @@ export type DashboardBadge =
   | "execution-unavailable";
 
 export type MilestoneDTO = { milestone: string; target: string | null; status: string | null };
-export type GoalDTO = { text: string; checked: boolean };
 
 export type CompassDTO = {
   iterationId: string;
@@ -232,12 +233,9 @@ export type IterationListDTO = { items: IterationDTO[]; total: number };
 
 export type RoadmapDTO = {
   projectId: string;
-  catalog: CatalogIdentityDTO | null;
-  direction: string | null;
-  goals: GoalDTO[];
-  /** Roadmap frontmatter milestone names, in document order. */
-  milestones: string[];
-  badges: DashboardBadge[];
+  catalog: CatalogIdentityDTO;
+  authority: { state: "present"; revision: number; contentHash: string } | { state: "absent" };
+  content: RoadmapContent | null;
 };
 
 export type IssueFlowBucket = {
@@ -281,7 +279,7 @@ export type DashboardViewData = {
   "issue-flow": IssueFlow;
 };
 
-/** Which views read projected execution/roadmap rows (contract §6 refresh rule). */
+/** Which views refresh projected execution rows (contract §6 refresh rule). */
 const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   issues: { needsProjection: false },
   "issue-detail": { needsProjection: false },
@@ -289,7 +287,7 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   "workflow-detail": { needsProjection: true },
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
-  roadmap: { needsProjection: true },
+  roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
 };
 
@@ -1081,15 +1079,12 @@ type ProjectedCompassRow = {
   status: string | null;
 };
 
-type ProjectedRoadmapRow = { project_id: string; direction: string | null; goals_json: string; milestones_json: string };
-
 type GeneratedRows = {
   generation: number | null;
   workflows: ProjectedWorkflowRow[];
   plans: ProjectedPlanRow[];
   leases: ProjectedLeaseRow[];
   compasses: ProjectedCompassRow[];
-  roadmaps: ProjectedRoadmapRow[];
 };
 
 /**
@@ -1102,7 +1097,7 @@ function readGeneratedRows(db: StoreDb): GeneratedRows {
     (db.prepare("select generation from projection_meta where id = 1").get() as { generation?: unknown } | undefined)?.generation,
   );
   if (generation === null) {
-    return { generation: null, workflows: [], plans: [], leases: [], compasses: [], roadmaps: [] };
+    return { generation: null, workflows: [], plans: [], leases: [], compasses: [] };
   }
   return {
     generation,
@@ -1130,9 +1125,6 @@ function readGeneratedRows(db: StoreDb): GeneratedRows {
           "order by iteration_id asc",
       )
       .all(generation) as ProjectedCompassRow[],
-    roadmaps: db
-      .prepare("select project_id, direction, goals_json, milestones_json from projection_roadmaps where generation = ? order by project_id asc")
-      .all(generation) as ProjectedRoadmapRow[],
   };
 }
 
@@ -1435,21 +1427,23 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
 function readRoadmap(db: StoreDb, filters: DashboardFilters): RoadmapDTO | null {
   const projectId = text(filters.projectId);
   if (projectId === null) usage("the roadmap view requires filters.projectId");
-  const generated = readGeneratedRows(db);
-  const row = generated.roadmaps.find((entry) => entry.project_id === projectId);
-  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId)) ?? null;
-  if (catalog === null && row === undefined) return null;
-  const badges: DashboardBadge[] = [];
-  if (catalog === null) badges.push("catalog-missing");
-  if (row === undefined) badges.push("execution-unavailable");
+  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId));
+  if (catalog === undefined) return null;
+
+  let authority: RoadmapRead;
+  try {
+    authority = readRoadmapAuthorityOn(db, projectId);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found") return null;
+    throw error;
+  }
+  if (authority.roadmap === null) {
+    return { projectId, catalog, authority: { state: "absent" }, content: null };
+  }
   return {
     projectId,
     catalog,
-    direction: row?.direction ?? null,
-    goals: parseJsonArray<GoalDTO>(row?.goals_json),
-    milestones: parseJsonArray<unknown>(row?.milestones_json).filter(
-      (entry): entry is string => typeof entry === "string" && entry !== "",
-    ),
-    badges,
+    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
+    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
   };
 }

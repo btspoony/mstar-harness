@@ -215,7 +215,7 @@ const fullSource: MstarEngineStatusPayload = {
       { planId: '00000808-dsh-package-core', id: 'R1', severity: 'high', title: 'doneAt passthrough untested' },
       { planId: '00000809-dsh-workflow-viz-panel', id: 'R2', severity: 'medium', title: 'header removal doc drift' },
     ],
-    project: { milestones: [], openResiduals: [] },
+    project: { milestones: [], roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-00000809-dsh-workflow-viz',
@@ -258,7 +258,7 @@ const noGateSource: MstarEngineStatusPayload = {
     plans: [{ id: '00000809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] }],
     residuals: [],
     residualFindings: null,
-    project: { milestones: [], openResiduals: [] },
+    project: { milestones: [], roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -535,6 +535,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
         ...fullSource.state!,
         project: {
           milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+          roadmapSource: { kind: 'present', absentProjectIds: ['project-b'], diagnostic: null },
           openResiduals: [
             { severity: 'critical', count: 1 },
             { severity: 'medium', count: 2 },
@@ -555,6 +556,37 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     // The four existing zones still render (additive-only, compass AC-4).
     expect(html).toContain('data-zone="tasks"')
     expect(html).toContain('data-iteration-head')
+  })
+  it('roadmap-authority disclosure separates present-empty, absent, unavailable, and partial coverage in both locales', async () => {
+    const projectSource = (roadmapSource: NonNullable<MstarEngineStatusPayload['state']>['project']['roadmapSource'], milestones: string[] = []): MstarEngineStatusPayload => ({
+      ...fullSource,
+      state: { ...fullSource.state!, project: { milestones, roadmapSource, openResiduals: [] } },
+    })
+
+    const presentEmpty = await panelHtml(projectSource({ kind: 'present', absentProjectIds: [], diagnostic: null }))
+    expect(presentEmpty).toContain('data-mstar-roadmap="empty"')
+    expect(presentEmpty).toContain('Roadmap is present but has no milestones')
+
+    const absent = await panelHtml(projectSource({ kind: 'absent', absentProjectIds: ['project-a'], diagnostic: null }), undefined, undefined, 'zh')
+    expect(absent).toContain('data-mstar-roadmap="absent"')
+    expect(absent).toContain('以下项目没有路线图：project-a')
+    const noProjects = await panelHtml(projectSource({ kind: 'absent', absentProjectIds: [], diagnostic: null }))
+    expect(noProjects).toContain('data-mstar-roadmap="absent"')
+    expect(noProjects).toContain('>none<')
+    expect(noProjects).not.toContain('No roadmap is recorded for these projects:')
+
+    const unavailable = await panelHtml(projectSource({ kind: 'unavailable', absentProjectIds: [], diagnostic: '<img src=x onerror=alert(1)>' }))
+    expect(unavailable).toContain('data-mstar-roadmap="unavailable"')
+    expect(unavailable).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(unavailable).not.toContain('<img src=x onerror=alert(1)>')
+
+    const partial = await panelHtml(projectSource(
+      { kind: 'present', absentProjectIds: ['project-b', 'project-c'], diagnostic: null },
+      ['P1'],
+    ))
+    expect(partial).toContain('data-mstar-roadmap-partial="project-b,project-c"')
+    expect(partial).toContain('No roadmap is recorded for these projects: project-b, project-c')
+    expect(partial).toContain('P1')
   })
 
   it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', async () => {

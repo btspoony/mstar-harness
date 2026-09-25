@@ -55,12 +55,9 @@ PM 批量触发后须：
 
 ## 3.3 更新 roadmap
 
-1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：
-   - current iteration 行标记为 **`delivered`**（或等价明确措辞）
-   - next iteration 更新为即将开始的内容、触发条件、owner
-2. 若项目层 roadmap（`{PROJECT_DIR}/<id>/roadmap.md`）存在，同步更新（frontmatter `status` / goal-item checkboxes）；若 snapshot plan 行含 `metadata.roadmap` 字段，同步更新
-3. 若存在 deferred-features / roadmap tracker 类文档，按项目惯例刷新
-4. 若 `STRATEGY.md` 存在，可更新 `## Decision Log`（重大架构决策时）
+1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：current iteration 标记为 **`delivered`**（或等价明确措辞），next iteration 记下即将开始的内容、触发条件和 owner。compass 是执行叙事，不是项目 roadmap 内容权威。
+2. 对该 catalog project，从 roadmap 域**读** store 当前正文及 project/roadmap revisions。存在正文时**导出为独立 Markdown 候选**并编辑候选中的 status / goal items；已知项目无记录时明确创建新候选并在 replacement 中预期 absent，**不**从 `roadmap.md` 补读。review 后使用 revision-guarded roadmap replacement 更新完整正文；若版本变化，重读权威并重新 review，不能盲目重试。**绝不编辑 live `projects/<id>/roadmap.md`**。读写/校验的唯一规则家 → **`mstar-project-governance`**；命令选项 → built `mstar roadmap --help`。
+3. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
 ## 3.4 标记迭代完成
 
@@ -76,7 +73,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 compound 完成；**`<iteration-id>/` package 已盘点**（提升 / 保留 / 跳过已记入 Compound Summary）；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
-- [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
+- [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；项目 roadmap 的 store 替换已以观察到的版本完成；STRATEGY 已按需更新
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] PR base = snapshot `branch.target`（`target_branch`，与 compass frontmatter 一致）；**不是**未记录的 `main`
@@ -93,11 +90,11 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 git branch --show-current   # must print <spec_integration_branch> — mismatch → STOP, see above
 git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ {SPECS_DIR}/ CONCEPTS.md
 git add STRATEGY.md   # only if updated in §3.3 (tracked root file); skip line otherwise
-git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
+git commit -m "chore(iteration): close <iteration-id> — compound round"
 git push origin <spec_integration_branch>
 ```
 
-Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见 `mstar-conventions`，如 `{HARNESS_DIR}/specs/`、`docs/specs/`、`specs/`）；本轮更新过才加入。§3.3 更新过的 tracked 项目层 roadmap tracker 若为 tracked 文件，一并 stage（gitignored 的 process 产物不进 commit）。
+Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见 `mstar-conventions`，如 `{HARNESS_DIR}/specs/`、`docs/specs/`、`specs/`）；本轮更新过才加入。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
 
 PR 目标使用 snapshot `branch.target`；缺失时停止并补齐，不得默认 `main`。
 

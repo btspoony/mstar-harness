@@ -34,6 +34,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { refreshProjections } from "./projection.js";
+import { importRoadmapAuthority, replaceRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   queryDashboard,
@@ -318,6 +319,10 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
 
   writeFile(join(catalogRootDir(context, "iterations"), "iter-read/delivery-compass.md"), COMPASS_DOC);
   writeFile(join(catalogRootDir(context, "projects"), "proj-a/roadmap.md"), ROADMAP_DOC);
+  const project = await getCatalog(context, { kind: "project", id: "proj-a" });
+  const review = await reviewRoadmapImport(context, "proj-a", join(catalogRootDir(context, "projects"), "proj-a/roadmap.md"));
+  expect(review.expectedProjectRevision).toBe(project.entity.revision);
+  await importRoadmapAuthority(context, review, op("roadmap-authority"));
 
   // The frozen pin must be the catalog revision this prepare actually saw:
   // a link also bumps its from-row revision, so it is read back here.
@@ -410,7 +415,6 @@ describe("read envelope and transaction", () => {
     const { context } = await workspace("pre-projection-");
     await withWrite(context, (db) => {
       for (const table of [
-        "projection_roadmaps",
         "projection_compasses",
         "projection_leases",
         "projection_plans",
@@ -875,19 +879,36 @@ describe("projection views", () => {
     expect(detail.data?.plans[0]?.catalogPinRevision).toBe(9);
   });
 
-  test("roadmap carries the project identity and the projected goals", async () => {
-    const { context } = await projectedWorkspace("roadmap-");
-    const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(envelope.data?.projectId).toBe("proj-a");
-    expect(envelope.data?.catalog?.title).toBe("Project A");
-    expect(envelope.data?.direction).toContain("Serve the dashboard from the store");
-    expect(envelope.data?.goals).toEqual([
-      { text: "Ship the read boundary", checked: true },
-      { text: "Ship the dashboard", checked: false },
+  test("roadmap reads full authoritative content without refreshing projections", async () => {
+    const { context, harness, generation } = await projectedWorkspace("roadmap-");
+    const before = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(before.data?.projectId).toBe("proj-a");
+    expect(before.data?.catalog.title).toBe("Project A");
+    expect(before.data?.authority).toMatchObject({ state: "present", revision: 1 });
+    expect(before.data?.authority.state === "present" && before.data.authority.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(before.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
+    expect(before.data?.content?.direction).toContain("Serve the dashboard from the store");
+    expect(before.data?.content?.goals.map(({ title, checked }) => ({ title, checked }))).toEqual([
+      { title: "Ship the read boundary", checked: true },
+      { title: "Ship the dashboard", checked: false },
     ]);
-    expect(envelope.data?.milestones).toEqual(["Read boundary"]);
-    expect(envelope.data?.badges).toEqual([]);
+    expect(before.data?.content?.milestones).toEqual(["Read boundary"]);
+
+    rmSync(join(harness, "projects/proj-a/roadmap.md"), { force: true });
+    await withWrite(context, (db) => {
+      db.prepare("update projection_meta set format_version = 1 where id = 1").run();
+    });
+    const after = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(after.projection.generation).toBe(generation);
+    expect(after.data).toEqual(before.data);
     expect((await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-absent" }))).data).toBeNull();
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-known-empty", title: "Known empty", rootKind: "projects", relativePath: "proj-known-empty" },
+      op("known-empty"),
+    );
+    const empty = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-known-empty" }));
+    expect(empty.data).toMatchObject({ authority: { state: "absent" }, content: null });
   });
 
   test("an unavailable projection is disclosed as unavailable, not as zero work", async () => {

@@ -321,7 +321,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
 });
 
 describe("catalog consumers \u2014 scaffold and execution routing boundaries", () => {
-  test("catalog discovery: scaffold registers the project through the domain boundary, idempotently", async () => {
+  test("catalog discovery: scaffold registers the project directory, idempotently, without roadmap content", async () => {
     const root = mkdtempSync(join(ROOT, "scaffold-catalog-"));
     const harness = join(root, ".mstar");
     const context: StoreContext = { harnessDir: root };
@@ -332,21 +332,50 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
 
     expect(await scaffoldHarness(root)).toBe(harness);
     const created = await getCatalog(context, { kind: "project", id: "_default" });
-    expect(created.entity.relativePath).toBe("_default/roadmap.md");
+    expect(created.entity.relativePath).toBe("_default");
+    expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(false);
     expect(created.entity.revision).toBe(1);
-    // Re-running the scaffold attaches to the same row: no duplicate register.
     await scaffoldHarness(root);
     expect((await getCatalog(context, { kind: "project", id: "_default" })).entity.revision).toBe(1);
     expect((await readCatalogCompleteness(context, ["projects"])).gaps).toEqual([]);
+  });
+
+  test("catalog discovery: existing scaffold-location identity and content are not relocated", async () => {
+    const root = mkdtempSync(join(ROOT, "scaffold-existing-catalog-"));
+    const harness = join(root, ".mstar");
+    const context: StoreContext = { harnessDir: root };
+    mkdirSync(harness, { recursive: true });
+    setArtifactStore(createFsStore(harness));
+    const handle = await initializeStore(context);
+    handle.close();
+    const roadmapPath = join(harness, "projects", "_default", "roadmap.md");
+    mkdirSync(join(harness, "projects", "_default"), { recursive: true });
+    writeFileSync(roadmapPath, "# Existing authority\n");
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "project",
+        id: "_default",
+        title: "Existing project",
+        rootKind: "projects",
+        relativePath: "_default/roadmap.md",
+      },
+      { operationId: "existing-project-location", actor: "test" },
+    );
+
+    await scaffoldHarness(root);
+    const existing = await getCatalog(context, { kind: "project", id: "_default" });
+    expect(existing.entity.relativePath).toBe("_default/roadmap.md");
+    expect(existing.entity.title).toBe("Existing project");
+    expect(readFileSync(roadmapPath, "utf8")).toBe("# Existing authority\n");
   });
 
   test("catalog discovery: scaffold leaves catalog registration to the store lifecycle when no store exists", async () => {
     const root = mkdtempSync(join(ROOT, "scaffold-no-store-"));
     setArtifactStore(createFsStore(join(root, ".mstar")));
     const harness = await scaffoldHarness(root);
-    // The files are scaffolded; the catalog is not this verb's precondition,
-    // and its absence is never reported as an empty catalog.
-    expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(true);
+    expect(existsSync(join(harness, "projects", "_default"))).toBe(true);
+    expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(false);
     const report = await readCatalogCompleteness({ harnessDir: root }, ["projects"]);
     expect(report.ok).toBe(false);
     expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);

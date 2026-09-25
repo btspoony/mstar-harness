@@ -195,6 +195,7 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
           message: header,
           steps: plan.steps,
           migrationNotes: plan.migrationNotes,
+          roadmapCandidate: plan.roadmap,
           validationWarnings,
         }),
       );
@@ -205,6 +206,10 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
       }
       for (const note of plan.migrationNotes) {
         console.log(pc.yellow(`  note: ${note}`));
+      }
+      if (plan.roadmap !== null) {
+        console.log(pc.yellow(`  pending roadmap candidate (not written as authority): ${plan.roadmap.file} from ${plan.roadmap.source}`));
+        console.log(plan.roadmap.content);
       }
       for (const warning of validationWarnings) {
         console.log(pc.yellow(`  warning: ${warning}`));
@@ -226,10 +231,15 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
           message: result.message,
           steps: plan.steps,
           migrationNotes: plan.migrationNotes,
+          roadmapCandidate: plan.roadmap,
         }),
       );
     } else {
       console.log(pc.green(`migrate: ${result.message}`));
+      if (plan.roadmap !== null) {
+        console.log(pc.yellow(`  pending roadmap candidate (not written as authority): ${plan.roadmap.file} from ${plan.roadmap.source}`));
+        console.log(plan.roadmap.content);
+      }
     }
   } catch (error) {
     const message = (error as Error).message;

@@ -2,8 +2,8 @@
  * projection.ts -- disposable execution/roadmap projections over the JSON
  * execution authority (state-projection-contract §5/§6).
  *
- * The root `status.json`, the workflow snapshots and the catalog-linked
- * compass/roadmap documents stay the authority; everything this module
+ * The root `status.json`, workflow snapshots and catalog-linked compass
+ * documents stay the authority; everything this module
  * writes lives in the `projection_*` tables (migration 3) and may be dropped
  * and rebuilt at any time. A refresh NEVER writes issue/catalog rows, never
  * consults the retired README indexes or the residual registers, and never
@@ -29,11 +29,10 @@
  *
  * Source set (contract §5): resolved `status.json`, the registered workflow
  * snapshot dirs plus the retained known locations from committed
- * `catalog_execution_bindings`, and the compass/roadmap documents the catalog
- * links to iterations/projects. Fingerprint = SHA-256 over the sorted
- * `(canonical source key, state, SHA-256 of the raw bytes)` tuples plus the
- * projection format version and the catalog revision. mtime/size are NOT
- * correctness tokens, so a same-size/same-mtime content change invalidates.
+ * `catalog_execution_bindings`, and compass documents linked to iterations.
+ * Fingerprint = SHA-256 over the sorted `(canonical source key, state, SHA-256
+ * of the raw bytes)` tuples plus the projection format version and catalog
+ * revision. mtime/size are NOT correctness tokens.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -43,7 +42,6 @@ import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
 import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
-import { validateRoadmap } from "./project.js";
 import { rowPlanId, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
@@ -55,7 +53,7 @@ import {
 
 /** Projection payload/format version (contract §5). A bump invalidates every
  * published generation: the refresh discards the old rows and rebuilds. */
-export const PROJECTION_FORMAT_VERSION = 1;
+export const PROJECTION_FORMAT_VERSION = 2;
 
 /** Root execution source, resolved under the harness root. */
 export const PROJECTION_ROOT_FILE = "status.json";
@@ -65,7 +63,7 @@ export const PROJECTION_ROOT_FILE = "status.json";
  * published (unavailable). */
 export type ProjectionFreshness = "current" | "stale" | "unavailable";
 export type ProjectionSourceState = "ok" | "missing" | "invalid" | "inaccessible";
-export type ProjectionSourceKind = "root" | "workflow" | "compass" | "roadmap";
+export type ProjectionSourceKind = "root" | "workflow" | "compass";
 
 /**
  * One named source diagnostic (contract §6: only the source key, the reason
@@ -140,19 +138,11 @@ export type ProjectedCompass = {
   status: string | null;
 };
 
-export type ProjectedRoadmap = {
-  projectId: string;
-  direction: string | null;
-  goalsJson: string;
-  milestonesJson: string;
-};
-
 export type ProjectionRows = {
   workflows: ProjectedWorkflow[];
   plans: ProjectedPlan[];
   leases: ProjectedLease[];
   compasses: ProjectedCompass[];
-  roadmaps: ProjectedRoadmap[];
 };
 
 /** Resolved location of one captured source (internal re-verification handle). */
@@ -321,17 +311,15 @@ type CatalogInputs = {
   catalogRevision: number;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
   compassDocs: Array<{ iterationId: string; rootKind: CatalogRootKind; relativePath: string }>;
-  roadmapDocs: Array<{ projectId: string; rootKind: CatalogRootKind; relativePath: string }>;
 };
 
 type CatalogDocumentRow = { id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string; lifecycle: string; revision: number };
 
 /**
  * The catalog side of a capture: ONE read-only connection for the current
- * revision, the committed execution bindings and the linked
- * compass/roadmap documents. These are plain projection SELECTs over the
- * catalog tables (the same read-only shape `coordination.ts` uses for its
- * pin facts); every catalog WRITE stays on the catalog domain verbs, and
+ * revision, committed execution bindings and linked compass documents. These
+ * are plain projection SELECTs over catalog tables; every catalog WRITE stays
+ * on the catalog domain verbs, and
  * this module never mutates a catalog row.
  */
 async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> {
@@ -358,15 +346,14 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
         : [];
     });
 
-    // Linked compass/roadmap documents: the catalog decides the paths (never
-    // README discovery). Deterministic selection when several documents of
-    // the same kind are linked: active first, then the newest revision, then
-    // the lowest id.
+    // Linked compass documents: the catalog decides the paths (never README
+    // discovery). When several are linked, select active first, then newest
+    // revision, then lowest id.
     const documents = (
       db
         .prepare(
           "select id, root_kind, relative_path, document_kind, lifecycle, revision from catalog_entities " +
-            "where kind = 'document' and document_kind in ('compass','roadmap')",
+            "where kind = 'document' and document_kind = 'compass'",
         )
         .all() as Array<Record<string, unknown>>
     ).flatMap((row) => {
@@ -392,21 +379,21 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
       .all() as Array<Record<string, unknown>>;
 
     const owners = db
-      .prepare("select kind, id from catalog_entities where kind in ('iteration','project')")
+      .prepare("select id from catalog_entities where kind = 'iteration'")
       .all() as Array<Record<string, unknown>>;
 
     const byId = new Map(documents.map((doc) => [doc.id, doc]));
-    const pick = (ownerKind: "iteration" | "project", ownerId: string, documentKind: string): CatalogDocumentRow | null => {
+    const pick = (ownerId: string): CatalogDocumentRow | null => {
       const candidates = links
         .filter(
           (link) =>
-            link.from_kind === ownerKind &&
+            link.from_kind === "iteration" &&
             link.from_id === ownerId &&
             link.to_kind === "document" &&
             typeof link.to_id === "string",
         )
         .map((link) => byId.get(link.to_id as string))
-        .filter((doc): doc is CatalogDocumentRow => doc !== undefined && doc.documentKind === documentKind)
+        .filter((doc): doc is CatalogDocumentRow => doc !== undefined)
         .sort((a, b) => {
           if (a.lifecycle !== b.lifecycle) return a.lifecycle === "active" ? -1 : 1;
           if (a.revision !== b.revision) return b.revision - a.revision;
@@ -416,20 +403,14 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
     };
 
     const compassDocs: CatalogInputs["compassDocs"] = [];
-    const roadmapDocs: CatalogInputs["roadmapDocs"] = [];
     for (const owner of owners) {
       const ownerId = text(owner.id);
       if (ownerId === null) continue;
-      if (owner.kind === "iteration") {
-        const doc = pick("iteration", ownerId, "compass");
-        if (doc !== null) compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
-      } else if (owner.kind === "project") {
-        const doc = pick("project", ownerId, "roadmap");
-        if (doc !== null) roadmapDocs.push({ projectId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
-      }
+      const doc = pick(ownerId);
+      if (doc !== null) compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
     }
 
-    return { catalogRevision, bindings, compassDocs, roadmapDocs };
+    return { catalogRevision, bindings, compassDocs };
   } finally {
     handle.close();
   }
@@ -636,19 +617,6 @@ function parseMilestoneTable(body: string): Array<{ milestone: string; target: s
   return rows;
 }
 
-/** Markdown task-list goal items of a roadmap body, in document order. */
-function parseGoalItems(body: string): Array<{ text: string; checked: boolean }> {
-  const goals: Array<{ text: string; checked: boolean }> = [];
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^\s*[-*]\s+\[([ xX])\]\s+(.*)$/.exec(line);
-    if (match === null) continue;
-    const label = match[2]?.trim() ?? "";
-    if (label === "") continue;
-    goals.push({ text: label, checked: (match[1] ?? " ").toLowerCase() === "x" });
-  }
-  return goals;
-}
-
 function deriveCompass(iterationId: string, content: string, relativePath: string): ProjectedCompass | { diagnostic: string } {
   let frontmatter: Record<string, unknown>;
   try {
@@ -669,30 +637,6 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
   };
 }
 
-function deriveRoadmap(projectId: string, content: string, relativePath: string, absolutePath: string): ProjectedRoadmap | { diagnostic: string } {
-  // The roadmap validator is the shared path-based one (there is no doc-level
-  // roadmap validator); the caller re-digests the bytes after this call so
-  // the hashed bytes and the validated bytes cannot silently diverge.
-  const gate = validateRoadmap(absolutePath);
-  if (!gate.ok) return { diagnostic: `invalid: ${gate.violations.map((violation) => violation.code).join(", ")}` };
-  let frontmatter: Record<string, unknown>;
-  try {
-    frontmatter = parseCompassFrontmatterText(content, relativePath);
-  } catch {
-    return { diagnostic: "invalid: roadmap frontmatter is not parseable" };
-  }
-  const body = bodyOf(content);
-  const milestones = Array.isArray(frontmatter.milestones)
-    ? frontmatter.milestones.filter((item): item is string => typeof item === "string" && item.trim() !== "")
-    : [];
-  return {
-    projectId,
-    direction: sectionText(body, "Direction"),
-    goalsJson: JSON.stringify(parseGoalItems(body)),
-    milestonesJson: JSON.stringify(milestones),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Capture
 // ---------------------------------------------------------------------------
@@ -710,7 +654,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
   const sources: ProjectionSourceDigest[] = [];
   const locations: ProjectionSourceLocation[] = [];
   const diagnostics: SourceDiagnostic[] = [];
-  const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [], roadmaps: [] };
+  const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
 
   const record = (
     spec: SourceSpec,
@@ -820,7 +764,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     rows.leases.push(...derived.leases);
   }
 
-  // --- catalog-linked compass and roadmap documents -------------------------
+  // --- catalog-linked compass documents ------------------------------------
   for (const doc of inputs.compassDocs) {
     const spec: SourceSpec = {
       sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
@@ -844,35 +788,6 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     rows.compasses.push(derived);
   }
 
-  for (const doc of inputs.roadmapDocs) {
-    const spec: SourceSpec = {
-      sourceKey: sourceKeyOf("roadmap", doc.rootKind, doc.relativePath),
-      kind: "roadmap",
-      rootKind: doc.rootKind,
-      relativePath: doc.relativePath,
-      absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath),
-      declared: true,
-    };
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      record(spec, read, read.state, read.diagnostic);
-      continue;
-    }
-    const derived = deriveRoadmap(doc.projectId, read.content, spec.absolutePath, spec.absolutePath);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    // The roadmap validator reads the file again: the bytes we hashed must
-    // still be the bytes it validated, or this capture cannot be published.
-    const after = readSource(spec);
-    if (after.sha256 !== read.sha256 || after.state !== "ok") {
-      record(spec, read, "ok", "changed-during-read: the source moved between its digest and its validation");
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.roadmaps.push(derived);
-  }
 
   sources.sort((a, b) => (a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0));
   locations.sort((a, b) => (a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0));
@@ -893,8 +808,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
  * Fingerprint (contract §5): SHA-256 over the sorted
  * `(canonical source key, existence/readability state, SHA-256 of the raw
  * bytes)` tuples, plus the projection format version and the catalog revision
- * (the catalog identity the compass/roadmap paths and the pin revisions came
- * from). mtime and size are deliberately absent.
+ * (the catalog identity the compass paths and pin revisions came from). mtime and size are deliberately absent.
  */
 function computeSourceSetHash(catalogRevision: number, sources: ProjectionSourceDigest[]): string {
   const tuples = sources
@@ -930,7 +844,6 @@ const PROJECTION_TABLES: readonly string[] = [
   "projection_plans",
   "projection_leases",
   "projection_compasses",
-  "projection_roadmaps",
 ];
 
 /**
@@ -1104,12 +1017,7 @@ function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCa
       compass.status,
     );
   }
-  const roadmapStatement = db.prepare(
-    "insert into projection_roadmaps(generation, project_id, direction, goals_json, milestones_json) values (?, ?, ?, ?, ?)",
-  );
-  for (const roadmap of capture.rows.roadmaps) {
-    roadmapStatement.run(generation, roadmap.projectId, roadmap.direction, roadmap.goalsJson, roadmap.milestonesJson);
-  }
+
 }
 
 function reportOf(

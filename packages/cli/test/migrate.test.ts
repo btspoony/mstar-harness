@@ -195,13 +195,15 @@ describe("mstar migrate --dry-run — planned-document validation", () => {
 });
 
 describe("mstar migrate — real run", () => {
-  test("converts the v1 fixture to a v2 tree (snapshots, roadmap, archived v1, v2 root)", () => {
+  test("converts the v1 fixture to a v2 tree while keeping roadmap seeds transport-only", () => {
     const root = fixtureTree();
     try {
       const v1Before = readJsonFile(join(root, "status.json"));
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("migrated");
+      expect(r.stdout).toContain("pending roadmap candidate (not written as authority)");
+      expect(r.stdout).toContain("- pi/dsh adapters (host APIs unknown)");
 
       const rootDoc = readJsonFile(join(root, "status.json"));
       expect(rootDoc).toEqual({ version: 2, updated_at: "2026-08-19", workflows: [] });
@@ -244,7 +246,7 @@ describe("mstar migrate — real run", () => {
       ]);
       expect(existsSync(join(root, "workflows", "v3.0.0", "snapshot.json"))).toBe(true);
 
-      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
       // empty residual_findings -> no register file
       expect(existsSync(join(root, "projects", "_default", "residuals.json"))).toBe(false);
     } finally {
@@ -366,6 +368,10 @@ describe("mstar migrate --json — machine-readable output", () => {
       expect(doc.applied).toBe(false);
       expect(typeof doc.message).toBe("string");
       expect(Array.isArray(doc.steps)).toBe(true);
+      const candidate = doc.roadmapCandidate as { file: string; source: string; content: string };
+      expect(candidate.file).toBe("projects/_default/roadmap.md");
+      expect(candidate.source).toBe("status.json metadata.program_roadmap");
+      expect(candidate.content).toContain("- pi/dsh adapters (host APIs unknown)");
       const steps = doc.steps as { kind: string; source: string; destination: string }[];
       expect(steps.length).toBeGreaterThan(0);
       expect(steps[0]!.kind).toBe("archive-status-v1");
@@ -386,6 +392,14 @@ describe("mstar migrate --json — machine-readable output", () => {
       expect(first.ok).toBe(true);
       expect(first.applied).toBe(true);
       expect(first.alreadyMigrated).toBe(false);
+      const steps = first.steps as { kind: string; source: string; destination: string }[];
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps[0]!.kind).toBe("archive-status-v1");
+      expect(steps[steps.length - 1]!.kind).toBe("replace-root-v2");
+      for (const step of steps) {
+        expect(typeof step.source).toBe("string");
+        expect(typeof step.destination).toBe("string");
+      }
 
       const second = JSON.parse(runCli(["migrate", "--path", root, "--json"]).stdout) as Record<string, unknown>;
       expect(second.ok).toBe(true);

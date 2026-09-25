@@ -18,6 +18,10 @@ An opt-in declaration that escalates engine validators from warn-only to blockin
 ### Review seat layers (L1–L4)
 The four verification layers of a plan's review chain: **L1** implementer (writes code + runs evidence), **L2** task reviewer (named role `code-reviewer` by default — spec + quality for one task, diff-first, fresh per task), **L3** plan QC (named `qc-specialist` / `-2` / `-3` tri seats — whole-branch diff/logic/risk lenses, never runs suites), **L4** QA (`qa-engineer` — acceptance + residual verification). Layers are roles, not people: a seat never executes another layer's work, and L2/L3 reviewer seats are structurally read-only via their agent-shell permission profiles.
 
+### Final range alignment
+The per-report declaration that closes a QC/QA review-basis drift: when a fix wave lands after a plan QC round, each seat appends a `## Final range alignment` section declaring the same final `Review range / Diff basis` as the QA Assignment and accounting for every reviewed segment (the round-1 range plus each revalidated fix delta) as contiguous. The alignment gate compares those fields as text, so an evidence-correct range change is otherwise indistinguishable from an unreviewed commit. It is accounting over work already reviewed — never a re-review, and it leaves the seat's verdict unchanged.
+*Avoid:* re-range, range re-baseline.
+
 ### Three-domain write model
 The ownership partition of a repo running the harness: **process SSOT** (harness-dir status/plans/iterations/workflows/sdd — lives on the control worktree's filesystem, never Git blobs), **tracked results** (repo files that follow Git branches: contract homes, knowledge, specs), and **product source** (feature-worktree edits only). Each domain has one writable home and one authority; a linked worktree never bootstraps a second process SSOT, and control worktrees never take product edits. Related: Harness root, Workflow lifecycle.
 

@@ -6,7 +6,7 @@ v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual
 
 - **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。PM-facing unregister caller：post-merge close `mstar status workflow-close --workflow <id>`（ordering 固定：terminal snapshot → unregister；细序 → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2）。
 - **`{WORKFLOW_DIR}/<id>/snapshot.json`** — 每 lifecycle 的运行态快照（`schema_version: 1`）：**`plans[]` 行（legacy PlanRow 形状逐字保留）**、per-row **`execution_lease`**、顶层 **`integration_merge_lease`** / **`execution_policy`** / **`branch` anchors** / **`integration_worktree_path`** / `compass_ref`。`<id>` = plan id 或 iteration id。
-- **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）——**迁移历史**；open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue（→ § Issue capture above）。无归属的流程落到 `_default` 项目。
+- **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层 legacy 文件：Markdown 是 reviewed import/export 的 transport/history，roadmap 内容权威在 `{HARNESS_DIR}/store.db` 的 `project_roadmaps`（读写规则 → `mstar-project-governance`）；residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义逐字保留）是迁移历史，open item 的 SSOT 是 store issue。无归属的流程落到 `_default` 项目。
 
 `status.json`（根）与 workflow snapshot 是**执行态 SSOT**：plan 行状态与 lease 在 snapshot。**open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture above）；project register 是**迁移历史**。  
 Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`status.json`, workflow snapshots, and open residual (summary)"）；本文件 covers **fields, severity, lifecycle, v2 地址与 engine-check 命令**。  
@@ -143,25 +143,7 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
 - Project-less flows use the fallback **`_default`** project (`projects/_default/`).
 - Register document validation delegates verbatim to `validateResidual` (severity enum + lifecycle states preserved at the new address).
 
-**`projects/<id>/roadmap.md`** — roadmap frontmatter (engine `validateRoadmap`):
-
-```markdown
----
-project_id: <id>
-title: <title>
-status: active | paused | completed
-created_at: YYYY-MM-DD
-milestones: [ ... ]        # optional
-residuals_ref: residuals.json  # optional
----
-
-# <title>
-
-## Direction
-...
-```
-
-Body conventions (`## Direction` + goal items as `- [ ]` / `- [x]` markdown task-list items) are **warnings only** — never a hard gate.
+**`projects/<id>/roadmap.md`（legacy Markdown transport）** — frontmatter、`milestones` 与 body 的内容校验以及 store-authoritative 读写规则只见 **`mstar-project-governance`**「Roadmap 内容权威与编写约定」。本文件不另立文件读写/schema 家。
 
 **Empty-repo template:** **`templates/status.empty.json`** — the v2 shape (`version: 2`, `updated_at`, `workflows: []`). See **`templates/README.md`**.
 

@@ -38,7 +38,16 @@
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.11",
-    "@types/node": "^25.6.0"
+    "@types/hast": "^3.0.0",
+    "@types/mdast": "^4.0.0",
+    "@types/node": "^25.6.0",
+    "github-slugger": "^2.0.0",
+    "hast-util-from-html": "^2.0.3",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "yaml": "^2.8.1"
   },
   "omp": {
     "name": "morning-star-harness",

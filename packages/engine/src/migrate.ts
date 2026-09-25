@@ -33,9 +33,8 @@
  * snapshot field is the integration checkout);
  * `integration_merge_lease` -> top-level `integration_merge_lease`; all of
  * these land on the ACTIVE iteration snapshot (status `running`; v3.0.0
- * today). `program_roadmap` seeds `projects/<id>/roadmap.md` (its
- * `no_intermediate_releases` / `deferred_beyond` fields are preserved in
- * the seed body — nothing dropped silently); `harness_root` is dropped as
+ * today). `program_roadmap` becomes a preserved transport candidate; it is
+ * never written as a Markdown file or used as authority. `harness_root` is dropped as
  * redundant with a `legacy_metadata` note;
  * `metadata.updated_at` folds into the v2 root `updated_at`; ALL other/
  * unknown root-metadata keys land in the active snapshot
@@ -53,12 +52,14 @@
  * generated not-started note line. SSOT: the ledger is the runtime log;
  * row `notes` is the legacy verbatim copy (see workflow.ts snapshot docs).
  * - **Ordering & idempotence:** apply steps are additive-first (archive
- * copy, workflow dirs, project register, roadmap); the root v2
- * replacement (`version: 2`, `updated_at`, empty `workflows[]` until
- * re-registered) is the LAST step — the commit point; before it a failed
- * run leaves v1 intact (recoverable by re-run). Re-run on a v2 root
- * (`version === 2`) -> no-op with message. `dryRun` plans carry the full
- * step list (source -> destination) and apply zero writes.
+ * copy, workflow dirs, project register); the root v2 replacement (`version:
+ * 2`, `updated_at`, empty `workflows[]` until re-registered) is the LAST
+ * step — the commit point; before it a failed run leaves v1 intact
+ * (recoverable by re-run). A legacy `program_roadmap` remains a named
+ * transport candidate on the returned plan only; it is never a file fallback
+ * or a migration destination. Re-run on a v2 root (`version === 2`) -> no-op
+ * with message. `dryRun` plans carry the full write-step list (source ->
+ * destination) and apply zero writes.
  *
  * No fs writes happen outside the harness dir: every destination is
  * harness-relative — enforced at the planner boundary:
@@ -121,7 +122,7 @@ export const NOTES_LEDGER_FILE = "notes.jsonl";
 
 /** One planned apply step (kind + source -> destination labels for dry-run). */
 export type MigrateStep = {
-  kind: "archive-status-v1" | "write-snapshot" | "write-notes" | "write-register" | "write-roadmap" | "replace-root-v2";
+  kind: "archive-status-v1" | "write-snapshot" | "write-notes" | "write-register" | "replace-root-v2";
   source: string;
   destination: string;
 };
@@ -161,9 +162,9 @@ export type MigrateRegister = {
   data: ProjectRegisterDoc;
 };
 
-/** One planned roadmap seed (`projects/<id>/roadmap.md`). */
+/** One legacy roadmap seed retained as an explicit transport candidate, never a file-write fallback. */
 export type MigrateRoadmap = {
- /** Canonical (default-layout) rel path; actual target = `plan.projectDir` + the suffix. */
+ /** Canonical candidate path; not an apply destination. */
   file: string;
   source: string;
   content: string;
@@ -197,7 +198,7 @@ export type MigrateOptions = {
   completionPolicy?: string;
 };
 
-/** Full migration plan: every write is described; the executor applies it. */
+/** Full migration plan: every write is described; roadmap is transport-only. */
 export type MigratePlan = {
  /** Resolved harness dir. */
   root: string;
@@ -213,8 +214,8 @@ export type MigratePlan = {
   /**
  * Resolved `{PROJECT_DIR}` (Phase-5 F1): the `.mstarc` `[config]
  * project_dir` declaration wins, else `{HARNESS_DIR}/projects`. Same
- * canonical-`file`-vs-actual-target split as `workflowDir` for the
- * register/roadmap writes.
+ * canonical-`file`-vs-actual-target split as `workflowDir` for register
+ * writes. A legacy roadmap candidate is never an apply destination.
  */
   projectDir: string;
   dryRun: boolean;
@@ -226,9 +227,9 @@ export type MigratePlan = {
    * changed by another writer is never silently replaced.
    */
   sourceVersion: string;
- /** Root status.json already at `version: 2` -> nothing to plan/apply. */
+  /** Root status.json already at `version: 2` -> nothing to plan/apply. */
   alreadyMigrated: boolean;
- /** Human message (no-op reason when `alreadyMigrated`). */
+  /** Human message (no-op reason when `alreadyMigrated`). */
   message: string;
   snapshots: MigrateSnapshot[];
   /**
@@ -257,12 +258,14 @@ export type MigratePlan = {
   deliveryKindAmbiguous: string[];
   notesFiles: MigrateNotesFile[];
   register: MigrateRegister | null;
+  /** Legacy v1 seed candidate; retained for explicit transport, never written by migration. */
   roadmap: MigrateRoadmap | null;
+  /** The root v2 replacement (commit point; empty `workflows[]` until re-registered). */
   rootV2: MigrateRootV2;
   archive: { file: string; source: string };
- /** Informational notes surfaced in dry-run output (never silent drops). */
+  /** Informational notes surfaced in dry-run output (never silent drops). */
   migrationNotes: string[];
- /** Ordered apply steps (additive-first; root v2 replacement last). */
+  /** Ordered write-step list (additive-first; root v2 replacement last). */
   steps: MigrateStep[];
 };
 
@@ -566,11 +569,9 @@ function applyRootMetadataLift(
 }
 
 /**
- * Build `projects/<id>/roadmap.md` seeds from `metadata.program_roadmap`.
- * Decision (fix round 1, M-1): the roadmap's internal fields
- * `no_intermediate_releases` / `deferred_beyond` are preserved in the seed
- * BODY (Direction section) — not in `legacy_metadata` — because they are
- * roadmap content the user reads in `roadmap.md`; nothing dropped silently.
+ * Build a transport candidate from `metadata.program_roadmap`. The candidate
+ * preserves legacy fields for an explicit later import; migration never
+ * materializes it as a Markdown file.
  */
 function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string, migratedAt: string): string {
   const title = typeof programRoadmap.title === "string" && programRoadmap.title !== "" ? programRoadmap.title : "Program roadmap";
@@ -691,9 +692,9 @@ function collectNotesFiles(snapshots: MigrateSnapshot[]): MigrateNotesFile[] {
 /**
  * Pure migration planner (): reads the v1 tree under `root` and
  * returns the full v2 migration plan — snapshots, notes ledgers, project
- * register, roadmap seeds, the archived v1 copy and the root v2
- * replacement — with an ordered step list (source -> destination). ZERO
- * writes; the caller applies via `applyMigratePlan`.
+ * register, an optional transport-only legacy roadmap candidate, the archived
+ * v1 copy and the root v2 replacement — with an ordered write-step list.
+ * ZERO writes; the caller applies via `applyMigratePlan`.
  *
  * A v2 root (`status.json` `version === 2`) yields an `alreadyMigrated`
  * plan with no steps (idempotence); `opts.dryRun` marks the plan so apply
@@ -863,8 +864,8 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
  // plan id (a row registered in no compass) — both would plan the same
  // `workflows/<id>/snapshot.json` and the apply loop would silently
  // overwrite the earlier snapshot. The project id joins the same set
- // (register/roadmap live under `projects/<projectId>/`; under a custom
- // `.mstarc` layout the workflow and project dirs may even coincide).
+ // (register and optional transport candidate share the project's logical
+ // namespace; under a custom `.mstarc` layout workflow and project dirs may coincide).
  // Refuse fail-loud with the conflict list — never a silent double-write.
   const lifecycleSources = new Map<string, string[]>();
   for (const snapshot of snapshots) {
@@ -907,8 +908,8 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   const residualFindings = isPlainObject(legacy.residual_findings) ? legacy.residual_findings : {};
   const register = buildRegister(residualFindings, byPlan, projectId, migratedAt);
 
- // 6. Roadmap seeds (the frontmatter title is sanitized —
- // line breaks would break the flat-subset YAML parse).
+ // 6. Legacy roadmap seed (transport only; never writes Markdown or becomes
+ // a fallback for the catalog/store authority).
   const programRoadmap = isPlainObject(metadata.program_roadmap) ? metadata.program_roadmap : null;
   let roadmap: MigrateRoadmap | null = null;
   if (programRoadmap) {
@@ -916,7 +917,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     const sanitizedTitle = rawTitle.replace(/[\r\n]+/g, " ").trim();
     if (sanitizedTitle !== rawTitle) {
       migrationNotes.push(
-        `roadmap title sanitized for frontmatter (line breaks replaced with spaces): ${JSON.stringify(rawTitle)}`,
+        `roadmap title sanitized for transport candidate frontmatter (line breaks replaced with spaces): ${JSON.stringify(rawTitle)}`,
       );
     }
     roadmap = {
@@ -948,7 +949,6 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     })),
   ];
   if (register !== null) steps.push({ kind: "write-register", source: register.source, destination: register.file });
-  if (roadmap !== null) steps.push({ kind: "write-roadmap", source: roadmap.source, destination: roadmap.file });
   steps.push({ kind: "replace-root-v2", source: `${MIGRATE_STATUS_FILE} (v1)`, destination: `${MIGRATE_STATUS_FILE} (v2)` });
 
   return {
@@ -973,16 +973,16 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 }
 
 /**
- * Execute a migration plan (). Additive-first ordering: the v1
- * root is archived, workflow snapshots/notes, the project register and the
- * roadmap are written BEFORE the root v2 replacement — the LAST step, the
- * commit point. A failure before it leaves the v1 tree intact (re-run
- * applies the same deterministic plan). Re-running on a v2 root, or with a
- * `dryRun` plan, is a no-op. Every destination stays inside the harness
- * dir; every snapshot is validated fail-closed inside `writeWorkflowSnapshot`
- * — the writer is the authoritative validator, so the apply loop does not
- * pre-validate (a gate here would run the same O(rows) pass
- * twice per snapshot).
+ * Execute a migration plan. Additive-first ordering: the v1 root is archived,
+ * workflow snapshots/notes and the project register are written BEFORE the
+ * root v2 replacement — the LAST step, the commit point. A legacy roadmap is
+ * returned as a transport candidate only. A failure before commit leaves v1
+ * intact (re-run applies the same deterministic plan). Re-running on a v2
+ * root, or with a `dryRun` plan, is a no-op. Every destination stays inside
+ * the harness dir; every snapshot is validated fail-closed inside
+ * `writeWorkflowSnapshot` — the writer is the authoritative validator, so
+ * the apply loop does not pre-validate (a gate here would run the same O(rows)
+ * pass twice per snapshot).
  */
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
@@ -1044,7 +1044,6 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     ...plan.snapshots.map((snapshot) => snapshot.file),
     ...plan.notesFiles.map((notes) => notes.file),
     ...(plan.register !== null ? [plan.register.file] : []),
-    ...(plan.roadmap !== null ? [plan.roadmap.file] : []),
   ];
   for (const destination of allDestinations) {
     const resolvedDest = resolve(join(plan.root, destination));
@@ -1068,27 +1067,20 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
   // fails closed.
   await assertNoActiveStoreForLegacyLayout(plan.root);
 
- // The apply is a MULTI-document write (archive → snapshots → notes →
- // register → roadmap → root v2 replacement), so it runs under the ROOT
- // lock in the mandated acquisition order root → snapshot → register
- // (spec §C3) — the root is locked FIRST and the snapshot/register locks are
- // taken inside it, never the other way round. Holding it for the whole
- // phase buys two things: the root writers (`registerWorkflow` /
- // `unregisterWorkflow`, a concurrent `migrate`) cannot interleave with the
- // commit, and the source byte-version re-check below is atomic with every
- // write derived from that source — a still-v1 `status.json` whose bytes
- // moved after planning is refused with NOTHING written instead of having
- // its snapshots/register written and then its replacement refused.
+ // The apply is a multi-document write (archive → snapshots → notes →
+ // register → root v2 replacement), so it runs under the ROOT lock in the
+ // mandated acquisition order root → snapshot → register (spec §C3). The
+ // lock prevents root writers and concurrent migrations from interleaving
+ // with commit, and makes the source-version re-check atomic with all writes.
  // `withStatusWriteLock` is not reentrant: nothing inside may re-take it.
   return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store, workflowRoot, projectRoot));
 }
 
 /**
- * Raw-byte ownership guard for the migration's non-JSON targets (archive
- * copy, JSONL notes, Markdown roadmap): absent -> exclusive create;
- * byte-identical (a previous run of this same deterministic plan) ->
- * converge untouched; divergent foreign bytes -> refused under the root
- * lock, never overwritten. Unlike the snapshot/register guards, the
+ * Raw-byte ownership guard for migration's non-JSON write targets (archive
+ * copy and JSONL notes): absent -> exclusive create; byte-identical (a
+ * previous run of this same deterministic plan) -> converge untouched;
+ * divergent foreign bytes -> refused under the root lock, never overwritten.
  * comparison is raw bytes — these files are preserved verbatim, never
  * re-serialized through `stableJson`.
  */
@@ -1282,12 +1274,6 @@ async function applyMigratePlanLocked(
         }
       });
     }
-  }
-
- // 5. Roadmap seeds (additive; raw-byte ownership guard on the resolved
- // seed; `roadmap === null` writes no seed).
-  if (plan.roadmap !== null) {
-    writeRawMigrateTarget(projectTargetOf(plan.roadmap.file), Buffer.from(plan.roadmap.content, "utf8"));
   }
 
  // 6. Root v2 replacement — the COMMIT POINT (last step), already serialized

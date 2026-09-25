@@ -907,6 +907,20 @@ alter table execution_migrations add column coverage_json text;
 
 export type Migration = { version: number; name: string; sql: string };
 
+/** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
+export const MIGRATION_6_SQL = `
+create table project_roadmaps(
+  project_id text primary key,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  content_markdown text not null,
+  content_hash text not null,
+  revision integer not null check (revision > 0),
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+drop table projection_roadmaps;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -914,6 +928,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
+  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
 ];
 
 /** Execution tables created by migration 4 — the executable form of §2.2. */

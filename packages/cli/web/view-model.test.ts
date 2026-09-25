@@ -564,13 +564,18 @@ function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
       id: "engine",
       title: "Engine",
       rootKind: "projects",
-      relativePath: "engine/roadmap.md",
-      documentKind: "roadmap",
+      relativePath: "engine",
+      documentKind: null,
     }),
-    direction: "One local store.",
-    goals: [{ text: "Ship phase 1", checked: false }],
-    milestones: ["Phase 1"],
-    badges: [],
+    authority: { state: "present", revision: 2, contentHash: "a".repeat(64) },
+    content: {
+      contentMarkdown: "---\nproject_id: engine\n---\n",
+      frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-09-25" },
+      direction: "One local store.",
+      goals: [{ ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" }],
+      milestones: ["Phase 1"],
+      sections: [{ level: 2, heading: "Direction", body: "One local store." }],
+    },
     ...overrides,
   };
 }
@@ -579,11 +584,10 @@ const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
 const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0 };
 
 describe("projection disclosure", () => {
-  test("a stale projection discloses source, reason and last successful build on every projected view", () => {
+  test("stale projection disclosures remain on execution views, not authoritative roadmap content", () => {
     const views = [
       workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION)),
       iterationListState(envelope({ items: [iteration()], total: 1 }, STALE_PROJECTION)),
-      roadmapState(envelope(roadmap(), STALE_PROJECTION)),
     ];
     for (const view of views) {
       expect(view.disclosure).not.toBeNull();
@@ -595,12 +599,12 @@ describe("projection disclosure", () => {
       expect(copy).toContain(`Last successful build: ${BUILT_AT}.`);
       expect(copy).toContain(`Last checked: ${CHECKED_AT}.`);
     }
+    expect(roadmapState(envelope(roadmap(), STALE_PROJECTION)).disclosure).toBeNull();
   });
 
-  test("a current projection leaves every projected view nothing to disclose", () => {
+  test("a current projection leaves execution views nothing to disclose", () => {
     expect(workflowListState(envelope(EMPTY_WORKFLOWS)).disclosure).toBeNull();
     expect(iterationListState(envelope(EMPTY_ITERATIONS)).disclosure).toBeNull();
-    expect(roadmapState(envelope(roadmap())).disclosure).toBeNull();
   });
 
   test("a projection disclosure with no recorded diagnostic says so instead of naming a source", () => {
@@ -611,6 +615,7 @@ describe("projection disclosure", () => {
     expect(copy).toContain("Last successful build: none recorded.");
     expect(copy).toContain("Last checked: unknown.");
   });
+
 });
 
 describe("catalog and projection authority", () => {
@@ -739,28 +744,37 @@ describe("catalog and projection authority", () => {
 });
 
 describe("roadmap", () => {
-  test("the roadmap never guesses a project and distinguishes absent catalog content from an unavailable projection", () => {
+  test("roadmap presence is authoritative even when the execution projection is unavailable", () => {
     expect(roadmapProject("")).toBeNull();
     expect(roadmapProject("?project=")).toBeNull();
     expect(roadmapProject("?project=%20")).toBeNull();
     expect(roadmapProject("?project=engine")).toBe("engine");
 
-    // A valid generation with no roadmap row for the project: absent, not empty.
-    const withoutRow = roadmap({ direction: null, goals: [], milestones: [], badges: ["execution-unavailable"] });
-    const absent = roadmapState(envelope(withoutRow));
+    const absent = roadmapState(envelope(roadmap({ authority: { state: "absent" }, content: null }), UNAVAILABLE_PROJECTION));
     expect(absent.content.kind).toBe("absent");
     expect(absent.disclosure).toBeNull();
+    expect(absent.content.kind === "absent" ? absent.content.roadmap.catalog : null).toMatchObject({
+      title: "Engine",
+      relativePath: "engine",
+      lifecycle: "active",
+      revision: 5,
+    });
 
-    // No valid generation at all: unavailable, even though the DTO looks the same.
-    const unavailable = roadmapState(envelope(withoutRow, UNAVAILABLE_PROJECTION));
-    expect(unavailable.content.kind).toBe("unavailable");
-    expect(unavailable.disclosure).not.toBeNull();
+    const missingProject = roadmapState(envelope(null, UNAVAILABLE_PROJECTION));
+    expect(missingProject.content.kind).toBe("not-found");
+    expect(missingProject.disclosure).toBeNull();
 
-    // Real projected content is the only case that claims the document's contents.
-    const ready = roadmapState(envelope(roadmap()));
+    const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
     expect(ready.content.kind).toBe("ready");
-    expect(ready.content.kind === "ready" ? ready.content.roadmap.goals : []).toEqual([
-      { text: "Ship phase 1", checked: false },
+    expect(ready.disclosure).toBeNull();
+    expect(ready.content.kind === "ready" ? ready.content.roadmap.catalog : null).toMatchObject({
+      title: "Engine",
+      relativePath: "engine",
+      lifecycle: "active",
+      revision: 5,
+    });
+    expect(ready.content.kind === "ready" ? ready.content.roadmap.content?.goals : []).toEqual([
+      { ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" },
     ]);
   });
 });

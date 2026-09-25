@@ -224,6 +224,43 @@ const row = (id: string, status: string, extra: Record<string, unknown> = {}): R
   ...extra,
 });
 
+function completedHandoff(sourceBranch: string, worktreePath: string): Record<string, unknown> {
+  const sha = "a".repeat(40);
+  const digest = "c".repeat(64);
+  return {
+    id: "handoff-cleanup",
+    attempt: 1,
+    state: "completed",
+    submitted_by: "plan-session",
+    submitted_at: "2026-09-15T00:00:00Z",
+    source_branch: sourceBranch,
+    source_sha: sha,
+    worktree_path: worktreePath,
+    review_base: "b".repeat(40),
+    review_head: sha,
+    qc: { decision: "Approve", reports: [{ path: "/tmp/qc1.md", sha256: digest }], consolidated: { path: "/tmp/qc.md", sha256: digest } },
+    qa: { gate: "mandatory", decision: "pass", report: { path: "/tmp/qa.md", sha256: digest } },
+    integration: {
+      target_branch: "main",
+      worktree_path: "/tmp/integration-wt",
+      base_sha: sha,
+      started_at: "2026-09-15T01:00:00Z",
+      result_sha: sha,
+      verified_at: "2026-09-15T01:30:00Z",
+    },
+    completed_at: "2026-09-15T02:00:00Z",
+  };
+}
+
+type MutableCleanupSnapshot = Record<string, unknown> & { plans: Array<Record<string, unknown>> };
+
+function updateWorkflow(root: string, id: string, update: (snapshot: MutableCleanupSnapshot) => void): void {
+  const snapshotPath = join(root, "workflows", id, "snapshot.json");
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as MutableCleanupSnapshot;
+  update(snapshot);
+  writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+}
+
 const lease = (worktreePath: string, workingBranch: string): Record<string, unknown> => ({
   holder: "cleanup-test",
   claimed_at: "2026-09-12",
@@ -754,6 +791,7 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const negativeRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", negative.root, "--remote"], negative.root, negativeShim.env);
       expect(negativeRun.exitCode).toBe(0);
       expect(negativeRun.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(negativeRun.stderr).toContain("note: remote unmerged-1: indeterminate 1");
       expect(negativeRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
       rmSync(dirname(negative.root), { recursive: true, force: true });
   }, 60000);
@@ -999,28 +1037,132 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.intWt);
     } finally {
       chmodSync(adminDir, 0o755);
+    }
+  });
+  test("a completed Done handoff restores historical branch and worktree ownership", () => {
+    const fx = basicFixture("mstar-cleanup-handoff-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => {
+        const plan = snapshot.plans[0];
+        delete plan.metadata;
+        plan.coordination = {
+          revision: 3,
+          session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
+          handoff: completedHandoff("feature/done-a", fx.doneWt),
+        };
+      });
+
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      if (dry.exitCode !== 0) throw new Error(dry.stderr);
+      expect(dry.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+      expect(dry.stdout).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
+      expect(applied.exitCode).toBe(0);
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.doneWt}`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
+    } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
   });
 
-  test("a worktree whose only dirtiness is an ignored file refuses as dirty and survives --apply untouched", () => {
+  test("a completed handoff on a non-Done row grants no cleanup ownership", () => {
+    const fx = basicFixture("mstar-cleanup-handoff-nondone-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => {
+        const plan = snapshot.plans[0];
+        delete plan.metadata;
+        plan.status = "InProgress";
+        plan.coordination = {
+          revision: 3,
+          session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
+          handoff: completedHandoff("feature/done-a", fx.doneWt),
+        };
+      });
+      const result = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows", "--apply"],
+        fx.root,
+      );
+      if (result.exitCode !== 0) throw new Error(result.stderr);
+      expect(result.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("conflicting completed Done handoffs remain ambiguous and refuse removal", () => {
+    const fx = basicFixture("mstar-cleanup-handoff-conflict-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => {
+        const plan = snapshot.plans[0];
+        delete plan.metadata;
+        plan.coordination = {
+          revision: 3,
+          session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
+          handoff: completedHandoff("feature/done-a", fx.doneWt),
+        };
+      });
+      const sibling = join(fx.root, "workflows", "wf-other");
+      execFileSync("mkdir", ["-p", sibling]);
+      writeFileSync(
+        join(sibling, "snapshot.json"),
+        JSON.stringify({
+          schema_version: 1,
+          id: "wf-other",
+          type: "plan",
+          status: "completed",
+          started_at: "2026-09-12",
+          ended_at: "2026-09-12",
+          updated_at: "2026-09-12",
+          branch: { source: "feature/done-a", target: fx.mainBranch },
+          plans: [row("other-plan", "Done", { coordination: { revision: 3, handoff: completedHandoff("feature/done-a", fx.doneWt) } })],
+        }),
+      );
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
+      if (result.exitCode !== 0) throw new Error(result.stderr);
+      expect(result.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+  test("a malformed handoff cannot authorize branch or worktree removal", () => {
+    const fx = basicFixture("mstar-cleanup-handoff-malformed-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => {
+        const plan = snapshot.plans[0];
+        delete plan.metadata;
+        plan.coordination = {
+          revision: 3,
+          handoff: { state: "completed", source_branch: "feature/done-a", worktree_path: fx.doneWt },
+        };
+      });
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a worktree whose only dirtiness is ignored content is removed safely", () => {
     const fx = basicFixture("mstar-cleanup-ignored-");
     try {
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
       expect(dry.exitCode).toBe(0);
-      // Ignored user content counts as dirty: `git worktree remove` deletes
-      // ignored files silently (no git-side backstop), so the probe must
-      // surface them and the verdict is refuse, never remove.
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.ignoredWt} | cleanup.refuse.dirty-worktree`);
-      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.ignoredWt}`);
+      expect(dry.stdout).toContain(`remove | worktree | ${fx.ignoredWt} | cleanup.remove.merged`);
+      expect(dry.stdout).not.toContain(`refuse | worktree | ${fx.ignoredWt} | cleanup.refuse.dirty-worktree`);
 
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.ignoredWt}`);
-      // The worktree, its branch, and the ignored content survive untouched.
-      expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.ignoredWt);
-      expect(git(["for-each-ref", "refs/heads/feature/ignored"], fx.root)).not.toBe("");
-      expect(readFileSync(join(fx.ignoredWt, "secret.env"), "utf8")).toBe("ignored secret\n");
+      expect(applied.stdout).toContain(`apply: removed worktree ${fx.ignoredWt}`);
+      expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.ignoredWt);
+      expect(git(["for-each-ref", "refs/heads/feature/ignored"], fx.root)).toBe("");
+      expect(() => readFileSync(join(fx.ignoredWt, "secret.env"), "utf8")).toThrow();
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1105,7 +1247,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0); // refusal, not a mutation failure: nothing was attempted
       expect(applied.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.active-lease`);
-      expect(applied.stdout).not.toContain("apply: removed worktree");
+      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
     } finally {
@@ -1282,25 +1424,31 @@ describe("mstar worktree cleanup — exit contract", () => {
     try {
       const badDir = join(fx.root, "workflows", "wf-bad-schema");
       execFileSync("mkdir", ["-p", badDir]);
-      // Parseable JSON, invalid snapshot (type/status/dates/plans missing) —
-      // but it declares a base anchor, which the degraded read must keep.
+      // Parseable JSON, invalid snapshot (type/status/dates/plans missing).
+      // The readable handoff still contributes protective ownership, but the
+      // degraded row cannot authorize removal regardless of its Done state.
       writeFileSync(
         join(badDir, "snapshot.json"),
-        JSON.stringify({ schema_version: 1, id: "wf-bad-schema", branch: { base: "feature/done-a" } }),
+        JSON.stringify({
+          schema_version: 1,
+          id: "wf-bad-schema",
+          plans: [row("plan-protective", "Done", { coordination: { handoff: completedHandoff("feature/done-a", fx.doneWt) } })],
+        }),
       );
 
-      // Full sweep: the foreign-worktree visibility row needs --all-workflows.
-      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
+      const dry = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"],
+        fx.root,
+      );
       expect(dry.exitCode).toBe(0);
+      // feature/done-a is owned, Done and merged (removable by wf-1 alone),
+      // but the degraded sibling's retained handoff is converted to protective
+      // metadata while its untrusted Done state becomes InProgress.
       expect(dry.stderr).toContain("kept in degraded form");
       expect(dry.stderr).toContain("workflow.snapshot.missing-type");
-      // feature/done-a is owned, Done and merged (removable by wf-1 alone),
-      // but the degraded sibling's base anchor still keeps its branch — and
-      // with it the worktree checked out at that branch.
-      expect(dry.stdout).toContain("keep | local-branch | feature/done-a | cleanup.keep.protected-ref");
-      expect(dry.stdout).toContain(`keep | worktree | ${fx.doneWt} | cleanup.keep.protected-ref`);
+      expect(dry.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
       // The schema-invalid sibling never aborts the plan: it still prints whole.
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
+      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1309,11 +1457,6 @@ describe("mstar worktree cleanup — exit contract", () => {
 
 /**
  * Candidate-scope fixture: two standalone-plan workflows with explicit
- * candidate universes and every scoping edge the contract names.
- *
- * Workflow A (`wf-a`, completed plan) has two rows:
- * - a1 (Done): working branch `feature/a1-work` (also duplicated in its own
- *   track_branches — identical claims must collapse), retained tracks
  *   `feature/a1-track-1/2/3`, ambiguous track `feature/a1-ambiguous` (also
  *   claimed by B), and an asserted worktree `wt-a1`.
  * - a2 (Done): working branch `feature/a2-work` + worktree `wt-a2` — a
@@ -1647,4 +1790,5 @@ describe("mstar worktree cleanup — candidate scope", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   }, 30000);
+
 });

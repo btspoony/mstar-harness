@@ -1,19 +1,6 @@
 /**
- * Roadmap view: one project's direction document,
- * read-only.
- *
- * The roadmap DTO carries the catalog's project identity — authoritative — plus
- * the projected direction, goals and milestones read from the catalog-linked
- * roadmap document. With no valid projection generation the direction content is
- * `unavailable`, and a valid generation with no projected roadmap row for the
- * project is `absent`; neither is rendered as an empty document. Goals are
- * direction-document checkboxes shown as text: this view has no editor and no
- * mutation affordance (DESIGN.md "Roadmap shows project direction/goals
- * as text, not editable checkboxes").
- *
- * The route is per project (`/api/roadmap?project=`), so the project comes from
- * the address bar; without one the view discloses that instead of guessing a
- * project.
+ * Roadmap view: a read-only presentation of the authoritative Markdown document.
+ * The address bar selects one explicit project; no project is inferred.
  */
 import type { RoadmapDTO } from "@mstar-harness/engine";
 import { html } from "htm/preact";
@@ -21,14 +8,10 @@ import { html } from "htm/preact";
 import type { Disclosure, Envelope } from "../components";
 import {
   CatalogFacts,
-  DataBadges,
   DetailSection,
   EmptyState,
   LiveRegion,
   Notice,
-  ProjectionNotice,
-  projectionDisclosure,
-  projectionUnavailable,
   useEnvelope,
 } from "../components";
 
@@ -38,34 +21,27 @@ export function roadmapProject(search: string): string | null {
   return value === null || value.trim() === "" ? null : value;
 }
 
-/**
- * What the view can honestly show. `unavailable` means no valid generation has
- * been published; `absent` means a valid generation simply carries no roadmap
- * row for this project (the read boundary's own `execution-unavailable` badge);
- * only `ready` claims the document's own content.
- */
+/** Authority presence, not execution-projection freshness, determines roadmap state. */
 export type RoadmapContent =
-  | { kind: "unavailable"; roadmap: RoadmapDTO }
+  | { kind: "not-found" }
   | { kind: "absent"; roadmap: RoadmapDTO }
   | { kind: "ready"; roadmap: RoadmapDTO };
 
 export type RoadmapState = { disclosure: Disclosure | null; content: RoadmapContent };
 
-export function roadmapState(envelope: Envelope<RoadmapDTO>): RoadmapState {
-  const disclosure = projectionDisclosure(envelope.projection);
+export function roadmapState(envelope: Envelope<RoadmapDTO | null>): RoadmapState {
   const roadmap = envelope.data;
-  if (projectionUnavailable(envelope.projection)) return { disclosure, content: { kind: "unavailable", roadmap } };
   return {
-    disclosure,
-    content: roadmap.badges.includes("execution-unavailable")
-      ? { kind: "absent", roadmap }
-      : { kind: "ready", roadmap },
+    disclosure: null,
+    content: roadmap === null
+      ? { kind: "not-found" }
+      : roadmap.authority.state === "absent" ? { kind: "absent", roadmap } : { kind: "ready", roadmap },
   };
 }
 
 export function RoadmapView() {
   const project = roadmapProject(window.location.search);
-  const load = useEnvelope<RoadmapDTO>(
+  const load = useEnvelope<RoadmapDTO | null>(
     project === null ? null : `/api/roadmap?${new URLSearchParams({ project }).toString()}`,
   );
   const state = load.status === "ready" ? roadmapState(load.envelope) : null;
@@ -74,10 +50,7 @@ export function RoadmapView() {
 
   if (project === null) {
     return html`${heading}
-      <p class="hint">
-        The roadmap view reads one project at a time: direction, goals and milestones come from that project's roadmap
-        document.
-      </p>
+      <p class="hint">The roadmap view reads one project's authoritative roadmap document. Direction, goals, milestones and complete source text are shown read-only.</p>
       <${LiveRegion} message="No project selected." />
       <${EmptyState}>
         <p class="prose">
@@ -87,78 +60,56 @@ export function RoadmapView() {
       </${EmptyState}>`;
   }
 
-  const roadmap = state === null ? null : state.content.roadmap;
+  const roadmap = state === null || state.content.kind === "not-found" ? null : state.content.roadmap;
   const announcement =
     load.status === "error"
       ? load.message
       : load.status === "loading"
         ? "Loading roadmap."
-        : state?.content.kind === "unavailable"
-          ? "Roadmap content is unavailable."
+        : state?.content.kind === "not-found"
+          ? `Project ${project} was not found in the catalog.`
           : state?.content.kind === "absent"
-            ? "No projected roadmap content for this project."
+            ? "No roadmap content is stored for this project."
             : "Roadmap loaded.";
 
   return html`${heading}
-    <p class="hint">
-      Project ${project} · projected from the catalog-linked roadmap document. Read-only: goals are shown as text and
-      every change goes through the CLI.
-    </p>
+    <p class="hint">Project ${project} · authoritative stored roadmap content. Read-only: use the roadmap CLI to import or replace it.</p>
     <${LiveRegion} message=${announcement} />
     ${load.status === "loading" ? html`<p class="hint">Loading roadmap…</p>` : null}
     ${load.status === "error" ? html`<${Notice} tone="error">${load.message}</${Notice}>` : null}
-    ${state === null || state.disclosure === null ? null : html`<${ProjectionNotice} disclosure=${state.disclosure} />`}
-    ${roadmap === null
-      ? null
-      : html`<${DataBadges} badges=${roadmap.badges} />
-          <${DetailSection} title="Catalog">
-            ${roadmap.catalog === null
-              ? html`<${Notice} tone="warning"
-                  >No catalog row exists for project ${project}: its title, description, location and lifecycle are
-                  not available. Nothing is inferred from the projected roadmap content.</${Notice}>`
-              : html`<${CatalogFacts} catalog=${roadmap.catalog} />`}
-          </${DetailSection}>`}
-    ${state?.content.kind === "unavailable"
-      ? html`<${DetailSection} title="Direction (projected)">
-          <p class="prose">
-            Not available: no valid projection generation is published, so nothing is claimed about this project's
-            roadmap document. The catalog identity above is unaffected.
-          </p>
-        </${DetailSection}>`
+    ${state?.content.kind === "not-found"
+      ? html`<${EmptyState}><p class="prose">Project ${project} was not found in the catalog. Check the project id and try again.</p></${EmptyState}>`
+      : null}
+    ${roadmap !== null
+      ? html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`
       : null}
     ${state?.content.kind === "absent"
-      ? html`<${DetailSection} title="Direction (projected)">
-          <p class="prose">
-            No projected roadmap content: the current projection carries no roadmap row for this project, so its
-            direction, goals and milestones are not available. That is not an empty roadmap document.
-          </p>
+      ? html`<${DetailSection} title="Roadmap">
+          <p class="prose">No roadmap content is stored for project ${project}. This is distinct from a store read failure.</p>
         </${DetailSection}>`
       : null}
-    ${state?.content.kind === "ready"
-      ? html`<${DetailSection} title="Direction (projected)">
-            ${state.content.roadmap.direction === null
+    ${state?.content.kind === "ready" && roadmap?.content !== null
+      ? html`<${DetailSection} title="Direction">
+            ${roadmap.content.direction === null
               ? html`<p class="prose">No direction text is recorded in the roadmap document.</p>`
-              : html`<p class="prose">${state.content.roadmap.direction}</p>`}
+              : html`<p class="prose">${roadmap.content.direction}</p>`}
           </${DetailSection}>
-          <${DetailSection} title="Goals (projected)">
-            <p class="hint">Direction-document checkboxes, shown as text. Not editable here.</p>
-            ${state.content.roadmap.goals.length === 0
+          <${DetailSection} title="Goals">
+            ${roadmap.content.goals.length === 0
               ? html`<p class="prose">No goals are recorded in the roadmap document.</p>`
               : html`<ul class="history">
-                  ${state.content.roadmap.goals.map(
-                    (goal, index) => html`<li key=${index} class="history-item">
-                      <p class="history-head"><span class="history-kind">${goal.checked ? "Done" : "Not done"}</span></p>
-                      <p class="prose">${goal.text}</p>
-                    </li>`,
-                  )}
+                  ${roadmap.content.goals.map((goal, index) => html`<li key=${index} class="history-item">
+                    <p class="history-head"><span class="history-kind">${goal.checked ? "Done" : "Not done"}</span></p>
+                    <p class="prose">${goal.title}</p>
+                  </li>`)}
                 </ul>`}
           </${DetailSection}>
-          <${DetailSection} title="Milestones (projected)">
-            ${state.content.roadmap.milestones.length === 0
+          <${DetailSection} title="Milestones">
+            ${roadmap.content.milestones.length === 0
               ? html`<p class="prose">No milestones are named in the roadmap document frontmatter.</p>`
-              : html`<ul class="relations">
-                  ${state.content.roadmap.milestones.map((milestone) => html`<li key=${milestone} class="mono">${milestone}</li>`)}
-                </ul>`}
-          </${DetailSection}>`
+              : html`<ul class="relations">${roadmap.content.milestones.map((milestone, index) => html`<li key=${index} class="mono">${milestone}</li>`)}</ul>`}
+          </${DetailSection}>
+          <${DetailSection} title="Complete roadmap document"><pre class="prose">${roadmap.content.contentMarkdown}</pre></${DetailSection}>`
       : null}`;
 }
+

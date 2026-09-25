@@ -74,7 +74,7 @@
  * (Step 2→4) — backward compatible, `active` semantics unchanged.
  */
 
-import type { MstarEngineStatusPayload } from '../../../types.ts'
+import type { MstarEngineStatusPayload, RoadmapSourceView } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { comparePlansByIterationRecency, PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
@@ -407,17 +407,16 @@ export interface AgentZoneView {
 /* ---------------------------------- project rollup zone ---------------------------------- */
 
 /**
- * The additive project rollup zone: additive project rollup (roadmap +
- * residuals) renders without changing the four existing ZoneView shapes —
- * roadmap milestones + open-residual severity counts from the project layer
- * (`state.project` — produced by the catalog from `projects/<id>/roadmap.md`
- * frontmatter `milestones[]` + `projects/<id>/residuals.json` registers).
- * Total function: `state.project` missing/malformed → empty aggregates,
- * never a throw and never a fabricated value.
+ * The additive project rollup zone renders store-authoritative roadmap
+ * milestones + open-issue severity counts without changing the four existing
+ * ZoneView shapes. `roadmapSource` preserves present / absent / unavailable
+ * status and partial coverage. Missing/malformed project data degrades to an
+ * explicit unavailable roadmap source and empty aggregates, never a throw.
  */
 export interface ProjectRollupZoneView {
-  /** Roadmap milestones (non-empty strings, roadmap order). */
+  /** Roadmap milestones (non-empty strings, catalog-project order then roadmap order). */
   milestones: string[]
+  roadmapSource: RoadmapSourceView
   /** Open residual severity counts (non-zero severities only). */
   openResiduals: { severity: string; count: number }[]
 }
@@ -707,13 +706,12 @@ export function projectGraph(source: MstarEngineStatusPayload | null): ZoneView 
 
 /**
  * The additive project rollup projection: `state.project` → guarded
- * milestones + open-residual severity counts. Total function — a missing /
- * malformed `state.project` (or no state at all) degrades to empty
- * aggregates (`[]`), never a throw and never a guessed value.
+ * milestones + open-residual severity counts. Missing or malformed roadmap
+ * source data degrades to explicit `unavailable`, not an empty-success state.
  */
 function projectRollup(source: MstarEngineStatusPayload | null): ProjectRollupZoneView {
   const state = stateRow(source)
-  const project = state?.project as { milestones?: unknown; openResiduals?: unknown } | null | undefined
+  const project = state?.project as { milestones?: unknown; openResiduals?: unknown; roadmapSource?: unknown } | null | undefined
   const milestones = Array.isArray(project?.milestones)
     ? project.milestones.filter((milestone): milestone is string => typeof milestone === 'string' && milestone !== '')
     : []
@@ -723,7 +721,18 @@ function projectRollup(source: MstarEngineStatusPayload | null): ProjectRollupZo
       return { severity: str(r?.severity) ?? '', count: count(r?.count) ?? 0 }
     })
     : []
-  return { milestones, openResiduals }
+  const sourceRow = project?.roadmapSource as { kind?: unknown; absentProjectIds?: unknown; diagnostic?: unknown } | null | undefined
+  const kind = sourceRow?.kind
+  const roadmapSource: RoadmapSourceView = kind === 'present' || kind === 'absent' || kind === 'unavailable'
+    ? {
+      kind,
+      absentProjectIds: Array.isArray(sourceRow?.absentProjectIds)
+        ? sourceRow.absentProjectIds.filter((id): id is string => typeof id === 'string' && id !== '')
+        : [],
+      diagnostic: str(sourceRow?.diagnostic),
+    }
+    : { kind: 'unavailable', absentProjectIds: [], diagnostic: 'Roadmap source is unavailable.' }
+  return { milestones, roadmapSource, openResiduals }
 }
 
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
