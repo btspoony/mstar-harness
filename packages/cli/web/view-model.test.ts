@@ -564,13 +564,18 @@ function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
       id: "engine",
       title: "Engine",
       rootKind: "projects",
-      relativePath: "engine/roadmap.md",
-      documentKind: "roadmap",
+      relativePath: "engine",
+      documentKind: null,
     }),
-    direction: "One local store.",
-    goals: [{ text: "Ship phase 1", checked: false }],
-    milestones: ["Phase 1"],
-    badges: [],
+    authority: { state: "present", revision: 2, contentHash: "a".repeat(64) },
+    content: {
+      contentMarkdown: "---\nproject_id: engine\n---\n",
+      frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-09-25" },
+      direction: "One local store.",
+      goals: [{ ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" }],
+      milestones: ["Phase 1"],
+      sections: [{ level: 2, heading: "Direction", body: "One local store." }],
+    },
     ...overrides,
   };
 }
@@ -739,28 +744,20 @@ describe("catalog and projection authority", () => {
 });
 
 describe("roadmap", () => {
-  test("the roadmap never guesses a project and distinguishes absent catalog content from an unavailable projection", () => {
+  test("roadmap presence is authoritative even when the execution projection is unavailable", () => {
     expect(roadmapProject("")).toBeNull();
     expect(roadmapProject("?project=")).toBeNull();
     expect(roadmapProject("?project=%20")).toBeNull();
     expect(roadmapProject("?project=engine")).toBe("engine");
 
-    // A valid generation with no roadmap row for the project: absent, not empty.
-    const withoutRow = roadmap({ direction: null, goals: [], milestones: [], badges: ["execution-unavailable"] });
-    const absent = roadmapState(envelope(withoutRow));
+    const absent = roadmapState(envelope(roadmap({ authority: { state: "absent" }, content: null }), UNAVAILABLE_PROJECTION));
     expect(absent.content.kind).toBe("absent");
-    expect(absent.disclosure).toBeNull();
+    expect(absent.disclosure).not.toBeNull();
 
-    // No valid generation at all: unavailable, even though the DTO looks the same.
-    const unavailable = roadmapState(envelope(withoutRow, UNAVAILABLE_PROJECTION));
-    expect(unavailable.content.kind).toBe("unavailable");
-    expect(unavailable.disclosure).not.toBeNull();
-
-    // Real projected content is the only case that claims the document's contents.
-    const ready = roadmapState(envelope(roadmap()));
+    const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
     expect(ready.content.kind).toBe("ready");
-    expect(ready.content.kind === "ready" ? ready.content.roadmap.goals : []).toEqual([
-      { text: "Ship phase 1", checked: false },
+    expect(ready.content.kind === "ready" ? ready.content.roadmap.content?.goals : []).toEqual([
+      { ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" },
     ]);
   });
 });

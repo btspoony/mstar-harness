@@ -179,6 +179,7 @@ import {
 } from "./execution-workflow";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
+import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
 import { judgmentUsageFailurePayload, registerJudgmentCommands } from "./commands/judgment";
 import { registerStoreCommands } from "./store-migrate";
 import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
@@ -6403,6 +6404,7 @@ registerSessionCommands(program);
 registerIssueCommands(program);
 
 registerCatalogCommands(program);
+registerRoadmapCommands(program);
 registerJudgmentCommands(program);
 
 // `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
@@ -6592,6 +6594,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
         planUsageFailurePayload(process.argv, error.message) ??
         issueUsageFailurePayload(process.argv, error.message) ??
         catalogUsageFailurePayload(process.argv, error.message) ??
+        roadmapUsageFailurePayload(process.argv, error.message) ??
         executionMigrationUsageFailurePayload(process.argv, error.message);
       if (payload !== null) console.log(payload);
     }

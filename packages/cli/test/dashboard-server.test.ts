@@ -9,12 +9,12 @@
  * generated module with no source asset directory in its packaging context).
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { initializeStore, listIssues, openStore, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { importRoadmapAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type StoreContext, type StoreDb } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "../src/dashboard/server";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../src/dashboard/assets.generated";
 
@@ -294,6 +294,34 @@ describe("API over a real store", () => {
     const envelope = JSON.parse(res.body) as { projection: { freshness: string; diagnostics: Array<{ sourceKey: string; reason: string }> } };
     expect(envelope.projection.freshness).toBe("stale");
     expect(envelope.projection.diagnostics[0]?.sourceKey).toBe("workflows");
+  });
+});
+
+describe("roadmap authority API", () => {
+  test("serves imported content without a projection or source file", async () => {
+    const { dir, context } = await workspace("roadmap-authority-");
+    await registerCatalogEntity(context, {
+      kind: "project", id: "proj-roadmap", title: "Roadmap", rootKind: "projects", relativePath: "proj-roadmap",
+    }, { operationId: "register-roadmap-api", actor: "dashboard-test" });
+    const source = join(dir, "roadmap.md");
+    writeFileSync(source, "---\nproject_id: proj-roadmap\ntitle: Roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nAuthority survives source removal.\n\n## Notes\n\nVisible explanatory content.\n");
+    const review = await reviewRoadmapImport(context, "proj-roadmap", source);
+    await importRoadmapAuthority(context, review, { operationId: "import-roadmap-api" });
+    unlinkSync(source);
+
+    const server = await start(dir, { project: "proj-roadmap" });
+    try {
+      const response = await raw(new URL("/api/roadmap?project=proj-roadmap", server.url).href);
+      expect(response.status).toBe(200);
+      const envelope = JSON.parse(response.body) as {
+        data: { authority: { state: string }; content: { contentMarkdown: string; sections: Array<{ heading: string }> } };
+      };
+      expect(envelope.data.authority.state).toBe("present");
+      expect(envelope.data.content.contentMarkdown).toContain("Authority survives source removal.");
+      expect(envelope.data.content.sections.map((section) => section.heading)).toContain("Notes");
+    } finally {
+      await server.close();
+    }
   });
 });
 

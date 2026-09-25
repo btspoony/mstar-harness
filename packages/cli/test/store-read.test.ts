@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { getIssue, initializeStore, listIssues, openStore, refreshProjections, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { getIssue, initializeStore, listIssues, openStore, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   DASHBOARD_API_VIEWS,
   dashboardFailure,
@@ -201,6 +201,29 @@ describe("dashboard views over a real store", () => {
     const other = (await readDashboardView({ context, view: "issue-flow", params: { project: "proj-other" } })).data as IssueFlow;
     expect(other.currentOpen).toBe(0);
     expect(other.buckets).toEqual([]);
+  });
+
+  test("roadmap is read from authority and does not depend on a projection generation", async () => {
+    const { context } = await workspace("roadmap-authority-");
+    const registration = await registerCatalogEntity(context, {
+      kind: "project", id: "proj-roadmap", title: "Roadmap", rootKind: "projects", relativePath: "proj-roadmap",
+    }, { operationId: "register-roadmap", actor: "store-read-test" });
+    const contentMarkdown = "---\nproject_id: proj-roadmap\ntitle: Authority\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nStored independently.\n";
+    await replaceRoadmapAuthority(context, {
+      projectId: "proj-roadmap",
+      expectedProjectRevision: registration.revision,
+      expectedRoadmapRevision: "absent",
+      contentMarkdown,
+    }, { operationId: "create-roadmap" });
+
+    const result = await readDashboardView({ context, view: "roadmap", params: { project: "proj-roadmap" } });
+    const dto = result.data as RoadmapDTO;
+    expect(dto.authority.state).toBe("present");
+    expect(dto.content?.contentMarkdown).toBe(contentMarkdown);
+    expect(dto.content?.direction).toContain("Stored independently.");
+    expect(result.projection.freshness).toBe("unavailable");
+    const missing = await readDashboardView({ context, view: "roadmap", params: { project: "proj-unknown" } });
+    expect(missing.data).toBeNull();
   });
 
   test("projection views answer the published generation and disclose it", async () => {
