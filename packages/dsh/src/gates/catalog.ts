@@ -512,7 +512,6 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
       // empty list: a store that could not be read says so (with the engine's
       // refusal text), and a stale/unavailable PROJECTION is disclosed on its
       // own line — the issue rows are read directly and stay authoritative
-      // while the projected execution/roadmap views may lag.
       const store = state.storeFacts
       if (store !== undefined && store.kind === 'unavailable') {
         lines.push(`residuals: unavailable — ${store.diagnostic ?? 'the issue/catalog authority was not read'}`)
@@ -977,14 +976,14 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
 /**
  * The disclosure text of ONE store-backed read: `null` while the projection is
  * current and the count whole, otherwise the named reason — a STALE or
- * UNAVAILABLE projection (execution/roadmap views may lag; the issue rows read
- * here are authoritative either way) and/or the paging bound.
+ * UNAVAILABLE projection (execution views may lag; the issue rows read here
+ * are authoritative either way) and/or the paging bound.
  */
 function storeProjectionDiagnostic(projection: ReadProjection, counted: number, total: number): string | null {
   const parts: string[] = []
   if (projection.freshness !== 'current') {
     const sources = projection.diagnostics.map((diagnostic) => diagnostic.sourceKey).join(', ')
-    parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative; execution/roadmap views may lag`)
+    parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative`)
   }
   if (counted < total) parts.push(`first ${counted} of ${total} open issues counted`)
   return parts.length === 0 ? null : parts.join('; ')

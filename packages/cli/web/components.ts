@@ -198,7 +198,7 @@ export function projectionDisclosure(projection: ReadProjection): Disclosure | n
 export function disclosureLines(disclosure: Disclosure): string[] {
   const lines = [
     disclosure.freshness === "stale"
-      ? "Execution data is stale: the last successful projection is retained and shown."
+      ? "Execution data is stale: the last successful projection is retained."
       : "Execution data is unavailable: no valid projection has been published yet.",
   ];
   if (disclosure.diagnostics.length === 0) {

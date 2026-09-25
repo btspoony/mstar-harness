@@ -188,7 +188,7 @@ function sourceBytes(sourcePath: string): { content: string; hash: string; sourc
   const resolved = canonicalSource(sourcePath);
   try {
     const bytes = readFileSync(resolved);
-    const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     return { content, hash: sha256(bytes), sourcePath: resolved };
   } catch (error) {
     if (error instanceof RoadmapError) throw error;

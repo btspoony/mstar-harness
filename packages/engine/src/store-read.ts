@@ -144,7 +144,6 @@ export type DashboardBadge =
   | "execution-unavailable";
 
 export type MilestoneDTO = { milestone: string; target: string | null; status: string | null };
-export type GoalDTO = { text: string; checked: boolean };
 
 export type CompassDTO = {
   iterationId: string;

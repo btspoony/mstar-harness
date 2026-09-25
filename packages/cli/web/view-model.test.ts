@@ -584,11 +584,10 @@ const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
 const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0 };
 
 describe("projection disclosure", () => {
-  test("a stale projection discloses source, reason and last successful build on every projected view", () => {
+  test("stale projection disclosures remain on execution views, not authoritative roadmap content", () => {
     const views = [
       workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION)),
       iterationListState(envelope({ items: [iteration()], total: 1 }, STALE_PROJECTION)),
-      roadmapState(envelope(roadmap(), STALE_PROJECTION)),
     ];
     for (const view of views) {
       expect(view.disclosure).not.toBeNull();
@@ -600,12 +599,12 @@ describe("projection disclosure", () => {
       expect(copy).toContain(`Last successful build: ${BUILT_AT}.`);
       expect(copy).toContain(`Last checked: ${CHECKED_AT}.`);
     }
+    expect(roadmapState(envelope(roadmap(), STALE_PROJECTION)).disclosure).toBeNull();
   });
 
-  test("a current projection leaves every projected view nothing to disclose", () => {
+  test("a current projection leaves execution views nothing to disclose", () => {
     expect(workflowListState(envelope(EMPTY_WORKFLOWS)).disclosure).toBeNull();
     expect(iterationListState(envelope(EMPTY_ITERATIONS)).disclosure).toBeNull();
-    expect(roadmapState(envelope(roadmap())).disclosure).toBeNull();
   });
 
   test("a projection disclosure with no recorded diagnostic says so instead of naming a source", () => {
@@ -616,6 +615,7 @@ describe("projection disclosure", () => {
     expect(copy).toContain("Last successful build: none recorded.");
     expect(copy).toContain("Last checked: unknown.");
   });
+
 });
 
 describe("catalog and projection authority", () => {
@@ -752,10 +752,11 @@ describe("roadmap", () => {
 
     const absent = roadmapState(envelope(roadmap({ authority: { state: "absent" }, content: null }), UNAVAILABLE_PROJECTION));
     expect(absent.content.kind).toBe("absent");
-    expect(absent.disclosure).not.toBeNull();
+    expect(absent.disclosure).toBeNull();
 
     const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
     expect(ready.content.kind).toBe("ready");
+    expect(ready.disclosure).toBeNull();
     expect(ready.content.kind === "ready" ? ready.content.roadmap.content?.goals : []).toEqual([
       { ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" },
     ]);

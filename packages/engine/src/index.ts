@@ -845,7 +845,6 @@ export type {
   DashboardViewData,
   ExecutionReadRoute,
   ExecutionSourceRead,
-  GoalDTO,
   IssueFlow,
   IssueFlowBucket,
   IterationDTO,
