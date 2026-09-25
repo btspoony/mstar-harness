@@ -705,8 +705,8 @@ describe("@mstar-harness/omp packed artifact", () => {
       const report = loadPackedRuntime(hostRoot, pluginsRoot, project);
       const host = resolvedHost();
 
-      // The exercised host artifact is the packed plugin's pinned optional peer.
-      expect(host.version).toBe(peer[HOST_PACKAGE]);
+      // The exercised host artifact satisfies the packed plugin's optional peer range.
+      expect(Bun.semver.satisfies(host.version, peer[HOST_PACKAGE])).toBe(true);
       expect(report.host.version).toBe(host.version);
       expect(report.host.entry).toBe(host.entry);
       expect(report.host.root).toBe(host.root);
@@ -791,8 +791,8 @@ describe("@mstar-harness/omp packed artifact", () => {
       const report = loadPhase2PackedRuntime(hostRoot, pluginsRoot, project, "read");
       const host = resolvedHost();
 
-      // The exercised host artifact is the packed plugin's pinned optional peer.
-      expect(host.version).toBe(peer[HOST_PACKAGE]);
+      // The exercised host artifact satisfies the packed plugin's optional peer range.
+      expect(Bun.semver.satisfies(host.version, peer[HOST_PACKAGE])).toBe(true);
       expect(report.host.version).toBe(host.version);
       expect(report.host.entry).toBe(host.entry);
       expect(report.host.root).toBe(host.root);

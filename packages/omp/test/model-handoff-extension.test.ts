@@ -1983,9 +1983,12 @@ describe("host session identity injection", () => {
     expect(sessionId).not.toBe("");
 
     // Every bash call this session issues is revised to carry the host identity,
-    // so the CLI's `plan bind` hands it to the engine and the engine session id
-    // equals the host session id. The revision is the *whole* execution input —
-    // every other field the caller sent survives untouched.
+    // so the CLI's `plan bind` inherits it from the child shell environment and
+    // the engine session id equals the host session id. The identity travels as
+    // a shell prefix — NOT the input's `env` field, which omp 18.3.0 hosts
+    // refuse with "ready and env require a service name." when no service
+    // `name` accompanies it — and every other field the caller sent survives
+    // untouched.
     const revised = await harness.emitToolCall({
       type: "tool_call",
       toolCallId: "call-bash",
@@ -1994,15 +1997,15 @@ describe("host session identity injection", () => {
     });
     expect(revised).toEqual({
       input: {
-        command: "mstar plan bind --coordinator --workflow fixture-iteration",
+        command: `export ${SESSION_ID_ENV}='${sessionId}'; mstar plan bind --coordinator --workflow fixture-iteration`,
         timeout: 5,
-        env: { [SESSION_ID_ENV]: sessionId },
       },
     });
 
-    // Unrelated env entries survive, and a caller-supplied value under the
-    // identity key is overwritten: the model can never define the id this
-    // extension asserts.
+    // A caller-supplied `env` field is left exactly as sent. The revision never
+    // touches the parameter surface — on omp 18.3.0 hosts the field-level env
+    // is the host's own argument validation to accept or refuse, and the
+    // identity reaches the child through the command prefix either way.
     const forged = await harness.emitToolCall({
       type: "tool_call",
       toolCallId: "call-forged",
@@ -2010,20 +2013,24 @@ describe("host session identity injection", () => {
       input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: "model-supplied" } },
     });
     expect(forged).toEqual({
-      input: { command: "true", env: { KEEP: "yes", [SESSION_ID_ENV]: sessionId } },
+      input: {
+        command: `export ${SESSION_ID_ENV}='${sessionId}'; true`,
+        env: { KEEP: "yes", [SESSION_ID_ENV]: "model-supplied" },
+      },
     });
 
-    // The event fires before the host validates the arguments, so neither shape
-    // is assumed: a non-object `input` or `env` still yields the identity
-    // revision instead of throwing into the host's fail-closed handler path
-    // (which would block the bash call).
+    // The event fires before the host validates the arguments, so no input
+    // shape is assumed: without an object input carrying a string `command`
+    // there is nothing to prefix, and the revision is skipped instead of
+    // throwing into the host's fail-closed handler path (which would block the
+    // bash call).
     const stringInput = await harness.emitToolCall({
       type: "tool_call",
       toolCallId: "call-input-string",
       toolName: "bash",
       input: "rm -rf",
     });
-    expect(stringInput).toEqual({ input: { env: { [SESSION_ID_ENV]: sessionId } } });
+    expect(stringInput).toBeUndefined();
 
     const nullInput = await harness.emitToolCall({
       type: "tool_call",
@@ -2031,7 +2038,7 @@ describe("host session identity injection", () => {
       toolName: "bash",
       input: null,
     });
-    expect(nullInput).toEqual({ input: { env: { [SESSION_ID_ENV]: sessionId } } });
+    expect(nullInput).toBeUndefined();
 
     const stringEnv = await harness.emitToolCall({
       type: "tool_call",
@@ -2040,7 +2047,7 @@ describe("host session identity injection", () => {
       input: { command: "true", env: "FOO=bar" },
     });
     expect(stringEnv).toEqual({
-      input: { command: "true", env: { [SESSION_ID_ENV]: sessionId } },
+      input: { command: `export ${SESSION_ID_ENV}='${sessionId}'; true`, env: "FOO=bar" },
     });
 
     // No other tool is revised — the identity channel is the bash tool only.

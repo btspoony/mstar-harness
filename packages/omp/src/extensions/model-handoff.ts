@@ -161,6 +161,9 @@ const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 /** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
 const SESSION_DIR = "sessions";
 
+/** Single-quote a value for a POSIX shell — the one quoting that never expands. */
+const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
 /**
  * Route families read from the host's own `InputEvent`. The scoped-plan PM
  * family (`/iteration-drive …`) is restore-only and must never arm; the two
@@ -1487,30 +1490,35 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /* --------------------------------------------------- session identity --- */
 
   /**
-   * Host identity into the tool env. The engine mints its own coordinator /
-   * plan-pm session id (`randomUUID()`) unless a caller supplies one, while
-   * every identity comparison on this surface compares it with the *host*
-   * session id — so readiness and the start-authority guards are satisfied only
-   * when the two are one identifier. The CLI closes that gap by adopting
-   * `--session-id`, else this env var; this revision is what puts the host id
-   * there, on the `bash` calls a coordinator runs `plan bind` through.
+   * Host identity into the child shell environment. The engine mints its own
+   * coordinator / plan-pm session id (`randomUUID()`) unless a caller supplies
+   * one, while every identity comparison on this surface compares it with the
+   * *host* session id — so readiness and the start-authority guards are
+   * satisfied only when the two are one identifier. The CLI closes that gap by
+   * adopting `--session-id`, else this env var; this revision is what puts the
+   * host id there, on the `bash` calls a coordinator runs `plan bind` through.
    *
-   * A pure input revision: no engine or harness write, no notice, no in-memory
-   * state. It is confined to `bash`, and the injected key **overwrites** any
-   * value the caller supplied under the same name — the identity this extension
-   * asserts is never model-definable. A session with no id has no identity to
-   * associate and nothing is injected.
+   * The id travels as a shell prefix (`export …;`) instead of the input's `env`
+   * field: hosts in the omp 18.3.0 line refuse any `bash` call whose input
+   * carries `env` without a service `name` ("ready and env require a service
+   * name."), so a field-level revision failed every call before execution. The
+   * prefix reaches the same child environment through the command itself and
+   * never touches the validated parameter surface. A pure input revision: no
+   * engine or harness write, no notice, no in-memory state. It is confined to
+   * `bash` calls that carry a string `command`, and a session with no id has no
+   * identity to associate and nothing is injected.
    */
   pi.on("tool_call", (event, ctx) => {
     if (event.toolName !== "bash") return undefined;
     const sessionId = sessionIdOf(ctx);
     if (sessionId === "") return undefined;
     // The event fires before the host has validated the arguments, so the input
-    // shape is not assumed: a non-object input or `env` simply leaves those
-    // fields out of the revision instead of throwing into the host's
-    // fail-closed handler path (a throwing `tool_call` handler blocks the tool).
+    // shape is not assumed: anything but an object input with a string `command`
+    // is left untouched instead of throwing into the host's fail-closed handler
+    // path (a throwing `tool_call` handler blocks the tool).
     const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
-    const env: Record<string, unknown> = isPlainObject(input.env) ? input.env : {};
-    return { input: { ...input, env: { ...env, [SESSION_ID_ENV]: sessionId } } };
+    if (typeof input.command !== "string") return undefined;
+    const prefix = `export ${SESSION_ID_ENV}=${shellSingleQuote(sessionId)}; `;
+    return { input: { ...input, command: prefix + input.command } };
   });
 }

@@ -73,7 +73,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": "18.2.1"
+    "@oh-my-pi/pi-coding-agent": "^18.3.0"
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-coding-agent": {
@@ -82,6 +82,6 @@
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",
-    "@oh-my-pi/pi-coding-agent": "18.2.1"
+    "@oh-my-pi/pi-coding-agent": "18.3.0"
   }
 }
