@@ -1557,7 +1557,7 @@ const migrateCommand = program
       "--delivery-kind declares the lifted ACTIVE plan workflows' kind (contract \u00a71/\u00a74a); " +
       "`development` needs --branch-source/--branch-target, `verification/report-only` --completion-policy. " +
       "It is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused (exit 2, ids " +
-      "listed) \u2014 migrate in batches of one declared plan",
+      "listed) \u2014 migrate in batches of one declared plan. Legacy program_roadmap content is surfaced as a pending transport candidate, never imported as authority; save its Markdown and explicitly import it with `roadmap import`",
   )
   .option("--dry-run", "Print the migration step plan (source \u2192 destination) + planned-document validation warnings without writing anything")
   .option("--path <root>", "Harness root to migrate (default: resolved {HARNESS_DIR}, else cwd)")
@@ -1565,7 +1565,7 @@ const migrateCommand = program
   .option("--branch-source <branch>", "Delivery source branch recorded as branch.source (required for development)")
   .option("--branch-target <branch>", "Delivery target branch recorded as branch.target (required for development)")
   .option("--completion-policy <text>", "Completion policy for verification/report-only lifts (required for that kind)")
-  .option("--json", "Machine-readable JSON output")
+  .option("--json", "Machine-readable output; pending legacy roadmap transport is included as roadmapCandidate")
   .action(async (options: MigrateCliOptions) => {
     await runMigrateCommand(options);
   });

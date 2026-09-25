@@ -23,22 +23,25 @@ export function roadmapProject(search: string): string | null {
 
 /** Authority presence, not execution-projection freshness, determines roadmap state. */
 export type RoadmapContent =
+  | { kind: "not-found" }
   | { kind: "absent"; roadmap: RoadmapDTO }
   | { kind: "ready"; roadmap: RoadmapDTO };
 
 export type RoadmapState = { disclosure: Disclosure | null; content: RoadmapContent };
 
-export function roadmapState(envelope: Envelope<RoadmapDTO>): RoadmapState {
+export function roadmapState(envelope: Envelope<RoadmapDTO | null>): RoadmapState {
   const roadmap = envelope.data;
   return {
     disclosure: null,
-    content: roadmap.authority.state === "absent" ? { kind: "absent", roadmap } : { kind: "ready", roadmap },
+    content: roadmap === null
+      ? { kind: "not-found" }
+      : roadmap.authority.state === "absent" ? { kind: "absent", roadmap } : { kind: "ready", roadmap },
   };
 }
 
 export function RoadmapView() {
   const project = roadmapProject(window.location.search);
-  const load = useEnvelope<RoadmapDTO>(
+  const load = useEnvelope<RoadmapDTO | null>(
     project === null ? null : `/api/roadmap?${new URLSearchParams({ project }).toString()}`,
   );
   const state = load.status === "ready" ? roadmapState(load.envelope) : null;
@@ -57,22 +60,26 @@ export function RoadmapView() {
       </${EmptyState}>`;
   }
 
-  const roadmap = state === null ? null : state.content.roadmap;
+  const roadmap = state === null || state.content.kind === "not-found" ? null : state.content.roadmap;
   const announcement =
     load.status === "error"
       ? load.message
       : load.status === "loading"
         ? "Loading roadmap."
-        : state?.content.kind === "absent"
-          ? "No roadmap content is stored for this project."
-          : "Roadmap loaded.";
+        : state?.content.kind === "not-found"
+          ? `Project ${project} was not found in the catalog.`
+          : state?.content.kind === "absent"
+            ? "No roadmap content is stored for this project."
+            : "Roadmap loaded.";
 
   return html`${heading}
     <p class="hint">Project ${project} · authoritative stored roadmap content. Read-only: use the roadmap CLI to import or replace it.</p>
     <${LiveRegion} message=${announcement} />
     ${load.status === "loading" ? html`<p class="hint">Loading roadmap…</p>` : null}
     ${load.status === "error" ? html`<${Notice} tone="error">${load.message}</${Notice}>` : null}
-    ${roadmap === null ? null : html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`}
+    ${state?.content.kind === "not-found"
+      ? html`<${EmptyState}><p class="prose">Project ${project} was not found in the catalog. Check the project id and try again.</p></${EmptyState}>`
+      : null}
     ${state?.content.kind === "absent"
       ? html`<${DetailSection} title="Roadmap">
           <p class="prose">No roadmap content is stored for project ${project}. This is distinct from a store read failure.</p>

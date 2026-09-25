@@ -710,6 +710,7 @@ export const CLI_INVENTORY_REGISTRAR_MODULES = [
   "packages/cli/src/store-migrate.ts",
   "packages/cli/src/issue.ts",
   "packages/cli/src/catalog.ts",
+  "packages/cli/src/roadmap.ts",
 ] as const;
 
 /**

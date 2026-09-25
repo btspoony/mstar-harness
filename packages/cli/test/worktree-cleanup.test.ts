@@ -1790,4 +1790,5 @@ describe("mstar worktree cleanup — candidate scope", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   }, 30000);
+
 });

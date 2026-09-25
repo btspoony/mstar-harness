@@ -75,7 +75,7 @@ describe("roadmap CLI", () => {
     const reviewed = data(preview);
     expect(reviewed.expectedRoadmapRevision).toBe("absent");
     expect(await readRoadmapAuthority(context, "proj-roadmap")).toEqual(revisionBefore);
-    writeFileSync(reviewFile, `${JSON.stringify(reviewed)}\n`);
+    writeFileSync(reviewFile, `${preview.stdout}\n`);
 
     const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-proof", "--json"], dir);
     expect(applied.status).toBe(0);

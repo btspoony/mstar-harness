@@ -113,7 +113,10 @@ function readReview(value: string): RoadmapImportReview {
     usage(`--review could not be read as JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) usage("--review must contain a RoadmapImportReview object");
-  const review = parsed as Partial<RoadmapImportReview>;
+  const envelope = parsed as { data?: unknown };
+  const candidate = "data" in envelope ? envelope.data : parsed;
+  if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) usage("--review must contain a RoadmapImportReview object");
+  const review = candidate as Partial<RoadmapImportReview>;
   if (
     review.version !== 1 || typeof review.projectId !== "string" || !Number.isSafeInteger(review.expectedProjectRevision) ||
     (review.expectedRoadmapRevision !== "absent" && (!Number.isSafeInteger(review.expectedRoadmapRevision) || (review.expectedRoadmapRevision as number) < 1)) ||
