@@ -1,17 +1,9 @@
 /**
- * ProjectRollup : the ADDITIVE project rollup zone of the tasks page — roadmap
- * milestones + open-residual severity counts from the project layer
- * (`state.project`, produced by the catalog from `projects/<id>/roadmap.md`
- * frontmatter `milestones[]` + `projects/<id>/residuals.json` registers).
+ * ProjectRollup: roadmap milestones + open-residual severity counts from the
+ * store-backed project authority and issue store.
  *
- * Additive-only contract (compass AC-4): this zone renders BELOW the kanban
- * inside the tasks scroll body and never touches the four existing ZoneView
- * shapes (iteration stepper / kanban / agent flow / event log) — the
- * projection's `project` field is the only addition.
- *
- * Degradation (same philosophy as TaskBoard): empty `milestones` /
- * `openResiduals` (no roadmaps / no registers / no open entries) render the
- * muted "none" note — never an orange warn box, never a throw.
+ * Roadmap absence and read failure are disclosed separately from a present
+ * roadmap with no milestones. All content is rendered as text.
  */
 
 import * as React from 'react'
@@ -25,25 +17,34 @@ export interface ProjectRollupProps {
 }
 
 export function ProjectRollup({ view, t }: ProjectRollupProps) {
-  const { milestones, openResiduals } = view
+  const { milestones, openResiduals, roadmapSource } = view
   return (
-    <section className={css.zone} data-zone="project">
+    <section className={css.zone} data-zone="project" data-roadmap-source={roadmapSource.kind}>
       <header className={css.tasksHeader} data-zone-header>
         <h2 className={css.zoneHeader}>{t('zone.project.title')}</h2>
       </header>
 
       <h3 className={css.zoneTitle} data-project-milestones-title>{t('zone.project.milestones')}</h3>
-      {milestones.length === 0
-        ? <p className={css.zoneEmpty} data-mstar-empty="no-milestones">{t('zone.project.none')}</p>
-        : (
-          <ul className={css.rollupList} data-project-milestones>
-            {milestones.map((milestone, i) => (
-              <li key={`${milestone}-${i}`} className={css.rollupItem} data-project-milestone>
-                <span className={css.rollupMilestone}>{milestone}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+      {roadmapSource.kind === 'unavailable'
+        ? <p className={css.zoneEmpty} data-mstar-roadmap="unavailable">{t('zone.project.roadmap.unavailable', { reason: roadmapSource.diagnostic ?? t('panel.unknown') })}</p>
+        : roadmapSource.kind === 'absent'
+          ? <p className={css.zoneEmpty} data-mstar-roadmap="absent">{t('zone.project.roadmap.absent')}</p>
+          : milestones.length === 0
+            ? <p className={css.zoneEmpty} data-mstar-roadmap="empty">{t('zone.project.roadmap.empty')}</p>
+            : (
+              <ul className={css.rollupList} data-project-milestones>
+                {milestones.map((milestone, i) => (
+                  <li key={`${milestone}-${i}`} className={css.rollupItem} data-project-milestone>
+                    <span className={css.rollupMilestone}>{milestone}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+      {roadmapSource.kind === 'present' && roadmapSource.absentProjectIds.length > 0
+        ? <p className={css.zoneEmpty} data-mstar-roadmap-partial={roadmapSource.absentProjectIds.join(',')}>
+          {t('zone.project.roadmap.partial', { projects: roadmapSource.absentProjectIds.join(', ') })}
+        </p>
+        : null}
 
       <h3 className={css.zoneTitle} data-project-residuals-title>{t('zone.project.residuals')}</h3>
       {openResiduals.length === 0

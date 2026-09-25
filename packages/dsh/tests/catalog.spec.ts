@@ -42,7 +42,10 @@ import {
   initializeExecutionAuthority,
   initializeStore,
   openStore,
+  importRoadmapAuthority,
   registerCatalogEntity,
+  reviewRoadmapImport,
+  replaceRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -761,6 +764,21 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     // The issue/catalog authority: a real store holding the golden open issues
     // and the golden knowledge document row.
     await seedStore(harnessDir)
+    const project = await registerCatalogEntity(
+      { harnessDir },
+      { kind: 'project', id: '_default', title: 'Golden project', rootKind: 'projects', relativePath: 'projects/_default' },
+      { operationId: 'register-roadmap-project', actor: 'catalog.spec' },
+    )
+    await sealStoreForReaders(harnessDir)
+    const review = await reviewRoadmapImport({ harnessDir }, '_default', join(harnessDir, 'projects/_default/roadmap.md'))
+    await importRoadmapAuthority(
+      { harnessDir },
+      review,
+      { operationId: 'seed-roadmap-authority', actor: 'catalog.spec' },
+    )
+    await sealStoreForReaders(harnessDir)
+    // The store authority wins even after its former file source is removed.
+    await rm(join(harnessDir, 'projects/_default/roadmap.md'))
     for (const issue of GOLDEN_ISSUES) await seedOpenIssue(harnessDir, { ...issue })
     await seedKnowledgeDoc(harnessDir, {
       id: 'doc-golden',
@@ -795,6 +813,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       ],
       project: {
         milestones: ['P1 foundation', 'P2 migrate + dogfood', 'P3 dsh viz'],
+        roadmapSource: { kind: 'present', absentProjectIds: [], diagnostic: null },
         openResiduals: [
           { severity: 'high', count: 1 },
           { severity: 'info', count: 1 },
@@ -849,6 +868,35 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
     expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
+  })
+  it('roadmap-authority failure is disclosed without dropping independent issue counts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-roadmap-authority-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, { 'status.json': v2Root([]) })
+    booted = await bootApp({ root })
+    await seedStore(harnessDir)
+    const project = await registerCatalogEntity(
+      { harnessDir },
+      { kind: 'project', id: 'project-a', title: 'Project A', rootKind: 'projects', relativePath: 'projects/project-a' },
+      { operationId: 'register-project-a', actor: 'catalog.spec' },
+    )
+    await replaceRoadmapAuthority(
+      { harnessDir },
+      { projectId: 'project-a', expectedProjectRevision: project.revision, expectedRoadmapRevision: 'absent', contentMarkdown: GOLDEN_ROADMAP.replaceAll('_default', 'project-a') },
+      { operationId: 'write-project-a-roadmap', actor: 'catalog.spec' },
+    )
+    await seedOpenIssue(harnessDir, { title: 'Still counted', severity: 'high', operationId: 'issue-roadmap-failure' })
+    await sealStoreForReaders(harnessDir)
+    const handle = await openStore({ harnessDir }, 'write')
+    handle.db.prepare("update project_roadmaps set content_markdown='corrupt' where project_id='project-a'").run()
+    handle.close()
+
+    const payload = await buildCatalogPayloadWithStore(booted.ctx, harnessDir)
+    expect(payload.state?.project.roadmapSource.kind).toBe('unavailable')
+    expect(payload.state?.project.roadmapSource.diagnostic).toContain('roadmap.corrupt')
+    expect(payload.state?.project.milestones).toEqual([])
+    expect(payload.state?.project.openResiduals).toEqual([{ severity: 'high', count: 1 }])
   })
 
   it('no snapshots → clear error (never a root v1 read)', async () => {

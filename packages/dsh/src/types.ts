@@ -225,18 +225,21 @@ export interface HarnessLeaseView {
 }
 
 /**
- * The additive project rollup section of the workspace-state digest (compass
- * v3.0.0 AC-4 / AC-P3 — the panel's fifth zone surface; additive, the four
- * existing ZoneView shapes stay byte-compatible): roadmap milestones +
- * open-issue severity counts from the PROJECT layer
- * (`projects/<id>/roadmap.md` frontmatter `milestones[]` — roadmap bodies stay
- * files — and the issue authority for the open counts). Always-present
- * (lossless JSON): no roadmaps → `milestones: []`; no open issues →
- * `openResiduals: []` — same advisory pattern as `residuals`.
+ * Whether the store-backed roadmap authority has roadmap content, no roadmap
+ * content, or could not be read. Partial coverage is explicit in
+ * `absentProjectIds`; `diagnostic` carries an actionable read failure.
  */
+export interface RoadmapSourceView {
+  readonly kind: 'present' | 'absent' | 'unavailable'
+  readonly absentProjectIds: readonly string[]
+  readonly diagnostic: string | null
+}
+
+/** The additive project rollup, sourced from store authority and open issues. */
 export interface MstarHarnessProject {
-  /** Roadmap milestones across ALL project registers (frontmatter `milestones[]`, roadmap order, projects dir order). */
+  /** Roadmap milestones in deterministic catalog-project order, roadmap order within each project. */
   readonly milestones: readonly string[]
+  readonly roadmapSource: RoadmapSourceView
   /** Open-issue counts by severity across the harness (non-zero severities only — same rollup as `state.residuals`). */
   readonly openResiduals: readonly HarnessResidualView[]
 }
@@ -318,10 +321,8 @@ export interface MstarHarnessState {
   readonly residuals: readonly HarnessResidualView[]
   /**
    * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
-   * zone): roadmap milestones + open-issue severity counts from the project
-   * layer (`projects/<id>/roadmap.md` frontmatter bodies + the issue store).
-   * Always-present (lossless) — empty arrays when the project layer is
-   * absent.
+   * zone): store-authoritative roadmap milestones plus open-issue counts.
+   * Always-present (lossless), including an explicit roadmap-source verdict.
    */
   readonly project: MstarHarnessProject
   /**

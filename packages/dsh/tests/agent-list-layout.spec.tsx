@@ -67,7 +67,7 @@ const baseSource: MstarEngineStatusPayload = {
     plans: [],
     residuals: [],
     residualFindings: null,
-    project: { milestones: [], openResiduals: [] },
+    project: { milestones: [], roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,

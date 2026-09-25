@@ -79,7 +79,7 @@ const fullSource: MstarEngineStatusPayload = {
     ],
     residuals: [],
     residualFindings: null,
-    project: { milestones: [], openResiduals: [] },
+    project: { milestones: [], roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-00000810-panel-zones',
@@ -2628,6 +2628,7 @@ describe('projectGraph — project rollup zone (compass AC-4)', () => {
         ...fullSource.state!,
         project: {
           milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+          roadmapSource: { kind: 'present', absentProjectIds: ['project-b'], diagnostic: null },
           openResiduals: [
             { severity: 'critical', count: 1 },
             { severity: 'medium', count: 3 },
@@ -2638,6 +2639,7 @@ describe('projectGraph — project rollup zone (compass AC-4)', () => {
     const view = projectGraph(source)
     expect(view.project).toEqual({
       milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+      roadmapSource: { kind: 'present', absentProjectIds: ['project-b'], diagnostic: null },
       openResiduals: [
         { severity: 'critical', count: 1 },
         { severity: 'medium', count: 3 },
@@ -2650,14 +2652,26 @@ describe('projectGraph — project rollup zone (compass AC-4)', () => {
 
   it('degrades to empty aggregates on a missing / malformed state.project (never a throw)', () => {
     // Missing field (the pre-Task-3 fixtures shape).
-    expect(projectGraph(fullSource).project).toEqual({ milestones: [], openResiduals: [] })
+    expect(projectGraph(fullSource).project).toEqual({
+      milestones: [],
+      roadmapSource: { kind: 'absent', absentProjectIds: [], diagnostic: null },
+      openResiduals: [],
+    })
     // Malformed shapes.
     const garbage = projectGraph({
       ...fullSource,
       state: { ...fullSource.state!, project: { milestones: 'nope', openResiduals: [{ severity: 'nit' }] } },
     } as unknown as MstarEngineStatusPayload)
-    expect(garbage.project).toEqual({ milestones: [], openResiduals: [{ severity: 'nit', count: 0 }] })
+    expect(garbage.project).toEqual({
+      milestones: [],
+      roadmapSource: { kind: 'unavailable', absentProjectIds: [], diagnostic: 'Roadmap source is unavailable.' },
+      openResiduals: [{ severity: 'nit', count: 0 }],
+    })
     // state null → empty rollup, never a throw.
-    expect(projectGraph(noHarnessSource).project).toEqual({ milestones: [], openResiduals: [] })
+    expect(projectGraph(noHarnessSource).project).toEqual({
+      milestones: [],
+      roadmapSource: { kind: 'unavailable', absentProjectIds: [], diagnostic: 'Roadmap source is unavailable.' },
+      openResiduals: [],
+    })
   })
 })
