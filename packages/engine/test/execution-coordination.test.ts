@@ -2448,6 +2448,14 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       kind: "integration-accept",
       handoffId,
     });
+    const unretainedState = parsedJson(planFootprint(context, OWN_PLAN).plan_state);
+    const unretainedMetadata = { ...(unretainedState.metadata as Record<string, unknown>), fixture_marker: "preserved" };
+    delete unretainedMetadata.working_branch;
+    delete unretainedMetadata.worktree_path;
+    unretainedState.metadata = unretainedMetadata;
+    withRaw(context, (db) =>
+      db.prepare("update execution_plans set state_json = ? where plan_id = ?").run(JSON.stringify(unretainedState), OWN_PLAN),
+    );
 
     const catalogBefore = catalogFootprint(context);
     const rootBefore = planFootprint(context, OWN_PLAN).root_revision;
@@ -2477,6 +2485,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       working_branch: `feature/${OWN_PLAN}`,
       worktree_path: fixture.featurePath,
     });
+    expect(done.data.plan.metadata.fixture_marker).toBe("preserved");
 
     // Terminal membership changed in that one transaction: a fresh read agrees.
     const fresh = await readExecutionPlan(domainContext(context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN);
@@ -2995,6 +3004,14 @@ describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-own
     });
     expect(restarted.data.coordination!.handoff!.state).toBe("integrating");
     const mergeSha = mergeIntoIntegration(fixture);
+    const unretainedState = parsedJson(planFootprint(context, OWN_PLAN).plan_state);
+    const unretainedMetadata = { ...(unretainedState.metadata as Record<string, unknown>), fixture_marker: "preserved" };
+    delete unretainedMetadata.working_branch;
+    delete unretainedMetadata.worktree_path;
+    unretainedState.metadata = unretainedMetadata;
+    withRaw(context, (db) =>
+      db.prepare("update execution_plans set state_json = ? where plan_id = ?").run(JSON.stringify(unretainedState), OWN_PLAN),
+    );
     const proven = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "reconcile-proven", {
       kind: "reconcile",
       handoffId,
@@ -3003,6 +3020,11 @@ describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-own
     expect(proven.data.coordination!.handoff!.integration!.result_sha).toBe(mergeSha);
     expect(proven.data.executionLease).toMatchObject({ status: "released" });
     expect(proven.data.integrationLease).toBeNull();
+    expect(proven.data.plan.metadata).toMatchObject({
+      fixture_marker: "preserved",
+      working_branch: proven.data.coordination!.handoff!.source_branch,
+      worktree_path: proven.data.coordination!.handoff!.worktree_path,
+    });
 
     // A completed attempt reconciles as a DOMAIN replay: no lease, block or
     // timestamp is rewritten — and the accepted operation still advances the

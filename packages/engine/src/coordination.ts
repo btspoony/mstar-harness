@@ -4899,7 +4899,10 @@ function completeRow(
     handoff: { ...handoff, state: "completed", integration: completed, completed_at: nowIso() },
   };
   assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
-  const nextRow: PlanRow = { ...context.row, status: "Done", coordination: nextCoordination };
+  const metadata = isPlainObject(context.row.metadata) ? { ...context.row.metadata } : {};
+  metadata.working_branch = handoff.source_branch;
+  metadata.worktree_path = handoff.worktree_path;
+  const nextRow: PlanRow = { ...context.row, status: "Done", metadata, coordination: nextCoordination };
   delete nextRow.execution_lease;
   // Only this attempt's own claim is released: a lease naming another plan or
   // another source branch is not this completion's to drop (spec §E).
