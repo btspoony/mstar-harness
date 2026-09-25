@@ -24,9 +24,9 @@
  * - Field lift: execution-policy keys first-class `execution_policy` +
  *   branch/integration_worktree_path (lifted from the v1 root
  *   `control_worktree_path`)/integration_merge_lease on the ACTIVE
- *   iteration snapshot (v3.0.0); `program_roadmap` seeds the default
- *   project roadmap; `harness_root` dropped with a legacy note; all other
- *   root-metadata keys -> `legacy_metadata` (nothing dropped silently).
+ *   iteration snapshot (v3.0.0); `program_roadmap` remains a transport-only
+ *   candidate (never a Markdown authority); `harness_root` dropped with a
+ *   legacy note; all other root-metadata keys -> `legacy_metadata` (nothing dropped silently).
  * - Residuals: open `residual_findings` -> `projects/_default/residuals.json`
  *   (keyed by plan id, each value an ARRAY of ALL open entries with
  *   `source_plan`/`registered_at` provenance — v1 multi-finding semantics
@@ -42,7 +42,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { getCatalog, registerCatalogEntity } from "../src/catalog.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
@@ -382,7 +384,6 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
       const kinds = plan.steps.map((step) => step.kind);
       expect(kinds.filter((kind) => kind === "write-snapshot")).toHaveLength(29);
       expect(kinds.filter((kind) => kind === "write-notes")).toHaveLength(7);
-      expect(kinds.filter((kind) => kind === "write-roadmap")).toHaveLength(1);
       expect(kinds.filter((kind) => kind === "write-register")).toHaveLength(0);
 
       // additivity: every snapshot/notes step precedes the root replacement
@@ -427,15 +428,15 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
     }
   });
 
-  test("roadmap seed preserves program_roadmap.no_intermediate_releases and deferred_beyond (nothing dropped silently)", () => {
+  test("roadmap seed remains an explicit transport candidate, not a migration step", () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
-      const content = plan.roadmap!.content;
-      expect(content).toContain("no_intermediate_releases: true");
-      expect(content).toContain("### Deferred beyond");
-      expect(content).toContain("- pi/dsh adapters (host APIs unknown)");
-      expect(content).toContain("- omp in-process binding (no TS plugin surface as of 2026-08-07)");
+      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
+      expect(plan.roadmap!.content).toContain("no_intermediate_releases: true");
+      expect(plan.roadmap!.content).toContain("### Deferred beyond");
+      expect(plan.roadmap!.content).toContain("- pi/dsh adapters (host APIs unknown)");
+      expect(plan.steps.map((step) => step.kind)).not.toContain("write-roadmap");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -466,19 +467,9 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
         expect(validateWorkflowSnapshot(readJson(filePath)).ok).toBe(true);
       }
 
-      // Roadmap seeded from metadata.program_roadmap.
-      const roadmapPath = join(root, "projects", "_default", "roadmap.md");
-      expect(existsSync(roadmapPath)).toBe(true);
-      const roadmap = readFileSync(roadmapPath, "utf8");
-      const frontmatter = parseCompassFrontmatterText(roadmap, roadmapPath);
-      expect(frontmatter.project_id).toBe("_default");
-      expect(frontmatter.title).toBe("Skill programmatic split \u2192 TS engine");
-      expect(frontmatter.status).toBe("active");
-      expect(frontmatter.created_at).toBe("2026-08-19");
-      expect(frontmatter.residuals_ref).toBe("residuals.json");
-      expect(frontmatter.milestones).toHaveLength(5);
-      expect(String((frontmatter.milestones as string[])[0])).toContain("Slice 1");
-
+      // Legacy roadmap data is retained on the plan, but never materialized.
+      expect(plan.roadmap?.content).toContain("no_intermediate_releases: true");
+      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
       // Empty residual_findings -> no register file.
       expect(existsSync(join(root, "projects", "_default", "residuals.json"))).toBe(false);
 
@@ -864,10 +855,9 @@ describe("residual lift + status-mapping fixture (derived from the snapshot fixt
     const root = mappedTree(["todo"]);
     try {
       const plan = planOf(root, { projectId: "acme" });
-      expect(plan.register!.file).toBe("projects/acme/residuals.json");
       expect(plan.roadmap!.file).toBe("projects/acme/roadmap.md");
       await applyMigratePlan(plan);
-      expect(existsSync(join(root, "projects", "acme", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "projects", "acme", "roadmap.md"))).toBe(false);
       expect(existsSync(join(root, "projects", "acme", "residuals.json"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1155,9 +1145,8 @@ describe("custom workflow_dir/project_dir layout", () => {
       for (const notes of plan.notesFiles) {
         expect(existsSync(join(root, "wf", notes.file.slice("workflows/".length)))).toBe(true);
       }
-      // …and the roadmap under the CUSTOM project dir (the real fixture
-      // carries metadata.program_roadmap).
-      expect(existsSync(join(root, "pj", "_default", PROJECT_ROADMAP_FILE))).toBe(true);
+      // A legacy seed is transport-only even with a custom project layout.
+      expect(existsSync(join(root, "pj", "_default", PROJECT_ROADMAP_FILE))).toBe(false);
       // The hardcoded default-layout dirs are NEVER created.
       expect(existsSync(join(root, "workflows"))).toBe(false);
       expect(existsSync(join(root, "projects"))).toBe(false);
@@ -1172,7 +1161,7 @@ describe("custom workflow_dir/project_dir layout", () => {
     }
   });
 
-  test("project register + roadmap seed under a custom project_dir on a residual-bearing tree", async () => {
+  test("project register migrates under custom project_dir without materializing roadmap seed", async () => {
     const root = fixtureTree();
     try {
       withCustomLayout(root, "wf", "pj");
@@ -1310,13 +1299,10 @@ describe("coordinated-writer — migration is additive-only", () => {
 // raw-byte target-ownership guards (archive / notes / roadmap)
 // ---------------------------------------------------------------------------
 
-describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
+describe("raw-byte target-ownership guards (archive / notes)", () => {
   /** The exact apply-time notes serializer (nonempty -> trailing newline). */
   const notesContent = (lines: string[]): string => (lines.length > 0 ? `${lines.join("\n")}\n` : "");
-  // Same resolved-target mapping the executor uses (workflowTargetOf /
-  // projectTargetOf): resolved layout dir + the canonical-rel suffix.
   const notesTargetOf = (plan: MigratePlan, file: string): string => join(plan.workflowDir, relative("workflows", file));
-  const roadmapTargetOf = (plan: MigratePlan, file: string): string => join(plan.projectDir, relative("projects", file));
 
   /** Require the apply to refuse with the additive-only version conflict. */
   async function expectVersionConflict(apply: Promise<unknown>): Promise<void> {
@@ -1325,7 +1311,7 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
     expect((failure as CoordinationError).code).toBe("coordination.version-conflict");
   }
 
-  test("missing archive, notes and roadmap targets are created with the exact planned bytes", async () => {
+  test("migration creates archive and notes targets while keeping roadmap seeds transport-only", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
@@ -1340,14 +1326,15 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
       // Notes ledger is the exact serializer output (newlines verbatim).
       const notes = plan.notesFiles[0]!;
       expect(readFileSync(notesTargetOf(plan, notes.file), "utf8")).toBe(notesContent(notes.lines));
-      // Roadmap seed is the exact planned Markdown content.
-      expect(readFileSync(roadmapTargetOf(plan, plan.roadmap!.file), "utf8")).toBe(plan.roadmap!.content);
+      const roadmapPath = join(root, "projects", "_default", "roadmap.md");
+      expect(existsSync(roadmapPath)).toBe(false);
+      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("byte-identical archive, notes and roadmap targets converge without rewriting", async () => {
+  test("byte-identical archive and notes targets converge without rewriting", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
@@ -1355,25 +1342,18 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
       const notes = plan.notesFiles[0]!;
       const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
       const notesPath = notesTargetOf(plan, notes.file);
-      const roadmapPath = roadmapTargetOf(plan, plan.roadmap!.file);
-
-      // A previous run of this same deterministic plan left all three raw
-      // targets behind, byte-identical to what this plan would write.
       mkdirSync(dirname(archivePath), { recursive: true });
       writeFileSync(archivePath, v1Bytes);
       mkdirSync(dirname(notesPath), { recursive: true });
       writeFileSync(notesPath, notesContent(notes.lines), "utf8");
-      mkdirSync(dirname(roadmapPath), { recursive: true });
-      writeFileSync(roadmapPath, plan.roadmap!.content, "utf8");
-      const mtimes = [archivePath, notesPath, roadmapPath].map((p) => statSync(p).mtimeMs);
+      const mtimes = [archivePath, notesPath].map((p) => statSync(p).mtimeMs);
 
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
-
-      // Identical targets were left untouched — never rewritten.
-      expect([archivePath, notesPath, roadmapPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
+      expect([archivePath, notesPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
       expect(readFileSync(notesPath, "utf8")).toBe(notesContent(notes.lines));
+      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1445,31 +1425,48 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
     }
   });
 
-  test("a late divergent roadmap refuses: root stays v1 while earlier additive outputs remain recoverable", async () => {
+  test("a pre-existing roadmap remains unchanged while migration completes", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      const roadmapPath = roadmapTargetOf(plan, plan.roadmap!.file);
+      const roadmapPath = join(root, "projects", "_default", "roadmap.md");
       mkdirSync(dirname(roadmapPath), { recursive: true });
-      const foreign = "# foreign roadmap\n";
-      writeFileSync(roadmapPath, foreign, "utf8");
+      const authority = "# Current project authority\n";
+      writeFileSync(roadmapPath, authority, "utf8");
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+      expect(readFileSync(roadmapPath, "utf8")).toBe(authority);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      await expectVersionConflict(applyMigratePlan(plan));
+  test("active catalog authority survives migration refusal with a legacy roadmap seed", async () => {
+    const root = fixtureTree();
+    try {
+      const context: StoreContext = { harnessDir: root };
+      setArtifactStore(createFsStore(root));
+      const store = await initializeStore(context);
+      store.close();
+      await registerCatalogEntity(
+        context,
+        {
+          kind: "project",
+          id: "_default",
+          title: "Current database authority",
+          rootKind: "projects",
+          relativePath: "_default",
+        },
+        { operationId: "current-project-authority", actor: "test" },
+      );
+      const before = await getCatalog(context, { kind: "project", id: "_default" });
+      const plan = planOf(root);
 
-      // The conflicting roadmap keeps its foreign bytes.
-      expect(readFileSync(roadmapPath, "utf8")).toBe(foreign);
-      // The commit point never ran: the root is still v1 (raw bytes).
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), v1Bytes)).toBe(0);
-      // No rollback of earlier additive outputs — they remain on disk,
-      // so a converged re-run can finish the migration.
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(true);
-      for (const snapshot of plan.snapshots) {
-        expect(existsSync(join(root, snapshot.file))).toBe(true);
-      }
-      for (const notes of plan.notesFiles) {
-        expect(existsSync(notesTargetOf(plan, notes.file))).toBe(true);
-      }
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/active.*store|store.*active/i);
+      const after = await getCatalog(context, { kind: "project", id: "_default" });
+      expect(after.entity).toEqual(before.entity);
+      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
+      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1486,23 +1483,17 @@ describe("raw-byte target-ownership guards (archive / notes / roadmap)", () => {
       const notes = plan.notesFiles[0]!;
       const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
       const notesPath = notesTargetOf(plan, notes.file);
-      const roadmapPath = roadmapTargetOf(plan, plan.roadmap!.file);
       expect(notesPath.startsWith(`${join(root, "cwf")}`)).toBe(true);
-      expect(roadmapPath.startsWith(`${join(root, "cjp")}`)).toBe(true);
-
       mkdirSync(dirname(archivePath), { recursive: true });
       writeFileSync(archivePath, v1Bytes);
       mkdirSync(dirname(notesPath), { recursive: true });
       writeFileSync(notesPath, notesContent(notes.lines), "utf8");
-      mkdirSync(dirname(roadmapPath), { recursive: true });
-      writeFileSync(roadmapPath, plan.roadmap!.content, "utf8");
-      const mtimes = [archivePath, notesPath, roadmapPath].map((p) => statSync(p).mtimeMs);
+      const mtimes = [archivePath, notesPath].map((p) => statSync(p).mtimeMs);
 
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
-      // Identical targets at the RESOLVED custom paths were left untouched.
-      expect([archivePath, notesPath, roadmapPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
+      expect([archivePath, notesPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
