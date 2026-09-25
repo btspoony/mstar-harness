@@ -136,6 +136,7 @@ appendFileSync(process.env.MSTAR_GIT_LOG, JSON.stringify({ cwd: process.cwd(), a
 const text = argv.join(" ");
 const fault = process.env.MSTAR_GIT_FAULT || "";
 if (fault === "positive" && text.includes("--merged") && text.includes("refs/remotes/origin")) process.exit(128);
+if (fault === "negative" && text.includes("--no-merged")) process.exit(128);
 const isSweep = argv[0] === "for-each-ref" && (text.includes("--merged") || text.includes("--no-merged"));
 const vanish = process.env.MSTAR_GIT_VANISH_REF || "";
 if (vanish !== "" && isSweep && !existsSync(process.env.MSTAR_GIT_LOG + ".vanished")) {
@@ -790,6 +791,7 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const negativeRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", negative.root, "--remote"], negative.root, negativeShim.env);
       expect(negativeRun.exitCode).toBe(0);
       expect(negativeRun.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(negativeRun.stderr).toContain("note: remote unmerged-1: indeterminate 1");
       expect(negativeRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
       rmSync(dirname(negative.root), { recursive: true, force: true });
   }, 60000);
