@@ -41,7 +41,9 @@
 import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { parseCompassFrontmatterText } from "./iteration.js";
+import { validateRoadmapContent, ROADMAP_STATUSES, type RoadmapValidation } from "./roadmap-content.js";
+export type { RoadmapValidation } from "./roadmap-content.js";
+export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { openStore, type StoreContext } from "./store-db.js";
 import { IssueError } from "./issue.js";
@@ -63,8 +65,6 @@ export const PROJECT_REGISTER_FILE = "residuals.json";
 /** Fallback project id for project-less flows ( — compass ruling 2). */
 export const _DEFAULT_PROJECT = "_default";
 
-/** Roadmap status enum ( — frontmatter schema). */
-export const ROADMAP_STATUSES = ["active", "paused", "completed"] as const;
 
 export type RoadmapStatus = (typeof ROADMAP_STATUSES)[number];
 
@@ -104,12 +104,6 @@ export type ProjectRegisterDoc = {
   [key: string]: unknown;
 };
 
-/**
- * Roadmap validation result: schema violations decide `ok`; body-convention
- * findings are collected as `warnings` and never flip `ok` ( —
- * goal-item body is not a hard gate).
- */
-export type RoadmapValidation = GateResult & { warnings: ValidationResult[] };
 
 /** Findings cleanup policy mirror of Assignment `Findings cleanup`. */
 export type FindingsCleanupMode = "zero-residual" | "allow-residual";
@@ -134,18 +128,8 @@ function validateNonEmptyString(
   }
 }
 
-/**
- * Validate a roadmap.md file (): parse the frontmatter with the
- * shared flat-subset parser and check the schema
- * `{ project_id, title, status: active|paused|completed, created_at,
- * milestones[]?, residuals_ref? }`. A roadmap file whose body follows the
- * documented conventions (a `## Direction` section + goal items as markdown
- * task-list items) is fully green; convention misses are `warnings` only
- * and never flip `ok` (compass Non-Goal / AC-P1).
- */
+/** Validate a roadmap file by delegating to the shared content validator. */
 export function validateRoadmap(filePath: string): RoadmapValidation {
-  const violations: ValidationResult[] = [];
-
   let content: string;
   try {
     content = readFileSync(filePath, "utf8");
@@ -156,101 +140,8 @@ export function validateRoadmap(filePath: string): RoadmapValidation {
       warnings: [],
     };
   }
-
-  let doc: Record<string, unknown>;
-  try {
-    doc = parseCompassFrontmatterText(content, filePath);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${filePath}`;
-    return { ok: false, violations: [violation("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
-  }
-
-  validateNonEmptyString(
-    violations,
-    doc.project_id,
-    "project_id",
-    "project.roadmap.missing-project-id",
-    "project.roadmap.invalid-project-id",
-  );
-  validateNonEmptyString(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
-
-  if (doc.status === undefined) {
-    violations.push(violation("high", "project.roadmap.missing-status", "missing required field: status"));
-  } else if (typeof doc.status !== "string" || !(ROADMAP_STATUSES as readonly string[]).includes(doc.status)) {
-    violations.push(
-      violation(
-        "medium",
-        "project.roadmap.invalid-status",
-        `status must be one of ${ROADMAP_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(doc.status)}`,
-      ),
-    );
-  }
-
-  if (doc.created_at === undefined) {
-    violations.push(violation("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
-  } else if (typeof doc.created_at !== "string" || !DATE_RE.test(doc.created_at)) {
-    violations.push(violation("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
-  }
-
- // milestones is optional; an empty `milestones:` parses as null (same as
- // absent). Otherwise it must be a list of non-empty strings.
-  if (doc.milestones !== undefined && doc.milestones !== null) {
-    if (!Array.isArray(doc.milestones)) {
-      violations.push(violation("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
-    } else {
-      for (const item of doc.milestones) {
-        if (typeof item !== "string" || item.trim() === "") {
-          violations.push(
-            violation("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"),
-          );
-          break;
-        }
-      }
-    }
-  }
-
-  if (doc.residuals_ref !== undefined && doc.residuals_ref !== null) {
-    if (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "") {
-      violations.push(violation("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
-    }
-  }
-
- // Body conventions ( — documented, warning-only, never a hard
- // gate): the body SHOULD state the direction in a `## Direction` section
- // and list goal items as markdown task-list items (`- [ ]` planned /
- // in-flight, `- [x]` delivered). No residual-to-goal auto-link this
- // iteration — goal items carry no register ids.
-  const warnings: ValidationResult[] = [];
-  const fenceEnd = linesIndexOfClosingFence(content);
-  const body = content.split(/\r?\n/).slice(fenceEnd + 1).join("\n");
-
-  if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(
-      violation(
-        "low",
-        "project.roadmap.body.missing-direction",
-        "roadmap body has no `## Direction` section (documented body convention) \u2014 state the project direction there",
-      ),
-    );
-  }
-  if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(
-      violation(
-        "low",
-        "project.roadmap.body.no-goal-items",
-        "roadmap body has no goal-item task list (documented body convention) \u2014 list goals as `- [ ]` / `- [x]` markdown task items",
-      ),
-    );
-  }
-
-  return { ok: violations.length === 0, violations, warnings };
+  return validateRoadmapContent(content, filePath);
 }
-
-/** Index of the closing frontmatter fence (`---` after the opening fence). */
-function linesIndexOfClosingFence(content: string): number {
-  return content.split(/\r?\n/).indexOf("---", 1);
-}
-
 /**
  * Validate a project register document (`projects/<id>/residuals.json`,
  *  `{ entries: { [key]: entry[] } }` keyed by

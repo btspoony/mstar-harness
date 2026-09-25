@@ -26,6 +26,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
+import { validateRoadmapContent } from "../src/roadmap-content.js";
 import {
   PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
@@ -133,6 +134,16 @@ describe("validateRoadmap — frontmatter schema ()", () => {
     } finally {
       rmSync(join(file, ".."), { recursive: true, force: true });
     }
+  });
+  test("content validation preserves the file validator's schema and warning rules", () => {
+    const content = `---\nproject_id: content-check\ntitle: Content check\nstatus: active\ncreated_at: 2026-09-25\n---\n\nNarrative only.\n`;
+    const result = validateRoadmapContent(content, "in-memory roadmap");
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+    expect(result.warnings.map((warning) => warning.code)).toEqual([
+      "project.roadmap.body.missing-direction",
+      "project.roadmap.body.no-goal-items",
+    ]);
   });
 
   test("missing file / unreadable path is rejected", () => {
