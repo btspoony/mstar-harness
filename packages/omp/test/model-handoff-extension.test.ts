@@ -2170,6 +2170,26 @@ describe("host session identity injection", () => {
     expect(command.match(/export MSTAR_HOST_SESSION_ID=/g)).toHaveLength(1);
     expect(command.endsWith(baseCommand)).toBe(true);
   }, 30_000);
+  test("caller-supplied session export is respected without revision", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const command = "export MSTAR_HOST_SESSION_ID=caller-value; true";
+    const input = { command };
+
+    expect(
+      await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: "call-caller-session-export",
+        toolName: "bash",
+        input,
+      }),
+    ).toBeUndefined();
+    expect(input.command).toBe(command);
+  }, 30_000);
 });
 
 describe("coordinator diagnostic forwarding", () => {
