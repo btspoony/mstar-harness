@@ -534,7 +534,6 @@ async function registerScaffoldCatalog(root: string): Promise<void> {
   }
 }
 
-
 /**
  * Create one bootstrap document create-only (spec §C4): the target is written
  * from `template` ONLY when it is absent. Existing state is never replaced —

@@ -1038,6 +1038,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
  // assertSafePathComponent, but apply is a public API — re-enforce the
  // module invariant ("no fs writes outside the harness dir or the
  // resolved workflow/project dirs") on every planned destination so a
+ // hand-built plan can never escape `plan.root` via a relative path.
   const allDestinations = [
     plan.archive.file,
     ...plan.snapshots.map((snapshot) => snapshot.file),
@@ -1274,7 +1275,6 @@ async function applyMigratePlanLocked(
       });
     }
   }
-
 
  // 6. Root v2 replacement — the COMMIT POINT (last step), already serialized
  // with the root writers by the caller's root lock; the source version
