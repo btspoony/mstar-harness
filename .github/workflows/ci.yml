@@ -6,43 +6,7 @@ on:
       - main
     tags-ignore:
       - "v*"
-    paths:
-      - "packages/engine/**"
-      - "packages/cli/**"
-      - "packages/opencode/**"
-      - "packages/dsh/**"
-      - "packages/omp/**"
-      - "scripts/**"
-      - "skills/**"
-      - "agents/**"
-      - "commands/**"
-      - "hooks/**"
-      - "package.json"
-      - "bun.lock"
-      - "bun.lockb"
-      - "tsconfig.json"
-      - ".github/workflows/ci.yml"
-      - ".omp-plugin/**"
-      - "assets/**"
   pull_request:
-    paths:
-      - "packages/engine/**"
-      - "packages/cli/**"
-      - "packages/opencode/**"
-      - "packages/dsh/**"
-      - "packages/omp/**"
-      - "scripts/**"
-      - "skills/**"
-      - "agents/**"
-      - "commands/**"
-      - "hooks/**"
-      - "package.json"
-      - "bun.lock"
-      - "bun.lockb"
-      - "tsconfig.json"
-      - ".github/workflows/ci.yml"
-      - ".omp-plugin/**"
-      - "assets/**"
 
 permissions:
   contents: read
@@ -69,10 +33,8 @@ permissions:
 # or given a different command: each `run:` line below is byte-identical to the
 # pre-split step it replaces; only the job it lives in changed.
 #
-# Invariants kept: `standalone-smoke` still runs without `bun install`;
-# `drift-lint` still checks out with `fetch-depth: 0`; `paths:` triggers and
-# `permissions: contents: read` are untouched.
-#
+# Push and pull-request workflows run for every path so Markdown-only edits
+# and linked-target deletions are checked by the drift-lint job.
 # Why there is no `needs:` edge (a DAG was evaluated): wall clock = the slowest
 # job, and the slowest job is the CLI suite (~243s of tests). Its own share of
 # the duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
@@ -559,9 +521,8 @@ jobs:
       - name: Standalone smoke (engine + cli uninstalled)
         run: bun run validation:standalone
 
-  # Roadmap §8.7 item 4 (risk R1): pointer callouts in skills/ must reference
-  # real engine exports + real CLI subcommands, and engine spec-citation
-  # comments must resolve to real skill files.
+  # Roadmap §8.7 item 4: pointer callouts and tracked Markdown links/anchors
+  # must resolve against the current repository corpus.
   drift-lint:
     runs-on: ubuntu-latest
     steps:
@@ -580,5 +541,8 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Pointer drift lint (callouts ↔ engine exports + CLI commands)
+      - name: Install dependencies for drift validation
+        run: bun install --frozen-lockfile
+
+      - name: Repository drift validation
         run: bun run validation:drift
