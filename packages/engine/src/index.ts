@@ -804,7 +804,6 @@ export type {
   ProjectedCompass,
   ProjectedLease,
   ProjectedPlan,
-  ProjectedRoadmap,
   ProjectedWorkflow,
   ProjectionCapture,
   ProjectionErrorCode,

@@ -291,7 +291,6 @@ type Projections = {
   plans: Array<Record<string, unknown>>;
   leases: Array<Record<string, unknown>>;
   compasses: Array<Record<string, unknown>>;
-  roadmaps: Array<Record<string, unknown>>;
 };
 
 async function projections(f: Fixture): Promise<Projections> {
@@ -307,9 +306,6 @@ async function projections(f: Fixture): Promise<Projections> {
         Record<string, unknown>
       >,
       compasses: db.prepare("select * from projection_compasses order by iteration_id asc").all() as Array<
-        Record<string, unknown>
-      >,
-      roadmaps: db.prepare("select * from projection_roadmaps order by project_id asc").all() as Array<
         Record<string, unknown>
       >,
     };
@@ -378,7 +374,7 @@ describe("projection publication and last-good handling", () => {
     expect(first).toMatchObject({ freshness: "current", published: true, generation: 1, diagnostics: [] });
     expect(first.builtAt).toBe(first.checkedAt);
     expect(first.changedKeys).toEqual(first.sources.map((source) => source.sourceKey));
-    expect(first.sources).toHaveLength(5);
+    expect(first.sources).toHaveLength(4);
     expect(first.sources.find((source) => source.relativePath === "workflows/wf-done/snapshot.json")).toMatchObject({
       declared: false,
       state: "ok",
@@ -445,46 +441,12 @@ describe("projection publication and last-good handling", () => {
       { milestone: "Spec freeze", target: "2026-09-18", status: "done" },
       { milestone: "Dev complete", target: "2026-09-20", status: "pending" },
     ]);
-    expect(rows.roadmaps).toEqual([
-      expect.objectContaining({ generation: 1, project_id: "proj-a", direction: "Direction-A ships the first slice." }),
-    ]);
-    expect(JSON.parse(String(rows.roadmaps[0]?.goals_json))).toEqual([
-      { text: "first goal", checked: false },
-      { text: "second goal", checked: true },
-    ]);
-    expect(JSON.parse(String(rows.roadmaps[0]?.milestones_json))).toEqual(["M1"]);
 
     const second = await refreshProjections(f.context);
     expect(second).toMatchObject({ freshness: "current", published: false, generation: 1, changedKeys: [] });
     expect(second.builtAt).toBe(first.builtAt);
     expect(second.checkedAt >= first.checkedAt).toBe(true);
     expect(await projectedRows(f)).toEqual((({ meta: _health, ...tables }) => tables)(rows));
-  });
-
-  test("a same-size, same-mtime content change publishes a new generation naming the changed key", async () => {
-    const f = await fixture("same-mtime-");
-    await seedStandard(f);
-    const first = await refreshProjections(f.context);
-    const roadmapPath = join(f.projectsDir, "proj-a/roadmap.md");
-    const original = readFileSync(roadmapPath, "utf8");
-    const stats = statSync(roadmapPath);
-
-    writeFileSync(roadmapPath, original.replace("Direction-A", "Direction-B"));
-    utimesSync(roadmapPath, stats.atime, stats.mtime);
-    const touched = statSync(roadmapPath);
-    expect(touched.size).toBe(stats.size);
-    expect(Math.abs(touched.mtimeMs - stats.mtimeMs)).toBeLessThan(2);
-
-    const second = await refreshProjections(f.context);
-    expect(second).toMatchObject({ freshness: "current", published: true, generation: 2 });
-    expect(second.changedKeys).toEqual(["roadmap:projects:proj-a/roadmap.md"]);
-    const rows = await projections(f);
-    expect(rows.meta).toMatchObject({ generation: 2, source_set_hash: second.sourceSetHash });
-    // Only the new generation's rows exist (the old one is retired in place).
-    expect(rows.roadmaps).toHaveLength(1);
-    expect(rows.roadmaps[0]).toMatchObject({ generation: 2, direction: "Direction-B ships the first slice." });
-    expect(rows.sources.every((source) => source.generation === 2)).toBe(true);
-    expect(second.generation).toBe((first.generation ?? 0) + 1);
   });
 
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {
@@ -535,31 +497,8 @@ describe("projection publication and last-good handling", () => {
     expect((await projections(f)).workflows[0]).toMatchObject({ status: "running", generation: first.generation });
 
     write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
-    rmSync(join(f.projectsDir, "proj-a/roadmap.md"), { force: true });
-    mkdirSync(join(f.projectsDir, "proj-a/roadmap.md"), { recursive: true });
-    const inaccessible = await refreshProjections(f.context);
-    expect(inaccessible).toMatchObject({ freshness: "stale", generation: first.generation });
-    expect(inaccessible.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "roadmap:projects:proj-a/roadmap.md", reason: "inaccessible" }),
-    );
-    expect((await projections(f)).roadmaps[0]).toMatchObject({ direction: "Direction-A ships the first slice." });
   });
 
-  test("a source that changes while it is being read retains the last good generation with a named diagnostic", async () => {
-    const f = await fixture("changed-during-read-");
-    await seedStandard(f);
-    const first = await refreshProjections(f.context);
-    const publishedRows = await projectedRows(f);
-
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_CHURN_PATH = "proj-a/roadmap.md";
-    const moved = await refreshProjections(f.context);
-    expect(moved).toMatchObject({ freshness: "stale", published: false, generation: first.generation, builtAt: first.builtAt });
-    expect(moved.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "roadmap:projects:proj-a/roadmap.md", reason: "changed-during-read" }),
-    );
-    expect(await projectedRows(f)).toEqual(publishedRows);
-  });
 
   test("a source set that keeps moving is bounded: one retry, then source-changing with the last good generation", async () => {
     const f = await fixture("source-changing-");
@@ -590,7 +529,7 @@ describe("projection publication and last-good handling", () => {
     expect(rows.meta).toMatchObject({ generation: null, freshness: "unavailable" });
     expect(JSON.parse(String(rows.meta.last_error_json))).toMatchObject({ code: "projection.unavailable" });
     // Unavailable means "we have nothing honest to show", never "zero work".
-    expect([rows.workflows, rows.plans, rows.leases, rows.compasses, rows.roadmaps].every((table) => table.length === 0)).toBe(true);
+    expect([rows.workflows, rows.plans, rows.leases, rows.compasses].every((table) => table.length === 0)).toBe(true);
   });
 
   test("a clean unregister is a valid source-set change, while a missing still-declared snapshot is an error", async () => {
@@ -720,7 +659,6 @@ describe("projection publication and last-good handling", () => {
 
 function dropProjectionTables(db: StoreDb): void {
   for (const table of [
-    "projection_roadmaps",
     "projection_compasses",
     "projection_leases",
     "projection_plans",
