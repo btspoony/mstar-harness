@@ -195,7 +195,7 @@ describe("mstar migrate --dry-run — planned-document validation", () => {
 });
 
 describe("mstar migrate — real run", () => {
-  test("converts the v1 fixture to a v2 tree (snapshots, roadmap, archived v1, v2 root)", () => {
+  test("converts the v1 fixture to a v2 tree while keeping roadmap seeds transport-only", () => {
     const root = fixtureTree();
     try {
       const v1Before = readJsonFile(join(root, "status.json"));
@@ -244,7 +244,7 @@ describe("mstar migrate — real run", () => {
       ]);
       expect(existsSync(join(root, "workflows", "v3.0.0", "snapshot.json"))).toBe(true);
 
-      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
       // empty residual_findings -> no register file
       expect(existsSync(join(root, "projects", "_default", "residuals.json"))).toBe(false);
     } finally {

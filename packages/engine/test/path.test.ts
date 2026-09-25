@@ -51,7 +51,6 @@ import {
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
-import { validateRoadmap } from "../src/project.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -849,29 +848,15 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
-  test("prebuilds projects/_default/ with a valid roadmap.md and no legacy register", async () => {
+  test("prebuilds the _default project directory without creating a roadmap or register", async () => {
     const root = tmpRoot("path-scaffold-project-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       const harnessDir = await scaffoldHarness(root);
       const projectDir = join(harnessDir, "projects", "_default");
-      // The register is retired (issue-governance cutover G2a): the issue store
-      // is the findings authority, so a scaffold must not recreate the legacy
-      // file next to the roadmap it does own.
-      expect(readdirSync(projectDir).sort()).toEqual(["roadmap.md"]);
- // Roadmap frontmatter: project_id _default, non-empty title, status
- // active, created_at today, plus a `## Direction` body placeholder —
- // 0 violations (the missing goal-item task list is a warning only).
-      const roadmapPath = join(projectDir, "roadmap.md");
-      const roadmap = validateRoadmap(roadmapPath);
-      expect(roadmap.ok).toBe(true);
-      expect(roadmap.violations).toEqual([]);
-      const roadmapText = readFileSync(roadmapPath, "utf8");
-      expect(roadmapText).toContain("project_id: _default");
-      expect(roadmapText).toContain("title: Default Project");
-      expect(roadmapText).toContain("status: active");
-      expect(roadmapText).toContain(`created_at: ${new Date().toISOString().slice(0, 10)}`);
-      expect(roadmapText).toContain("## Direction");
+      expect(existsSync(projectDir)).toBe(true);
+      expect(readdirSync(projectDir)).toEqual([]);
+      expect(existsSync(join(projectDir, "roadmap.md"))).toBe(false);
       expect(existsSync(join(projectDir, "residuals.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -905,7 +890,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       expect(harnessDir).toBe(resolve(root, ".custom"));
       expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
       expect(existsSync(join(root, ".custom", "plans"))).toBe(true);
-      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(false);
       expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -923,7 +908,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
         const harnessDir = await scaffoldHarness(root);
         expect(harnessDir).toBe(custom);
         expect(existsSync(join(custom, "status.json"))).toBe(true);
-        expect(existsSync(join(custom, "projects", "_default", "roadmap.md"))).toBe(true);
+        expect(existsSync(join(custom, "projects", "_default", "roadmap.md"))).toBe(false);
       } finally {
         if (previous === undefined) delete process.env[ENV_KEY];
         else process.env[ENV_KEY] = previous;
@@ -944,7 +929,8 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
  // file's directory), not {HARNESS_DIR}/projects.
       expect(harnessDir).toBe(resolve(root, ".mstar"));
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
-      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(false);
       // No register is scaffolded under the resolved project dir either.
       expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(false);
       expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
@@ -961,23 +947,23 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       const harnessDir = await scaffoldHarness(root);
       expect(harnessDir).toBe(resolve(root, ".custom"));
       expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
-      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, ".custom", "projects"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("is idempotent: preserves user-edited roadmap.md and an existing legacy register", async () => {
+  test("preserves historical scaffold-location content and legacy register without adopting them", async () => {
     const root = tmpRoot("path-scaffold-idem-project-");
     try {
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      await scaffoldHarness(root);
-      const roadmapPath = join(root, ".mstar", "projects", "_default", "roadmap.md");
-      const registerPath = join(root, ".mstar", "projects", "_default", "residuals.json");
+      const historicalProjectDir = join(root, ".mstar", "projects", "_default");
+      mkdirSync(historicalProjectDir, { recursive: true });
+      const roadmapPath = join(historicalProjectDir, "roadmap.md");
+      const registerPath = join(historicalProjectDir, "residuals.json");
       const customRoadmap = `---
 project_id: _default
-title: Custom Roadmap
+title: Historical Roadmap
 status: active
 created_at: 2026-08-01
 ---
@@ -988,9 +974,9 @@ Custom direction.
 `;
       const customRegister = '{\n  "entries": {}\n}\n';
       writeFileSync(roadmapPath, customRoadmap);
-      // A register the workspace already holds is migration history the
-      // scaffold neither creates nor rewrites (issue authority).
       writeFileSync(registerPath, customRegister);
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
       await scaffoldHarness(root);
       expect(readFileSync(roadmapPath, "utf8")).toBe(customRoadmap);
       expect(readFileSync(registerPath, "utf8")).toBe(customRegister);
