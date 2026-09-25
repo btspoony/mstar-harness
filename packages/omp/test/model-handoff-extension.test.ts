@@ -2143,6 +2143,33 @@ describe("host session identity injection", () => {
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
   }, 30_000);
+  test("functions.bash revisions inject the host id once across re-fires", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const baseCommand = "mstar plan bind --workflow wf-a --plan plan-a";
+    let input: Record<string, unknown> = { command: baseCommand };
+    for (let fire = 0; fire < 3; fire += 1) {
+      const revision = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: `call-functions-bash-${fire}`,
+        toolName: "functions.bash",
+        input,
+      });
+      if (isPlainFixtureRecord(revision) && isPlainFixtureRecord(revision.input)) {
+        input = revision.input;
+      }
+    }
+
+    const command = input.command;
+    expect(typeof command).toBe("string");
+    if (typeof command !== "string") throw new Error("expected revised functions.bash command");
+    expect(command.match(/export MSTAR_HOST_SESSION_ID=/g)).toHaveLength(1);
+    expect(command.endsWith(baseCommand)).toBe(true);
+  }, 30_000);
 });
 
 describe("coordinator diagnostic forwarding", () => {

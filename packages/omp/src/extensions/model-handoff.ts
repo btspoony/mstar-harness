@@ -148,6 +148,7 @@ import type { ExecutionPlanView, ExecutionRead, ExecutionSessionRef, ExecutionSt
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
 import {
   COORDINATOR_TOOL_NAME,
+  SHELL_TOOL_NAMES,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
   executionBindingOf,
@@ -1814,11 +1815,11 @@ export default function modelHandoff(pi: ExtensionAPI): void {
    */
   pi.on("tool_call", (event, ctx) => {
     const refusal = classifyCoordinatorShellCall({ toolName: event.toolName, input: event.input });
-    if (refusal !== undefined || event.toolName !== "bash") return refusal;
+    if (refusal !== undefined || !(SHELL_TOOL_NAMES as readonly string[]).includes(event.toolName)) return refusal;
 
     const sessionId = sessionIdOf(ctx);
     if (sessionId === "") return undefined;
-    const input = isPlainObject(event.input) ? event.input : {};
+    const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
     if (typeof input.command !== "string") return undefined;
     if (input.command.includes(`export ${SESSION_ID_ENV}=`)) return undefined;
 
