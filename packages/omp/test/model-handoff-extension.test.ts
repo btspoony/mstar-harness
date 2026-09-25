@@ -2002,6 +2002,27 @@ describe("host session identity injection", () => {
       },
     });
 
+    // Execution level: the prefix is a real POSIX shell line. The revised input
+    // must carry no `env` field (the omp 18.3.0 argument validation refuses any
+    // bash call whose input has `env` without a service `name`), the revised
+    // command must run as-is, and the identity must reach the child environment
+    // `mstar plan bind` inherits. An inherited variable from the outer test
+    // process would be overwritten by the prefix export, so the child output
+    // pins the prefix — not the ambient environment — as the source.
+    const echoRevised = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-bash-echo",
+      toolName: "bash",
+      input: { command: 'printf %s "$MSTAR_HOST_SESSION_ID"' },
+    });
+    // The prefix's exact text is asserted by the revised `toEqual` above; this
+    // narrowing only feeds the executed command to spawnSync.
+    const echoInput = echoRevised as { input: { command: string } };
+    expect(echoInput.input.env).toBeUndefined();
+    const child = Bun.spawnSync(["sh", "-c", echoInput.input.command]);
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toBe(sessionId);
+
     // A caller-supplied `env` field is left exactly as sent. The revision never
     // touches the parameter surface — on omp 18.3.0 hosts the field-level env
     // is the host's own argument validation to accept or refuse, and the
