@@ -80,6 +80,9 @@ export function RoadmapView() {
     ${state?.content.kind === "not-found"
       ? html`<${EmptyState}><p class="prose">Project ${project} was not found in the catalog. Check the project id and try again.</p></${EmptyState}>`
       : null}
+    ${roadmap !== null
+      ? html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`
+      : null}
     ${state?.content.kind === "absent"
       ? html`<${DetailSection} title="Roadmap">
           <p class="prose">No roadmap content is stored for project ${project}. This is distinct from a store read failure.</p>

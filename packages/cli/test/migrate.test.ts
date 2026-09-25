@@ -392,6 +392,14 @@ describe("mstar migrate --json — machine-readable output", () => {
       expect(first.ok).toBe(true);
       expect(first.applied).toBe(true);
       expect(first.alreadyMigrated).toBe(false);
+      const steps = first.steps as { kind: string; source: string; destination: string }[];
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps[0]!.kind).toBe("archive-status-v1");
+      expect(steps[steps.length - 1]!.kind).toBe("replace-root-v2");
+      for (const step of steps) {
+        expect(typeof step.source).toBe("string");
+        expect(typeof step.destination).toBe("string");
+      }
 
       const second = JSON.parse(runCli(["migrate", "--path", root, "--json"]).stdout) as Record<string, unknown>;
       expect(second.ok).toBe(true);

@@ -753,6 +753,12 @@ describe("roadmap", () => {
     const absent = roadmapState(envelope(roadmap({ authority: { state: "absent" }, content: null }), UNAVAILABLE_PROJECTION));
     expect(absent.content.kind).toBe("absent");
     expect(absent.disclosure).toBeNull();
+    expect(absent.content.kind === "absent" ? absent.content.roadmap.catalog : null).toMatchObject({
+      title: "Engine",
+      relativePath: "engine",
+      lifecycle: "active",
+      revision: 5,
+    });
 
     const missingProject = roadmapState(envelope(null, UNAVAILABLE_PROJECTION));
     expect(missingProject.content.kind).toBe("not-found");
@@ -761,6 +767,12 @@ describe("roadmap", () => {
     const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
     expect(ready.content.kind).toBe("ready");
     expect(ready.disclosure).toBeNull();
+    expect(ready.content.kind === "ready" ? ready.content.roadmap.catalog : null).toMatchObject({
+      title: "Engine",
+      relativePath: "engine",
+      lifecycle: "active",
+      revision: 5,
+    });
     expect(ready.content.kind === "ready" ? ready.content.roadmap.content?.goals : []).toEqual([
       { ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" },
     ]);

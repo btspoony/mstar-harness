@@ -28,7 +28,9 @@ export function ProjectRollup({ view, t }: ProjectRollupProps) {
       {roadmapSource.kind === 'unavailable'
         ? <p className={css.zoneEmpty} data-mstar-roadmap="unavailable">{t('zone.project.roadmap.unavailable', { reason: roadmapSource.diagnostic ?? t('panel.unknown') })}</p>
         : roadmapSource.kind === 'absent'
-          ? <p className={css.zoneEmpty} data-mstar-roadmap="absent">{t('zone.project.roadmap.partial', { projects: roadmapSource.absentProjectIds.join(', ') })}</p>
+          ? roadmapSource.absentProjectIds.length === 0
+            ? <p className={css.zoneEmpty} data-mstar-roadmap="absent">{t('zone.project.none')}</p>
+            : <p className={css.zoneEmpty} data-mstar-roadmap="absent">{t('zone.project.roadmap.partial', { projects: roadmapSource.absentProjectIds.join(', ') })}</p>
           : milestones.length === 0
             ? <p className={css.zoneEmpty} data-mstar-roadmap="empty">{t('zone.project.roadmap.empty')}</p>
             : (
