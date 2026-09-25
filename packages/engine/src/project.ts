@@ -10,8 +10,8 @@
  * - Roadmap frontmatter schema `{ project_id, title, status:
  * active|paused|completed, created_at, milestones[]?, residuals_ref }`
  * (; compass-style frontmatter + engine validator, machine-
- * checkable). Frontmatter parsing reuses the shared flat-subset parser
- * `parseCompassFrontmatterText` (iteration.ts) — no new parser dependency.
+ * checkable). Validation is shared with the content-taking roadmap module;
+ * Markdown structure uses the engine's GFM parser dependencies.
  * - Goal-item body conventions are documented conventions surfaced as
  * validator **warnings only** — not a hard gate (compass Non-Goal /
  * AC-P1). No residual-to-goal-item auto-link this iteration (compass
