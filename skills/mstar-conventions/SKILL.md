@@ -10,7 +10,7 @@ description: Morning Star (晨星) harness 计划目录约定 —— `{HARNESS_D
 | 你还可能要 Read | 何时 |
 |-----------------|------|
 | `mstar-artifacts` | 主 plan、review bundle 摘要、`status.json`、residual、InReview/QC 波次、knowledge |
-| `mstar-project-governance` | `projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期、`_default` 回退 |
+| `mstar-project-governance` | 项目 roadmap 内容权威与读写/导入/导出规则；legacy `roadmap.md` 仅 transport/history；residual register 迁移边界与 `_default` |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
 | `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |
@@ -30,8 +30,8 @@ description: Morning Star (晨星) harness 计划目录约定 —— `{HARNESS_D
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认；`.mstarc` `knowledge_dir` 声明时用声明值） |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/`（默认；`.mstarc` `workflow_dir` 声明时用声明值）——v3 每 lifecycle 一个 `workflows/<id>/`（`snapshot.json` + `notes.jsonl`） |
-| `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——v3 项目层 `projects/<id>/roadmap.md` + `residuals.json` |
-| `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库。 |
+| `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
+| `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/**roadmap 内容** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
 
 > **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveWorkflowDir` / `resolveProjectDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]` (`--json` for machine output) to print the resolved dirs — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -90,7 +90,7 @@ enforcement=hard
 
 > **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
-可选项目选择：部分 spoke 仓库另跟踪 `{HARNESS_DIR}/roadmap.md` — **非**默认 tracked；仅在项目 opt-in 时提及。
+部分 spoke 仓库 opt-in 跟踪的 `{HARNESS_DIR}/roadmap.md` 仅是既有 Markdown 文件/可审导入候选，非项目内容权威；读写规则 → `mstar-project-governance`。
 
 ## 内容边界（摘要）
 
@@ -106,7 +106,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）。执行路由、lease、session 凭证与冻结执行输入仍是根 `status.json` / workflow snapshot 等 **JSON**（`ArtifactStore` / 默认 `FsStore`）——不是 SQLite，也不把 `ArtifactStore` 改成通用 SQLite 后端。
+Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）；roadmap 正文也在该 store，其读写规则 → **`mstar-project-governance`**。执行路由、lease、session 凭证与冻结执行输入仍是根 `status.json` / workflow snapshot 等 **JSON**（`ArtifactStore` / 默认 `FsStore`）——不是 SQLite，也不把 `ArtifactStore` 改成通用 SQLite 后端。
 
 ### Catalog 字段权威（contract §1）
 
@@ -150,7 +150,7 @@ PM 在需要持久化追踪时：
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加；文件已声明 harness 根规则时属作者所有，fence 不写入（见下文「Git 跟踪策略」）
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
 
-**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）一次性完成上述 bootstrap —— 目录 + v2 `status.json` + **`projects/_default/` 预建**（`roadmap.md` + 空 `residuals.json`）+ canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；幂等，重跑只补缺失件（canonical gitignore snippet 只 bootstrap 未声明的 `.gitignore`；已声明的文件属作者所有，字节不变）。 scaffold 遵循 `.mstarc`：`harness_dir` / `project_dir` 声明优先（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
+**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）完成目录 + v2 `status.json` + **`projects/_default/` 目录及 catalog 登记** + canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；不创建 roadmap Markdown 或 residual register。既有 v1 `roadmap.md` 只作为后续 reviewed import 的候选（→ `mstar-project-governance`）。幂等，重跑只补缺失件（canonical gitignore snippet 只 bootstrap 未声明的 `.gitignore`；已声明的文件属作者所有，字节不变）。scaffold 遵循 `.mstarc`：`harness_dir` / `project_dir` 声明优先；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义布局自行管理 ignore 规则）。
 
 步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
 
@@ -172,12 +172,12 @@ PM 在需要持久化追踪时：
 - `sdd/`
 - `status.json`
 - `workflows/`（v3 每 lifecycle 运行态：`<id>/snapshot.json` + `<id>/notes.jsonl`）
-- `projects/`（v3 项目层：`<id>/roadmap.md` + `<id>/residuals.json`）
-- `store.db`（issue/catalog SQLite；与 `status.json` 同属进程产物，默认随 `{HARNESS_DIR}` 忽略）
+- `projects/`（项目层目录；旧 `<id>/roadmap.md` 与 residual register 是迁移文件，不是 live roadmap / issue 权威）
+- `store.db`（issue/catalog/roadmap 内容 SQLite；与 `status.json` 同属进程产物，默认随 `{HARNESS_DIR}` 忽略）
 
 Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 
-**v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/` 与 `projects/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 预建**（`roadmap.md` + 空 `residuals.json`）；其余 project id 与 `workflows/` 子目录由 **engine writers 按需创建**（`writeWorkflowSnapshot` / `registerWorkflow` / project-register 写入路径），**不是** `scaffoldHarness` 的初始化产物。
+**v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/` 与 `projects/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 建目录并在可用的 catalog 中登记**，不生成 `roadmap.md` 或 `residuals.json`；其余 project id 与 `workflows/` 子目录由各自 domain writers 按需创建。历史文件的迁移只走 transport/review（→ `mstar-project-governance`）。
 
 **多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入新检出。进程 SSOT 固定在 **control root = 主 checkout（main worktree）**，读写经 control 绝对路径（`<main-repo-root>/{HARNESS_DIR}/…`）；integration 分支检出在专属 integration worktree（snapshot `integration_worktree_path`，唯一 merge cwd）；产品代码改在 feature worktree。**Gitignore 策略注**：tracked-results 层（`{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{HARNESS_DIR}/AGENTS.md`）随 Git 分支走，在采纳 canonical gitignore snippet 的仓库中对所有 worktree **可见**——本仓库 `.mstar/` 全量 gitignore 属仓库自身 ignore 规则的属性，非契约。三写域模型（process SSOT / tracked results / product source）的 SSOT 表 → **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」；反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）同见该表。
 

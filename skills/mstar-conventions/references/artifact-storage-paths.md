@@ -18,12 +18,12 @@
 | **status.json（v2 根）** | `.mstar/status.json`（gitignored；本地会话 SSOT；`{version: 2, updated_at, workflows[]}` 活跃 lifecycle 登记） | `mstar-artifacts`、`mstar-iteration` |
 | **workflow snapshot** | `{HARNESS_DIR}/workflows/<id>/snapshot.json`（gitignored；每 lifecycle 运行态：`plans[]` 行 + leases + branch anchors；`<id>` = plan id 或 iteration id） | `mstar-artifacts`、`mstar-iteration`、`mstar-branch-worktree` |
 | **workflow notes ledger** | `{HARNESS_DIR}/workflows/<id>/notes.jsonl`（gitignored；append-only 运行时笔记） | `mstar-artifacts`、`mstar-iteration` |
-| **project roadmap** | `.mstar/projects/<id>/roadmap.md`（gitignored；frontmatter `{project_id, title, status, created_at, milestones[]?, residuals_ref?}` + 正文约定） | `mstar-artifacts`、`mstar-iteration` |
+| **project roadmap transport/history** | `{PROJECT_DIR}/<id>/roadmap.md`（legacy 文件或 reviewed import / export 候选；**不**是 live 内容权威；文件可不存在） | `mstar-project-governance`（唯一读写/校验规则）；`mstar-iteration`（close 时导出独立候选） |
 | **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-artifacts`、`mstar-review-qc` |
 | **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-artifacts` |
 | **迭代 package** | `.mstar/iterations/<iteration-id>/`（gitignored；`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
 | **迭代 README（散文）** | `.mstar/iterations/README.md`（gitignored；可选导览散文，**不是**登记索引 — 见下） | `mstar-iteration`（散文指向；**不再**维护「一行 = 一次迭代」） |
-| **issue/catalog store** | `.mstar/store.db`（进程/control harness 根；gitignored；issue + catalog 行的权威，权威分界见 `mstar-conventions` SKILL.md § Issue/catalog store 路径与权威分界） | `mstar issue …` / `mstar catalog …`（域 API） |
+| **issue/catalog/roadmap store** | `.mstar/store.db`（进程/control harness 根；gitignored；issue、catalog 与 `project_roadmaps` 正文权威；roadmap 规则 → `mstar-project-governance`） | `mstar issue …` / `mstar catalog …` / `mstar roadmap …`（各域 API） |
 | **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-conventions`） | `mstar-artifacts` |
 | **harness AGENTS** | `.mstar/AGENTS.md`（tracked） | PM / init |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
