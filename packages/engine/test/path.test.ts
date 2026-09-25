@@ -50,6 +50,7 @@ import {
   validateGitignore,
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
+import { initializeStore, openStore } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -858,6 +859,31 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       expect(readdirSync(projectDir)).toEqual([]);
       expect(existsSync(join(projectDir, "roadmap.md"))).toBe(false);
       expect(existsSync(join(projectDir, "residuals.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("defers _default catalog registration when the existing store is staged", async () => {
+    const root = tmpRoot("path-scaffold-staged-store-");
+    const context = { harnessDir: resolve(root, ".mstar") };
+    try {
+      mkdirSync(context.harnessDir, { recursive: true });
+      const initialized = await initializeStore(context);
+      initialized.close();
+      const handle = await openStore(context, "write");
+      handle.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+      handle.close();
+
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+
+      const staged = await openStore({ harnessDir: root }, "read");
+      const defaultProject = staged.db
+        .prepare("select id from catalog_entities where kind = 'project' and id = '_default'")
+        .get();
+      staged.close();
+      expect(defaultProject).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -12,8 +12,6 @@ import {
   EmptyState,
   LiveRegion,
   Notice,
-  ProjectionNotice,
-  projectionDisclosure,
   useEnvelope,
 } from "../components";
 
@@ -33,7 +31,7 @@ export type RoadmapState = { disclosure: Disclosure | null; content: RoadmapCont
 export function roadmapState(envelope: Envelope<RoadmapDTO>): RoadmapState {
   const roadmap = envelope.data;
   return {
-    disclosure: projectionDisclosure(envelope.projection),
+    disclosure: null,
     content: roadmap.authority.state === "absent" ? { kind: "absent", roadmap } : { kind: "ready", roadmap },
   };
 }
@@ -74,7 +72,6 @@ export function RoadmapView() {
     <${LiveRegion} message=${announcement} />
     ${load.status === "loading" ? html`<p class="hint">Loading roadmap…</p>` : null}
     ${load.status === "error" ? html`<${Notice} tone="error">${load.message}</${Notice}>` : null}
-    ${state === null || state.disclosure === null ? null : html`<${ProjectionNotice} disclosure=${state.disclosure} />`}
     ${roadmap === null ? null : html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`}
     ${state?.content.kind === "absent"
       ? html`<${DetailSection} title="Roadmap">

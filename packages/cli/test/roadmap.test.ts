@@ -108,6 +108,31 @@ describe("roadmap CLI", () => {
     });
   });
 
+  test("reviewed import preserves a leading BOM through apply and Markdown export", async () => {
+    const { dir } = await fixture("import-bom-");
+    const source = join(dir, "bom-roadmap.md");
+    const reviewFile = join(dir, "review.json");
+    const bomMarkdown = `\uFEFF${MARKDOWN}`;
+    const sourceBytes = Buffer.from(bomMarkdown, "utf8");
+    writeFileSync(source, sourceBytes);
+
+    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source, "--json"], dir);
+    expect(preview.status).toBe(0);
+    const reviewed = data(preview);
+    expect(reviewed.sourceHash).toBe(createHash("sha256").update(sourceBytes).digest("hex"));
+    writeFileSync(reviewFile, `${JSON.stringify(reviewed)}\n`);
+
+    const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-bom", "--json"], dir);
+    expect(applied.status).toBe(0);
+    const receipt = data(applied);
+    const shown = object(data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir)).roadmap);
+    expect(shown.contentMarkdown).toBe(bomMarkdown);
+    expect(shown.contentHash).toBe(reviewed.sourceHash);
+    expect(shown.contentHash).toBe(receipt.contentHash);
+    const exported = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
+    expect(Buffer.from(exported.stdout, "utf8")).toEqual(sourceBytes);
+  });
+
   test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
     const { dir } = await fixture("cas-");
     const source = join(dir, "roadmap.md");
