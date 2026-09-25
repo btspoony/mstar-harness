@@ -148,6 +148,7 @@ import type { ExecutionPlanView, ExecutionRead, ExecutionSessionRef, ExecutionSt
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
 import {
   COORDINATOR_TOOL_NAME,
+  SHELL_TOOL_NAMES,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
   executionBindingOf,
@@ -185,6 +186,10 @@ const RECORD_VERSION = 1;
 const STATUS_FILE = "status.json";
 /** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
 const SESSION_DIR = "sessions";
+/** Host session id passed to plan/assignment binds through the child shell. */
+const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
+/** Single-quote a value for a POSIX shell — the one quoting that never expands. */
+const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /**
  * Route families read from the host's own `InputEvent`. The scoped-plan PM
@@ -1801,18 +1806,24 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /* --------------------------------------------------- session identity --- */
 
   /**
-   * The one transport refusal on this surface (prerequisite contract §3.2):
-   * a managed coordinator bind attempted through the shell is blocked before
-   * shell execution with a redirect to the host-owned `mstar_coordinator` tool.
-   *
-   * There is no input revision here — in particular no environment injection:
-   * authority for a coordinator bootstrap is the tool's host-derived identity,
-   * never a model- or environment-definable value. The classifier is bounded to
-   * the two supported shell tool identities and one command shape; every other
-   * call (unrelated command, unknown tool, unrecognized input shape) returns
-   * `undefined`, so an absent or unsupported `env` field can never produce an
-   * invalid input revision. It deliberately does not parse arbitrary shell and
-   * fences no other native code.
+   * A managed coordinator bind attempted through the shell is blocked in favor
+   * of the dedicated host-owned `mstar_coordinator` tool. Other bash calls carry
+   * the host identity to plan/assignment binds as a command prefix: omp 18.3.0
+   * refuses an `env` field without a service name, so the validated input shape
+   * must remain untouched. The export guard makes host re-fires idempotent and
+   * respects a caller-supplied identity value.
    */
-  pi.on("tool_call", (event) => classifyCoordinatorShellCall({ toolName: event.toolName, input: event.input }));
+  pi.on("tool_call", (event, ctx) => {
+    const refusal = classifyCoordinatorShellCall({ toolName: event.toolName, input: event.input });
+    if (refusal !== undefined || !(SHELL_TOOL_NAMES as readonly string[]).includes(event.toolName)) return refusal;
+
+    const sessionId = sessionIdOf(ctx);
+    if (sessionId === "") return undefined;
+    const input: Record<string, unknown> = isPlainObject(event.input) ? event.input : {};
+    if (typeof input.command !== "string") return undefined;
+    if (input.command.includes(`export ${SESSION_ID_ENV}=`)) return undefined;
+
+    const prefix = `export ${SESSION_ID_ENV}=${shellSingleQuote(sessionId)}; `;
+    return { input: { ...input, command: prefix + input.command } };
+  });
 }

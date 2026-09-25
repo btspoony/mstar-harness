@@ -2023,7 +2023,7 @@ describe("switch failure reports actual model", () => {
 });
 
 describe("prerequisite identity — managed coordinator bind transport", () => {
-  test("a bare or namespaced shell coordinator bind is blocked before execution, and unrelated shell calls are untouched", async () => {
+  test("a bare or namespaced shell coordinator bind is blocked before execution", async () => {
     const repo = buildControlRepo();
     const harness = await createHarness({
       cwd: repo.main,
@@ -2046,30 +2046,153 @@ describe("prerequisite identity — managed coordinator bind transport", () => {
       expect(String((refused as { reason?: string }).reason)).toContain(COORDINATOR_TOOL_NAME);
     }
 
-    // Unrelated shell calls — a plan bind *without* --coordinator included — are
-    // not blocked and not revised: no environment identity is injected any more,
-    // so an absent or unsupported `env` field cannot produce an invalid input.
+    // Unrelated tool calls are not revised. Host session identity injection
+    // for bash is covered separately and must not change the coordinator route.
     for (const [toolName, input] of [
-      ["bash", { command: "git status" }],
-      ["bash", { command: "mstar plan bind --workflow wf-a --plan plan-a --session-id s" }],
-      ["bash", { command: "true", env: { KEEP: "yes" } }],
-      ["bash", { command: "true", env: "FOO=bar" }],
-      ["bash", { command: "true" }],
-      ["bash", "not-an-object"],
       ["read", { command: bindCommand }],
       [TOOL_NAME, { command: bindCommand }],
+      ["bash", "not-an-object"],
     ] as const) {
       expect(
         await harness.emitToolCall({ type: "tool_call", toolCallId: "call-other", toolName, input }),
       ).toBeUndefined();
     }
 
-    // The transport has no side effect at all: no record, no notice, no ledger.
+    // Coordinator binds remain on the dedicated host tool; shell interception
+    // continues to block them before any identity prefix can be applied.
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
     expect(harness.ledger().filter((entry) => entry.type === "custom")).toHaveLength(0);
   }, 30_000);
+});
 
+describe("host session identity injection", () => {
+  test("repeated bash revisions inject the host id once and preserve caller input", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const sessionId = harness.sessionManager.getSessionId();
+    const baseCommand = 'printf %s "$MSTAR_HOST_SESSION_ID"';
+    let input: Record<string, unknown> = { command: baseCommand, timeout: 5 };
+    for (let fire = 0; fire < 3; fire += 1) {
+      const revision = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: `call-bash-${fire}`,
+        toolName: "bash",
+        input,
+      });
+      if (isPlainFixtureRecord(revision) && isPlainFixtureRecord(revision.input)) {
+        input = revision.input;
+      }
+    }
+
+    const command = input.command;
+    expect(typeof command).toBe("string");
+    if (typeof command !== "string") throw new Error("expected revised bash command");
+    expect(command.match(/export MSTAR_HOST_SESSION_ID=/g)).toHaveLength(1);
+    expect(command).toBe(`export MSTAR_HOST_SESSION_ID='${sessionId}'; ${baseCommand}`);
+    const child = Bun.spawnSync(["sh", "-c", command]);
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toBe(sessionId);
+
+    const env = { KEEP: "yes", MSTAR_HOST_SESSION_ID: "caller-value" };
+    const envRevision = await harness.emitToolCall({
+      type: "tool_call",
+      toolCallId: "call-env",
+      toolName: "bash",
+      input: { command: "true", env },
+    });
+    if (!isPlainFixtureRecord(envRevision) || !isPlainFixtureRecord(envRevision.input)) {
+      throw new Error("expected a revised bash input");
+    }
+    expect(envRevision.input.env).toBe(env);
+
+    for (const [toolName, malformedInput] of [
+      ["bash", { timeout: 5 }],
+      ["bash", "not-an-object"],
+      ["read", { command: "true" }],
+    ] as const) {
+      expect(
+        await harness.emitToolCall({
+          type: "tool_call",
+          toolCallId: `call-skip-${toolName}`,
+          toolName,
+          input: malformedInput,
+        }),
+      ).toBeUndefined();
+    }
+
+    const manager = harness.sessionManager as unknown as { getSessionId: () => string };
+    const getSessionId = manager.getSessionId;
+    manager.getSessionId = () => "";
+    try {
+      expect(
+        await harness.emitToolCall({
+          type: "tool_call",
+          toolCallId: "call-idless",
+          toolName: "bash",
+          input: { command: "true" },
+        }),
+      ).toBeUndefined();
+    } finally {
+      manager.getSessionId = getSessionId;
+    }
+    expect(harness.records()).toHaveLength(0);
+    expect(harness.notices()).toHaveLength(0);
+  }, 30_000);
+  test("functions.bash revisions inject the host id once across re-fires", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const baseCommand = "mstar plan bind --workflow wf-a --plan plan-a";
+    let input: Record<string, unknown> = { command: baseCommand };
+    for (let fire = 0; fire < 3; fire += 1) {
+      const revision = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: `call-functions-bash-${fire}`,
+        toolName: "functions.bash",
+        input,
+      });
+      if (isPlainFixtureRecord(revision) && isPlainFixtureRecord(revision.input)) {
+        input = revision.input;
+      }
+    }
+
+    const command = input.command;
+    expect(typeof command).toBe("string");
+    if (typeof command !== "string") throw new Error("expected revised functions.bash command");
+    expect(command.match(/export MSTAR_HOST_SESSION_ID=/g)).toHaveLength(1);
+    expect(command.endsWith(baseCommand)).toBe(true);
+  }, 30_000);
+  test("caller-supplied session export is respected without revision", async () => {
+    const repo = buildControlRepo();
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const command = "export MSTAR_HOST_SESSION_ID=caller-value; true";
+    const input = { command };
+
+    expect(
+      await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: "call-caller-session-export",
+        toolName: "bash",
+        input,
+      }),
+    ).toBeUndefined();
+    expect(input.command).toBe(command);
+  }, 30_000);
+});
+
+describe("coordinator diagnostic forwarding", () => {
   test("the registered handoff tool forwards the checkpoint's typed diagnostic verbatim into a refusal", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
