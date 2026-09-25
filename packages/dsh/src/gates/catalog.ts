@@ -15,9 +15,10 @@
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
  * `state.plans[]` / leases come from the selected snapshot's `plans[]` rows
- * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, residuals
- * from the project registers — never a root v1 `plans[]` / root
- * `agent-flow.jsonl` read. The direction one-liner and the iteration gate come
+ * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, open issues
+ * from the issue authority, and roadmap milestones from the store roadmap
+ * authority — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
+ * The direction one-liner and the iteration gate come
  * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
  * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
  * — never a directory-wide first-active compass scan.
@@ -35,7 +36,7 @@
  * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `TurnDigest`,
  * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal.
  */
-import { existsSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
@@ -46,11 +47,10 @@ import {
   parseCompassFrontmatterText,
   queryDashboard,
   readJson,
-  resolveProjectDir,
   resolveRepoEnforcement,
   readWorkflowSnapshot,
   withStoreRead,
-  PROJECT_ROADMAP_FILE,
+  listRoadmapAuthority,
   WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
@@ -70,6 +70,7 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
+  RoadmapSourceView,
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
@@ -738,7 +739,7 @@ function harnessStateSource(
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(harnessDir, facts.residuals),
+      project: projectRollupSource(facts.roadmap, facts.residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -792,7 +793,7 @@ function selectionErrorState(
     // open-item facts.
     residuals: facts.residuals,
     residualFindings: facts.residualFindings,
-    project: projectRollupSource(harnessDir, facts.residuals),
+    project: projectRollupSource(facts.roadmap, facts.residuals),
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -808,46 +809,15 @@ function selectionErrorState(
 }
 
 /**
- * The additive project rollup (compass v3.0.0 AC-4 / AC-P3 — the panel's
- * fifth zone): roadmap milestones + open-issue severity counts from the
- * PROJECT layer. The milestones come from the roadmap DOCUMENT bodies
- * (`projects/<id>/roadmap.md` frontmatter `milestones[]` — a roadmap is a
- * Markdown body, not a register, so it stays a file read); the open counts are
- * the harness-wide issue rollup the caller read from `store.db`, never a
- * second walk and never a project register. Always-present (lossless): no
- * roadmap files → `milestones: []`; no open issues → `openResiduals: []`.
- * Unreadable roadmaps are skipped (advisory).
+ * The project rollup uses only roadmap records read from the store authority.
+ * The issue counts are independent and remain available if that read fails.
  */
-function projectRollupSource(harnessDir: string, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
-  const milestones: string[] = []
-  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
-  if (existsSync(projectsDir)) {
-    let entries: Dirent[]
-    try {
-      entries = readdirSync(projectsDir, { withFileTypes: true })
-    } catch {
-      entries = []
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const roadmapPath = join(projectsDir, entry.name, PROJECT_ROADMAP_FILE)
-      if (!existsSync(roadmapPath)) continue
-      try {
-        // The roadmap frontmatter shares the compass flat-subset grammar
-        // (engine `parseCompassFrontmatterText` — the same parser
-        // `validateRoadmap` uses).
-        const doc = parseCompassFrontmatterText(readFileSync(roadmapPath, 'utf8'), roadmapPath)
-        if (Array.isArray(doc.milestones)) {
-          for (const milestone of doc.milestones) {
-            if (typeof milestone === 'string' && milestone.trim() !== '') milestones.push(milestone)
-          }
-        }
-      } catch {
-        continue // unreadable roadmap — skip (advisory)
-      }
-    }
+function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
+  return {
+    milestones: roadmap.milestones,
+    roadmapSource: roadmap.source,
+    openResiduals: residuals,
   }
-  return { milestones, openResiduals: residuals }
 }
 
 /**
@@ -858,8 +828,14 @@ function projectRollupSource(harnessDir: string, residuals: readonly HarnessResi
  * path; the synchronous builders fall back to {@link UNREAD_STORE_FACTS},
  * which says so instead of pretending the rollup is empty.
  */
+interface ProjectRoadmapFacts {
+  readonly milestones: readonly string[]
+  readonly source: RoadmapSourceView
+}
+
 interface StoreFacts {
   readonly source: StoreFactsView
+  readonly roadmap: ProjectRoadmapFacts
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
@@ -891,14 +867,55 @@ const UNREAD_STORE_FACTS: StoreFacts = {
     storeRevision: null,
     diagnostic: 'the issue/catalog store was not read for this build',
   },
+  roadmap: {
+    milestones: [],
+    source: {
+      kind: 'unavailable',
+      absentProjectIds: [],
+      diagnostic: 'the roadmap authority was not read for this build',
+    },
+  },
   residuals: [],
   residualFindings: null,
   knowledge: null,
 }
 
-/** One refresh's open-issue rollup (counts + detail) plus the knowledge digest. */
+/** Read the store-backed roadmap authority once, retaining catalog order. */
+async function readProjectRoadmapFacts(context: StoreContext): Promise<ProjectRoadmapFacts> {
+  try {
+    const records = await listRoadmapAuthority(context)
+    const milestones: string[] = []
+    const absentProjectIds: string[] = []
+    let hasRoadmap = false
+    for (const record of records) {
+      if (record.roadmap === null) {
+        absentProjectIds.push(record.projectId)
+        continue
+      }
+      hasRoadmap = true
+      const document = parseCompassFrontmatterText(record.roadmap.contentMarkdown, `store roadmap ${record.projectId}`)
+      if (Array.isArray(document.milestones)) {
+        for (const milestone of document.milestones) {
+          if (typeof milestone === 'string' && milestone.trim() !== '') milestones.push(milestone)
+        }
+      }
+    }
+    return {
+      milestones,
+      source: { kind: hasRoadmap ? 'present' : 'absent', absentProjectIds, diagnostic: null },
+    }
+  } catch (error) {
+    return {
+      milestones: [],
+      source: { kind: 'unavailable', absentProjectIds: [], diagnostic: storeRefusalText(error) },
+    }
+  }
+}
+
+/** One refresh's open-issue rollup, roadmap source, and knowledge digest. */
 async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
+  const roadmap = await readProjectRoadmapFacts(context)
   try {
     const envelope = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT } }))
     const items: Array<IssuePage['items'][number]> = [...envelope.data.items]
@@ -937,6 +954,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         diagnostic: storeProjectionDiagnostic(envelope.projection, items.length, envelope.data.total),
       },
       residuals,
+      roadmap,
       residualFindings,
       knowledge: await readKnowledgeDigest(context),
     }
@@ -948,6 +966,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         storeRevision: null,
         diagnostic: storeRefusalText(error),
       },
+      roadmap,
       residuals: [],
       residualFindings: null,
       knowledge: null,

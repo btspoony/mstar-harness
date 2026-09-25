@@ -202,6 +202,10 @@ export type PanelKey =
   | 'zone.project.milestones'
   | 'zone.project.residuals'
   | 'zone.project.none'
+  | 'zone.project.roadmap.empty'
+  | 'zone.project.roadmap.absent'
+  | 'zone.project.roadmap.unavailable'
+  | 'zone.project.roadmap.partial'
   | 'zone.state.Todo'
   | 'zone.state.InProgress'
   | 'zone.state.InReview'
@@ -339,6 +343,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.project.milestones': '里程碑',
   'zone.project.residuals': '未结残留',
   'zone.project.none': '无',
+  'zone.project.roadmap.empty': '路线图已登记，但尚无里程碑',
+  'zone.project.roadmap.absent': '路线图 authority 中没有项目记录',
+  'zone.project.roadmap.unavailable': '路线图 authority 不可用（{reason}）',
+  'zone.project.roadmap.partial': '以下项目没有路线图：{projects}',
   'zone.state.Todo': '待办',
   'zone.state.InProgress': '进行中',
   'zone.state.InReview': '审查中',
@@ -471,6 +479,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.project.milestones': 'Milestones',
   'zone.project.residuals': 'Open Residuals',
   'zone.project.none': 'none',
+  'zone.project.roadmap.empty': 'Roadmap is present but has no milestones',
+  'zone.project.roadmap.absent': 'No project records are present in the roadmap authority',
+  'zone.project.roadmap.unavailable': 'Roadmap authority unavailable ({reason})',
+  'zone.project.roadmap.partial': 'No roadmap is recorded for these projects: {projects}',
   'zone.state.Todo': 'Todo',
   'zone.state.InProgress': 'InProgress',
   'zone.state.InReview': 'InReview',
