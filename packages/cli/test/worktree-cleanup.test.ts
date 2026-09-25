@@ -791,6 +791,7 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const negativeRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", negative.root, "--remote"], negative.root, negativeShim.env);
       expect(negativeRun.exitCode).toBe(0);
       expect(negativeRun.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(negativeRun.stderr).toContain("note: remote unmerged-1: indeterminate 1");
       expect(negativeRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
       rmSync(dirname(negative.root), { recursive: true, force: true });
   }, 60000);
