@@ -7,6 +7,7 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import { toString } from "mdast-util-to-string";
+import { isMap, parseDocument } from "yaml";
 import type { Root as HastRoot, RootContent } from "hast";
 import type { Heading, Link, LinkReference } from "mdast";
 
@@ -81,6 +82,8 @@ function frontmatter(source: string): string {
   const rest = source.slice(firstEnd + 1);
   const close = /^(?:---|\.\.\.)\s*\r?$/m.exec(rest);
   if (!close) return source;
+  const document = parseDocument(rest.slice(0, close.index), { strict: true });
+  if (document.errors.length > 0 || (document.contents !== null && !isMap(document.contents))) return source;
   const after = firstEnd + 1 + close.index + close[0].length;
   const newline = source.indexOf("\n", after);
   const end = newline < 0 ? source.length : newline + 1;
@@ -188,9 +191,10 @@ function inside(root: string, path: string): boolean {
 }
 
 function directoryReadme(root: string, dir: string, tracked: ReadonlySet<string>): string | undefined {
+  const directory = relative(root, dir) || ".";
   const candidates = [...tracked].filter((path) => {
     const base = dirname(path);
-    return base === relative(root, dir) && /^readme\.md$/i.test(path.slice(path.lastIndexOf("/") + 1));
+    return base === directory && /^readme\.md$/i.test(path.slice(path.lastIndexOf("/") + 1));
   }).sort();
   return candidates.length === 1 ? candidates[0] : undefined;
 }

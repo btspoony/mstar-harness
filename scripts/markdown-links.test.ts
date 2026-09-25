@@ -93,6 +93,28 @@ describe("markdown-links behavior groups", () => {
     } finally { repo.close(); }
   });
 
+  test("markdown-links scans links inside invalid frontmatter-like content", () => {
+    const repo = fixture({ "index.md": "---\ntitle: [not closed\n[bad](missing.md)\n---\n" });
+    try {
+      expect(checkMarkdownLinks(repo.root, repo.tracked).diagnostics).toEqual([
+        { source: "index.md", line: 3, rawTarget: "missing.md", kind: "missing-target" },
+      ]);
+    } finally { repo.close(); }
+  });
+
+  test("markdown-links resolves root and nested directory fragments through README files", () => {
+    const repo = fixture({
+      "README.md": "# Home\n",
+      "docs/source.md": "[root](../#home) [nested](child#inside)\n",
+      "docs/child/README.md": "# Inside\n",
+    });
+    try {
+      const result = checkMarkdownLinks(repo.root, repo.tracked);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.anchorsChecked).toBe(2);
+    } finally { repo.close(); }
+  });
+
   test("markdown-links classifies templates and skips external schemes without opening them", () => {
     const repo = fixture({
       "index.md": "[template]({TARGET}) [empty](<>) [real](<guide file.md>) [web](https://example.invalid/a) [skill](skill://topic) [root](/guide%20file.md)\n",

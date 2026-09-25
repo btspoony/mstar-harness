@@ -18,6 +18,7 @@
         "mdast-util-gfm": "^3.1.0",
         "mdast-util-to-string": "^4.0.0",
         "micromark-extension-gfm": "^3.0.0",
+        "yaml": "^2.8.1",
       },
     },
     "packages/cli": {
