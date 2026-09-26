@@ -60,11 +60,29 @@ function schema() {
   });
 }
 
-function makeDefinition(id: string, description: string, effect: "read" | "write", keys: readonly string[], execute: (input: z.infer<ReturnType<typeof schema>>, context: InvocationContext) => Promise<CommandEnvelope<unknown>>): CommandDefinition {
+function makeDefinition(
+  id: string,
+  description: string,
+  effect: "read" | "write",
+  keys: readonly string[],
+  execute: (input: z.infer<ReturnType<typeof schema>>, context: InvocationContext) => Promise<CommandEnvelope<unknown>>,
+  contextOptions: readonly { key: string; context: "sessionId" }[] = [],
+): CommandDefinition {
   const input = schema().pick(Object.fromEntries(keys.map((key) => [key, true])) as never);
-  const optionNames = keys;
+  const optionNames = [...keys, ...contextOptions.map(({ key }) => key)];
   return {
-    id, cli: { path: id.split("."), aliases: [], arguments: [], options: optionNames.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value>`, required: false })) },
+    id,
+    cli: {
+      path: id.split("."),
+      aliases: [],
+      arguments: [],
+      options: optionNames.map((key) => ({
+        key,
+        flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value>`,
+        required: false,
+        ...(contextOptions.find((option) => option.key === key) ?? {}),
+      })),
+    },
     input, output: commandEnvelopeSchema, effects: [effect], description,
     async execute(raw, context) { const parsed = input.safeParse(raw); if (!parsed.success) return usage(id, parsed.error.message); return execute(parsed.data, context); },
   };
@@ -124,9 +142,28 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     makeDefinition("workflow.amend-prepare", "Append approved Prepare rows using legacy snapshot/compass byte-version CAS.", "write", ["session", "expectSnapshot", "expectCompass", "input"], async (input, context) => {
       try { if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.input === undefined) return usage("workflow.amend-prepare", "session, both expected versions and input patch are required"); const sessionPath = absolute(input.session, "session"); const envelope = readSessionEnvelope(sessionPath); await assertLegacyRoute(envelope.harness_root, "workflow amend-prepare"); return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, expectedSnapshotVersion: input.expectSnapshot, expectedCompassVersion: input.expectCompass, patch: object(input.input, "input") as never })); } catch (error) { return refused("workflow.amend-prepare", error); }
     }),
-    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "sessionId", "expectSnapshot", "expectCompass", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
-      try { if (input.session === undefined || input.sessionId === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "all prior-session recovery assertions are required"); const priorSessionPath = absolute(input.session, "session"); const prior = readSessionEnvelope(priorSessionPath); setArtifactStore(createFsStore(prior.harness_root)); return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({ cwd: context.cwd, harnessDir: prior.harness_root, identity: { source: "local", sessionId: input.sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null }, priorSessionPath, priorSessionId: prior.session_id, expectedSnapshotVersion: input.expectSnapshot, expectedCompassVersion: input.expectCompass, operationId: input.operationId, reason: input.reason, authorizationRef: input.authorizationRef, stoppedSessionIds: input.stopped })); } catch (error) { return refused("workflow.recover-coordinator", error); }
-    }),
+    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "expectSnapshot", "expectCompass", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
+      try {
+        if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "all prior-session recovery assertions are required");
+        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage("workflow.recover-coordinator", "recovery requires the main conversation session identity");
+        const priorSessionPath = absolute(input.session, "session");
+        const prior = readSessionEnvelope(priorSessionPath);
+        setArtifactStore(createFsStore(prior.harness_root));
+        return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({
+          cwd: context.cwd,
+          harnessDir: prior.harness_root,
+          identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          priorSessionPath,
+          priorSessionId: prior.session_id,
+          expectedSnapshotVersion: input.expectSnapshot,
+          expectedCompassVersion: input.expectCompass,
+          operationId: input.operationId,
+          reason: input.reason,
+          authorizationRef: input.authorizationRef,
+          stoppedSessionIds: input.stopped,
+        }));
+      } catch (error) { return refused("workflow.recover-coordinator", error); }
+    }, [{ key: "sessionId", context: "sessionId" }]),
   ];
   for (const transition of transitions) {
     const id = `workflow.${transition.name}`;

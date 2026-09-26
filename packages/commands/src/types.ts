@@ -44,7 +44,7 @@ export type CliSyntax = Readonly<{
   path: readonly string[];
   aliases: readonly string[];
   arguments: readonly { key: string; required: boolean; variadic: boolean }[];
-  options: readonly { key: string; flags: string; required: boolean; defaultValue?: unknown }[];
+  options: readonly { key: string; flags: string; required: boolean; defaultValue?: unknown; context?: "sessionId" }[];
 }>;
 
 export interface CommandDefinition<I = unknown, O = unknown> {

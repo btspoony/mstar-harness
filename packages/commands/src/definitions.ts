@@ -63,10 +63,18 @@ function validateOne(definition: CommandDefinition): void {
 
   const syntaxKeys = [
     ...definition.cli.arguments.map(({ key }) => key),
-    ...definition.cli.options.map(({ key }) => key),
+    ...definition.cli.options.filter(({ context }) => context === undefined).map(({ key }) => key),
   ].sort();
-  if (new Set(syntaxKeys).size !== syntaxKeys.length) {
-    throw new CommandDefinitionError(`${definition.id}: CLI syntax contains duplicate input keys`);
+  const contextKeys = definition.cli.options.filter(({ context }) => context !== undefined);
+  if (contextKeys.some(({ context }) => context !== "sessionId")) {
+    throw new CommandDefinitionError(`${definition.id}: CLI context options must name a supported invocation context`);
+  }
+  const allSyntaxKeys: Record<string, true> = {};
+  for (const key of [...syntaxKeys, ...contextKeys.map(({ key }) => key)]) {
+    if (allSyntaxKeys[key] === true) {
+      throw new CommandDefinitionError(`${definition.id}: CLI syntax contains duplicate input or context keys`);
+    }
+    allSyntaxKeys[key] = true;
   }
   if (definition.input instanceof z.ZodObject) {
     const schemaKeys = Object.keys(definition.input.shape).sort();

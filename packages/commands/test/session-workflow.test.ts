@@ -71,6 +71,34 @@ describe("session and workflow command families", () => {
     const result = await definition("session.recover").execute({ workflow: "wf-recovery", sessionId: "child-agent-session", priorSession: "stopped", reason: "reload", attestation: {}, expect: "stale-token", operation: "recover-1" }, context);
     expect(result).toMatchObject({ status: "usage", message: "active recovery requires the main conversation session identity" });
   });
+  test("workflow recovery requires the runtime main-session identity, not a request-supplied session", async () => {
+    const recovery = definition("workflow.recover-coordinator");
+    const input = {
+      session: "/tmp/prior-coordinator.json",
+      sessionId: "child-agent-session",
+      expectSnapshot: "snapshot-token",
+      expectCompass: "compass-token",
+      operationId: "recover-1",
+      reason: "the prior session stopped",
+      authorizationRef: "approval-1",
+      stopped: ["prior-coordinator"],
+    };
+    expect(recovery.input.parse(input)).not.toHaveProperty("sessionId");
+    expect(recovery.cli.options).toContainEqual({
+      key: "sessionId",
+      flags: "--session-id <value>",
+      required: false,
+      context: "sessionId",
+    });
+    expect(recovery.input.parse(input)).not.toHaveProperty("sessionId");
+
+    const result = await recovery.execute(input, testContext());
+    expect(result).toMatchObject({
+      status: "usage",
+      message: "recovery requires the main conversation session identity",
+    });
+  });
+
 
   test("pre-activation registration refuses on an active execution authority", async () => {
     const context = testContext();
