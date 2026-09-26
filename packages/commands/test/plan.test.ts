@@ -88,10 +88,16 @@ describe("plan command family", () => {
     expect(ids).toContain("plan.residual-close");
   });
 
-  test("coordinator session shows plan data and the engine refuses leaf-only progress by coordinator", async () => {
+  test("plan binds require runtime session identity and coordinator progress remains role-scoped", async () => {
     const data = fixture();
     const ctx = context(data.root);
-    const bound = await definition("plan.bind").execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "coordinator-a" } as never, ctx);
+    const coordinatorDefinition = definition("plan.bind");
+    const suppliedOnly = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
+    expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input", message: "coordinator bind requires runtime session identity" });
+    expect(coordinatorDefinition.input.safeParse({ sessionId: "caller-chosen" }).data).not.toHaveProperty("sessionId");
+    const planSessionWithoutRuntime = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
+    expect(planSessionWithoutRuntime).toMatchObject({ status: "usage", code: "command.invalid-input", message: "plan-session bind requires runtime session identity" });
+    const bound = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
     if (bound.status !== "ok" || typeof bound.data !== "object" || bound.data === null || !("session_file" in bound.data)) {
       throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
     }

@@ -37,7 +37,6 @@ const inputSchema = z.object({
   harness: z.string().min(1).optional(),
   expect: z.union([z.string().min(1), z.number().int().nonnegative()]).optional(),
   operation: z.string().min(1).optional(),
-  sessionId: z.string().min(1).optional(),
   handoff: z.string().min(1).optional(),
   reason: z.string().min(1).optional(),
   progress: z.unknown().optional(),
@@ -198,6 +197,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         pinSessionStore(resumePath);
         bindInput = { resumePath, cwd };
       } else if (input.coordinator === true) {
+        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "coordinator bind requires runtime session identity");
         if (input.workflow === undefined) return usage(id, "coordinator bind requires workflow");
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
@@ -205,24 +205,26 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           coordinator: true,
           workflowId: input.workflow,
           cwd,
+          sessionId: context.sessionId,
           ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}),
-          ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
         };
       } else if (input.assignment !== undefined) {
+        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "plan-session bind requires runtime session identity");
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
         bindInput = {
           scope: { assignmentPath: absolutePath(input.assignment, "assignment") },
           cwd,
-          ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+          sessionId: context.sessionId,
         };
       } else if (input.workflow !== undefined && input.plan !== undefined) {
+        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "plan-session bind requires runtime session identity");
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
         bindInput = {
           scope: { workflowId: input.workflow, planId: input.plan, ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}) },
           cwd,
-          ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+          sessionId: context.sessionId,
         };
       } else {
         return usage(id, "bind requires a session, coordinator workflow, assignment, or workflow and plan");
@@ -321,7 +323,10 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         path: ["plan", verb],
         aliases: [],
         arguments: [],
-        options: optionKeys.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`, required: false })),
+        options: [
+          ...optionKeys.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`, required: false })),
+          ...(verb === "bind" ? [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const }] : []),
+        ],
       },
       input: inputSchema,
       output: commandEnvelopeSchema,

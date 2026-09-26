@@ -163,6 +163,19 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   if (definition === undefined) {
     return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
   }
+  const rawInput = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
+  const selector = definition.cli.options.find((option) => option.context === "sessionId");
+  const selectorValue = selector === undefined ? undefined : rawInput[selector.key];
+  if (selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "")) {
+    return {
+      version: 1,
+      command: id,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message: `${selector?.flags.split(/[ <]/)[0] ?? selector?.key} must be a non-empty string`,
+    };
+  }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
     return {
@@ -174,11 +187,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
       message: parsed.error.issues.map((issue) => issue.message).join("; "),
     };
   }
-  const sessionKey = definition.cli.options.find((option) => option.context === "sessionId")?.key;
-  const sessionValue = sessionKey === undefined || parsed.data === null || typeof parsed.data !== "object"
-    ? undefined
-    : Object.entries(parsed.data).find(([key]) => key === sessionKey)?.[1];
-  const request = typeof sessionValue === "string" ? { ...context, sessionId: sessionValue } : context;
+  const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
   try {
     const envelope = await definition.execute(parsed.data, request);
     if (!definition.output.safeParse(envelope).success) {

@@ -1,3 +1,6 @@
+// Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
+// These adapter tests load @mstar-harness/commands through its generated package entry.
+
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { getCommandDefinitions } from "@mstar-harness/commands";
@@ -43,10 +46,10 @@ function context(): InvocationContext {
   };
 }
 
-async function run(args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+async function run(args: string[], definitions: readonly CommandDefinition[] = getCommandDefinitions()): Promise<{ status: number; stdout: string; stderr: string }> {
   const program = new Command();
   program.name("mstar").exitOverride();
-  registerCliCommands(program, getCommandDefinitions(), context());
+  registerCliCommands(program, definitions, context());
   const stdout: string[] = [];
   const stderr: string[] = [];
   const writeOut = process.stdout.write.bind(process.stdout);
@@ -84,6 +87,13 @@ describe("generated CLI adapter", () => {
     expect(new Set(ids)).toEqual(new Set(census));
     expect(ids).not.toContain("init");
     expect(ids).not.toContain("report");
+  });
+
+  test("forwards declared CLI context selectors through the real handler", async () => {
+    const result = await run(["plan", "bind", "--resume-ref", "invalid-ref", "--session-id", "cli-main-session"]);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope.status).not.toBe("usage");
+    expect(envelope.message).not.toContain("active resume requires runtime session identity");
   });
 
   test("help is a successful parser outcome, not a usage envelope", async () => {
