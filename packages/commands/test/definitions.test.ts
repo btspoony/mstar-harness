@@ -98,6 +98,12 @@ describe("command definitions", () => {
       "store.execution.restore-preview",
       "store.execution.restore",
       "store.execution.export",
+      "sdd.workspace",
+      "sdd.task-brief",
+      "sdd.review-package",
+      "sdd.check-context",
+      "sdd.evidence.capture",
+      "sdd.evidence.verify",
     ]);
   });
 

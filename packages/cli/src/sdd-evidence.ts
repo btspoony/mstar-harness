@@ -26,6 +26,7 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as re
 import { performance } from "node:perf_hooks";
 import pc from "picocolors";
 import type { Command } from "commander";
+import type { CommandDefinition } from "@mstar-harness/commands";
 import {
   assessSddEvidenceReuse,
   checkSddAction,
@@ -1750,19 +1751,18 @@ function failEvidence(error: unknown, context: string): void {
  * Register `sdd evidence capture` and `sdd evidence verify` beside the
  * existing sdd commands. The old `sdd exec` surface is untouched.
  */
-export function registerSddEvidenceCommands(sddCommand: Command): void {
+export function registerSddEvidenceCommands(sddCommand: Command, definitions: readonly CommandDefinition[]): void {
+  const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));
+  const captureDefinition = definitionsById.get("sdd.evidence.capture");
+  const verifyDefinition = definitionsById.get("sdd.evidence.verify");
+  if (!captureDefinition || !verifyDefinition) throw new Error("SDD evidence command definitions are missing");
   const evidenceCommand = sddCommand
     .command("evidence")
-    .description(
-      "Capture and verify SDD test evidence bundles (developer-authorized checks; capture runs POSIX linux/darwin only, verify is read-only and portable)",
-    );
+    .description("Capture and verify SDD test evidence bundles.");
 
   evidenceCommand
     .command("capture")
-    .description(
-      "Run an already-authorized check once and retain its raw evidence under {SDD_DIR}/evidence/<run-uuid> " +
-        "(literal argv, no shell; exit: child code preserved, missing executable 127, timeout 124, signals 128+n, gate/IO 1, usage 2)",
-    )
+    .description(captureDefinition.description)
     .option("--request <path>", "Absolute path to the immutable task capture request JSON")
     .argument("[argv...]", "Child executable + args placed after -- (passed through unchanged)")
     .action(async (argv: string[], options: { request?: string }) => {
@@ -1785,10 +1785,7 @@ export function registerSddEvidenceCommands(sddCommand: Command): void {
 
   evidenceCommand
     .command("verify")
-    .description(
-      "Read-only integrity/applicability assessment of a retained evidence bundle (never runs the recorded child; " +
-        "no-target exit 0 means complete integrity only; with --target exit 0 means reuse candidate)",
-    )
+    .description(verifyDefinition.description)
     .option("--sdd-dir <path>", "Absolute path to the plan's SDD dir")
     .option("--plan <id>", "Expected plan id")
     .option("--task <id>", "Expected task id")

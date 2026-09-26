@@ -158,7 +158,7 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
-import { getPlanCommandDefinitions } from "@mstar-harness/commands";
+import { getPlanCommandDefinitions, getSddCommandDefinitions } from "@mstar-harness/commands";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {
@@ -2182,6 +2182,8 @@ function loadSddContextFile(pathValue: string | undefined): SddExecutionContext 
   return doc as SddExecutionContext;
 }
 
+const sddDefinitions = getSddCommandDefinitions();
+const sddDefinitionsById = Object.fromEntries(sddDefinitions.map((definition) => [definition.id, definition]));
 const sddCommand = program
   .command("sdd")
   .description(
@@ -2191,7 +2193,7 @@ const sddCommand = program
 
 sddCommand
   .command("workspace")
-  .description("Resolve and ensure {SDD_DIR} for a plan (exit 1 on resolution failures, 2 on usage errors)")
+  .description(sddDefinitionsById["sdd.workspace"]!.description)
   .argument("[plan-id]", "Plan id whose SDD dir is resolved/created")
   .argument("[control-root]", "Main worktree repo root (default: MSTAR_CONTROL_ROOT or the Git-derived main worktree of the cwd)")
   .action((planId: string | undefined, controlRoot?: string) => {
@@ -2215,10 +2217,7 @@ sddCommand
 
 sddCommand
   .command("task-brief")
-  .description(
-    "Extract the `## Task N` section of a plan into a brief file (exit 3 when task N is missing). " +
-      "With --context the artifact destination is gate-checked before mkdir/write and the emitted path is absolute",
-  )
+  .description(sddDefinitionsById["sdd.task-brief"]!.description)
   .argument("[plan-file]", "Plan markdown file")
   .argument("[task-number]", "Task number whose brief is extracted")
   .argument("[outfile]", "Output file (default: {SDD_DIR}/task-N-brief.md)")
@@ -2241,10 +2240,7 @@ sddCommand
 
 sddCommand
   .command("review-package")
-  .description(
-    "Write commits + stat + diff -U10 for BASE..HEAD into a review file (exit 2 on bad refs). " +
-      "With --context the review range is probed in the feature worktree and the package is gate-checked into the plan's control artifacts",
-  )
+  .description(sddDefinitionsById["sdd.review-package"]!.description)
   .argument("[base]", "Base ref (commit SHA)")
   .argument("[head]", "Head ref (commit SHA)")
   .argument("[outfile]", "Output file (default: {SDD_DIR}/review-<short-base>..<short-head>.diff)")
@@ -2267,10 +2263,7 @@ sddCommand
 
 sddCommand
   .command("check-context")
-  .description(
-    "Gate one action seam against a resolved SDD execution context (spec A3): the observed cwd is this process's cwd. " +
-      "Exit 0 pass, 1 gate fail, 2 usage; a refused action performs no write",
-  )
+  .description(sddDefinitionsById["sdd.check-context"]!.description)
   .option("--context <path>", "Absolute path to the SddExecutionContext JSON file")
   .option("--kind <kind>", "Action seam kind: source | artifact | launch")
   .option("--target <path>", "Path the action would touch (required for artifact; optional for source/launch)")
@@ -2329,7 +2322,7 @@ sddCommand
 
 // Local SDD test-evidence facility: capture + read-only verify, registered
 // beside the existing sdd commands; `sdd exec` stays untouched.
-registerSddEvidenceCommands(sddCommand);
+registerSddEvidenceCommands(sddCommand, sddDefinitions);
 
 const iterationCommand = program
   .command("iteration")
