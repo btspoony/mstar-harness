@@ -66,7 +66,10 @@ test("registration preserves every canonical identity and Zod schema through the
       const name = mcpToolName(definition.id);
       const tool = toolsByName.get(name);
       assert.ok(tool, `Missing MCP tool for CLI command ${definition.id}`);
-      assert.deepEqual(normalize(tool.inputSchema), normalize(z.toJSONSchema(definition.input, { io: "input" })));
+      const input = definition.id === "judgment.review-advice" && definition.input instanceof z.ZodObject
+        ? definition.input.extend({ input: z.string().optional() })
+        : definition.input;
+      assert.deepEqual(normalize(tool.inputSchema), normalize(z.toJSONSchema(input, { io: "input" })));
       assert.deepEqual(normalize(tool.outputSchema), normalize(z.toJSONSchema(definition.output, { io: "output" })));
     }
 

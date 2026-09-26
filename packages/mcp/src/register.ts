@@ -54,8 +54,8 @@ export function registerMcpCommands(
       outputSchema: definition.output,
     }, async (input, extra) => {
       const invocationInput = handlerInput(definition, input);
-      const validated = await connectionEffects.withInput(input, async () => {
-        const resolved = await resolveContext(definition, input, extra.mcpReq.signal, services, connectionEffects);
+      const resolved = await resolveContext(definition, input, extra.mcpReq.signal, services, connectionEffects);
+      const validated = await connectionEffects.withInput(input, resolved, async () => {
         const envelope = await definition.execute(invocationInput, { ...resolved, effects: connectionEffects });
         return validateCommandOutcome(definition, envelope);
       });
