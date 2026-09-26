@@ -2,19 +2,25 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import {
   compareSemver,
   diagnoseCodexHost,
   diagnoseCursorHost,
+  diagnoseDshHost,
   detectCodexPluginVersion,
   detectCursorPluginVersionForScope,
   globalInstallPath,
-  projectInstallPath,
+  isDshAvailable,
   joinWithinRoot,
   legacyCodexMarketplaceNote,
   parseCodexInstalledEntries,
   parseCodexMarketplaceNames,
+  parseDshLoaderEntries,
+  projectInstallPath,
+  readInstalledFallbacksVersion,
   resolveCliPath,
+  resolveDshProfileDir,
   validateAgentPlugin,
 } from "../src/index.js";
 
@@ -158,5 +164,95 @@ describe("cursor host health", () => {
     expect(diagnoseCursorHost("global", { global: pluginRoot }).errors).toEqual([
       `Missing marker file: ${path.join(pluginRoot, ".cursor-plugin/plugin.json")}`,
     ]);
+  });
+});
+
+const DSH_DUMP_BOTH = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "# == dsh-llm-fallbacks",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "",
+].join("\n");
+
+const DSH_DUMP_FALLBACKS_DISABLED = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "# == dsh-llm-fallbacks",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  enabled: false",
+  "",
+].join("\n");
+
+function dshProbe(dump: string): (args: string[]) => string {
+  return (args) => {
+    if (args[0] === "--version") return "dsh 0.1.0-rc.6";
+    if (args.includes("--dump-config")) return dump;
+    throw new Error(`unexpected dsh args: ${args.join(" ")}`);
+  };
+}
+
+describe("dsh host health", () => {
+  test("discovers dsh diagnostics from a synthetic host root", () => {
+    const root = fixture();
+    writeJson(root, "profiles/web/node_modules/dsh-llm-fallbacks/package.json", {
+      version: DSH_LLM_FALLBACKS_VERSION,
+    });
+    const profileDir = resolveDshProfileDir(root);
+    expect(profileDir).toBe(path.join(root, "profiles", "web"));
+
+    const mounted = diagnoseDshHost(dshProbe(DSH_DUMP_BOTH), { dshHome: root });
+    expect(mounted.location).toBe(profileDir);
+    expect(mounted.errors).toEqual([]);
+    expect(mounted.notes).toEqual([
+      "@mstar-harness/dsh: mounted",
+      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: mounted`,
+    ]);
+
+    const disabled = diagnoseDshHost(dshProbe(DSH_DUMP_FALLBACKS_DISABLED), { dshHome: root });
+    expect(disabled.notes).toEqual([
+      "@mstar-harness/dsh: mounted",
+      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: disabled`,
+    ]);
+    expect(disabled.errors).toEqual([
+      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION} is disabled. Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.`,
+    ]);
+    expect(parseDshLoaderEntries(DSH_DUMP_FALLBACKS_DISABLED)?.find((entry) => entry.name === "dsh-llm-fallbacks")?.enabled)
+      .toBe(false);
+  });
+
+  test("reports a missing dsh artifact from a synthetic root", () => {
+    const root = fixture();
+    const profileDir = resolveDshProfileDir(root);
+    expect(readInstalledFallbacksVersion(profileDir)).toBeNull();
+
+    const missing = diagnoseDshHost(dshProbe(DSH_DUMP_BOTH), { dshHome: root });
+    expect(missing.location).toBe(profileDir);
+    expect(missing.notes).toEqual([
+      "@mstar-harness/dsh: mounted",
+      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: drifted (installed unknown, pinned ${DSH_LLM_FALLBACKS_VERSION})`,
+    ]);
+    expect(missing.errors).toEqual([
+      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION} is drifted (profile has unknown, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+    ]);
+
+    const unavailable = diagnoseDshHost(() => {
+      throw new Error("dsh unavailable");
+    }, { dshHome: root });
+    expect(unavailable.location).toBe(profileDir);
+    expect(unavailable.notes).toEqual([]);
+    expect(unavailable.errors).toEqual([
+      "dsh CLI not found on PATH. Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
+    ]);
+    expect(isDshAvailable(() => {
+      throw new Error("dsh unavailable");
+    })).toBe(false);
+    expect(parseDshLoaderEntries("not a loader dump")).toBeNull();
   });
 });
