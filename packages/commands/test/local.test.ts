@@ -5,6 +5,7 @@ import path from "node:path";
 import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import {
   compareSemver,
+  diagnoseZcodeHost,
   diagnoseOpencodeHost,
   diagnoseCodexHost,
   diagnoseCursorHost,
@@ -357,5 +358,46 @@ describe("dsh host health", () => {
       throw new Error("dsh unavailable");
     })).toBe(false);
     expect(parseDshLoaderEntries("not a loader dump")).toBeNull();
+  });
+});
+
+describe("zcode host health", () => {
+  test("discovers ZCode diagnostics from synthetic host roots", () => {
+    const root = fixture();
+    const pluginsRoot = path.join(root, "plugins");
+    const harnessRepoPath = path.join(root, "harness");
+    mkdirSync(path.join(harnessRepoPath, ".zcode-plugin"), { recursive: true });
+    writeJson(harnessRepoPath, ".zcode-plugin/plugin.json", { name: "morning-star-harness" });
+    writeJson(pluginsRoot, "known_marketplaces.json", {
+      marketplaces: [{ id: "mstar-local", source: { source: "github", repo: "btspoony/mstar-harness" } }],
+    });
+    writeJson(pluginsRoot, "marketplaces/mstar-local/marketplace.json", {
+      name: "mstar-local",
+      plugins: [{ name: "morning-star-harness", source: { source: "github", repo: "btspoony/mstar-harness" } }],
+    });
+    for (const agent of ["fullstack-dev", "qc-specialist"]) {
+      writeText(harnessRepoPath, `agents/${agent}.md`, `agent: ${agent}`);
+    }
+
+    expect(diagnoseZcodeHost("global", { pluginsRoot, harnessRepoPath })).toEqual({
+      location: path.join(pluginsRoot, "known_marketplaces.json"),
+      errors: [],
+    });
+  });
+
+  test("reports missing ZCode marketplace and agent artifacts", () => {
+    const root = fixture();
+    const pluginsRoot = path.join(root, "plugins");
+    const harnessRepoPath = path.join(root, "harness");
+    mkdirSync(path.join(harnessRepoPath, ".zcode-plugin"), { recursive: true });
+    writeJson(harnessRepoPath, ".zcode-plugin/plugin.json", { name: "morning-star-harness" });
+    writeJson(pluginsRoot, "known_marketplaces.json", {
+      marketplaces: [{ id: "mstar-local", source: { source: "github", repo: "btspoony/mstar-harness" } }],
+    });
+
+    expect(diagnoseZcodeHost("global", { pluginsRoot, harnessRepoPath }).errors).toEqual([
+      `Missing plugin agents directory: ${path.join(harnessRepoPath, "agents")}`,
+      `Missing ZCode marketplace: ${path.join(pluginsRoot, "marketplaces", "mstar-local", "marketplace.json")}`,
+    ]);
   });
 });
