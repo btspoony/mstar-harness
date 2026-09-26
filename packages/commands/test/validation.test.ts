@@ -129,4 +129,30 @@ describe("validation command family", () => {
     mkdirSync(rolesDir);
     expect((await definition("roles.validate").execute({ rolesDir, skillsDir: cwd }, context(cwd))).status).toBe("refused");
   });
+  test("roles validation scans root-relative directories from a nested invocation and preserves absolute paths", async () => {
+    const projectRoot = path.join(tempRoot(), "project");
+    const invocationCwd = path.join(projectRoot, "packages", "nested");
+    const skillsRoot = path.join(projectRoot, "skills");
+    const rolesDir = path.join(skillsRoot, "mstar-roles");
+    mkdirSync(invocationCwd, { recursive: true });
+    mkdirSync(rolesDir, { recursive: true });
+    mkdirSync(path.join(skillsRoot, "mstar-fixture"), { recursive: true });
+    mkdirSync(path.join(invocationCwd, "skills", "mstar-wrong"), { recursive: true });
+    writeFileSync(path.join(skillsRoot, "mstar-fixture", "SKILL.md"), "---\nname: mstar-fixture\n---\nFixture.\n");
+    writeFileSync(path.join(invocationCwd, "skills", "mstar-wrong", "SKILL.md"), "---\nname: mstar-wrong\n---\nWrong tree.\n");
+
+    const result = await definition("roles.validate").execute({
+      rolesDir: path.resolve(projectRoot, "skills/mstar-roles"),
+      skillsDir: path.resolve(projectRoot, "skills"),
+    }, context(invocationCwd));
+
+    const violations = violationsOf(result);
+    expect(violations.some(({ code, message }) =>
+      code === "roles.mapping.reference.missing" && message.includes(`under ${rolesDir}`),
+    )).toBe(true);
+    expect(violations.some(({ code, message }) =>
+      code === "roles.loadorder.section.missing" && message.includes('"mstar-fixture"'),
+    )).toBe(true);
+    expect(violations.some(({ message }) => message.includes("mstar-wrong"))).toBe(false);
+  });
 });

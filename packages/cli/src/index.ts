@@ -6663,7 +6663,10 @@ function bindValidationCommandActions(): void {
           input = { skillDir: typeof first === "string" ? toPath(first) : undefined };
           break;
         case "roles.validate":
-          input = { rolesDir: options.rolesDir, skillsDir: options.skillsDir };
+          input = {
+            rolesDir: toPath(typeof options.rolesDir === "string" ? options.rolesDir : "skills/mstar-roles"),
+            skillsDir: typeof options.skillsDir === "string" ? toPath(options.skillsDir) : undefined,
+          };
           break;
         case "qc.validate-report":
           input = { reportFile: typeof first === "string" ? toPath(first) : undefined };
