@@ -6,6 +6,7 @@ import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import {
   compareSemver,
   diagnoseOpencodeHost,
+  diagnoseCodexHost,
   diagnoseCursorHost,
   diagnoseDshHost,
   diagnoseKimiHost,
