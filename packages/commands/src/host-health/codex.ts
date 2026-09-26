@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 const PLUGIN_NAME = "morning-star-harness";
 export const CODEX_MARKETPLACE_NAME = "mstar-repo";
 const MARKETPLACE_GIT_SOURCE = "btspoony/mstar-harness";
@@ -70,4 +72,49 @@ export function legacyCodexMarketplaceNote(raw: string, legacyPath: string): str
     // Unparseable user config: leave it alone.
   }
   return null;
+}
+
+const CODEX_BIN = "codex";
+const CODEX_INSTALL_HINT =
+  "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
+
+export type CodexDoctorResult = { location: string; errors: string[]; notes: string[] };
+
+/** Assemble read-only Codex doctor findings from the CLI probe and optional legacy artifact. */
+export function diagnoseCodexHost(
+  runCodex: CodexCommandRunner,
+  legacyMarketplacePath: string,
+): CodexDoctorResult {
+  const errors: string[] = [];
+  const notes: string[] = [];
+  let legacyRaw: string;
+  try {
+    legacyRaw = fs.readFileSync(legacyMarketplacePath, "utf8");
+  } catch {
+    legacyRaw = "";
+  }
+  const legacyNote = legacyCodexMarketplaceNote(legacyRaw, legacyMarketplacePath);
+  if (legacyNote) notes.push(legacyNote);
+
+  if (!isCodexAvailable(() => runCodex(["--version"]))) {
+    errors.push(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
+    return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
+  }
+
+  try {
+    const marketplaces = parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"]));
+    if (!marketplaces.includes(CODEX_MARKETPLACE_NAME)) {
+      errors.push(
+        `Marketplace ${CODEX_MARKETPLACE_NAME} not configured (run init, or: ${CODEX_BIN} plugin marketplace add ${MARKETPLACE_GIT_SOURCE} --ref main).`,
+      );
+    }
+    const installed = parseCodexInstalledPluginIds(runCodex(["plugin", "list", "--json"]));
+    if (marketplaces.includes(CODEX_MARKETPLACE_NAME) && !installed.includes(CODEX_PLUGIN_ID)) {
+      notes.push(`Plugin not installed yet: ${CODEX_BIN} plugin add ${CODEX_PLUGIN_ID}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`Could not query ${CODEX_BIN} plugin marketplace list: ${message}`);
+  }
+  return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
 }

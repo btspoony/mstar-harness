@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   compareSemver,
+  diagnoseCodexHost,
   detectCodexPluginVersion,
   detectCursorPluginVersionForScope,
   detectZcodePluginVersion,
@@ -87,21 +88,40 @@ describe("shared host-health helpers", () => {
 });
 
 describe("codex host health", () => {
-  test("discovers an installed plugin, reports missing artifacts, and handles unavailable probes", () => {
+  test("discovers Codex diagnostics from a synthetic host root", () => {
     const root = fixture();
-    const installedDump = JSON.stringify({
-      installed: [{ pluginId: "morning-star-harness@mstar-repo", version: "3.6.3" }],
+    const legacyPath = path.join(root, ".agents", "plugins", "marketplace.json");
+    writeJson(root, ".agents/plugins/marketplace.json", {
+      plugins: [{ name: "morning-star-harness" }],
     });
-    expect(detectCodexPluginVersion((args) => {
-      expect(args).toEqual(["plugin", "list", "--json"]);
-      return installedDump;
-    })).toBe("3.6.3");
-    expect(detectCodexPluginVersion(() => JSON.stringify({ installed: [] }))).toBeNull();
-    expect(() => parseCodexInstalledEntries("{ invalid json")).toThrow();
+    const result = diagnoseCodexHost((args) => {
+      if (args[0] === "--version") return "codex 0.144.1";
+      if (args[1] === "marketplace") return JSON.stringify({ marketplaces: [{ name: "mstar-repo" }] });
+      return JSON.stringify({ installed: [{ pluginId: "morning-star-harness@mstar-repo" }] });
+    }, legacyPath);
+    expect(result.errors).toEqual([]);
+    expect(result.notes).toEqual([
+      `Legacy personal marketplace entry found at ${legacyPath} — the morning-star-harness plugin now installs from the repo marketplace (btspoony/mstar-harness). Remove the entry, then install: codex plugin add morning-star-harness@mstar-repo`,
+    ]);
+    expect(detectCodexPluginVersion(() => JSON.stringify({
+      installed: [{ pluginId: "morning-star-harness@mstar-repo", version: "3.6.3" }],
+    }))).toBe("3.6.3");
+  });
+
+  test("reports unavailable Codex and missing legacy artifacts from a synthetic root", () => {
+    const root = fixture();
+    const missingPath = path.join(root, ".agents", "plugins", "marketplace.json");
+    const result = diagnoseCodexHost(() => {
+      throw new Error("codex unavailable");
+    }, missingPath);
+    expect(result.errors).toEqual([
+      "codex CLI not found on PATH. Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
+    ]);
+    expect(result.notes).toEqual([]);
     expect(isCodexAvailable(() => { throw new Error("codex unavailable"); })).toBe(false);
+    expect(() => parseCodexInstalledEntries("{ invalid json")).toThrow();
     expect(parseCodexMarketplaceNames(JSON.stringify({ marketplaces: [{ name: "mstar-repo" }, {}, null] })))
       .toEqual(["mstar-repo"]);
-    expect(legacyCodexMarketplaceNote(JSON.stringify({ plugins: [] }), path.join(root, ".agents/plugins/marketplace.json")))
-      .toBeNull();
+    expect(legacyCodexMarketplaceNote(JSON.stringify({ plugins: [] }), missingPath)).toBeNull();
   });
 });

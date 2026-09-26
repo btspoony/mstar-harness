@@ -3,11 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   CODEX_MARKETPLACE_NAME as MARKETPLACE_NAME,
+  diagnoseCodexHost,
   detectCodexPluginVersion as detectCodexPluginVersionFromHealth,
-  isCodexAvailable,
-  legacyCodexMarketplaceNote,
-  parseCodexInstalledPluginIds,
-  parseCodexMarketplaceNames,
 } from "@mstar-harness/commands";
 import { ensureCodexAgentFile, validateCodexAgentFile } from "./codex-agent-files";
 import type { AgentAdapter, Scope } from "../types";
@@ -56,8 +53,7 @@ import {
 const CODEX_BIN = "codex";
 const CODEX_LOCAL_TIMEOUT_MS = 10_000;
 const CODEX_MARKETPLACE_TIMEOUT_MS = 300_000;
-const CODEX_INSTALL_HINT =
-  "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
+
 
 const CODEX_AGENT_NAMES = [
   "product-manager",
@@ -94,43 +90,12 @@ function runCodex(args: string[], dryRun: boolean, timeoutMs: number): string {
   return runCliCommand([CODEX_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
 
-function codexAvailable(): boolean {
-  return isCodexAvailable(() => runCodex(["--version"], false, CODEX_LOCAL_TIMEOUT_MS));
-}
-
-/** Parse `codex plugin marketplace list --json` → marketplace names. */
-function configuredMarketplaceNames(dryRun: boolean): string[] {
-  if (dryRun) return [];
-  return parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
-}
-
-/** Parse installed plugin IDs from the read-only codex plugin list. */
-function installedPluginIds(dryRun: boolean): string[] {
-  if (dryRun) return [];
-  return parseCodexInstalledPluginIds(runCodex(["plugin", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
-}
 
 /** CLI-owned subprocess boundary for the shared read-only Codex version probe. */
 export function detectCodexPluginVersion(): string | null {
   return detectCodexPluginVersionFromHealth((args) => runCodex(args, false, CODEX_LOCAL_TIMEOUT_MS));
 }
 
-/**
- * Read the legacy personal marketplace (`~/.agents/plugins/marketplace.json`),
- * if it exists, and surface a migration note when it still carries a harness
- * entry. Never throws — the file is user-owned and optional post-cutover.
- */
-function legacyPersonalMarketplaceNote(): string | null {
-  const legacyPath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
-  let raw: string;
-  try {
-    raw = fs.readFileSync(legacyPath, "utf8");
-  } catch {
-    // Absent or unreadable: the legacy file is user-owned and optional.
-    return null;
-  }
-  return legacyCodexMarketplaceNote(raw, legacyPath);
-}
 
 function agentSourcePath(agentName: string) {
   return path.join(HARNESS_REPO_PATH, "codex", "agents", `${agentName}.toml`);
@@ -256,30 +221,12 @@ function runInit(scope: Scope, dryRun: boolean) {
 }
 
 function runDoctor(scope: Scope) {
-  const errors = [...validateLocalHarnessRepo(), ...validateAgentFiles(scope)];
-  const notes: string[] = [];
-  const legacyNote = legacyPersonalMarketplaceNote();
-  if (legacyNote) notes.push(legacyNote);
-
-  if (!codexAvailable()) {
-    errors.push(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
-    return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
-  }
-  try {
-    const marketplaces = configuredMarketplaceNames(false);
-    if (!marketplaces.includes(MARKETPLACE_NAME)) {
-      errors.push(`Marketplace ${MARKETPLACE_NAME} not configured (run init, or: ${CODEX_BIN} plugin marketplace add ${REPO_URL} --ref main).`);
-    }
-    const installed = installedPluginIds(false);
-    const pluginId = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-    if (marketplaces.includes(MARKETPLACE_NAME) && !installed.includes(pluginId)) {
-      notes.push(`Plugin not installed yet: ${CODEX_BIN} plugin add ${pluginId}`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    errors.push(`Could not query ${CODEX_BIN} plugin marketplace list: ${message}`);
-  }
-
+  const diagnostic = diagnoseCodexHost(
+    (args) => runCodex(args, false, CODEX_LOCAL_TIMEOUT_MS),
+    path.join(os.homedir(), ".agents", "plugins", "marketplace.json"),
+  );
+  const errors = [...validateLocalHarnessRepo(), ...validateAgentFiles(scope), ...diagnostic.errors];
+  const notes = [...diagnostic.notes];
   if (scope === "project") {
     const projectRoot = resolveProjectRoot();
     const gitignorePath = path.join(projectRoot, ".gitignore");
@@ -294,7 +241,7 @@ function runDoctor(scope: Scope) {
     }
     errors.push(...validateIterationSkillLinks());
   }
-  return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors, notes };
+  return { location: diagnostic.location, errors, notes };
 }
 
 export const codexAdapter: AgentAdapter = {
