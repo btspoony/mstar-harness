@@ -145,6 +145,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getValidationCommandDefinitions(),
   ...getPrReviewCommandDefinitions(),
   ...getProcessCommandDefinitions(),
+  ...getJudgmentCommandDefinitions(),
   ...getDashboardCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
