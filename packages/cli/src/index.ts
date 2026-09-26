@@ -1580,7 +1580,7 @@ const persistCommand = program
   );
 
 /** Persist kinds (unknown kind is a usage error, exit 2). */
-const PERSIST_KINDS: readonly string[] = ["status", "snapshot", "review", "json"];
+const PERSIST_KINDS: readonly ArtifactKind[] = ["status", "snapshot", "review", "json"];
 
 /**
  * Kinds the coordination boundary protects: their local bytes belong to the
@@ -1610,7 +1610,7 @@ function refuseRetiredPersistKind(kind: string): void {
 
 function parsePersistKind(kind: string): ArtifactKind {
   refuseRetiredPersistKind(kind);
-  if (PERSIST_KINDS.includes(kind)) return kind as ArtifactKind;
+  if (PERSIST_KINDS.includes(kind as ArtifactKind)) return kind as ArtifactKind;
   throw new SddScriptError(
     "usage: persist <kind> --key <key> [--file <path>|--stdin] [--store <module>] [--schema <id>]\n" +
       "       persist get <kind> --key <key> [--validate] [--store <module>]\n" +

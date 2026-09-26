@@ -26,7 +26,7 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 }
 
 describe("command definitions", () => {
-  test("canonical registry includes the seven status family identities", () => {
+  test("canonical registry includes status and persist family identities", () => {
     expect(getCommandDefinitions().map(({ id }) => id)).toEqual([
       "status.validate",
       "status.workflow-close",
@@ -35,6 +35,10 @@ describe("command definitions", () => {
       "status.tech-debt",
       "status.backlog-register",
       "status.backlog-close",
+      "persist.write",
+      "persist.get",
+      "persist.list",
+      "persist.delete",
     ]);
   });
 
