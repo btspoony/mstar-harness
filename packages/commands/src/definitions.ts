@@ -16,6 +16,7 @@ import { getValidationCommandDefinitions } from "./families/validation.js";
 import { getAuditCommandDefinitions } from "./families/audit.js";
 import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 import { getJudgmentCommandDefinitions } from "./families/judgment.js";
+import { getProcessCommandDefinitions } from "./families/process.js";
 
 
 
@@ -142,6 +143,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getAuditCommandDefinitions(),
   ...getValidationCommandDefinitions(),
   ...getPrReviewCommandDefinitions(),
+  ...getProcessCommandDefinitions(),
   ...getJudgmentCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
