@@ -1019,7 +1019,7 @@ for (const [verb, replacement] of Object.entries(RETIRED_BACKLOG_COMMANDS)) {
     .action(() => {
       console.error(
         pc.red(
-          `status ${verb}: removed \u2014 project registers are migration history; findings are issues in ` +
+          `status ${verb}: status.verb-retired \u2014 project registers are migration history; findings are issues in ` +
             `{HARNESS_DIR}/store.db (capture/close via \`mstar ${replacement}\`, or the unscoped \`mstar issue add|close\`); ` +
             "this verb writes nothing",
         ),
@@ -1186,7 +1186,7 @@ statusCommand
   .action(() => {
     console.error(
       pc.red(
-        "status archive-residuals: removed \u2014 findings are issues in {HARNESS_DIR}/store.db; close one with " +
+        "status archive-residuals: status.verb-retired \u2014 findings are issues in {HARNESS_DIR}/store.db; close one with " +
           "`mstar plan issue-close` (plan-scoped) or `mstar issue close|waive|duplicate|supersede` (unscoped) instead",
       ),
     );

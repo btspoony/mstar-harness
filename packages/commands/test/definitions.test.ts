@@ -26,8 +26,16 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 }
 
 describe("command definitions", () => {
-  test("canonical registry is side-effect-free and initially empty", () => {
-    expect(getCommandDefinitions()).toEqual([]);
+  test("canonical registry includes the seven status family identities", () => {
+    expect(getCommandDefinitions().map(({ id }) => id)).toEqual([
+      "status.validate",
+      "status.workflow-close",
+      "status.archive-residuals",
+      "status.findings-cleanup",
+      "status.tech-debt",
+      "status.backlog-register",
+      "status.backlog-close",
+    ]);
   });
 
   test("rejects MCP name collisions after command ID normalization", () => {

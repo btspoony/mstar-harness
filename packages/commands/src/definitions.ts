@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type { CommandDefinition } from "./types.js";
+import { getStatusCommandDefinitions } from "./families/status.js";
+
 
 const failureEnvelopeSchema = z.object({
   version: z.literal(1),
@@ -99,7 +101,7 @@ export function validateCommandDefinitions(definitions: readonly CommandDefiniti
   }
 }
 
-const canonicalDefinitions: readonly CommandDefinition[] = [];
+const canonicalDefinitions: readonly CommandDefinition[] = getStatusCommandDefinitions();
 validateCommandDefinitions(canonicalDefinitions);
 
 export function getCommandDefinitions(): readonly CommandDefinition[] {
