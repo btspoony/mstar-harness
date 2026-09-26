@@ -89,11 +89,28 @@ describe("generated CLI adapter", () => {
     expect(ids).not.toContain("report");
   });
 
-  test("forwards declared CLI context selectors through the real handler", async () => {
-    const result = await run(["plan", "bind", "--resume-ref", "invalid-ref", "--session-id", "cli-main-session"]);
-    const envelope = JSON.parse(result.stdout);
-    expect(envelope.status).not.toBe("usage");
-    expect(envelope.message).not.toContain("active resume requires runtime session identity");
+  test("forwards workflow recovery selectors and multi-value stopped assertions", async () => {
+    const args = [
+      "workflow", "recover-coordinator",
+      "--session", "/tmp/missing-prior-coordinator.json",
+      "--expect-snapshot", "snapshot-token",
+      "--expect-compass", "compass-token",
+      "--operation-id", "recover-op",
+      "--reason", "prior coordinator stopped",
+      "--authorization-ref", "approval-1",
+      "--stopped", "prior-coordinator", "another-stopped-session",
+    ];
+    const recovered = await run([...args, "--session-id", "cli-main-session"]);
+    const recoveredEnvelope = JSON.parse(recovered.stdout);
+    expect(recoveredEnvelope.status).toBe("refused");
+    expect(recoveredEnvelope.message).not.toContain("recovery requires the main conversation session identity");
+    expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
+
+    const withoutRuntimeIdentity = await run(args);
+    expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
+      status: "usage",
+      message: "recovery requires the main conversation session identity",
+    });
   });
 
   test("help is a successful parser outcome, not a usage envelope", async () => {

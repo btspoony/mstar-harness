@@ -47,7 +47,9 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
   if (options !== null && typeof options === "object") {
     for (const [key, value] of Object.entries(options)) {
       const option = definition.cli.options.find((entry) => optionKey(entry.flags) === key);
-      if (option !== undefined && value !== undefined) input[option.key] = value;
+      if (option !== undefined && value !== undefined) {
+        input[option.key] = option.variadic && !Array.isArray(value) ? [value] : value;
+      }
     }
   }
   return input;

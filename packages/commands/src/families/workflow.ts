@@ -76,12 +76,16 @@ function makeDefinition(
       path: id.split("."),
       aliases: [],
       arguments: [],
-      options: optionNames.map((key) => ({
-        key,
-        flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value>`,
-        required: false,
-        ...(contextOptions.find((option) => option.key === key) ?? {}),
-      })),
+      options: optionNames.map((key) => {
+        const variadic = key === "stopped";
+        return {
+          key,
+          flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value${variadic ? "..." : ""}>`,
+          required: false,
+          ...(variadic ? { variadic: true } : {}),
+          ...(contextOptions.find((option) => option.key === key) ?? {}),
+        };
+      }),
     },
     input, output: commandEnvelopeSchema, effects: [effect], description,
     async execute(raw, context) { const parsed = input.safeParse(raw); if (!parsed.success) return usage(id, parsed.error.message); return execute(parsed.data, context); },
