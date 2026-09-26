@@ -178,7 +178,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
-import { getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
+import { getAuditCommandDefinitions, getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -6711,6 +6711,83 @@ function bindValidationCommandActions(): void {
     });
   }
 }
+
+function bindAuditCommandActions(): void {
+  for (const definition of getAuditCommandDefinitions()) {
+    let command: Command = program;
+    for (const part of definition.cli.path) {
+      const child = command.commands.find((candidate) => candidate.name() === part);
+      if (child === undefined) throw new Error(`Audit command is not registered in CLI: ${definition.id}`);
+      command = child;
+    }
+    command.action(async (...args: unknown[]) => {
+      const options = args.find((arg): arg is Record<string, unknown> => arg !== null && typeof arg === "object" && !(arg instanceof Command)) ?? {};
+      const positional = args.filter((arg) => typeof arg === "string");
+      const input: Record<string, unknown> = {};
+      const firstArg = definition.cli.arguments[0]?.key;
+      if (firstArg !== undefined && typeof positional[0] === "string") {
+        const value = positional[0];
+        input[firstArg] = firstArg === "findings" || firstArg === "path" ? resolveCliPath(value) : value;
+      }
+      for (const option of definition.cli.options) {
+        const value = options[option.key];
+        if (value !== undefined) input[option.key] = option.key === "dir" ? resolveCliPath(String(value)) : value;
+      }
+      const result = await definition.execute(input, {
+        cwd: process.cwd(),
+        controlRoot: resolveProcessHarnessDir(),
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: new AbortController().signal,
+        effects: {
+          async readInput() { return ""; },
+          async spawn(request) {
+            try {
+              const stdout = execFileSync(request.argv[0]!, request.argv.slice(1), {
+                cwd: request.cwd, env: { ...process.env, ...request.env }, encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"], signal: request.signal,
+              });
+              return { exitCode: 0, signal: null, stdout, stderr: "" };
+            } catch (error) {
+              const failure = error as NodeJS.ErrnoException & { status?: number | null; stdout?: Buffer | string; stderr?: Buffer | string; signal?: NodeJS.Signals | null };
+              return { exitCode: failure.status ?? 1, signal: failure.signal ?? null, stdout: String(failure.stdout ?? ""), stderr: String(failure.stderr ?? failure.message) };
+            }
+          },
+          async startDashboard() { throw new Error("Dashboard capability unavailable for audit commands"); },
+          async openBrowser() { throw new Error("Browser capability unavailable for audit commands"); },
+        },
+      });
+      if (result.status === "ok") {
+        const data = result.data as Record<string, unknown>;
+        if (definition.id === "audit.scaffold") {
+          const files = data.files as string[];
+          console.log(pc.green(`audit scaffold: OK — ${files.length} plan file${files.length === 1 ? "" : "s"} in ${String(data.outDir)}`));
+          for (const file of files) console.log(`  created: ${file}`);
+        } else if (definition.id === "audit.promote") {
+          console.log(pc.green(`audit promote: OK — workflow ${String(data.workflowId)} registered`));
+          console.log(`  snapshot: ${String(data.snapshotPath)}`);
+        } else if (definition.id === "audit.secret-scan") {
+          const filesScanned = Number(data.filesScanned);
+          console.log(pc.green(`secret-scan: clean — ${filesScanned} tracked file${filesScanned === 1 ? "" : "s"} scanned`));
+        } else {
+          console.log(pc.green("supply-chain: OK — no findings"));
+        }
+      } else {
+        console.error(`${definition.id}: ${result.status.toUpperCase()} ${result.code}: ${result.message}`);
+        const details = result.details;
+        if (details !== undefined) {
+          if (definition.id === "audit.secret-scan" && Array.isArray(details.findings)) {
+            for (const finding of details.findings) console.log(JSON.stringify(finding));
+          } else if (definition.id === "audit.supply-chain" && Array.isArray(details.findings)) {
+            for (const finding of details.findings) console.log(JSON.stringify(finding));
+          } else console.error(JSON.stringify(details));
+        }
+        process.exitCode = result.exitCode;
+      }
+    });
+  }
+}
+
+bindAuditCommandActions();
 
 bindValidationCommandActions();
 
