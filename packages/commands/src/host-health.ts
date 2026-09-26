@@ -7,3 +7,4 @@ export * from "./host-health/cursor.js";
 export * from "./host-health/kimi.js";
 export * from "./host-health/dsh.js";
 export * from "./host-health/omp.js";
+export * from "./host-health/opencode.js";

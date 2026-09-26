@@ -5,7 +5,7 @@ import path from "node:path";
 import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import {
   compareSemver,
-  diagnoseCodexHost,
+  diagnoseOpencodeHost,
   diagnoseCursorHost,
   diagnoseDshHost,
   diagnoseKimiHost,
@@ -199,6 +199,31 @@ describe("cursor host health", () => {
     expect(diagnoseCursorHost("global", { global: pluginRoot }).errors).toEqual([
       `Missing marker file: ${path.join(pluginRoot, ".cursor-plugin/plugin.json")}`,
     ]);
+  });
+});
+describe("opencode host health", () => {
+  test("discovers and validates a synthetic OpenCode config root", () => {
+    const root = fixture();
+    writeJson(root, "opencode.json", {
+      $schema: "https://opencode.ai/config.json",
+      plugin: ["@mstar-harness/opencode@3.11.2"],
+    });
+
+    expect(diagnoseOpencodeHost(root, [])).toEqual({
+      location: path.join(root, "opencode.json"),
+      errors: [],
+      warnings: [],
+    });
+  });
+
+  test("reports a missing OpenCode config artifact from a synthetic root", () => {
+    const root = fixture();
+
+    expect(diagnoseOpencodeHost(root, [])).toEqual({
+      location: path.join(root, "opencode.json"),
+      errors: [`Missing config file: ${path.join(root, "opencode.json")}`],
+      warnings: [],
+    });
   });
 });
 
