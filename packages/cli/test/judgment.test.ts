@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { judgmentExitCode } from "../src/commands/judgment";
+
 
 const roots: string[] = [];
 const REPO = resolve(import.meta.dir, "../../..");
@@ -43,9 +43,10 @@ describe("mstar judgment review-advice", () => {
     const result = run(["--file", "missing-pack.json", "--pilot", "missing-pilot.json"], cwd);
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schema: "mstar.judgment-cli/v1",
-      status: "disabled",
-      advice: null,
+      version: 1,
+      status: "ok",
+      exitCode: 0,
+      data: { status: "disabled", advice: null },
     });
     expect(existsSync(join(cwd, ".jev-mailbox"))).toBe(false);
   });
@@ -56,10 +57,11 @@ describe("mstar judgment review-advice", () => {
     expect(result.status).toBe(1);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schema: "mstar.judgment-cli/v1",
-      status: "unavailable",
-      code: "jev.channel-unavailable",
-      advice: null,
+      version: 1,
+      status: "error",
+      code: "judgment.provider-failed",
+      exitCode: 1,
+      details: { boundary: "jev.channel-unavailable" },
     });
     expect(existsSync(join(cwd, ".jev-mailbox"))).toBe(false);
   });
@@ -70,10 +72,10 @@ describe("mstar judgment review-advice", () => {
     expect(result.status).toBe(2);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schema: "mstar.judgment-cli/v1",
-      status: "invalid",
-      code: "jev.assist-not-qualified",
-      advice: null,
+      version: 1,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
     });
   });
 
@@ -89,9 +91,10 @@ describe("mstar judgment review-advice", () => {
     expect(result.status).toBe(2);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schema: "mstar.judgment-cli/v1",
-      status: "invalid",
-      code: "jev.usage",
+      version: 1,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
     });
   });
 
@@ -99,19 +102,12 @@ describe("mstar judgment review-advice", () => {
     const result = run(["--file", "pack.json", "--stdin", "--pilot", "pilot.json"], workspace());
     expect(result.status).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      schema: "mstar.judgment-cli/v1",
-      status: "invalid",
-      code: "jev.usage",
+      version: 1,
+      command: "judgment.review-advice",
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
     });
   });
 
-  test("runtime outcomes and actual signal statuses map to the CLI contract", () => {
-    const result = { schema: "mstar.judgment-cli/v1", contractRevision: "phase3a-native-20260924", status: "recorded", advice: null } as const;
-    expect(judgmentExitCode(result)).toBe(0);
-    expect(judgmentExitCode({ ...result, status: "unavailable" })).toBe(1);
-    expect(judgmentExitCode({ ...result, status: "cancelled" })).toBe(130);
-    expect(judgmentExitCode(result, "SIGINT")).toBe(130);
-    expect(judgmentExitCode(result, "SIGTERM")).toBe(143);
-    expect(judgmentExitCode({ ...result, status: "invalid" })).toBe(2);
-  });
 });

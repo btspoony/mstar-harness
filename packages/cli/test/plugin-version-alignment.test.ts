@@ -25,8 +25,8 @@ import {
   ompEntryVersion,
 } from "../src/plugin-version-alignment";
 import type { Target } from "../src/types";
-import { parseCodexInstalledEntries } from "../src/adapters/codex";
-import { OMP_LIST_TIMEOUT_MS, findInstalledPlugin, parseOmpPluginList } from "../src/adapters/omp";
+import { findInstalledPlugin, parseCodexInstalledEntries, parseOmpPluginList } from "@mstar-harness/commands";
+import { OMP_LIST_TIMEOUT_MS } from "../src/adapters/omp";
 
 const PLUGIN_DIR_NAME = "morning-star-harness";
 

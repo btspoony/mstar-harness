@@ -1,0 +1,212 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import {
+  WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
+  commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
+  executionContextFor, mutateExecutionWorkflow, readCatalogRevisions, readSessionEnvelope,
+  recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
+  resolveExecutionReadRoute, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
+  type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
+} from "@mstar-harness/engine";
+import { commandEnvelopeSchema } from "../definitions.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+
+const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
+const transitions = [
+  { name: "phase", effect: "write" as const }, { name: "lifecycle", effect: "write" as const },
+  { name: "execution-policy", effect: "write" as const }, { name: "integration-worktree", effect: "write" as const },
+];
+function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
+function usage(id: string, message: string): CommandEnvelope<never> { return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message }; }
+function refused(id: string, error: unknown): CommandEnvelope<never> {
+  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
+  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+}
+function object(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${field} must be an object`);
+  return value as Record<string, unknown>;
+}
+function absolute(value: string | undefined, field: string): string {
+  if (value === undefined || !path.isAbsolute(value)) throw new Error(`${field} must be an absolute path`);
+  return value;
+}
+
+async function assertLegacyRoute(harnessDir: string, operation: string): Promise<void> {
+  if (await resolveExecutionReadRoute({ harnessDir }) === "execution") {
+    throw new StoreError(
+      "execution.consumer-not-ready",
+      `${operation}: the execution authority of ${harnessDir} is ACTIVE, so this pre-activation form is retired. ` +
+        "Nothing was written; read the current token and use the active DB form under an independently acquired identity.",
+    );
+  }
+}
+function schema() {
+  return z.object({
+    workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), planId: z.string().min(1).optional(),
+    planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.string().min(1).optional(),
+    project: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
+    completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),
+    operation: z.string().min(1).optional(), file: z.string().min(1).optional(), declareKind: z.string().min(1).optional(),
+    at: z.string().min(1).optional(), session: z.string().min(1).optional(), sessionRef: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(), reason: z.string().min(1).optional(),
+    stopped: z.array(z.string()).optional(), expectSnapshot: z.string().min(1).optional(), expectCompass: z.string().min(1).optional(),
+    operationId: z.string().min(1).optional(), authorizationRef: z.string().min(1).optional(), input: z.unknown().optional(),
+    phase: z.string().min(1).optional(), status: z.string().min(1).optional(), path: z.string().min(1).optional(),
+    compass: z.string().min(1).optional(), policy: z.unknown().optional(), json: z.boolean().optional(),
+    row: z.array(z.unknown()).optional(), branchBase: z.string().min(1).optional(), branchIntegration: z.string().min(1).optional(),
+    branchTargetIteration: z.string().min(1).optional(), compassRef: z.string().min(1).optional(),
+  });
+}
+
+function makeDefinition(
+  id: string,
+  description: string,
+  effect: "read" | "write",
+  keys: readonly string[],
+  execute: (input: z.infer<ReturnType<typeof schema>>, context: InvocationContext) => Promise<CommandEnvelope<unknown>>,
+  contextOptions: readonly { key: string; context: "sessionId" }[] = [],
+): CommandDefinition {
+  const input = schema().pick(Object.fromEntries(keys.map((key) => [key, true])) as never);
+  const optionNames = [...keys, ...contextOptions.map(({ key }) => key)];
+  return {
+    id,
+    cli: {
+      path: id.split("."),
+      aliases: [],
+      arguments: [],
+      options: optionNames.map((key) => {
+        const variadic = key === "stopped";
+        return {
+          key,
+          flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value${variadic ? "..." : ""}>`,
+          required: false,
+          ...(variadic ? { variadic: true } : {}),
+          ...(contextOptions.find((option) => option.key === key) ?? {}),
+        };
+      }),
+    },
+    input, output: commandEnvelopeSchema, effects: [effect], description,
+    async execute(raw, context) { const parsed = input.safeParse(raw); if (!parsed.success) return usage(id, parsed.error.message); return execute(parsed.data, context); },
+  };
+}
+
+export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
+  const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
+  const defs: CommandDefinition[] = [
+    makeDefinition("workflow.register", "Register a standalone plan workflow using create-only catalog registration and active DB CAS when selected.", "write", commonRegister, async (input, context) => {
+      try {
+        const required = [input.workflow, input.planId, input.planTitle, input.planFile, input.deliveryKind];
+        if (required.some((value) => value === undefined || value.trim() === "")) return usage("workflow.register", "workflow, planId, planTitle, planFile and deliveryKind are required");
+        if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.deliveryKind!)) return usage("workflow.register", `deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`);
+        const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (harnessDir === null) return usage("workflow.register", "harness dir not found; supply harness");
+        const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+        setArtifactStore(createFsStore(harnessDir));
+        if (input.expect !== undefined || input.operation !== undefined) {
+          if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.register", "active registration requires main session identity, expect and operation");
+          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow!, role: "coordinator", planId: null };
+          const { catalogRevision } = await readCatalogRevisions({ harnessDir });
+          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath: input.planFile! }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
+        }
+        await assertLegacyRoute(harnessDir, "workflow register");
+        return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));
+      } catch (error) { return refused("workflow.register", error); }
+    }),
+    makeDefinition("workflow.evidence", "Record delivery evidence or one-time kind declaration; legacy file writes and active DB transitions stay disjoint.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
+      try {
+        if (input.workflow === undefined) return usage("workflow.evidence", "workflow is required");
+        if ((input.file === undefined) === (input.declareKind === undefined)) return usage("workflow.evidence", "provide exactly one of file or declareKind");
+        const root = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (root === null) return usage("workflow.evidence", "harness dir not found; supply harness");
+        setArtifactStore(createFsStore(root));
+        const workflowDir = path.join(resolveWorkflowDir(root, { harnessDir: root }), input.workflow);
+        if (input.declareKind !== undefined) {
+          if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined) return usage("workflow.evidence", "declareKind is pre-activation only");
+          await assertLegacyRoute(root, "workflow evidence --declare-kind");
+          const result = await declareWorkflowDeliveryKind(input.workflow, workflowDir, { deliveryKind: input.declareKind as never, ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) });
+          return ok("workflow.evidence", result);
+        }
+        const evidence = JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) as Record<string, unknown>;
+        if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined) {
+          if (input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.evidence", "active evidence requires main session identity, sessionRef, expect and operation");
+          if (input.at !== undefined || input.session !== undefined) return usage("workflow.evidence", "active evidence cannot use legacy session or at fields");
+          const ref = decodeExecutionSessionRef(input.sessionRef);
+          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
+          return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), { workflowId: input.workflow, session: ref, expected: input.expect as never, operationId: input.operation, operation: { kind: "delivery", delivery: evidence } }));
+        }
+        await assertLegacyRoute(root, "workflow evidence");
+        return ok("workflow.evidence", await recordWorkflowDelivery(input.workflow, workflowDir, { evidence, ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) }));
+      } catch (error) { return refused("workflow.evidence", error); }
+    }),
+    makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
+      try { if (input.session === undefined) return usage("workflow.show-prepare", "session is required"); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return refused("workflow.show-prepare", error); }
+    }),
+    makeDefinition("workflow.amend-prepare", "Append approved Prepare rows using legacy snapshot/compass byte-version CAS.", "write", ["session", "expectSnapshot", "expectCompass", "input"], async (input, context) => {
+      try { if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.input === undefined) return usage("workflow.amend-prepare", "session, both expected versions and input patch are required"); const sessionPath = absolute(input.session, "session"); const envelope = readSessionEnvelope(sessionPath); await assertLegacyRoute(envelope.harness_root, "workflow amend-prepare"); return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, expectedSnapshotVersion: input.expectSnapshot, expectedCompassVersion: input.expectCompass, patch: object(input.input, "input") as never })); } catch (error) { return refused("workflow.amend-prepare", error); }
+    }),
+    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "expectSnapshot", "expectCompass", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
+      try {
+        if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "all prior-session recovery assertions are required");
+        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage("workflow.recover-coordinator", "recovery requires the main conversation session identity");
+        const priorSessionPath = absolute(input.session, "session");
+        const prior = readSessionEnvelope(priorSessionPath);
+        setArtifactStore(createFsStore(prior.harness_root));
+        return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({
+          cwd: context.cwd,
+          harnessDir: prior.harness_root,
+          identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          priorSessionPath,
+          priorSessionId: prior.session_id,
+          expectedSnapshotVersion: input.expectSnapshot,
+          expectedCompassVersion: input.expectCompass,
+          operationId: input.operationId,
+          reason: input.reason,
+          authorizationRef: input.authorizationRef,
+          stoppedSessionIds: input.stopped,
+        }));
+      } catch (error) { return refused("workflow.recover-coordinator", error); }
+    }, [{ key: "sessionId", context: "sessionId" }]),
+  ];
+  for (const transition of transitions) {
+    const id = `workflow.${transition.name}`;
+    defs.push(makeDefinition(id, `Apply the existing active workflow ${transition.name} transition under caller identity and full-token CAS.`, transition.effect, ["workflow", "sessionRef", "expect", "operation", "harness", "phase", "compass", "status", "reason", "file", "path"], async (input, context) => {
+      try {
+        if (input.workflow === undefined || input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage(id, "active workflow transition requires workflow, main session identity, sessionRef, full expect token and operation");
+        const ref = decodeExecutionSessionRef(input.sessionRef);
+        if (ref.workflowId !== input.workflow) return usage(id, "sessionRef workflow does not match workflow selector");
+        const root = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+        const operation: WorkflowExecutionOperation = transition.name === "phase"
+          ? input.phase === undefined || input.compass === undefined || !path.isAbsolute(input.compass) ? (() => { throw new Error("phase requires phase and absolute compass") })() : { kind: "phase", phase: input.phase, compassPath: input.compass }
+          : transition.name === "lifecycle"
+            ? input.status === undefined || input.reason === undefined || !(WORKFLOW_LIFECYCLE_STATUSES as readonly string[]).includes(input.status) ? (() => { throw new Error("lifecycle requires a supported status and reason") })() : { kind: "lifecycle", status: input.status as never, reason: input.reason }
+            : transition.name === "execution-policy"
+              ? { kind: "execution-policy", policy: JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) }
+              : { kind: "integration-worktree", path: absolute(input.path, "path") };
+        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
+        setArtifactStore(createFsStore(root));
+        return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), { workflowId: input.workflow, session: ref, expected: input.expect as never, operationId: input.operation, operation }));
+      } catch (error) { return refused(id, error); }
+    }));
+  }
+  defs.push(makeDefinition("iteration.register", "Register a create-only iteration workflow with its branch anchors and Todo rows.", "write", ["workflow", "compassRef", "branchBase", "branchIntegration", "branchTargetIteration", "row", "project", "startedAt", "harness", "expect", "operation"], async (input, context) => {
+    try {
+      if (input.workflow === undefined || input.compassRef === undefined || input.branchBase === undefined || input.branchIntegration === undefined || input.branchTargetIteration === undefined || input.row === undefined) return usage("iteration.register", "workflow, compassRef, all branch anchors and rows are required");
+      const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
+      if (harnessDir === null) return usage("iteration.register", "harness dir not found; supply harness");
+      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: input.row as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+      setArtifactStore(createFsStore(harnessDir));
+      if (input.expect !== undefined || input.operation !== undefined) {
+        if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("iteration.register", "active registration requires main session identity, expect and operation");
+        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
+        const { catalogRevision } = await readCatalogRevisions({ harnessDir });
+        return ok("iteration.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:iteration-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "iteration", id: input.workflow, title: input.workflow, rootKind: "iterations", relativePath: input.workflow }], binding: { catalogKind: "iteration", catalogId: input.workflow } }, expected: input.expect as never }));
+      }
+      await assertLegacyRoute(harnessDir, "iteration register");
+      return ok("iteration.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:iteration-register", workflow }));
+    } catch (error) { return refused("iteration.register", error); }
+  }));
+  return defs;
+}

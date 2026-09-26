@@ -34,6 +34,7 @@
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {
+    "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "^3.11.2"
   },
   "devDependencies": {

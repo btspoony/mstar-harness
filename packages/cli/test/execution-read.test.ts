@@ -54,7 +54,7 @@ import {
   type StoreContext,
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
-import { readDashboardView } from "../src/store-read";
+import { readDashboardView } from "../../commands/src/dashboard/store-read";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");

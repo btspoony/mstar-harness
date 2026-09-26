@@ -1,10 +1,26 @@
-import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
+import {
+  DSH_BIN,
+  DSH_DUMP_FLAG,
+  DSH_FALLBACKS_LOADER_NAME,
+  DSH_FALLBACKS_SPEC,
+  DSH_HOME_ENV,
+  DSH_HOME_SUBDIR,
+  DSH_INSTALL_HINT,
+  DSH_PLUGIN_SPECS,
+  DSH_PROFILE,
+  DSH_PROFILE_FLAG,
+  DSH_PROFILES_DIR,
+  diagnoseDshHost,
+  dshLoaderName,
+  fallbacksVersionDrifted,
+  isDshAvailable,
+  parseDshLoaderEntries,
+  resolveDshProfileDir,
+} from "@mstar-harness/commands";
 import { runCliCommand } from "../exec";
-import fs from "node:fs";
-import os from "node:os";
-import { compareSemver } from "../version-compare";
-import path from "node:path";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
+
+export { DSH_FALLBACKS_LOADER_NAME, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
 
 // --- dsh CLI surface (probe-pinned 2026-08-17 on dsh 0.1.0-rc.6) ---
 // - `--profile <name>` is required and must precede the subcommand:
@@ -23,20 +39,9 @@ import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 //   `name: <spec>` line), disabled rows included.
 // - There is no `dsh plugin list` subcommand; enumeration goes through
 //   --dump-config (or the profile manifest under $DSH_HOME/profiles/<name>).
-const DSH_BIN = "dsh";
-/** The profile the dsh adapter operates on (fixed default `web`; dsh-tui not
- * verified). Exported for `../plugin-version-alignment` so version discovery
- * reads the SAME profile install/reinstall manages — a version in an
- * unrelated profile must not win the doctor comparison. */
-export const DSH_PROFILE = "web";
-const DSH_PROFILE_FLAG = "--profile";
-const DSH_DUMP_FLAG = "--dump-config";
-/** dsh home resolution: `$DSH_HOME`, else `~/.dsh`. Exported for
- * `../plugin-version-alignment` (its dsh discovery scans the same home so
- * the probe can never disagree with install). */
-export const DSH_HOME_ENV = "DSH_HOME";
-export const DSH_HOME_SUBDIR = ".dsh";
-export const DSH_PROFILES_DIR = "profiles";
+// Read-only discovery, dump parsing, and doctor assembly live in
+// `@mstar-harness/commands` host-health. This adapter keeps the subprocess
+// boundary and the `plugin add` writes.
 
 /** Subprocess timeouts (ms). The `add` call forwards to pnpm over the
  * network, so it gets a conservative ceiling: a stalled registry must
@@ -57,62 +62,6 @@ function addTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DSH_ADD_TIMEOUT_MS;
 }
 
-/** Install order is the F4 double-command contract: mstar first, fallbacks
- * second (reconcile append order — the fallbacks row lands after the
- * dsh-base/llm-retry layers). The lines are never folded into any patch.
- * Default profile is fixed to `web` (dsh-tui not verified); centralized so a
- * future profile flag changes exactly one place.
- *
- * The fallbacks spec is an EXACT version: `dsh plugin add` forwards to pnpm
- * with the dsh CLI's own manifest spec (`^0.3.5`), whose dist re-exports
- * `installSettingsSection` from `@deepseek-ai/dsh-settings` — an export the
- * rc.1 line removed — so an unpinned add breaks the installed-artifact boot
- * against the single-line peer graph. 0.4.1 was the line adapted to
- * `@deepseek-ai/dsh-*` `^0.1.2-rc.1` (no dsh-settings re-export at runtime).
- * 0.5.2 is the line adapted to `@deepseek-ai/dsh-*` `^0.1.5-rc.2`.
- * The pin is `DSH_LLM_FALLBACKS_VERSION` from `@mstar-harness/engine`; keep
- * it lockstep with the repo's `dsh-llm-fallbacks` devDependency. */
-const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
-const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
-
-/** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's
- * spec; fallbacks carries the pinned one). */
-function dshLoaderName(spec: string): string {
-  const at = spec.lastIndexOf("@");
-  // Scoped names (`@scope/pkg`) carry an `@` at index 0 — only strip a TRAILING `@version`.
-  return at > 0 ? spec.slice(0, at) : spec;
-}
-
-/** Loader-row name for the fallbacks package (dump-config `name:` line is version-free). */
-export const DSH_FALLBACKS_LOADER_NAME = dshLoaderName(DSH_FALLBACKS_SPEC);
-
-const FALLBACKS_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-
-function readInstalledFallbacksVersion(profileDir: string): string | null {
-  const pkgJson = path.join(profileDir, "node_modules", DSH_FALLBACKS_LOADER_NAME, "package.json");
-  try {
-    const raw = fs.readFileSync(pkgJson, "utf8");
-    const version = (JSON.parse(raw) as { version?: unknown }).version;
-    if (typeof version === "string") {
-      const trimmed = version.trim();
-      if (FALLBACKS_VERSION_SHAPE_RE.test(trimmed)) return trimmed;
-    }
-  } catch {
-    // absent / unreadable
-  }
-  return null;
-}
-
-function fallbacksVersionDrifted(profileDir: string): boolean {
-  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION)) return false;
-  const installedVersion = readInstalledFallbacksVersion(profileDir);
-  if (installedVersion === null) return true;
-  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
-}
-
-const DSH_INSTALL_HINT =
-  "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
-
 /** Run dsh with args; dry-run never spawns a subprocess (preview only).
  * `timeoutMs` bounds the child so a hung dsh/pnpm surfaces as an error
  * instead of blocking the CLI forever. `env: process.env` is required —
@@ -122,83 +71,13 @@ function runDsh(args: string[], dryRun: boolean, timeoutMs: number): string {
   return runCliCommand([DSH_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
 
-function dshAvailable(): boolean {
-  try {
-    runDsh(["--version"], false, DSH_LOCAL_TIMEOUT_MS);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** The `web` profile directory. dsh resolves its home from $DSH_HOME, else
- * `~/.dsh` (observed on this machine). Only used for the reported location;
- * installed-state detection goes through the dsh binary itself. */
-function resolveProfileDir(): string {
-  const dshHome = process.env[DSH_HOME_ENV] ?? path.join(os.homedir(), DSH_HOME_SUBDIR);
-  return path.join(dshHome, DSH_PROFILES_DIR, DSH_PROFILE);
-}
-
-/** One loader entry from a `--dump-config` dump. `enabled` is false when the
- * entry carries a literal `disabled: true` or `enabled: false` marker: as a
- * standalone 2-space line (the real shapes observed on dsh 0.1.0-rc.6 — the
- * patch-applied `enabled: false` row and the built-in `disabled: true` row)
- * or inline on the `- id:` / `name:` line. `!!js` expressions (e.g.
- * `disabled: !!js process.platform === 'win32'`) are not statically
- * decidable and count as enabled. */
-type LoaderEntry = { name: string; enabled: boolean };
-
-/** Literal disable markers that make a loader row statically disabled. */
-const DISABLED_MARKERS = /\b(?:disabled: true|enabled: false)\b/;
-
-/** Parse loader entries from a `dsh --profile <name> --dump-config` dump: a
- * flat list of `- id: <id>` entries, each carrying a `name: <spec>` line plus
- * optional keys at the same 2-space indent. Returns null when the dump is
- * non-empty but yields no named entry (or an entry without a `name:` line) —
- * format drift — so callers degrade loudly instead of misreporting the
- * installed state. */
-function parseLoaderEntries(dump: string): LoaderEntry[] | null {
-  const entries: LoaderEntry[] = [];
-  let current: LoaderEntry | null = null;
-  for (const line of dump.split("\n")) {
-    if (/^- id: /.test(line)) {
-      if (current) entries.push(current);
-      current = { name: "", enabled: !DISABLED_MARKERS.test(line) };
-    } else if (current) {
-      const nameMatch = /^  name: (.+)$/.exec(line);
-      if (nameMatch) {
-        let name = nameMatch[1].trim();
-        if (DISABLED_MARKERS.test(line)) {
-          current.enabled = false;
-          // Inline marker on the name line (drift shape): strip a trailing
-          // `, disabled: true` / ` disabled: true` suffix before quote
-          // removal so the row still matches its spec.
-          name = name.replace(/\s*,?\s*(?:disabled: true|enabled: false)\s*$/, "");
-        }
-        current.name = name.replace(/^['"]|['"]$/g, "");
-      } else if (/^  disabled: true$/.test(line) || /^  enabled: false$/.test(line)) {
-        current.enabled = false;
-      } else if (line.trim() !== "" && !line.startsWith("  ")) {
-        // Top-level line outside the entry block: close the current entry.
-        entries.push(current);
-        current = null;
-      }
-    }
-  }
-  if (current) entries.push(current);
-  if (dump.trim() !== "" && (entries.length === 0 || entries.some((entry) => !entry.name))) {
-    return null;
-  }
-  return entries;
-}
-
 /** Install orchestration for the dsh target. `scope` is accepted for the
  * shared AgentAdapter contract but has no dsh surface: dsh profiles live
  * machine-globally under $DSH_HOME/profiles, so the flow is identical for
  * global and project scopes. */
 function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   const notes: string[] = [];
-  const profileDir = resolveProfileDir();
+  const profileDir = resolveDshProfileDir();
 
   // Fail-loud when the dsh bin is absent: without it there is nothing an
   // init can complete (deliberate divergence from omp's note-and-continue,
@@ -208,7 +87,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   // never probes installed state, never fails on a missing bin, and always
   // previews the full add list — the output is identical regardless of the
   // machine's install state. (Task 3 documents this.)
-  if (!dryRun && !dshAvailable()) {
+  if (!dryRun && !isDshAvailable(() => runDsh(["--version"], false, DSH_LOCAL_TIMEOUT_MS))) {
     throw new Error(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
   }
 
@@ -218,7 +97,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   const disabledLoaderNames = new Set<string>();
   if (!dryRun) {
     try {
-      const entries = parseLoaderEntries(
+      const entries = parseDshLoaderEntries(
         runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], dryRun, DSH_LOCAL_TIMEOUT_MS),
       );
       if (entries === null) {
@@ -281,63 +160,9 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   return { location: profileDir, notes };
 }
 
-/** Doctor for the dsh install surface: reports each plugin row's capability
- * state with the AC-2 words `uninstalled` / `disabled` / `mounted`
- * (`mounted` = loader row present and not disabled; doctor probes the
- * install surface, it does not boot a live fiber). Issue states
- * (uninstalled/disabled) go to `errors` (the CLI exits 1); every state also
- * gets a worded `notes` line so `mounted` is visible on a healthy run —
- * never implied only by exit code 0. An unusable probe degrades into an
- * explicit error line instead of a silent pass. `scope` is accepted for the
- * shared AgentAdapter contract but has no dsh surface (machine-global
- * profiles), mirroring runInit. */
 function runDoctor(scope: Scope): { location: string; errors: string[]; notes: string[] } {
-  const errors: string[] = [];
-  const notes: string[] = [];
-  const profileDir = resolveProfileDir();
-
-  if (!dshAvailable()) {
-    errors.push(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
-    return { location: profileDir, errors, notes };
-  }
-
-  let dump: string;
-  try {
-    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], false, DSH_LOCAL_TIMEOUT_MS);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    errors.push(`Warning: could not probe installed plugins (${message}); cannot verify install state.`);
-    return { location: profileDir, errors, notes };
-  }
-
-  const entries = parseLoaderEntries(dump);
-  if (entries === null) {
-    errors.push("Warning: could not parse installed plugins from dump (unexpected format); cannot verify install state.");
-    return { location: profileDir, errors, notes };
-  }
-
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
-  for (const spec of DSH_PLUGIN_SPECS) {
-    const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
-    let state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
-    if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
-      const installedVersion = readInstalledFallbacksVersion(profileDir);
-      const installedLabel = installedVersion ?? "unknown";
-      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
-      errors.push(
-        `${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
-      );
-      continue;
-    }
-    notes.push(`${spec}: ${state}`);
-    if (state === "mounted") continue;
-    const hint =
-      state === "uninstalled"
-        ? "Run: mstar-harness init --target dsh"
-        : "Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.";
-    errors.push(`${spec} is ${state}. ${hint}`);
-  }
-  return { location: profileDir, errors, notes };
+  void scope;
+  return diagnoseDshHost((args) => runDsh(args, false, DSH_LOCAL_TIMEOUT_MS));
 }
 
 export const dshAdapter: AgentAdapter = {

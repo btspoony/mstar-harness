@@ -5,6 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "^3.11.2",
       },
       "devDependencies": {
@@ -34,10 +35,24 @@
         "picocolors": "^1.1.1",
       },
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
         "htm": "^3.1.1",
         "preact": "^10.29.8",
+      },
+    },
+    "packages/commands": {
+      "name": "@mstar-harness/commands",
+      "version": "3.11.2",
+      "dependencies": {
+        "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/judgment": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+        "bun-types": "^1.2.17",
+        "typescript": "^5.9.3",
       },
     },
     "packages/dsh": {
@@ -490,6 +505,8 @@
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.4", "", { "os": "win32", "cpu": "x64" }, "sha512-CmCXPQrkbwExx3j946/PtHWHbYJiCRBRDl4BlkRQcJB/YOwQxJRTpoo7aTsortjgoJ1x7opzTSxn7C+ASSLVjQ=="],
 
     "@mstar-harness/cli": ["@mstar-harness/cli@workspace:packages/cli"],
+
+    "@mstar-harness/commands": ["@mstar-harness/commands@workspace:packages/commands"],
 
     "@mstar-harness/dsh": ["@mstar-harness/dsh@workspace:packages/dsh"],
 

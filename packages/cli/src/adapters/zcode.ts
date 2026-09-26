@@ -3,17 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentAdapter, Scope } from "../types";
 import { ensureObject, readJson, writeJson, resolveProjectRoot, readHarnessVersion } from "../utils";
+import { diagnoseZcodeHost } from "@mstar-harness/commands";
 import {
   REPO_URL,
   PLUGIN_NAME,
   HARNESS_REPO_PATH,
   ensureLocalHarnessRepo,
   ensureGitCheckout,
-  validateLocalHarnessRepo,
-  validateGitCheckout,
   appendGitignore,
   appendHarnessProjectGitignore,
-  missingHarnessProcessGitignoreEntries,
 } from "./shared-install";
 
 const MARKETPLACE_ID = "mstar-local";
@@ -28,10 +26,7 @@ const PLUGIN_DISPLAY_NAME = "Morning Star Harness";
 const PLUGIN_ICON_URL = "https://raw.githubusercontent.com/btspoony/mstar-harness/main/assets/icon.png";
 const GITHUB_REPO = "btspoony/mstar-harness";
 const GITHUB_REF = "main";
-const ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
 const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
-const ZCODE_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
-
 const ZCODE_PLUGINS_ROOT = path.join(os.homedir(), ".zcode", "cli", "plugins");
 const KNOWN_MARKETPLACES_PATH = path.join(ZCODE_PLUGINS_ROOT, "known_marketplaces.json");
 const MARKETPLACE_DIR = path.join(ZCODE_PLUGINS_ROOT, "marketplaces", MARKETPLACE_ID);
@@ -125,106 +120,6 @@ function upsertKnownMarketplace(raw: Record<string, unknown>) {
   return next;
 }
 
-function findKnownMarketplace(raw: Record<string, unknown>) {
-  const marketplaces = Array.isArray(raw.marketplaces) ? raw.marketplaces : [];
-  return marketplaces.find((entry) => {
-    return (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { id?: unknown }).id === MARKETPLACE_ID
-    );
-  }) as Record<string, unknown> | undefined;
-}
-
-function findMarketplacePlugin(raw: Record<string, unknown>) {
-  const plugins = Array.isArray(raw.plugins) ? raw.plugins : [];
-  return plugins.find((entry) => {
-    return (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { name?: unknown }).name === PLUGIN_NAME
-    );
-  }) as Record<string, unknown> | undefined;
-}
-
-function validateMarketplaceJson() {
-  const errors: string[] = [];
-  if (!fs.existsSync(MARKETPLACE_JSON_PATH)) {
-    errors.push(`Missing ZCode marketplace: ${MARKETPLACE_JSON_PATH}`);
-    return errors;
-  }
-  const raw = readJson(MARKETPLACE_JSON_PATH);
-  if (raw.name !== MARKETPLACE_NAME) {
-    errors.push(`ZCode marketplace name must be ${MARKETPLACE_NAME} (in ${MARKETPLACE_JSON_PATH}).`);
-  }
-  const entry = findMarketplacePlugin(raw);
-  if (!entry) {
-    errors.push(`Missing ${PLUGIN_NAME} plugin entry in ${MARKETPLACE_JSON_PATH}.`);
-    return errors;
-  }
-  const expected = marketplacePluginEntry();
-  const source = ensureObject(entry.source);
-  if (source.source !== "github") {
-    errors.push("ZCode marketplace plugin source.source must be `github`.");
-  }
-  if (source.repo !== expected.source.repo) {
-    errors.push(`ZCode marketplace plugin source.repo must be ${expected.source.repo}.`);
-  }
-  // Version skew is deliberately NOT gated here: after a marketplace refresh
-  // the snapshot carries the repo-shipped release version, which may be newer
-  // or older than this CLI's own version. That skew is the update signal the
-  // pinned version exists to expose, not an unhealthy marketplace (gating it
-  // would flag the normal pre-update state and nudge a re-init that could
-  // regress a newer refreshed snapshot). Directional CLI↔plugin update
-  // prompting is tracked separately.
-  return errors;
-}
-
-function validateKnownMarketplaces() {
-  const errors: string[] = [];
-  if (!fs.existsSync(KNOWN_MARKETPLACES_PATH)) {
-    errors.push(`Missing ZCode known_marketplaces.json: ${KNOWN_MARKETPLACES_PATH}`);
-    return errors;
-  }
-  const raw = readJson(KNOWN_MARKETPLACES_PATH);
-  const entry = findKnownMarketplace(raw);
-  if (!entry) {
-    errors.push(`Missing ${MARKETPLACE_ID} entry in ${KNOWN_MARKETPLACES_PATH}.`);
-    return errors;
-  }
-  if (entry.id !== MARKETPLACE_ID) errors.push(`known_marketplaces entry id must be ${MARKETPLACE_ID}.`);
-  const source = ensureObject(entry.source);
-  if (source.source !== "github") {
-    errors.push(`known_marketplaces entry source.source must be github.`);
-  }
-  if (source.repo !== GITHUB_REPO) {
-    errors.push(`known_marketplaces entry source.repo must be ${GITHUB_REPO}.`);
-  }
-  return errors;
-}
-
-/** Plugin manifest `version` field reader and the cache version discovery
- * live in `../plugin-version-alignment` (shared across hosts, plan batch 2);
- * the zcode doctor alignment note is printed centrally by `runDoctor` in
- * `index.ts` for every target. */
-
-function validatePluginAgents(pluginRoot: string) {
-  const errors: string[] = [];
-  const agentsDir = path.join(pluginRoot, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    errors.push(`Missing plugin agents directory: ${agentsDir}`);
-    return errors;
-  }
-  for (const agentName of ZCODE_AGENT_SMOKE_NAMES) {
-    const agentPath = path.join(agentsDir, `${agentName}.md`);
-    if (!fs.existsSync(agentPath)) {
-      errors.push(`Missing plugin agent file: ${agentPath}`);
-    }
-  }
-  return errors;
-}
 
 function buildMarketplaceJson(): Record<string, unknown> {
   return {
@@ -274,34 +169,11 @@ function runInit(scope: Scope, dryRun: boolean) {
 }
 
 function runDoctor(scope: Scope) {
-  const errors: string[] = [];
-  errors.push(...validateLocalHarnessRepo());
-
-  if (scope === "project") {
-    const projectRoot = resolveProjectRoot();
-    const checkoutPath = path.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
-    errors.push(...validateGitCheckout(checkoutPath, ZCODE_PLUGIN_MARKER));
-    const gitignorePath = path.join(projectRoot, ".gitignore");
-    const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    if (!gitignore.split(/\r?\n/).includes(ZCODE_PLUGIN_CHECKOUT_PROJECT)) {
-      errors.push(`Missing .gitignore entry: ${ZCODE_PLUGIN_CHECKOUT_PROJECT}`);
-    }
-    for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
-      errors.push(`Missing .gitignore entry: ${entry}`);
-    }
-    errors.push(...validatePluginAgents(checkoutPath));
-  } else {
-    errors.push(...validatePluginAgents(HARNESS_REPO_PATH));
-  }
-
-  errors.push(...validateKnownMarketplaces());
-  errors.push(...validateMarketplaceJson());
-
-  // Plugin/CLI version alignment moved to `../plugin-version-alignment` and
-  // is printed centrally by runDoctor in index.ts for every target — the
-  // adapter no longer emits its own note (it would print twice).
-
-  return { location: KNOWN_MARKETPLACES_PATH, errors };
+  return diagnoseZcodeHost(scope, {
+    pluginsRoot: ZCODE_PLUGINS_ROOT,
+    projectRoot: resolveProjectRoot(),
+    harnessRepoPath: HARNESS_REPO_PATH,
+  });
 }
 
 export const zcodeAdapter: AgentAdapter = {

@@ -17,7 +17,7 @@ import {
   dashboardFilters,
   readDashboardView,
   resolveDashboardRoute,
-} from "../src/store-read";
+} from "../../commands/src/dashboard/store-read";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-read-cli-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
