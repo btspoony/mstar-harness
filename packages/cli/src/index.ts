@@ -173,11 +173,12 @@ import { registerStoreCommands, storeUsageFailurePayload } from "./store-migrate
 import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { runDashboard } from "./dashboard";
-import { validateAgentPlugin } from "./agent-plugins";
+import { validateAgentPlugin } from "@mstar-harness/commands";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
 import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
-import { detectInstalledPluginVersion, formatPluginVersionDoctorNote } from "./plugin-version-alignment";
+import { detectInstalledPluginVersion } from "./plugin-version-alignment";
+import { formatPluginVersionDoctorNote } from "@mstar-harness/commands";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";

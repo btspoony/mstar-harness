@@ -2,7 +2,7 @@ import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import { runCliCommand } from "../exec";
 import fs from "node:fs";
 import os from "node:os";
-import { compareSemver } from "../version-compare";
+import { compareSemver } from "@mstar-harness/commands";
 import path from "node:path";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
