@@ -183,7 +183,7 @@ import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
 import { judgmentUsageFailurePayload, registerJudgmentCommands } from "./commands/judgment";
-import { registerStoreCommands } from "./store-migrate";
+import { registerStoreCommands, storeUsageFailurePayload } from "./store-migrate";
 import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { runDashboard } from "./dashboard";
@@ -6638,6 +6638,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
         issueUsageFailurePayload(process.argv, error.message) ??
         catalogUsageFailurePayload(process.argv, error.message) ??
         roadmapUsageFailurePayload(process.argv, error.message) ??
+        storeUsageFailurePayload(process.argv, error.message) ??
         executionMigrationUsageFailurePayload(process.argv, error.message);
       if (payload !== null) console.log(payload);
     }

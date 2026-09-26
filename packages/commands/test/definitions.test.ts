@@ -84,6 +84,20 @@ describe("command definitions", () => {
       "roadmap.replace",
       "roadmap.show",
       "roadmap.export",
+      "store.init",
+      "store.migrate",
+      "store.upgrade",
+      "store.backup",
+      "store.activate",
+      "store.retire",
+      "store.execution.preview",
+      "store.execution.apply",
+      "store.execution.activate",
+      "store.execution.retire",
+      "store.execution.abort",
+      "store.execution.restore-preview",
+      "store.execution.restore",
+      "store.execution.export",
     ]);
   });
 
