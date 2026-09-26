@@ -9,7 +9,7 @@ import {
   diagnoseCursorHost,
   diagnoseDshHost,
   diagnoseKimiHost,
-  detectCodexPluginVersion,
+  diagnoseOmpHost,
   detectCursorPluginVersionForScope,
   detectKimiPluginVersion,
   globalInstallPath,
@@ -46,6 +46,11 @@ function writeJson(root: string, relative: string, value: unknown): void {
   const file = path.join(root, relative);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(value));
+}
+function writeText(root: string, relative: string, value: string): void {
+  const file = path.join(root, relative);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, value);
 }
 
 describe("shared host-health helpers", () => {
@@ -190,6 +195,48 @@ describe("cursor host health", () => {
     expect(diagnoseCursorHost("global", { global: pluginRoot }).errors).toEqual([
       `Missing marker file: ${path.join(pluginRoot, ".cursor-plugin/plugin.json")}`,
     ]);
+  });
+});
+
+describe("omp host health", () => {
+  test("diagnoses a complete synthetic omp installation", () => {
+    const harnessRepo = fixture();
+    writeJson(harnessRepo, "packages/omp/plugin.json", { name: "@mstar-harness/omp" });
+    for (const skill of ["mstar-host", "mstar-harness-core", "pm"]) {
+      writeText(harnessRepo, `packages/omp/skills/${skill}/SKILL.md`, "synthetic skill");
+    }
+    for (const command of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"]) {
+      writeText(harnessRepo, `packages/omp/commands/${command}.md`, "synthetic command");
+    }
+    writeText(harnessRepo, "packages/omp/skills/mstar-host/references/omp.md", "synthetic host reference");
+
+    expect(diagnoseOmpHost({
+      harnessRepoPath: harnessRepo,
+      scope: "global",
+      ompAvailable: true,
+      installedPlugins: [{ name: "@mstar-harness/omp", enabled: true }],
+      localHarnessRepoErrors: [],
+      missingGitignoreEntries: [],
+    })).toEqual({ location: harnessRepo, errors: [] });
+  });
+
+  test("reports missing omp package artifacts from a synthetic root", () => {
+    const harnessRepo = fixture();
+    const result = diagnoseOmpHost({
+      harnessRepoPath: harnessRepo,
+      scope: "global",
+      ompAvailable: true,
+      installedPlugins: [{ name: "@mstar-harness/omp", enabled: true }],
+      localHarnessRepoErrors: [],
+      missingGitignoreEntries: [],
+    });
+
+    expect(result.errors).toContain(
+      `Missing omp plugin marker: ${path.join(harnessRepo, "packages", "omp", "plugin.json")}`,
+    );
+    expect(result.errors).toContain(
+      `Missing omp host reference: ${path.join(harnessRepo, "packages", "omp", "skills", "mstar-host", "references", "omp.md")}`,
+    );
   });
 });
 

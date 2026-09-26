@@ -13,10 +13,10 @@ import {
   PLUGIN_VERSION_SHAPE_RE,
   globalInstallPath as cursorGlobalInstallPath,
   projectInstallPath as cursorProjectInstallPath,
+  findInstalledPlugin,
 } from "@mstar-harness/commands";
 import { detectCodexPluginVersion } from "./adapters/codex";
-import { DSH_HOME_ENV, DSH_HOME_SUBDIR } from "./adapters/dsh";
-import { findInstalledPlugin, listInstalledPlugins } from "./adapters/omp";
+import { listInstalledPlugins } from "./adapters/omp";
 
 function detectOmpPluginVersion(): string | null {
   const entry = findInstalledPlugin(listInstalledPlugins());

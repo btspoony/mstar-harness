@@ -1,3 +1,4 @@
+import { diagnoseOmpHost, parseOmpPluginList } from "@mstar-harness/commands";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -6,7 +7,6 @@ import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import {
   REPO_URL,
-  PLUGIN_NAME,
   HARNESS_REPO_PATH,
   ensureLocalHarnessRepo,
   appendGitignore,
@@ -21,9 +21,6 @@ import {
 // `skills/`/`commands/`/`agents/`/`hooks/`/`tools/` mirrors are produced by
 // `bun run --cwd packages/omp build`.
 const OMP_PACKAGE_REL = path.join("packages", "omp");
-const PACKAGE_NAMES = new Set(["morning-star", PLUGIN_NAME, "github:btspoony/mstar-harness", "@mstar-harness/omp"]);
-const SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
-const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
 
 function ompAvailable() {
   try {
@@ -47,37 +44,6 @@ function runOmp(args: string[], dryRun: boolean): void {
  */
 export const OMP_LIST_TIMEOUT_MS = 10_000;
 
-/**
- * Parse `omp plugin list --json` output into flat entry records (npm +
- * marketplace groups flattened; pure — no subprocess). Exported so the
- * JSON-parsing layer is testable without spawning omp.
- */
-export function parseOmpPluginList(raw: string): Array<Record<string, unknown>> {
-  const parsed = JSON.parse(raw) as unknown;
-  if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>;
-  if (parsed && typeof parsed === "object") {
-    const record = parsed as {
-      plugins?: unknown;
-      npm?: unknown;
-      marketplace?: unknown;
-    };
-    if (Array.isArray(record.plugins)) {
-      return record.plugins as Array<Record<string, unknown>>;
-    }
-    // omp 17.x: { npm: [...], marketplace: [...] }
-    const entries: Array<Record<string, unknown>> = [];
-    for (const key of ["npm", "marketplace"] as const) {
-      const group = record[key];
-      if (Array.isArray(group)) {
-        for (const item of group) {
-          if (item && typeof item === "object") entries.push(item as Record<string, unknown>);
-        }
-      }
-    }
-    if (entries.length > 0) return entries;
-  }
-  return [];
-}
 
 /** Exported for `../plugin-version-alignment`: the doctor alignment note
  * reads the installed plugin version from the same listing the doctor's
@@ -100,43 +66,7 @@ export function listInstalledPlugins(timeoutMs: number = OMP_LIST_TIMEOUT_MS): A
   }
 }
 
-export function findInstalledPlugin(plugins: Array<Record<string, unknown>>) {
-  return plugins.find((entry) => {
-    const name = typeof entry.name === "string" ? entry.name : "";
-    const pathValue = typeof entry.path === "string" ? entry.path : "";
-    const manifest =
-      entry.manifest && typeof entry.manifest === "object"
-        ? (entry.manifest as Record<string, unknown>)
-        : null;
-    const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
-    if (PACKAGE_NAMES.has(name) || PACKAGE_NAMES.has(manifestName)) return true;
-    if (name.includes("morning-star") || manifestName.includes("morning-star")) return true;
-    if (pathValue.includes("mstar-harness") || pathValue.includes(`${path.sep}morning-star`)) return true;
-    return false;
-  });
-}
 
-function validatePluginTree(pluginRoot: string) {
-  const errors: string[] = [];
-  // The omp package ships a package-root `plugin.json` (Agent Plugins
-  // format) — the repo-root `.omp-plugin/`/`.claude-plugin/` markers are not
-  // part of the linked package tree.
-  const markerPath = path.join(pluginRoot, "plugin.json");
-  if (!fs.existsSync(markerPath)) {
-    errors.push(`Missing omp plugin marker: ${markerPath}`);
-  }
-  for (const skill of SKILL_SMOKE) {
-    const skillPath = path.join(pluginRoot, "skills", skill, "SKILL.md");
-    if (!fs.existsSync(skillPath)) errors.push(`Missing skill: ${skillPath}`);
-  }
-  for (const command of COMMAND_SMOKE) {
-    const commandPath = path.join(pluginRoot, "commands", `${command}.md`);
-    if (!fs.existsSync(commandPath)) errors.push(`Missing command: ${commandPath}`);
-  }
-  const hostRef = path.join(pluginRoot, "skills", "mstar-host", "references", "omp.md");
-  if (!fs.existsSync(hostRef)) errors.push(`Missing omp host reference: ${hostRef}`);
-  return errors;
-}
 
 function runInit(scope: Scope, dryRun: boolean) {
   const notes = ensureLocalHarnessRepo(dryRun);
@@ -269,34 +199,23 @@ function postInstallNotes(scope: Scope, dryRun: boolean, projectRoot: string): s
 }
 
 function runDoctor(scope: Scope) {
-  const errors: string[] = [];
-  errors.push(...validateLocalHarnessRepo());
-  errors.push(...validatePluginTree(path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL)));
+  const projectRoot = scope === "project" ? resolveProjectRoot() : undefined;
+  const gitignorePath = projectRoot ? path.join(projectRoot, ".gitignore") : undefined;
+  const gitignore = gitignorePath && fs.existsSync(gitignorePath)
+    ? fs.readFileSync(gitignorePath, "utf8")
+    : "";
+  const ompIsAvailable = ompAvailable();
 
-  if (!ompAvailable()) {
-    errors.push("omp CLI not found on PATH (required for omp target doctor checks).");
-  } else {
-    const plugins = listInstalledPlugins();
-    const installed = findInstalledPlugin(plugins);
-    if (!installed) {
-      errors.push(
-        `Morning Star plugin not found in \`omp plugin list\` (expected one of: ${[...PACKAGE_NAMES].join(", ")}). Run: mstar-harness init --target omp --scope ${scope}`,
-      );
-    } else if (installed.enabled === false) {
-      errors.push(`Morning Star omp plugin is installed but disabled (${String(installed.name)}).`);
-    }
-  }
-
-  if (scope === "project") {
-    const projectRoot = resolveProjectRoot();
-    const gitignorePath = path.join(projectRoot, ".gitignore");
-    const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
-      errors.push(`Missing .gitignore entry: ${entry}`);
-    }
-  }
-
-  return { location: HARNESS_REPO_PATH, errors };
+  return diagnoseOmpHost({
+    harnessRepoPath: HARNESS_REPO_PATH,
+    scope,
+    ompAvailable: ompIsAvailable,
+    installedPlugins: ompIsAvailable ? listInstalledPlugins() : [],
+    localHarnessRepoErrors: validateLocalHarnessRepo(),
+    missingGitignoreEntries: projectRoot
+      ? missingHarnessProcessGitignoreEntries(gitignore)
+      : [],
+  });
 }
 
 export const ompAdapter: AgentAdapter = {
