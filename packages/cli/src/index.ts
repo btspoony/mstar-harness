@@ -178,6 +178,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
+import { getIssueCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -6450,11 +6451,10 @@ registerWorkflowCommands(program);
 registerExecutionWorkflowCommands(program);
 
 registerSessionCommands(program);
-// The command package composes workflow/session family definitions for MCP;
-// these existing registrations remain the operator CLI adapters. In particular,
-// session run keeps its local process launch semantics.
+// The command package owns canonical family identities; the operator CLI remains
+// a thin local adapter. Session run keeps its process-launch semantics.
 
-registerIssueCommands(program);
+registerIssueCommands(program, getIssueCommandDefinitions());
 
 registerCatalogCommands(program);
 registerRoadmapCommands(program);

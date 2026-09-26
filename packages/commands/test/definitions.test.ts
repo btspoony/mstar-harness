@@ -60,6 +60,17 @@ describe("command definitions", () => {
       "plan.reconcile",
       "plan.residual-add",
       "plan.residual-close",
+      "issue.add",
+      "issue.list",
+      "issue.show",
+      "issue.occurrence",
+      "issue.triage",
+      "issue.close",
+      "issue.waive",
+      "issue.duplicate",
+      "issue.supersede",
+      "issue.link",
+      "issue.export",
     ]);
   });
 

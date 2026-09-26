@@ -6,6 +6,7 @@ import { getPersistCommandDefinitions } from "./families/persist.js";
 import { getPlanCommandDefinitions } from "./families/plan.js";
 import { getSessionCommandDefinitions } from "./families/session.js";
 import { getWorkflowCommandDefinitions } from "./families/workflow.js";
+import { getIssueCommandDefinitions } from "./families/issue.js";
 
 
 
@@ -123,6 +124,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getPlanCommandDefinitions(),
   ...getSessionCommandDefinitions(),
   ...getWorkflowCommandDefinitions(),
+  ...getIssueCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

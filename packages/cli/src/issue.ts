@@ -35,20 +35,10 @@ import {
   type StoreContext,
   type TerminalDisposition,
 } from "@mstar-harness/engine";
+import { getIssueCommandDefinitions } from "@mstar-harness/commands";
 
-const ISSUE_VERBS: Record<string, true> = {
-  add: true,
-  list: true,
-  show: true,
-  occurrence: true,
-  triage: true,
-  close: true,
-  waive: true,
-  duplicate: true,
-  supersede: true,
-  link: true,
-  export: true,
-};
+const ISSUE_VERBS = Object.fromEntries(getIssueCommandDefinitions().map(({ id }) => [id.slice("issue.".length), true])) as Record<string, true>;
+
 
 const COMMAND_POSITION = 2;
 
@@ -479,7 +469,7 @@ function expectFlag(command: Command): Command {
   return command.option("--expect <n>", "Expected issue revision");
 }
 
-export function registerIssueCommands(program: Command): void {
+export function registerIssueCommands(program: Command, definitions: readonly { id: string; description: string }[]): void {
   const issue = program
     .command("issue")
     .description(
@@ -591,14 +581,12 @@ export function registerIssueCommands(program: Command): void {
     );
   };
 
-  closeVerb(
-    "close",
-    "resolved",
-    "Close as resolved (acceptance evidence in references plus the acceptance authority in alignmentRef)",
-  );
-  closeVerb("waive", "waived", "Close as waived");
-  closeVerb("duplicate", "duplicate", "Close as duplicate of a canonical issue");
-  closeVerb("supersede", "superseded", "Close as superseded by a replacement issue");
+  for (const definition of definitions) {
+    const verb = definition.id.slice("issue.".length);
+    if (verb !== "close" && verb !== "waive" && verb !== "duplicate" && verb !== "supersede") continue;
+    const disposition: TerminalDisposition = verb === "close" ? "resolved" : verb === "supersede" ? "superseded" : verb;
+    closeVerb(verb, disposition, definition.description);
+  }
 
   expectFlag(
     authorizedFlags(
