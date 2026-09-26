@@ -1,4 +1,4 @@
-import type { z, ZodObject, ZodType } from "zod";
+import type { z, ZodType } from "zod";
 
 export type CommandStatus = "ok" | "refused" | "usage" | "error";
 
@@ -50,7 +50,7 @@ export type CliSyntax = Readonly<{
 export interface CommandDefinition<I = unknown, O = unknown> {
   readonly id: string;
   readonly cli: CliSyntax;
-  readonly input: ZodObject<any>;
+  readonly input: ZodType<I>;
   readonly output: ZodType<CommandEnvelope<O>>;
   readonly effects: readonly CommandEffect[];
   readonly description: string;
