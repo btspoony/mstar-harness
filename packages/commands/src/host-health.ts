@@ -4,4 +4,5 @@ export * from "./host-health/plugin-version-alignment.js";
 export * from "./host-health/agent-plugins.js";
 export * from "./host-health/codex.js";
 export * from "./host-health/cursor.js";
+export * from "./host-health/kimi.js";
 export * from "./host-health/dsh.js";

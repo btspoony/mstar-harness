@@ -8,11 +8,14 @@ import {
   diagnoseCodexHost,
   diagnoseCursorHost,
   diagnoseDshHost,
+  diagnoseKimiHost,
   detectCodexPluginVersion,
   detectCursorPluginVersionForScope,
+  detectKimiPluginVersion,
   globalInstallPath,
   isDshAvailable,
   joinWithinRoot,
+  kimiManagedRoot,
   legacyCodexMarketplaceNote,
   parseCodexInstalledEntries,
   parseCodexMarketplaceNames,
@@ -131,6 +134,29 @@ describe("codex host health", () => {
     expect(legacyCodexMarketplaceNote(JSON.stringify({ plugins: [] }), missingPath)).toBeNull();
   });
 });
+describe("kimi host health", () => {
+  test("discovers the Kimi managed root and installed plugin from a synthetic host root", () => {
+    const home = fixture();
+    const managedRoot = kimiManagedRoot(home);
+    writeJson(home, "plugins/managed/morning-star-harness/.kimi-plugin/plugin.json", { version: "3.7.0" });
+
+    expect(managedRoot).toBe(path.join(home, "plugins", "managed"));
+    expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+    expect(diagnoseKimiHost(home)).toEqual({ location: managedRoot, errors: [], notes: [] });
+  });
+
+  test("reports a missing plugin artifact without failing diagnostics", () => {
+    const home = fixture();
+
+    expect(detectKimiPluginVersion(home)).toBeNull();
+    expect(diagnoseKimiHost(home)).toEqual({
+      location: kimiManagedRoot(home),
+      errors: [],
+      notes: [],
+    });
+  });
+});
+
 describe("cursor host health", () => {
   test("discovers and validates a synthetic project plugin checkout", () => {
     const projectRoot = fixture();

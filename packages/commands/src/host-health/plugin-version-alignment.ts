@@ -105,38 +105,6 @@ export function detectDshPluginVersion(dshHome: string = process.env.DSH_HOME ??
   return versionFromJsonFile(path.join(dshHome, "profiles", "web", "node_modules", "@mstar-harness", "dsh", "package.json"));
 }
 
-export function kimiManagedRoot(kimiCodeHome: string = process.env.KIMI_CODE_HOME ?? path.join(os.homedir(), ".kimi-code")): string {
-  return path.join(kimiCodeHome, "plugins", "managed");
-}
-
-function listDirsToDepth(root: string, maxDepth: number): string[] {
-  const out: string[] = [];
-  const visit = (dir: string, depth: number) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const child = path.join(dir, entry.name);
-      out.push(child);
-      if (depth + 1 < maxDepth) visit(child, depth + 1);
-    }
-  };
-  visit(root, 0);
-  return out;
-}
-
-export function detectKimiPluginVersion(kimiCodeHome: string = process.env.KIMI_CODE_HOME ?? path.join(os.homedir(), ".kimi-code")): string | null {
-  let highest: string | null = null;
-  for (const dir of listDirsToDepth(kimiManagedRoot(kimiCodeHome), 3)) {
-    if (path.basename(dir) !== PLUGIN_NAME) continue;
-    highest = highestVersion(highest, readTolerantVersion(dir, [".kimi-plugin/plugin.json", "plugin.json", "package.json"]));
-  }
-  return highest;
-}
 
 /** Version precedence for one parsed `omp plugin list` entry; no subprocess. */
 export function ompEntryVersion(entry: Record<string, unknown>): string | null {

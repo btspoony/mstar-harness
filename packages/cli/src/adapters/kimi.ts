@@ -1,5 +1,5 @@
+import { diagnoseKimiHost, kimiManagedRoot } from "@mstar-harness/commands";
 import type { AgentAdapter, Scope } from "../types";
-import { kimiManagedRoot } from "../plugin-version-alignment";
 
 /**
  * Kimi Code install-mode adapter (minimal, probe-pinned 2026-09-08 on
@@ -12,11 +12,8 @@ import { kimiManagedRoot } from "../plugin-version-alignment";
  *   (the shared AgentAdapter install-init contract only requires
  *   `{ location, notes }`) and points at the TUI install path.
  * - doctor does NOT require the kimi binary (there is no plugin surface to
- *   probe) and never errors on an absent install: the CLI ↔ plugin version
- *   alignment note — including the not-installed TUI hint — is printed
- *   centrally by runDoctor in index.ts via the shared builder
- *   (`../plugin-version-alignment`), so the adapter adds no note of its own
- *   (exactly one alignment line per doctor run).
+ *   probe) and never errors on an absent install; diagnostics are assembled
+ *   by the shared read-only host-health module.
  */
 
 const KIMI_INSTALL_HINT = "Install via Kimi TUI: /plugins install";
@@ -29,11 +26,7 @@ function runInit(_scope: Scope, _dryRun: boolean): { location: string; notes: st
 }
 
 function runDoctor(_scope: Scope): { location: string; errors: string[]; notes: string[] } {
-  return {
-    location: kimiManagedRoot(),
-    errors: [],
-    notes: [],
-  };
+  return diagnoseKimiHost();
 }
 
 export const kimiAdapter: AgentAdapter = {
