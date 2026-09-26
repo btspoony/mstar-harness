@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  CODEX_MARKETPLACE_NAME as MARKETPLACE_NAME,
+  detectCodexPluginVersion as detectCodexPluginVersionFromHealth,
+  isCodexAvailable,
+  legacyCodexMarketplaceNote,
+  parseCodexInstalledPluginIds,
+  parseCodexMarketplaceNames,
+} from "@mstar-harness/commands";
 import { ensureCodexAgentFile, validateCodexAgentFile } from "./codex-agent-files";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
@@ -48,10 +56,6 @@ import {
 const CODEX_BIN = "codex";
 const CODEX_LOCAL_TIMEOUT_MS = 10_000;
 const CODEX_MARKETPLACE_TIMEOUT_MS = 300_000;
-/** GitHub shorthand accepted by `codex plugin marketplace add <SOURCE>`. */
-const MARKETPLACE_GIT_SOURCE = "btspoony/mstar-harness";
-/** Marketplace name = upstream repo's bundled `.agents/plugins/marketplace.json` `name`. */
-export const MARKETPLACE_NAME = "mstar-repo";
 const CODEX_INSTALL_HINT =
   "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
 
@@ -91,72 +95,24 @@ function runCodex(args: string[], dryRun: boolean, timeoutMs: number): string {
 }
 
 function codexAvailable(): boolean {
-  try {
-    runCodex(["--version"], false, CODEX_LOCAL_TIMEOUT_MS);
-    return true;
-  } catch {
-    return false;
-  }
+  return isCodexAvailable(() => runCodex(["--version"], false, CODEX_LOCAL_TIMEOUT_MS));
 }
 
 /** Parse `codex plugin marketplace list --json` → marketplace names. */
 function configuredMarketplaceNames(dryRun: boolean): string[] {
   if (dryRun) return [];
-  const dump = runCodex(["plugin", "marketplace", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS);
-  const parsed = JSON.parse(dump) as {
-    marketplaces?: Array<{ name?: unknown }>;
-  };
-  const list = Array.isArray(parsed.marketplaces) ? parsed.marketplaces : [];
-  return list
-    .map((entry) => (entry && typeof entry.name === "string" ? entry.name : ""))
-    .filter((name) => name !== "");
+  return parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
 }
 
-/**
- * Parse `codex plugin list --json` → the full `installed[]` entries (records
- * carrying `pluginId`, `version`, `enabled`, …). Shared by the doctor's
- * installed-id check and `detectCodexPluginVersion` — one JSON-parsing site.
- * Throws on non-JSON dumps (doctor catches and degrades to an error line).
- */
-export function parseCodexInstalledEntries(dump: string): Array<Record<string, unknown>> {
-  const parsed = JSON.parse(dump) as {
-    installed?: unknown;
-  };
-  const list = Array.isArray(parsed.installed) ? parsed.installed : [];
-  return list.filter(
-    (entry): entry is Record<string, unknown> =>
-      entry !== null && typeof entry === "object" && !Array.isArray(entry),
-  );
-}
-
-/** Parse `codex plugin list --json` → installed plugin ids (`name@marketplace`). */
+/** Parse installed plugin IDs from the read-only codex plugin list. */
 function installedPluginIds(dryRun: boolean): string[] {
   if (dryRun) return [];
-  const dump = runCodex(["plugin", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS);
-  return parseCodexInstalledEntries(dump)
-    .map((entry) => (typeof entry.pluginId === "string" ? entry.pluginId : ""))
-    .filter((pluginId) => pluginId !== "");
+  return parseCodexInstalledPluginIds(runCodex(["plugin", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
 }
 
-/**
- * Version of the installed Morning Star plugin (`morning-star-harness@mstar-repo`)
- * from `codex plugin list --json`. Subprocess-bound discovery consumed by
- * `../plugin-version-alignment`; no-throw — a missing codex CLI, a failed
- * query, or an absent/shape-invalid version reports `null` (the alignment
- * note is informational; doctor reports codex failures through its own
- * error channels).
- */
+/** CLI-owned subprocess boundary for the shared read-only Codex version probe. */
 export function detectCodexPluginVersion(): string | null {
-  let entries: Array<Record<string, unknown>>;
-  try {
-    entries = parseCodexInstalledEntries(runCodex(["plugin", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
-  } catch {
-    return null;
-  }
-  const pluginId = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-  const entry = entries.find((candidate) => candidate.pluginId === pluginId);
-  const version = typeof entry?.version === "string" ? entry.version : "";
-  return version === "" ? null : version;
+  return detectCodexPluginVersionFromHealth((args) => runCodex(args, false, CODEX_LOCAL_TIMEOUT_MS));
 }
 
 /**
@@ -173,20 +129,7 @@ function legacyPersonalMarketplaceNote(): string | null {
     // Absent or unreadable: the legacy file is user-owned and optional.
     return null;
   }
-  try {
-    const parsed = JSON.parse(raw) as { plugins?: unknown };
-    const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
-    const hasMstar = plugins.some(
-      (entry) =>
-        entry !== null && typeof entry === "object" && !Array.isArray(entry) && "name" in entry && entry.name === PLUGIN_NAME,
-    );
-    if (hasMstar) {
-      return `Legacy personal marketplace entry found at ${legacyPath} \u2014 the ${PLUGIN_NAME} plugin now installs from the repo marketplace (${MARKETPLACE_GIT_SOURCE}). Remove the entry, then install: codex plugin add ${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-    }
-  } catch {
-    // Unparseable user config: leave it alone.
-  }
-  return null;
+  return legacyCodexMarketplaceNote(raw, legacyPath);
 }
 
 function agentSourcePath(agentName: string) {

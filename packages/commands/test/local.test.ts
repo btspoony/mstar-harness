@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import {
   compareSemver,
+  detectCodexPluginVersion,
   detectCursorPluginVersionForScope,
   detectZcodePluginVersion,
   formatPluginVersionDoctorNote,
+  isCodexAvailable,
   joinWithinRoot,
+  legacyCodexMarketplaceNote,
+  parseCodexInstalledEntries,
+  parseCodexMarketplaceNames,
   resolveCliPath,
   validateAgentPlugin,
 } from "../src/index.js";
@@ -78,5 +83,25 @@ describe("shared host-health helpers", () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.errors).toContain('plugin.json: "$schema" is required and must be the string https://agent-plugins.org/schemas/1.0.0/plugin.schema.json');
     expect(invalid.errors.some((error) => error.includes("violates Agent Plugins name rules"))).toBe(true);
+  });
+});
+
+describe("codex host health", () => {
+  test("discovers an installed plugin, reports missing artifacts, and handles unavailable probes", () => {
+    const root = fixture();
+    const installedDump = JSON.stringify({
+      installed: [{ pluginId: "morning-star-harness@mstar-repo", version: "3.6.3" }],
+    });
+    expect(detectCodexPluginVersion((args) => {
+      expect(args).toEqual(["plugin", "list", "--json"]);
+      return installedDump;
+    })).toBe("3.6.3");
+    expect(detectCodexPluginVersion(() => JSON.stringify({ installed: [] }))).toBeNull();
+    expect(() => parseCodexInstalledEntries("{ invalid json")).toThrow();
+    expect(isCodexAvailable(() => { throw new Error("codex unavailable"); })).toBe(false);
+    expect(parseCodexMarketplaceNames(JSON.stringify({ marketplaces: [{ name: "mstar-repo" }, {}, null] })))
+      .toEqual(["mstar-repo"]);
+    expect(legacyCodexMarketplaceNote(JSON.stringify({ plugins: [] }), path.join(root, ".agents/plugins/marketplace.json")))
+      .toBeNull();
   });
 });
