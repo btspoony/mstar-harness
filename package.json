@@ -35,7 +35,8 @@
   "packageManager": "bun@1.4.0",
   "dependencies": {
     "@mstar-harness/commands": "workspace:*",
-    "@mstar-harness/engine": "^3.11.2"
+    "@mstar-harness/engine": "^3.11.2",
+    "@mstar-harness/mcp": "workspace:*"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.11",

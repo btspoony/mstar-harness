@@ -1,0 +1,34 @@
+{
+  "name": "@mstar-harness/mcp",
+  "version": "3.11.2",
+  "description": "MCP adapter for Morning Star canonical commands.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/mcp/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/mcp/src/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./stdio": {
+      "types": "./dist/mcp/src/stdio.d.ts",
+      "default": "./dist/stdio.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "rm -rf dist && bun run scripts/build.ts && bunx tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.1.0",
+    "@mstar-harness/commands": "workspace:*",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.1.0",
+    "@types/node": "^25.6.0",
+    "bun-types": "^1.2.17",
+    "typescript": "^5.9.3"
+  }
+}
