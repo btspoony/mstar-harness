@@ -27,6 +27,7 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 
 describe("command definitions", () => {
   test("canonical registry includes all composed family identities", () => {
+    // Current composed set; grows with C6a–C6d; C7 closes the 122-identity census (report=123 via P2).
     expect(getCommandDefinitions().map(({ id }) => id)).toEqual([
       "status.validate",
       "status.workflow-close",
@@ -60,6 +61,18 @@ describe("command definitions", () => {
       "plan.reconcile",
       "plan.residual-add",
       "plan.residual-close",
+      "session.run",
+      "session.recover",
+      "workflow.register",
+      "workflow.evidence",
+      "workflow.show-prepare",
+      "workflow.amend-prepare",
+      "workflow.recover-coordinator",
+      "workflow.phase",
+      "workflow.lifecycle",
+      "workflow.execution-policy",
+      "workflow.integration-worktree",
+      "iteration.register",
       "issue.add",
       "issue.list",
       "issue.show",
@@ -134,6 +147,7 @@ describe("command definitions", () => {
       definition("plan.issue-add", ["plan", "issue-add"]),
       definition("plan-issue.add", ["plan-issue", "add"]),
     ])).toThrow("Duplicate MCP tool name: mstar_plan_issue_add");
+  });
 
   test("rejects CLI syntax whose keys diverge from its input schema", () => {
     const valid = definition("greet", ["greet"]);
