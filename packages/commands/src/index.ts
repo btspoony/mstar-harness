@@ -18,6 +18,8 @@ export { getCommandSchemas, getPayloadSchema } from "./families/schema.js";
 export { getValidationCommandDefinitions } from "./families/validation.js";
 export { getAuditCommandDefinitions } from "./families/audit.js";
 export { getPrReviewCommandDefinitions } from "./families/pr-review.js";
+export { getJudgmentCommandDefinitions } from "./families/judgment.js";
+export type { JudgmentProvider } from "./families/judgment.js";
 export { getProcessCommandDefinitions } from "./families/process.js";
 export { spawnProcess } from "./effects/process.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";

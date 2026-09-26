@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@mstar-harness/engine": "workspace:*",
+    "@mstar-harness/judgment": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

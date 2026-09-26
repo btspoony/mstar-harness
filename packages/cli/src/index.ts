@@ -165,7 +165,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
-import { getAuditCommandDefinitions, getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
+import { getAuditCommandDefinitions, getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getJudgmentCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -5943,7 +5943,7 @@ registerSessionCommands(program);
 registerIssueCommands(program, getIssueCommandDefinitions());
 registerCatalogCommands(program, getCatalogCommandDefinitions());
 registerRoadmapCommands(program, getRoadmapCommandDefinitions());
-registerJudgmentCommands(program);
+registerJudgmentCommands(program, getJudgmentCommandDefinitions());
 
 // `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
 // engine store boundary and the migration transport (contract §2/§7).

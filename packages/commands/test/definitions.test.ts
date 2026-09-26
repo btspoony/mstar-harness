@@ -27,8 +27,8 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 
 describe("command definitions", () => {
   test("canonical registry includes all composed family identities", () => {
-    // Current composed set; grows with C6a–C6d; C7 closes the 122-identity census (report=123 via P2).
-    expect(getCommandDefinitions()).toHaveLength(113);
+    // Current composed set; grows with C6d; C7 closes the 122-identity census (report=123 via P2).
+    expect(getCommandDefinitions()).toHaveLength(114);
     expect(getCommandDefinitions().map(({ id }) => id)).toEqual([
       "status.validate",
       "status.workflow-close",
@@ -143,6 +143,7 @@ describe("command definitions", () => {
       "sdd.exec",
       "worktree.cleanup",
       "pr-review.worktree-setup",
+      "judgment.review-advice",
     ]);
   });
 
