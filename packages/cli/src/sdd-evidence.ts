@@ -1122,13 +1122,10 @@ function openExclusiveLog(logPath: string): number {
 }
 
 /**
- * Spawn once (shell false, resolved feature cwd, inherited environment,
- * owned POSIX process group), stream raw output into the stored logs up to
- * the per-stream cap while draining to the terminal sink, and settle once:
- * normal exit settles on child + streams closed; timeout / parent
- * SIGINT/SIGTERM escalate TERM → KILL with bounded grace and drain; a
- * direct-child exit with descendant-held pipes gets the bounded drain
- * timer, then the same escalation while retaining the direct outcome.
+ * Spawn once (shell false, resolved feature cwd, an explicit environment,
+ * owned POSIX process group), capture child streams into bounded result logs,
+ * and settle once: normal exit settles on child + streams closed; timeout /
+ * parent cancellation escalates TERM → KILL with bounded grace and drain.
  */
 function runChild(
   featureCwd: string,
@@ -1288,7 +1285,7 @@ function runChild(
         cwd: featureCwd,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
+        env: { ...process.env },
         detached: true,
       });
     } catch (error) {
@@ -1758,7 +1755,8 @@ function failEvidence(error: unknown, context: string): void {
 
 /**
  * Register `sdd evidence capture` and `sdd evidence verify` beside the
- * existing sdd commands. The old `sdd exec` surface is untouched.
+ * SDD commands. `sdd.exec` is represented in the shared process family;
+ * this CLI keeps its native terminal-oriented entry point.
  */
 export function registerSddEvidenceCommands(sddCommand: Command, definitions: readonly CommandDefinition[]): void {
   const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));

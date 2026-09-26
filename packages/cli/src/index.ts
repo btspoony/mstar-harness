@@ -145,6 +145,7 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
+import { getSddCommandDefinitions } from "@mstar-harness/commands";
 import { getPrReviewCommandDefinitions } from "@mstar-harness/commands";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {
@@ -2171,6 +2172,7 @@ function loadSddContextFile(pathValue: string | undefined): SddExecutionContext 
 
 const sddDefinitions = getSddCommandDefinitions();
 const sddDefinitionsById = Object.fromEntries(sddDefinitions.map((definition) => [definition.id, definition]));
+const processDefinitionsById = Object.fromEntries(getCommandDefinitions().filter(({ effects }) => effects.includes("process")).map((definition) => [definition.id, definition]));
 const sddCommand = program
   .command("sdd")
   .description(
@@ -2282,11 +2284,7 @@ sddCommand
 
 sddCommand
   .command("exec")
-  .description(
-    "Run an argv child bound to a resolved SDD execution context (spec A3): spawn cwd = the context's feature worktree, " +
-      "no shell (the argv after -- reaches the child literally), inherited env + stdio. " +
-      "Gate failure exits 1, usage 2, spawn-not-found 127, child exit preserved, signal termination 128+signal (SIGINT/SIGTERM forwarded)",
-  )
+  .description(processDefinitionsById["sdd.exec"]!.description)
   .option("--context <path>", "Absolute path to the SddExecutionContext JSON file")
   .argument("[argv...]", "Child executable + args placed after -- (passed through unchanged)")
   .action(async (argv: string[], options: { context?: string }) => {
@@ -3783,12 +3781,7 @@ function cleanupBranchDeletionCwd(base: string | undefined, probe: CleanupProbe,
 
 worktreeCommand
   .command("cleanup")
-  .description(
-    "Plan (and with --apply execute) guarded worktree/branch cleanup for a workflow: merged-evidence-only branch deletion with " +
-      "active-lease / checked-out / foreign / dirty / non-terminal refusals; dry-run by default (no fetch/prune/write), prints " +
-      "`verdict | kind | ref | reason` (exit 0 valid dry-run / successful removals, 1 probe/mutation failure, 2 usage). " +
-      "By default candidates come from the selected workflow's recorded claims; --all-workflows sweeps everything.",
-  )
+  .description(processDefinitionsById["worktree.cleanup"]!.description)
   .option(
     "--workflow <id>",
     "Workflow id whose snapshot drives ownership and protected refs (required); without --all-workflows, candidates are limited to this workflow's recorded claims",
@@ -5317,12 +5310,7 @@ type ReviewWorktreeSidecar = {
 
 prReviewCommand
   .command("worktree-setup")
-  .description(
-    "Create the isolated review worktree per pr-review.md \u00a7 Worktree isolation: resolves the real base, picks a " +
-      "collision-free branch name, fetches with explicit refspecs, creates the worktree, computes the diff basis INSIDE it, " +
-      "and records a sidecar json consumed by worktree-cleanup; prints {reviewBranch, worktreePath, base, mergeBase, diffCmd, diffFile} " +
-      "(input modes: --pr <n> | --branch <b> | --diff | --working-tree | --commit <sha>)",
-  )
+  .description(processDefinitionsById["pr-review.worktree-setup"]!.description)
   .option("--pr <n>", "PR number input mode (pull/<n>/head via gh)")
   .option("--branch <name>", "Bare remote-branch input mode")
   .option("--diff", "Arbitrary diff input mode \u2014 no worktree, no refs")

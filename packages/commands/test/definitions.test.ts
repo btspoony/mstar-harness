@@ -139,6 +139,9 @@ describe("command definitions", () => {
       "pr-review.size",
       "pr-review.seat-prompt",
       "pr-review.budget",
+      "sdd.exec",
+      "worktree.cleanup",
+      "pr-review.worktree-setup",
     ]);
   });
 
