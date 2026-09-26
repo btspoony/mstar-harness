@@ -29,6 +29,7 @@
  * route is guessed from the other.
  */
 import { Command } from "commander";
+import { PLAN_COORDINATOR_TRANSITIONS, getPlanCommandDefinitions } from "@mstar-harness/commands";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import pc from "picocolors";
@@ -156,22 +157,9 @@ function failurePayload(
 }
 
 /** Every verb this family registers (spec §A2 — no aliases). */
-const PLAN_VERBS: Record<string, true> = {
-  bind: true,
-  show: true,
-  prepare: true,
-  progress: true,
-  "issue-add": true,
-  "issue-close": true,
-  handoff: true,
-  accept: true,
-  return: true,
-  "integration-start": true,
-  "integration-accept": true,
-  complete: true,
-  "repair-delivery-source": true,
-  reconcile: true,
-};
+const PLAN_VERBS: Record<string, true> = Object.fromEntries(
+  getPlanCommandDefinitions().map(({ cli }) => [cli.path[1]!, true]),
+) as Record<string, true>;
 
 /**
  * The issue-cutover rename (G2b), as one table used on both sides of the
@@ -1102,7 +1090,9 @@ function harnessOverrideOf(input: BindPlanSessionInput): string | undefined {
   return undefined;
 }
 
-export function registerPlanCommands(program: Command): void {
+export function registerPlanCommands(program: Command, definitions: readonly { id: string }[]): void {
+  const registeredPlanIds = definitions.map(({ id }) => id).filter((id) => id.startsWith("plan."));
+  if (registeredPlanIds.length !== 16) throw new Error(`expected 16 plan command definitions, received ${registeredPlanIds.length}`);
   const plan = program
     .command("plan")
     .description(
@@ -1366,30 +1356,7 @@ export function registerPlanCommands(program: Command): void {
 
   // The seven coordinator transitions share one flag surface; `return` alone
   // carries a reason.
-  for (const [kind, description] of [
-    ["accept", "Accept a submitted handoff: execution ownership transfers to the coordinator, no merge yet"],
-    ["return", "Return a submitted/accepted handoff to the plan owner and restore its execution holder"],
-    [
-      "integration-start",
-      "Iteration route only: record the integration attempt and pin its base before any Git merge (Git stays the operator's action)",
-    ],
-    [
-      "integration-accept",
-      "Iteration route only: verify the pinned Git result of the started integration attempt (never runs a merge)",
-    ],
-    [
-      "complete",
-      "Record row Done after verified Git proof \u2014 iteration route releases both leases after a merged handoff; standalone development completes from the accepted handoff without integration and releases only the row lease (workflow stays running)",
-    ],
-    [
-      "repair-delivery-source",
-      "Legacy-only: replace a wrong registered delivery source (source === target) from the accepted handoff pin \u2014 never Done, delivery evidence, or a user-supplied branch; not a normal lifecycle step",
-    ],
-    [
-      "reconcile",
-      "Crash recovery: iteration route observes the merge checkout and finishes or abandons the attempt; standalone development only replays an already-completed row as a no-write already-completed",
-    ],
-  ] as const) {
+  for (const [kind, description] of PLAN_COORDINATOR_TRANSITIONS) {
     const command = plan
       .command(kind)
       .description(`${description} (coordinator session)`)

@@ -158,6 +158,7 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
+import { getPlanCommandDefinitions } from "@mstar-harness/commands";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {
@@ -6436,7 +6437,7 @@ prReviewCommand
 
 // `mstar plan` — the scoped plan-coordination transport (spec §A2). It owns
 // the scoped verbs only; the unscoped lifecycle verbs above are unchanged.
-registerPlanCommands(program);
+registerPlanCommands(program, getPlanCommandDefinitions());
 
 // `mstar workflow` — the workflow-level Prepare amendment verbs: the same
 // scoped transport (one coordinator envelope, one engine call, the shared

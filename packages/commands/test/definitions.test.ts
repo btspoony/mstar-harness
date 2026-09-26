@@ -44,6 +44,22 @@ describe("command definitions", () => {
       "lease.verify-integration",
       "iteration.gate",
       "iteration.push-cadence",
+      "plan.bind",
+      "plan.show",
+      "plan.prepare",
+      "plan.progress",
+      "plan.issue-add",
+      "plan.issue-close",
+      "plan.handoff",
+      "plan.accept",
+      "plan.return",
+      "plan.integration-start",
+      "plan.integration-accept",
+      "plan.complete",
+      "plan.repair-delivery-source",
+      "plan.reconcile",
+      "plan.residual-add",
+      "plan.residual-close",
     ]);
   });
 
