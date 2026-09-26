@@ -15,4 +15,5 @@ export { getStoreCommandDefinitions } from "./families/store.js";
 export { getExecutionCommandDefinitions } from "./families/execution.js";
 export { getSddCommandDefinitions } from "./families/sdd.js";
 export { getCommandSchemas, getPayloadSchema } from "./families/schema.js";
+export { getValidationCommandDefinitions } from "./families/validation.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";

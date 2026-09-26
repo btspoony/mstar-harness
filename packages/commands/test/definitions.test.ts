@@ -104,6 +104,16 @@ describe("command definitions", () => {
       "sdd.check-context",
       "sdd.evidence.capture",
       "sdd.evidence.verify",
+      "dispatch.validate",
+      "worktree.check",
+      "worktree.qc-alignment",
+      "review.seats",
+      "lint",
+      "design-md.validate",
+      "compound.validate",
+      "skill.lint",
+      "roles.validate",
+      "qc.validate-report",
     ]);
   });
 

@@ -178,7 +178,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
-import { getCatalogCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions } from "@mstar-harness/commands";
+import { getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -6614,6 +6614,102 @@ program
     }
     await runDashboard({ harnessDir, port, open: options.open, project: options.project });
   });
+
+function bindValidationCommandActions(): void {
+  const rootCommand = (pathParts: readonly string[]): Command | undefined => {
+    let current: Command = program;
+    for (const part of pathParts) {
+      const next = current.commands.find((candidate) => candidate.name() === part);
+      if (!next) return undefined;
+      current = next;
+    }
+    return current;
+  };
+  for (const definition of getValidationCommandDefinitions()) {
+    const command = rootCommand(definition.cli.path);
+    if (!command) throw new Error(`Validation command is not registered in CLI: ${definition.id}`);
+    command.action(async (...args: unknown[]) => {
+      const options = args.find((arg): arg is Record<string, unknown> => arg !== null && typeof arg === "object" && !(arg instanceof Command)) ?? {};
+      const positional = args.filter((arg) => typeof arg === "string" || Array.isArray(arg));
+      const first = positional[0];
+      const toPath = (value: string, cwd = false): string => cwd ? path.resolve(value) : resolveCliPath(value);
+      let input: Record<string, unknown>;
+      switch (definition.id) {
+        case "dispatch.validate": {
+          const value = first as string | undefined;
+          const fromCwd = value ? (path.isAbsolute(value) ? value : path.resolve(process.cwd(), value)) : value;
+          input = { assignmentFile: fromCwd && fs.existsSync(fromCwd) ? fromCwd : value ? resolveCliPath(value) : undefined, branch: options.branch };
+          break;
+        }
+        case "worktree.check":
+          input = { planId: first, plan: options.plan, workflow: options.workflow, harness: options.harness, integration: options.integration, mainBranch: options.mainBranch, control: options.control, l2: options.l2, tracks: options.tracks };
+          break;
+        case "worktree.qc-alignment":
+          input = { files: (first as string[] | undefined)?.map((value) => toPath(value, true)) ?? [] };
+          break;
+        case "review.seats":
+          input = { assignmentFile: typeof first === "string" ? toPath(first, true) : undefined, mode: options.mode, reviewers: typeof options.reviewers === "string" ? options.reviewers.split(",").map((role) => role.trim()).filter(Boolean) : [] };
+          break;
+        case "lint":
+          input = { target: typeof first === "string" ? toPath(first) : undefined, type: options.type, prVariant: options.prVariant };
+          break;
+        case "design-md.validate":
+          input = { dir: typeof first === "string" ? toPath(first) : undefined };
+          break;
+        case "compound.validate":
+          input = { docPath: typeof first === "string" ? toPath(first) : undefined, knowledgeDir: typeof options.knowledgeDir === "string" ? toPath(options.knowledgeDir) : undefined };
+          break;
+        case "skill.lint":
+          input = { skillDir: typeof first === "string" ? toPath(first) : undefined };
+          break;
+        case "roles.validate":
+          input = { rolesDir: options.rolesDir, skillsDir: options.skillsDir };
+          break;
+        case "qc.validate-report":
+          input = { reportFile: typeof first === "string" ? toPath(first) : undefined };
+          break;
+        default:
+          throw new Error(`Unsupported validation CLI identity: ${definition.id}`);
+      }
+      const result = await definition.execute(input, {
+        cwd: process.cwd(),
+        controlRoot: resolveProcessHarnessDir(),
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: new AbortController().signal,
+        effects: {
+          async readInput() { return ""; },
+          async spawn(request) {
+            try {
+              const stdout = execFileSync(request.argv[0]!, request.argv.slice(1), { cwd: request.cwd, env: { ...process.env, ...request.env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], signal: request.signal });
+              return { exitCode: 0, signal: null, stdout, stderr: "" };
+            } catch (error) {
+              const failure = error as NodeJS.ErrnoException & { status?: number | null; stdout?: Buffer | string; stderr?: Buffer | string; signal?: NodeJS.Signals | null };
+              return { exitCode: failure.status ?? 1, signal: failure.signal ?? null, stdout: String(failure.stdout ?? ""), stderr: String(failure.stderr ?? failure.message) };
+            }
+          },
+          async startDashboard() { throw new Error("Dashboard capability unavailable for validation commands"); },
+          async openBrowser() { throw new Error("Browser capability unavailable for validation commands"); },
+        },
+      });
+      if (result.status === "ok") console.log(pc.green(`${definition.id}: OK`));
+      else {
+        console.error(pc.red(`${definition.id}: ${result.status.toUpperCase()} ${result.code}: ${result.message}`));
+        const details = result.details;
+        if (details && Array.isArray(details.violations)) {
+          for (const item of details.violations) {
+            if (item && typeof item === "object" && "code" in item && "message" in item) {
+              console.error(`  - [${"severity" in item ? item.severity : "high"}] ${item.code}: ${item.message}`);
+              if ("fix" in item && item.fix) console.error(`    fix: ${item.fix}`);
+            }
+          }
+        }
+        process.exitCode = result.exitCode;
+      }
+    });
+  }
+}
+
+bindValidationCommandActions();
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   // Usage-class commander errors are exit 2, not exit 1, for the verb

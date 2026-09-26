@@ -12,6 +12,7 @@ import { getIssueCommandDefinitions } from "./families/issue.js";
 import { getCatalogCommandDefinitions } from "./families/catalog.js";
 import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 import { getSddCommandDefinitions } from "./families/sdd.js";
+import { getValidationCommandDefinitions } from "./families/validation.js";
 
 
 
@@ -135,6 +136,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getStoreCommandDefinitions(),
   ...getExecutionCommandDefinitions(),
   ...getSddCommandDefinitions(),
+  ...getValidationCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 
