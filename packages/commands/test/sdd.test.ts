@@ -207,6 +207,13 @@ describe("SDD command family", () => {
       }, invocation(fixture.feature, true));
       expect(verified.status).toBe("ok");
       expect(integrityOk(verified)).toBe(true);
+
+      const failedCapture = await command("sdd.evidence.capture").execute({
+        request: fixture.requestPath,
+        argv: [process.execPath, "-e", "process.exit(3)"],
+      }, invocation(fixture.feature, true));
+      expect(failedCapture.status).toBe("error");
+      expect(failedCapture.exitCode).toBe(3);
     } finally {
       process.chdir(previousCwd);
       rmSync(root, { recursive: true, force: true });

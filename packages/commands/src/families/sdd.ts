@@ -82,7 +82,13 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
       if (argv.length === 0) throw new SddScriptError("argv after -- must include the child executable", 2);
       const capture = invocation.effects.captureSddEvidence;
       if (!capture) throw new SddScriptError("SDD evidence capture is unavailable in this invocation context", 1);
-      return ok(id, await capture(request, argv));
+      const result = await capture(request, argv) as { exitCode: number; runDir: string; record: unknown };
+      if (result.exitCode === 0) return ok(id, result);
+      return {
+        version: 1, command: id, status: "error", code: "sdd.evidence.child-exit", exitCode: result.exitCode,
+        message: `child exited with status ${result.exitCode}`,
+        details: { runDir: result.runDir, record: result.record },
+      };
     }
     if (verb === "evidence.verify") {
       const verify = invocation.effects.verifySddEvidence;
