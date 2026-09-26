@@ -118,6 +118,14 @@ describe("command definitions", () => {
       "skill.lint",
       "roles.validate",
       "qc.validate-report",
+      "pr-review.tally",
+      "pr-review.report-path",
+      "pr-review.validate-report",
+      "pr-review.post",
+      "pr-review.worktree-cleanup",
+      "pr-review.size",
+      "pr-review.seat-prompt",
+      "pr-review.budget",
     ]);
   });
 
@@ -126,7 +134,6 @@ describe("command definitions", () => {
       definition("plan.issue-add", ["plan", "issue-add"]),
       definition("plan-issue.add", ["plan-issue", "add"]),
     ])).toThrow("Duplicate MCP tool name: mstar_plan_issue_add");
-  });
 
   test("rejects CLI syntax whose keys diverge from its input schema", () => {
     const valid = definition("greet", ["greet"]);

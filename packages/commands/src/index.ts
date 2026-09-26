@@ -17,4 +17,5 @@ export { getSddCommandDefinitions } from "./families/sdd.js";
 export { getCommandSchemas, getPayloadSchema } from "./families/schema.js";
 export { getValidationCommandDefinitions } from "./families/validation.js";
 export { getAuditCommandDefinitions } from "./families/audit.js";
+export { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";

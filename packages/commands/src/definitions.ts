@@ -14,6 +14,7 @@ import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 import { getSddCommandDefinitions } from "./families/sdd.js";
 import { getValidationCommandDefinitions } from "./families/validation.js";
 import { getAuditCommandDefinitions } from "./families/audit.js";
+import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 
 
 
@@ -139,6 +140,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getSddCommandDefinitions(),
   ...getAuditCommandDefinitions(),
   ...getValidationCommandDefinitions(),
+  ...getPrReviewCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

@@ -102,17 +102,9 @@ import {
   stripFrontmatter,
   taskBrief,
   unregisterWorkflow,
-  computePrTally,
-  prReviewReportPath,
-  validatePrReviewReport,
   validateQcReport,
   pickReviewBranchName,
-  planReviewPost,
-  PR_REVIEW_TIER_BUDGETS,
   preflightChangeset,
-  prReviewSeatPrompt,
-  prReviewSizing,
-  resolvePrReviewTier,
   validateFindingDoc,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
@@ -144,12 +136,7 @@ import {
   type ExecutionState,
   type GateResult,
   type HostId,
-  type PrReportTarget,
-  type QcAlignmentAssignment,
-  type MergeClass,
-  type PrSizeBand,
   type ReviewChangesetMode,
-  type ReviewPostPlan,
   type SddExecutionContext,
   type StatusV2Doc,
   type StoreContext,
@@ -158,8 +145,7 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
-import { getPlanCommandDefinitions, getSddCommandDefinitions } from "@mstar-harness/commands";
-import { registerSddEvidenceCommands } from "./sdd-evidence";
+import { getPrReviewCommandDefinitions } from "@mstar-harness/commands";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {
   assertLegacyExecutionFormAvailable,
@@ -5135,161 +5121,14 @@ const prReviewCommand = program
       "local-report path resolution, saved-report validation (pr-review.md \u00a7 Tally / \u00a7 Local report archive / \u00a7 Output shape)",
   );
 
-/** Parse `--target pr:<n>|branch:<slug>|diff:<sha>|diff` into a PrReportTarget (exit 2 on a bad form). */
-function parsePrReviewTarget(raw: string): PrReportTarget {
-  const kind = raw.slice(0, raw.indexOf(":") === -1 ? raw.length : raw.indexOf(":"));
-  const rest = kind.length + 1 <= raw.length ? raw.slice(kind.length + 1) : "";
-  if (kind === "pr") {
-    const n = Number(rest);
-    if (!/^[0-9]+$/.test(rest) || !Number.isInteger(n) || n < 1) {
-      throw new SddScriptError(`usage: pr-review report-path \u2014 --target pr requires a positive integer PR number, got ${JSON.stringify(raw)}`, 2);
-    }
-    return { kind: "pr", n };
-  }
-  if (kind === "branch") {
-    if (rest === "") throw new SddScriptError(`usage: pr-review report-path \u2014 --target branch requires the branch slug, got ${JSON.stringify(raw)}`, 2);
-    return { kind: "branch", slug: rest };
-  }
-  if (kind === "diff" && rest === "") return { kind: "diff" };
-  if (kind === "diff") return { kind: "diff", headSha: rest };
-  throw new SddScriptError(
-    `usage: pr-review report-path \u2014 --target must be pr:<n> | branch:<slug> | diff:<sha> | diff, got ${JSON.stringify(raw)}`,
-    2,
-  );
-}
-
-prReviewCommand
-  .command("tally")
-  .description(
-    "Compute the locked-formula tally, verdict and score from accepted findings JSON ([{mergeClass}]) plus the " +
-      "leftover unmet-AC / unverified counts; prints the two-line chat header + structured result (pr-review.md \u00a7 Tally)",
-  )
-  .requiredOption("--findings <file.json>", "Accepted findings JSON \u2014 array of {mergeClass: must-fix|should-fix|nit}")
-  .option("--unverified <n>", "Count of residual - unverified: items (default 0)")
-  .option("--unmet-ac-unsafe <n>", "Leftover unmet ACs that are unsafe-to-ship (each \u2192 must_fix + 1)")
-  .option("--unmet-ac-safe <n>", "Leftover unmet ACs that are ship-safe (each \u2192 should_fix + 1)")
-  .action((options: { findings: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string }) => {
-    try {
-      const findingsPath = resolveCliPath(options.findings);
-      if (!fs.existsSync(findingsPath)) throw new Error(`findings file not found: ${findingsPath}`);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
-      } catch (error) {
-        throw new Error(`--findings is not valid JSON: ${(error as Error).message}`);
-      }
-      if (!Array.isArray(parsed)) {
-        throw new Error("findings file must be a JSON array of {mergeClass} objects");
-      }
-      const MERGE_CLASS_SET: readonly string[] = ["must-fix", "should-fix", "nit"];
-      const findings = parsed.map((entry, index) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-          throw new Error(`findings[${index}] must be an object with a mergeClass field`);
-        }
-        const mergeClass = (entry as Record<string, unknown>).mergeClass;
-        if (typeof mergeClass !== "string" || !MERGE_CLASS_SET.includes(mergeClass)) {
-          throw new Error(
-            `findings[${index}].mergeClass ${JSON.stringify(String(mergeClass))} must be one of ${MERGE_CLASS_SET.join(" | ")}`,
-          );
-        }
-        return { mergeClass: mergeClass as MergeClass };
-      });
- // Plain decimal digits only \u2014 same integer grammar as
- // parsePrReviewTarget and the validator's tally parser; Number() would
- // accept `1e2`, `0x10` or `1.0`.
- // Cap at the engine's TALLY_CAP (plan-QC S-02): absurd counts would
- // materialize that many unmetAc objects before computePrTally.
-      const TALLY_COUNT_CAP = 50;
-      const countOption = (flag: string, raw: string | undefined): number | undefined => {
-        if (raw === undefined) return undefined;
-        if (!/^\d+$/.test(raw)) {
-          throw new Error(`${flag} must be a non-negative integer, got ${JSON.stringify(raw)}`);
-        }
-        const n = Number(raw);
-        if (n > TALLY_COUNT_CAP) {
-          throw new Error(`too many ${flag} values (cap ${TALLY_COUNT_CAP}) - got ${JSON.stringify(raw)}`);
-        }
-        return n;
-      };
-      const unverifiedCount = countOption("--unverified", options.unverified);
-      const unmetUnsafe = countOption("--unmet-ac-unsafe", options.unmetAcUnsafe) ?? 0;
-      const unmetSafe = countOption("--unmet-ac-safe", options.unmetAcSafe) ?? 0;
-      const result = computePrTally({
-        findings,
-        ...(unverifiedCount !== undefined ? { unverifiedCount } : {}),
-        unmetAc: [
-          ...Array.from({ length: unmetUnsafe }, () => ({ unsafeToShip: true })),
-          ...Array.from({ length: unmetSafe }, () => ({ unsafeToShip: false })),
-        ],
-      });
-      console.log(result.chatHeader);
-      console.log(JSON.stringify({ verdict: result.verdict, scorePct: result.scorePct, tally: result.tally }, null, 2));
-    } catch (error) {
-      failScript(error, "pr-review tally");
-    }
-  });
-
-prReviewCommand
-  .command("report-path")
-  .description(
-    "Resolve the local-report (or evidence-file) path for a reviewed target per pr-review.md \u00a7 Local report archive \u2014 " +
-      "pure resolver, prints the path and never writes; appends -r2/-r3 on same-day collisions",
-  )
-  .requiredOption("--reports-dir <dir>", "Reports directory ({PROJECT_DIR}/<project-id>/reports/pr-review); created on demand by the caller, scanned read-only here")
-  .requiredOption("--target <spec>", "Reviewed target: pr:<n> | branch:<slug> | diff:<short-sha> | diff")
-  .option("--stage <1|2>", "Evidence-file stage (requires --slug)")
-  .option("--slug <domain-seat>", "Seat slug <domain>-<seat> (required with --stage)")
-  .option("--date <YYYY-MM-DD>", "Archive date (default: today)")
-  .action((options: { reportsDir: string; target: string; stage?: string; slug?: string; date?: string }) => {
-    try {
-      let stage: 1 | 2 | undefined;
-      if (options.stage !== undefined) {
-        if (options.stage !== "1" && options.stage !== "2") {
-          throw new SddScriptError(`usage: pr-review report-path \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
-        }
-        stage = options.stage === "1" ? 1 : 2;
-      }
-      if ((stage !== undefined) !== (options.slug !== undefined)) {
-        throw new SddScriptError("usage: pr-review report-path \u2014 --stage and --slug go together (--slug <domain-seat> required with --stage)", 2);
-      }
-      if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
-        throw new SddScriptError(`usage: pr-review report-path \u2014 --date must be YYYY-MM-DD, got ${JSON.stringify(options.date)}`, 2);
-      }
-      const resolved = prReviewReportPath({
-        reportsDir: resolveCliPath(options.reportsDir),
-        target: parsePrReviewTarget(options.target),
-        ...(stage !== undefined ? { stage } : {}),
-        ...(options.slug !== undefined ? { slug: options.slug } : {}),
-        ...(options.date !== undefined ? { date: options.date } : {}),
-      });
-      console.log(resolved);
-    } catch (error) {
-      failScript(error, "pr-review report-path");
-    }
-  });
-
-prReviewCommand
-  .command("validate-report")
-  .description(
-    "Validate a saved local PR-review report against the machine-readable contract (frontmatter fields, verdict-from-tally, " +
-      "locked-formula score recompute, comments tri-state; exit 1 with violations printed)",
-  )
-  .argument("<file.md>", "Saved report markdown file")
-  .action((reportFile: string) => {
-    try {
-      const abs = resolveCliPath(reportFile);
-      if (!fs.existsSync(abs)) throw new Error(`report file not found: ${abs}`);
-      const gate = validatePrReviewReport(fs.readFileSync(abs, "utf8"));
-      printChecklist(abs, gate);
-      if (!gate.ok) process.exitCode = 1;
-    } catch (error) {
-      failScript(error, "pr-review validate-report");
-    }
-  });
 
 // ---------------------------------------------------------------------------
 // qc validate-report — thin CLI wrapper over the engine's QC seat-report
 // validator (qcreview.ts): structural contract only, never review content.
+const prReviewCommand = program
+  .command("pr-review")
+  .description("PR-review commands: local report contracts, authorized GitHub review posting, and isolated review worktree operations.");
+
 // ---------------------------------------------------------------------------
 
 const qcCommand = program.command("qc").description(
@@ -5451,149 +5290,6 @@ function probeChangesetEmptyPreworktree(mode: ReviewChangesetMode, headSpec: str
   return false;
 }
 
-/** Validate one findings-file entry shape; returns normalized inline comment. */
-function parseFindingEntry(entry: unknown, index: number): ReviewPostPlan["inlineComments"][number] | null {
-  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
-  const rec = entry as Record<string, unknown>;
-  if (rec.path === undefined && rec.body === undefined && rec.line === undefined) return null;
-  const path = typeof rec.path === "string" ? rec.path : "";
-  const body = typeof rec.body === "string" ? rec.body : "";
-  const line = typeof rec.line === "number" ? rec.line : Number.NaN;
-  if (!path.trim() || !body.trim() || !Number.isInteger(line) || line < 1) {
-    throw new Error(
-      `findings[${index}] must be an object {path: string, line: number >= 1, body: string} - got ${JSON.stringify(entry)}`,
-    );
-  }
-  return { path, line, side: "RIGHT", body };
-}
-
-prReviewCommand
-  .command("post")
-  .description(
-    "Build and POST the GitHub Review per pr-review.md \u00a7 Comment posting procedure: resolves the BASE owner/repo " +
-      "from the PR url only (never headRepository), event is always COMMENT, posts via gh api with the payload on stdin, " +
-      "applies the at-most-once 422 fallback (drop rejected inline entries and fold them into the body); prints review_url " +
-      "(exit 1 = auth/API failure -> comments: failed)",
-  )
-  .requiredOption("--pr <n>", "PR number")
-  .requiredOption("--body-file <path>", "Review body markdown file")
-  .option("--findings <file.json>", "Optional inline comments JSON \u2014 array of {path, line, body} entries")
-  .action((options: { pr: string; bodyFile: string; findings?: string }) => {
-    try {
-      if (!/^\d+$/.test(options.pr)) {
-        throw new SddScriptError(`usage: pr-review post \u2014 --pr requires a positive integer PR number, got ${JSON.stringify(options.pr)}`, 2);
-      }
-      const prNumber = Number(options.pr);
-      const bodyPath = resolveCliPath(options.bodyFile);
-      if (!fs.existsSync(bodyPath)) throw new Error(`body file not found: ${bodyPath}`);
-      const body = fs.readFileSync(bodyPath, "utf8");
-      let comments: ReviewPostPlan["inlineComments"] = [];
-      if (options.findings !== undefined) {
-        const findingsPath = resolveCliPath(options.findings);
-        if (!fs.existsSync(findingsPath)) throw new Error(`findings file not found: ${findingsPath}`);
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
-        } catch (error) {
-          throw new Error(`--findings is not valid JSON: ${(error as Error).message}`);
-        }
-        if (!Array.isArray(parsed)) throw new Error("findings file must be a JSON array of {path, line, body} objects");
- // File may also carry folded plan entries or section notes \u2014 only
- // well-shaped {path,line,body} objects become inline comments.
-        comments = parsed.flatMap((entry, index) => {
-          const parsedEntry = parseFindingEntry(entry, index);
-          return parsedEntry === null ? [] : [parsedEntry];
-        });
-        if (parsed.length > 0 && comments.length === 0) {
-          console.error(pc.yellow("pr-review post \u2014 no valid inline comment entries found in --findings (array is non-empty but every entry lacks path/line/body); posting the summary body with zero inline comments"));
-        }
-      }
-
- // Step 1 \u2014 resolve target: base owner/repo comes from url ONLY.
- // planReviewPost IGNORES prView.headRepository by contract (fork-PR
- // data must never feed owner/repo \u2014 see planReviewPost JSDoc); do not
- // add `headRepository` to this fetch or pass it downstream.
-      const viewJson = ghSync(["pr", "view", String(prNumber), "--json", "url,headRefOid"]);
-      let prView: { url?: string; headRepository?: unknown; headRefOid?: string };
-      try {
-        prView = JSON.parse(viewJson) as typeof prView;
-      } catch (error) {
-        throw new Error(`gh pr view returned invalid JSON: ${(error as Error).message}`);
-      }
-      const plan = planReviewPost(prView, { body, comments });
-
- // Step 2+3 \u2014 POST with payload on stdin; step 4 = at-most-ONE fallback retry.
-      const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
-      const buildPayload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string =>
-        JSON.stringify({
-          commit_id: plan.commitId,
-          event: plan.event,
-          body: dropped.length === 0 ? plan.body : foldIntoBody(plan.body, dropped),
-          ...(kept.length > 0 ? { comments: kept.map((comment) => ({ path: comment.path, line: comment.line, side: comment.side, body: comment.body })) } : {}),
-        });
-
- // gh prints its API-error line to STDERR (`gh: HTTP 422: ...`), and
- // GitHub's 422 JSON body typically carries no `"status"` field \u2014 scan
- // stderr, then stdout, then the process exit status for the code.
-      type GhApiError = Error & { status?: number; stderr?: Buffer | string; stdout?: Buffer | string };
-      const errorStreamText = (value?: Buffer | string): string => (typeof value === "string" ? value : value?.toString() ?? "");
-      let reviewResponse: string;
-      let remaining = plan.inlineComments;
-      try {
-        reviewResponse = ghApi(apiPath, buildPayload(remaining, []));
-      } catch (error) {
-        const ghError = error as GhApiError;
-        const combinedErrorText = `${errorStreamText(ghError.stderr)}\n${errorStreamText(ghError.stdout)}${typeof ghError.status === "number" ? `\nexit status ${ghError.status}` : ""}`;
-        const statusMatch = /HTTP\s+(\d{3})/.exec(combinedErrorText) ?? /"status":\s*(\d{3})/.exec(combinedErrorText);
-        const rejectedStatus = statusMatch?.[1];
-        if (rejectedStatus !== "422" && ghError.status !== 422) throw error;
-        if (remaining.length === 0) throw error;
-        const dropped = remaining;
-        console.error(pc.yellow(`${dropped.length} inline comment(s) rejected (HTTP 422) - dropping inline comments and folding them into the body, retrying once`));
-        remaining = [];
-        reviewResponse = ghApi(apiPath, buildPayload(remaining, dropped));
-      }
-      let reviewUrl = "";
-      try {
-        const parsedReview = JSON.parse(reviewResponse) as { html_url?: unknown };
-        reviewUrl = typeof parsedReview.html_url === "string" ? parsedReview.html_url : "";
-      } catch {
- // keep stdout text as the url line content \u2014 never fail after a good POST
-        reviewUrl = reviewResponse;
-      }
-      console.log(JSON.stringify({ posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" }, null, 2));
-    } catch (error) {
-      if (error instanceof SddScriptError) {
-        failScript(error, "pr-review post");
-        return;
-      }
-      console.error(pc.red(`pr-review post failed: ${(error as Error).message}`));
-      console.error(JSON.stringify({ posted: false, comments: "failed" }, null, 2));
-      process.exitCode = 1;
-    }
-  });
-
-/** Fold dropped inline entries into the summary body (\u00a7 Procedure step 4). */
-function foldIntoBody(body: string, entries: ReviewPostPlan["inlineComments"]): string {
-  if (entries.length === 0) return body;
-  const lines = [
-    ...body.split(/\r?\n/),
-    "",
-    "## Inline comments folded into this summary",
-    "",
-    ...entries.map((entry) => `- \`${entry.path}:${entry.line}\` \u2014 ${entry.body}`),
-  ];
-  return lines.join("\n");
-}
-
-/** POST to the Reviews API through gh; throws with gh's stderr on failure. */
-function ghApi(apiPath: string, payload: string): string {
-  return execFileSync("gh", ["api", "--method", "POST", apiPath, "--input", "-"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    input: payload,
-  });
-}
 
 /** Sidecar state recorded by `worktree-setup`, consumed by `worktree-cleanup`. */
 type ReviewWorktreeSidecar = {
@@ -6236,198 +5932,6 @@ function removeOwnedFreshSidecarFile(sidecarFd: number, worktreePath: string): v
   }
 }
 
-prReviewCommand
-  .command("worktree-cleanup")
-  .description(
-    "Remove the review worktree per pr-review.md \u00a7 Worktree isolation cleanup: refuses unless --report-saved is given OR the " +
-      "setup sidecar records report-saved; removes the worktree, prunes, and deletes EXACTLY the recorded review branch \u2014 a " +
-      "--branch argument that disagrees with the sidecar is refused (never delete a foreign/pre-existing branch)",
-  )
-  .requiredOption("--path <dir>", "Worktree directory created by worktree-setup")
-  .requiredOption("--branch <name>", "The recorded review branch (must match the setup sidecar for PR mode)")
-  .option("--report-saved", "Assert the local report has been saved before removal")
-  .action((options: { path: string; branch: string; reportSaved?: boolean }) => {
-    try {
-      const worktreePath = path.resolve(resolveCliPath(options.path));
-      const sidecarPath = prReviewArtifactPathFor(worktreePath, "json");
-      if (!fs.existsSync(sidecarPath)) {
-        throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first (foreign worktrees are never cleaned here)`);
-      }
-      let sidecar: ReviewWorktreeSidecar;
-      try {
-        sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8")) as ReviewWorktreeSidecar;
-      } catch (error) {
-        throw new Error(`setup sidecar at ${sidecarPath} is not valid JSON: ${(error as Error).message}`);
-      }
- // All git below runs from the REPO ROOT recorded at setup \u2014 never the
- // worktree being removed, never the user's cwd (which may even be
- // deleted after a successful remove). Legacy sidecars without the field
- // fall back to the worktree's parent directory.
-      const gitRoot = typeof sidecar.repoRoot === "string" && sidecar.repoRoot !== ""
-        ? sidecar.repoRoot
-        : path.dirname(worktreePath);
-      if (sidecar.reviewBranch === "") {
- // Detached review worktree (branch / commit mode): nothing to delete,
- // and any claimed --branch is by definition foreign.
-        if (options.branch !== "") {
-          throw new Error(
-            `this setup recorded no review branch (detached review) - refusing ${JSON.stringify(options.branch)} as a foreign branch`,
-          );
-        }
-      } else if (options.branch !== sidecar.reviewBranch) {
-        throw new Error(
-          `--branch ${JSON.stringify(options.branch)} does not match the recorded review branch ${JSON.stringify(sidecar.reviewBranch)} - refusing to delete a foreign branch`,
-        );
-      }
-      const savedOk = options.reportSaved === true || sidecar.reportSaved === true;
-      if (!savedOk) {
-        throw new Error("refusing cleanup: the local report is not saved yet - save it first or pass --report-saved (\u00a7 Local report archive)");
-      }
-      if (fs.existsSync(worktreePath)) {
-        gitSync(["worktree", "remove", worktreePath], gitRoot);
-      }
-      gitSync(["worktree", "prune"], gitRoot);
-      if (sidecar.reviewBranch !== "") {
-        if (!refResolves(`refs/heads/${sidecar.reviewBranch}`, gitRoot)) {
-          throw new Error(`recorded review branch ${sidecar.reviewBranch} no longer resolves - refusing ambiguous cleanup`);
-        }
-        gitSync(["branch", "-D", sidecar.reviewBranch], gitRoot);
-      }
- // The diff snapshot is a review artifact beside the sidecar \u2014 remove it
- // BEFORE the sidecar (a snapshot-rm failure must not strand an orphan a
- // retry can't reach: once the sidecar is gone, cleanup refuses). Use the
- // SAME computed path the rollback uses \u2014 immune to doctored sidecar
- // fields and symlink-spelled paths (macOS /tmp vs /private/tmp). Only a
- // regular file at that path is a snapshot this flow wrote; directories /
- // symlinks / other entries are unowned and left in place (never recursive).
-      removeOwnedSnapshotFile(worktreePath, sidecar);
-      fs.rmSync(sidecarPath, { force: true });
-      console.log(pc.green(`worktree-cleanup: removed ${worktreePath}${sidecar.reviewBranch !== "" ? ` + deleted ${sidecar.reviewBranch}` : " (no local branch to delete)"}`));
-    } catch (error) {
-      failScript(error, "pr-review worktree-cleanup");
-    }
-  });
-
-/** Count changed lines for `size`: added + deleted taken straight from a
- * `git diff --numstat` run (exact counts \u2014 handles lines whose CONTENT
- * starts with +/- markers and empty added lines; binary rows skipped). */
-function countChangedLines(numstatOutput: string): number {
-  let changed = 0;
-  for (const line of numstatOutput.split(/\r?\n/)) {
-    const entry = /^(\d+)\t(\d+)\t/.exec(line);
-    if (entry === null) continue;
-    changed += Number(entry[1]!) + Number(entry[2]!);
-  }
-  return changed;
-}
-
-prReviewCommand
-  .command("size")
-  .description(
-    "Classify a changeset into the sizing bands (~100 / ~300 / ~1000 \u2014 single set of numbers) and derive the kept-wave Stage-1 seat plan " +
-      "(collect seats apply only when the deep collect wave is kept \u2014 the default fold dispatches none; pr-review.md \u00a7 Review pipeline), " +
-      "split advice and file-size watch, plus the SP-A inferred tier; prints band + seats + adviseSplit (+ tier)",
-  )
-  .requiredOption("--base <ref>", "Base ref (three-dot diff side A)")
-  .requiredOption("--head <ref>", "Head ref (three-dot diff side B)")
-  .option("--largest-file-total <n>", "Override the largest touched file's TOTAL line count (default: measured at the --head ref)")
-  .action((options: { base: string; head: string; largestFileTotal?: string }) => {
-    try {
-      const repoRoot = gitSync(["rev-parse", "--show-toplevel"], process.cwd());
-      const diffOutput = gitSync(["diff", `${options.base}...${options.head}`], repoRoot);
-      const changedLines = countChangedLines(gitSync(["diff", "--numstat", `${options.base}...${options.head}`], repoRoot));
-      let largestTouchedFileTotal: number | undefined;
-      if (options.largestFileTotal !== undefined) {
-        if (!/^\d+$/.test(options.largestFileTotal)) {
-          throw new SddScriptError(`usage: pr-review size \u2014 --largest-file-total requires a non-negative integer, got ${JSON.stringify(options.largestFileTotal)}`, 2);
-        }
-        largestTouchedFileTotal = Number(options.largestFileTotal);
-      } else {
-        largestTouchedFileTotal = measureLargestTouchedTotal(diffOutput, options.head, repoRoot);
-      }
-      const sizing = prReviewSizing({ changedLines, ...(largestTouchedFileTotal !== undefined ? { largestTouchedFileTotal } : {}) });
-      const tier = resolvePrReviewTier({ band: sizing.band });
-      console.log(JSON.stringify({ ...sizing, tier, changedLines }, null, 2));
-    } catch (error) {
-      failScript(error, "pr-review size");
-    }
-  });
-
-/** Measure the largest diff-touched file's TOTAL lines, read from the
- * `--head` ref's tree (`git show <headRef>:<file>`) so the file-size watch
- * always reflects the reviewed tip \u2014 never the checkout HEAD. */
-function measureLargestTouchedTotal(diffOutput: string, headRef: string, cwd: string): number | undefined {
-  const files = [...new Set([...diffOutput.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]!))];
-  let maxTotal: number | undefined;
-  for (const file of files) {
-    const content = gitIf(["show", `${headRef}:${file}`], cwd);
-    const total = content === "" ? 0 : content.split("\n").length;
-    if (maxTotal === undefined || total > maxTotal) maxTotal = total;
-  }
-  return maxTotal;
-}
-
-prReviewCommand
-  .command("seat-prompt")
-  .description(
-    "Generate the read-only audit-seat prompt per pr-review.md \u00a7 Seat prompts (Hard Rules 4/5 verbatim, payload-return contract, " +
-      "no-verdict/no-post clauses, slug <domain>-<seat>, Merge-class instruction on stage 2); prints the prompt",
-  )
-  .requiredOption("--stage <1|2>", "Pipeline stage (1 = collect, 2 = domain/security)")
-  .requiredOption("--domain <d>", "Review domain for this seat")
-  .requiredOption("--seat <id>", "Seat id (slug becomes <domain>-<seat>)")
-  .requiredOption("--worktree <path>", "Absolute review worktree path")
-  .option("--security", "Mark this seat as the security-lens seat (stage 2)")
-  .option("--skill-root <dir>", "Skill root containing references/pr-review.md (default: resolved skills/mstar-audit)")
-  .option("--recon <facts...>", "Recon facts (variadic: --recon fact1 fact2 ...)")
-  .option("--tier <quick|default|deep>", "Prompt tier (SP-A): quick shrinks read-first + folds the security lens in-seat; deep adds cross-domain security seat + stage-as-wave (default: default)")
-  .option("--diff-file <path>", "Absolute path to the pinned diff snapshot written by worktree-setup (read-first ingredient)")
-  .option("--collect-folded", "Fold the collect wave onto this stage-2 domain seat: the prompt gains a self-collection bullet after the budget block (requires --diff-file; refused on stage 1 and security seats)")
-  .action((options: { stage: string; domain: string; seat: string; worktree: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean }) => {
-    try {
-      if (options.stage !== "1" && options.stage !== "2") {
-        throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --stage must be 1 or 2, got ${JSON.stringify(options.stage)}`, 2);
-      }
-      const tier = options.tier;
-      if (tier !== undefined && tier !== "quick" && tier !== "default" && tier !== "deep") {
-        throw new SddScriptError(`usage: pr-review seat-prompt \u2014 --tier must be quick | default | deep, got ${JSON.stringify(tier)}`, 2);
-      }
-      const auditSkillRoot = options.skillRoot !== undefined
-        ? path.resolve(resolveCliPath(options.skillRoot))
-        : path.resolve(resolveCliPath("skills/mstar-audit"));
-      const prompt = prReviewSeatPrompt({
-        stage: options.stage === "1" ? 1 : 2,
-        domain: options.domain,
-        seat: options.seat,
-        skillRoot: auditSkillRoot,
-        worktreePath: path.resolve(options.worktree),
-        reconFacts: options.recon ?? [],
-        ...(options.security === true ? { securitySeat: true } : {}),
-        ...(tier !== undefined ? { tier } : {}),
-        ...(options.diffFile !== undefined && options.diffFile !== "" ? { diffFile: path.resolve(resolveCliPath(options.diffFile)) } : {}),
-        ...(options.collectFolded === true ? { collectFolded: true } : {}),
-      });
-      console.log(prompt);
-    } catch (error) {
-      failScript(error, "pr-review seat-prompt");
-    }
-  });
-
-prReviewCommand
-  .command("budget")
-  .description(
-    "Print the per-tier time-budget table (wall-clock target + per-seat caps) from PR_REVIEW_TIER_BUDGETS \u2014 " +
-      "for humans and drift checks (pr-review.md \u00a7 Review depth Budget column)",
-  )
-  .action(() => {
-    for (const [tier, budget] of Object.entries(PR_REVIEW_TIER_BUDGETS)) {
-      console.log(
-        `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), ` +
-          `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
-          `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
-      );
-    }
-  });
 
 // `mstar plan` — the scoped plan-coordination transport (spec §A2). It owns
 // the scoped verbs only; the unscoped lifecycle verbs above are unchanged.
@@ -6712,6 +6216,73 @@ function bindValidationCommandActions(): void {
   }
 }
 
+function bindPrReviewCommandActions(): void {
+  for (const definition of getPrReviewCommandDefinitions()) {
+    let parent = program;
+    for (const part of definition.cli.path.slice(0, -1)) {
+      const child = parent.commands.find((candidate) => candidate.name() === part);
+      if (child === undefined) throw new Error(`PR-review command group is not registered: ${definition.id}`);
+      parent = child;
+    }
+    const command = parent.command(definition.cli.path.at(-1)!).description(definition.description);
+    for (const argument of definition.cli.arguments) command.argument(`<${argument.key}${argument.variadic ? "..." : ""}>`);
+    for (const option of definition.cli.options) {
+      if (option.required) command.requiredOption(option.flags);
+      else command.option(option.flags);
+    }
+    command.action(async (...args: unknown[]) => {
+      const options = args.find((arg): arg is Record<string, unknown> => arg !== null && typeof arg === "object" && !(arg instanceof Command)) ?? {};
+      const positional = args.filter((arg) => typeof arg === "string" || Array.isArray(arg));
+      const input: Record<string, unknown> = {};
+      definition.cli.arguments.forEach((argument, index) => {
+        if (positional[index] !== undefined) input[argument.key] = positional[index];
+      });
+      for (const option of definition.cli.options) if (options[option.key] !== undefined) input[option.key] = options[option.key];
+      const controller = new AbortController();
+      const result = await definition.execute(input, {
+        cwd: process.cwd(), controlRoot: resolveProcessHarnessDir(),
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: controller.signal,
+        effects: {
+          async readInput() { return ""; },
+          async spawn(request) {
+            try {
+              const stdout = execFileSync(request.argv[0]!, request.argv.slice(1), {
+                cwd: request.cwd, env: { ...process.env, ...request.env }, encoding: "utf8",
+                stdio: ["pipe", "pipe", "pipe"], ...(request.stdin !== undefined ? { input: request.stdin } : {}),
+                signal: request.signal,
+              });
+              return { exitCode: 0, signal: null, stdout, stderr: "" };
+            } catch (error) {
+              const failure = error as NodeJS.ErrnoException & { status?: number | null; stdout?: Buffer | string; stderr?: Buffer | string; signal?: NodeJS.Signals | null };
+              return { exitCode: failure.status ?? 1, signal: failure.signal ?? null, stdout: String(failure.stdout ?? ""), stderr: String(failure.stderr ?? failure.message) };
+            }
+          },
+          async startDashboard() { throw new Error("Dashboard capability unavailable for PR-review commands"); },
+          async openBrowser() { throw new Error("Browser capability unavailable for PR-review commands"); },
+        },
+      });
+      if (result.status !== "ok") {
+        console.error(`${definition.id}: ${result.status.toUpperCase()} ${result.code}: ${result.message}`);
+        if (result.details !== undefined) console.error(JSON.stringify(result.details, null, 2));
+        process.exitCode = result.exitCode;
+        return;
+      }
+      const data = result.data as Record<string, unknown>;
+      if (definition.id === "pr-review.report-path") console.log(data.path);
+      else if (definition.id === "pr-review.seat-prompt") console.log(data.prompt);
+      else if (definition.id === "pr-review.budget") {
+        const budgets = data.budgets as Record<string, { wallClockMinutes: number; maxSeats: number; perSeatFindingsCap: number; evidenceTokensCap: number; fileOpenCap: number }>;
+        for (const [tier, budget] of Object.entries(budgets)) console.log(`${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), <=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, <=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`);
+      } else if (definition.id === "pr-review.tally") {
+        const tally = data as { chatHeader: string; verdict: string; scorePct: number; tally: unknown };
+        console.log(tally.chatHeader);
+        console.log(JSON.stringify({ verdict: tally.verdict, scorePct: tally.scorePct, tally: tally.tally }, null, 2));
+      } else console.log(JSON.stringify(data, null, 2));
+    });
+  }
+}
+
 function bindAuditCommandActions(): void {
   for (const definition of getAuditCommandDefinitions()) {
     let command: Command = program;
@@ -6787,6 +6358,7 @@ function bindAuditCommandActions(): void {
   }
 }
 
+bindPrReviewCommandActions();
 bindAuditCommandActions();
 
 bindValidationCommandActions();
