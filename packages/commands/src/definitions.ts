@@ -57,8 +57,6 @@ function validateOne(definition: CommandDefinition): void {
     throw new CommandDefinitionError(`${definition.id}: CLI options require keys and flags`);
   }
 
-  const shape = definition.input.shape;
-  const schemaKeys = Object.keys(shape).sort();
   const syntaxKeys = [
     ...definition.cli.arguments.map(({ key }) => key),
     ...definition.cli.options.map(({ key }) => key),
@@ -66,8 +64,11 @@ function validateOne(definition: CommandDefinition): void {
   if (new Set(syntaxKeys).size !== syntaxKeys.length) {
     throw new CommandDefinitionError(`${definition.id}: CLI syntax contains duplicate input keys`);
   }
-  if (schemaKeys.length !== syntaxKeys.length || schemaKeys.some((key, index) => key !== syntaxKeys[index])) {
-    throw new CommandDefinitionError(`${definition.id}: CLI syntax keys must match input schema keys`);
+  if (definition.input instanceof z.ZodObject) {
+    const schemaKeys = Object.keys(definition.input.shape).sort();
+    if (schemaKeys.length !== syntaxKeys.length || schemaKeys.some((key, index) => key !== syntaxKeys[index])) {
+      throw new CommandDefinitionError(`${definition.id}: CLI syntax keys must match input schema keys`);
+    }
   }
   if (!definition.output.safeParse({
     version: 1,

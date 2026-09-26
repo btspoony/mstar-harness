@@ -79,4 +79,39 @@ describe("coordination checks command family", () => {
     expect(result).toMatchObject({ status: "refused", exitCode: 1 });
     if (result.status === "refused") expect(result.details?.violations).toHaveLength(2);
   });
+  test("integration lease verification validates claimed snapshot leases", async () => {
+    const cwd = tempRoot();
+    const harness = path.join(cwd, ".mstar");
+    const workflowDir = path.join(harness, "workflows", "wf-integration");
+    mkdirSync(workflowDir, { recursive: true });
+    const file = path.join(workflowDir, "snapshot.json");
+    const validLease = {
+      holder: "session-a",
+      claimed_at: "2026-09-26T12:00:00Z",
+      plan_id: "plan-a",
+      source_branch: "feature/plan-a",
+      target_branch: "spec/integration",
+    };
+    writeFileSync(file, JSON.stringify({ integration_merge_lease: validLease }));
+
+    const valid = await definition("lease.verify-integration").execute(
+      { workflow: "wf-integration", harness } as never,
+      context(cwd),
+    );
+    expect(valid).toMatchObject({
+      status: "ok",
+      data: { workflow: "wf-integration", claimed: true, lease: validLease },
+    });
+
+    writeFileSync(file, JSON.stringify({ integration_merge_lease: null }));
+    const invalid = await definition("lease.verify-integration").execute(
+      { workflow: "wf-integration", harness } as never,
+      context(cwd),
+    );
+    expect(invalid).toMatchObject({
+      status: "refused",
+      code: "lease.merge-lease.invalid",
+      exitCode: 1,
+    });
+  });
 });

@@ -157,6 +157,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
       input: z.object({ workflow: z.string().min(1), harness: z.string().optional() }), output, effects: ["read", "validate"], description: "Verify the workflow integration merge lease without mutation.",
       async execute(input, context) {
         const id = "lease.verify-integration";
+        let lease: unknown;
         try {
           const root = harnessDir(context, input.harness);
           const served = await readExecutionSource({ harnessDir: root }, { workflowId: input.workflow });
