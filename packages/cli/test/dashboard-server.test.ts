@@ -15,8 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { importRoadmapAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type StoreContext, type StoreDb } from "@mstar-harness/engine";
-import { startDashboard, type RunningDashboard } from "../src/dashboard/server";
-import { dashboardCss, dashboardHtml, dashboardJs } from "../src/dashboard/assets.generated";
+import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
+import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-server-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";

@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/commands/src/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./dashboard": {
+      "types": "./dist/commands/src/dashboard/index.d.ts",
+      "default": "./dist/dashboard/index.js"
     }
   },
   "files": ["dist"],

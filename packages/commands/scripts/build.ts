@@ -1,7 +1,7 @@
 import { build } from "bun";
 
 const result = await build({
-  entrypoints: ["src/index.ts"],
+  entrypoints: ["src/index.ts", "src/dashboard/index.ts"],
   outdir: "dist",
   target: "node",
   packages: "external",

@@ -10,10 +10,9 @@
   // this package provides yet — it is excluded rather than silently mis-typed;
   // package tests live in `test/` and run under `bun test`.
   //
-  // `src/dashboard/server.ts` imports the gitignored generated module
-  // `assets.generated.ts`, so `typecheck:src` runs `scripts/build-web.ts`
-  // first (deterministic, round-trip-verified) — a fresh checkout typechecks
-  // without a full build, matching CI's validate job order.
+  // The dashboard server and generated assets are owned by @mstar-harness/commands;
+  // the web asset generator remains in CLI build/typecheck order so fresh builds
+  // write the module consumed by that package.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

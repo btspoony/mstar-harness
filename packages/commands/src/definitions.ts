@@ -18,6 +18,7 @@ import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 import { getJudgmentCommandDefinitions } from "./families/judgment.js";
 import { getProcessCommandDefinitions } from "./families/process.js";
 
+import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 
 
 const failureEnvelopeSchema = z.object({
@@ -144,7 +145,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getValidationCommandDefinitions(),
   ...getPrReviewCommandDefinitions(),
   ...getProcessCommandDefinitions(),
-  ...getJudgmentCommandDefinitions(),
+  ...getDashboardCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

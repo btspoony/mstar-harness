@@ -26,7 +26,7 @@ export interface CommandEffects {
     stdin?: string;
     signal: AbortSignal;
   }): Promise<{ exitCode: number | null; signal: string | null; stdout: string; stderr: string }>;
-  startDashboard(request: { harnessDir: string; port: number }): Promise<{ url: string; close(): Promise<void> }>;
+  startDashboard(request: { harnessDir: string; port: number; projectId?: string }): Promise<{ url: string; close(): Promise<void> }>;
   openBrowser(url: string): Promise<void>;
   captureSddEvidence?(requestPath: string, argv: readonly string[]): Promise<unknown>;
   verifySddEvidence?(request: {

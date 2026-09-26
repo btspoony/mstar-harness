@@ -2,7 +2,7 @@
  * Dashboard loopback server.
  *
  * The ONE HTTP boundary in front of the P6 read transport
- * (`packages/cli/src/store-read.ts`): fixed static routes serving the inlined
+ * `packages/commands/src/dashboard/store-read.ts`: fixed static routes serving the inlined
  * assets, the fixed `/api/...` route table mapped exactly to the
  * engine's `ReadEnvelope` DTOs, and the fixed boundary protections --
  * loopback binding only, Host/Origin checks, no CORS, the exact CSP, JSON
@@ -20,9 +20,9 @@ import {
   dashboardFailure,
   readDashboardView,
   resolveDashboardRoute,
-} from "../store-read";
+} from "./store-read.js";
 import type { DashboardView } from "@mstar-harness/engine";
-import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated";
+import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated.js";
 
 /** The exact CSP the plan fixes; identical on every response. */
 export const DASHBOARD_CSP =
@@ -227,7 +227,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   return await new Promise<RunningDashboard>((resolve, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
-        reject(new Error(`Port ${port} is already in use on 127.0.0.1. Choose another --port or omit it for an OS-selected port.`));
+        reject(Object.assign(new Error(`Port ${port} is already in use on 127.0.0.1. Choose another --port or omit it for an OS-selected port.`), { code: error.code }));
         return;
       }
       reject(error);

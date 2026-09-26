@@ -165,7 +165,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
-import { getAuditCommandDefinitions, getCatalogCommandDefinitions, getCommandDefinitions, getIssueCommandDefinitions, getJudgmentCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
+import { getAuditCommandDefinitions, getCatalogCommandDefinitions, getCommandDefinitions, getDashboardCommandDefinitions, getIssueCommandDefinitions, getJudgmentCommandDefinitions, getRoadmapCommandDefinitions, getValidationCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -173,7 +173,7 @@ import { judgmentUsageFailurePayload, registerJudgmentCommands } from "./command
 import { registerStoreCommands, storeUsageFailurePayload } from "./store-migrate";
 import { registerExecutionMigrationCommands, executionMigrationUsageFailurePayload } from "./execution-migrate";
 import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
-import { runDashboard } from "./dashboard";
+import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { validateAgentPlugin } from "@mstar-harness/commands";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -6084,29 +6084,92 @@ function attachWorkflowGroup(target: Command): void {
 
 attachWorkflowGroup(program);
 
-// Read-only local dashboard. Loopback binding is fixed: there is deliberately
-// no host/bind-address option.
-program
-  .command("dashboard")
-  .description("Start the read-only Morning Star dashboard on 127.0.0.1")
-  .option("--port <port>", "TCP port (0 = OS-selected)", "0")
-  .option("--open", "Open the dashboard in the default browser")
-  .option("--project <projectId>", "Initial project selector")
-  .action(async (options: { port: string; open?: boolean; project?: string }) => {
-    const port = Number(options.port);
-    if (!Number.isInteger(port) || port < 0 || port > 65535) {
-      console.error(pc.red(`dashboard: --port must be an integer between 0 and 65535 \u2014 got ${JSON.stringify(options.port)}`));
-      process.exitCode = 2;
-      return;
-    }
+function registerDashboardCommand(target: Command): void {
+  const definition = getDashboardCommandDefinitions()[0]!;
+  const dashboard = target
+    .command(definition.cli.path.join(" "))
+    .description(definition.description);
+  for (const option of definition.cli.options) dashboard.option(option.flags, "", option.defaultValue);
+
+  dashboard.action(async (options: { port?: string | number; open?: boolean; project?: string }) => {
     const harnessDir = resolveProcessHarnessDir();
-    if (harnessDir === null) {
-      console.error(pc.red("dashboard: no {HARNESS_DIR} found from the working directory; run inside an initialized harness workspace."));
+    let server: RunningDashboard | null = null;
+    let closing = false;
+    const shutdown = (signal: string): void => {
+      if (closing) return;
+      closing = true;
+      console.error(`dashboard: received ${signal}; closing server`);
+      void (server === null ? Promise.resolve() : server.close()).then(() => {
+        process.exit(process.exitCode ?? 0);
+      });
+    };
+    const onSigint = (): void => shutdown("SIGINT");
+    const onSigterm = (): void => shutdown("SIGTERM");
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+
+    try {
+      const result = await definition.execute({
+        port: Number(options.port ?? 0),
+        ...(options.open === true ? { open: true } : {}),
+        ...(options.project === undefined ? {} : { project: options.project }),
+      }, {
+        cwd: process.cwd(),
+        controlRoot: harnessDir,
+        versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+        signal: new AbortController().signal,
+        effects: {
+          async readInput() { return ""; },
+          async spawn() { throw new Error("dashboard does not use the process effect"); },
+          async startDashboard(request) {
+            const running = await startDashboard({
+              harnessDir: request.harnessDir,
+              port: request.port,
+              projectId: request.projectId,
+            });
+            server = running;
+            return {
+              url: running.url,
+              async close() {
+                await running.close();
+                if (server === running) server = null;
+              },
+            };
+          },
+          async openBrowser(url) {
+            const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+            const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn(opener, argv, { stdio: "ignore", detached: false, shell: false });
+              child.once("spawn", resolve);
+              child.once("error", (error: NodeJS.ErrnoException) => {
+                reject(Object.assign(new Error(`no platform opener (${opener}) available: ${error.message}`), { code: "capability.browser.unavailable" }));
+              });
+            });
+          },
+        },
+      });
+      if (result.status === "ok") {
+        const data = result.data as { url: string };
+        console.log(`dashboard: read-only Morning Star dashboard at ${data.url}`);
+        console.log("dashboard: press Ctrl+C to stop");
+      } else {
+        console.error(pc.red(`dashboard: ${result.code}: ${result.message}`));
+        process.exitCode = result.exitCode;
+      }
+    } catch (error) {
+      console.error(pc.red(`dashboard: ${error instanceof Error ? error.message : String(error)}`));
       process.exitCode = 1;
-      return;
+    } finally {
+      if (server === null) {
+        process.removeListener("SIGINT", onSigint);
+        process.removeListener("SIGTERM", onSigterm);
+      }
     }
-    await runDashboard({ harnessDir, port, open: options.open, project: options.project });
   });
+}
+
+registerDashboardCommand(program);
 
 function bindValidationCommandActions(): void {
   const rootCommand = (pathParts: readonly string[]): Command | undefined => {

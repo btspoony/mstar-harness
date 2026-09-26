@@ -18,7 +18,7 @@
   },
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun run scripts/build-web.ts && rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js && bun ../../scripts/escape-dist-literals.ts dist/mstar-harness.js",
+    "build": "bun run scripts/build-web.ts && bun run --cwd ../commands build && rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js && bun ../../scripts/escape-dist-literals.ts dist/mstar-harness.js",
     "check": "bun run src/index.ts --help",
     "typecheck:src": "bun run scripts/build-web.ts && bunx tsc --noEmit -p tsconfig.json",
     "test": "bun run --cwd ../engine build && bun run build && bun test",
