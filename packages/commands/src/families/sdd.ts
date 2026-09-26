@@ -76,9 +76,27 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
       if (!gate.ok) throw new SddScriptError(gate.violations.map(({ code, message }) => `${code}: ${message}`).join("; "), 1);
       return ok(id, { kind, planId: context!.planId });
     }
-    // Evidence capture and verification are executed by the CLI evidence adapter,
-    // which owns their filesystem/process collectors and preserves child exits.
-    throw new SddScriptError(`${id}: invoke through the SDD evidence CLI adapter`, 2);
+    if (verb === "evidence.capture") {
+      const request = required(input.request, "--request");
+      const argv = input.argv ?? [];
+      if (argv.length === 0) throw new SddScriptError("argv after -- must include the child executable", 2);
+      const capture = invocation.effects.captureSddEvidence;
+      if (!capture) throw new SddScriptError("SDD evidence capture is unavailable in this invocation context", 1);
+      return ok(id, await capture(request, argv));
+    }
+    if (verb === "evidence.verify") {
+      const verify = invocation.effects.verifySddEvidence;
+      if (!verify) throw new SddScriptError("SDD evidence verification is unavailable in this invocation context", 1);
+      const result = await verify({
+        sddDir: required(input.sddDir, "--sdd-dir"),
+        planId: required(input.plan, "--plan"),
+        taskId: required(input.task, "--task"),
+        runId: required(input.run, "--run"),
+        ...(input.target !== undefined ? { targetPath: input.target } : {}),
+      });
+      return ok(id, result);
+    }
+    throw new SddScriptError(`unsupported SDD command: ${id}`, 2);
   } catch (error) {
     return failed(id, error);
   }

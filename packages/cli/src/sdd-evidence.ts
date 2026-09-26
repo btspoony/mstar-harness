@@ -1733,6 +1733,15 @@ async function runEvidenceVerify(invocation: VerifyInvocation): Promise<Evidence
   return assessSddEvidenceReuse(record, facts, expected, target);
 }
 
+export async function captureSddEvidenceFromFile(requestPath: string, argv: readonly string[]) {
+  const request = validateRequestUsage(loadJsonFileUsage(requestPath, "--request"));
+  return captureSddEvidence(request, argv);
+}
+
+export async function verifySddEvidence(invocation: VerifyInvocation): Promise<EvidenceAssessment> {
+  return runEvidenceVerify(invocation);
+}
+
 // ---------------------------------------------------------------------------
 // Command registration.
 // ---------------------------------------------------------------------------
