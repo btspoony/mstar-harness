@@ -55,7 +55,7 @@ describe("status command family", () => {
       const store = await initializeStore({ harnessDir: dir });
       store.close();
       const result = await statusDefinition("status.tech-debt").execute({ harness: dir }, context(dir));
-      expect(result).toMatchObject({ status: "ok", code: "status.ok", data: { total_open: 0, by_severity: {}, by_project: {} } });
+      expect(result).toMatchObject({ status: "ok", code: "status.ok", data: { total_open: 0, by_severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, by_project: {} } });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
