@@ -6450,6 +6450,9 @@ registerWorkflowCommands(program);
 registerExecutionWorkflowCommands(program);
 
 registerSessionCommands(program);
+// The command package composes workflow/session family definitions for MCP;
+// these existing registrations remain the operator CLI adapters. In particular,
+// session run keeps its local process launch semantics.
 
 registerIssueCommands(program);
 

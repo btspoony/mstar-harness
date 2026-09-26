@@ -1549,6 +1549,8 @@ function printRecovery(result: RecoverPrepareCoordinatorResult, json: boolean): 
  * coordination transport: one coordinator envelope, one engine call, the same
  * argument/failure protocol (success exit 0, refusal exit 1 with the JSON
  * failure object, usage exit 2). There is no force/replace/init/fallback flag.
+ * The matching MCP identities are registered by `@mstar-harness/commands`;
+ * these CLI verbs intentionally retain their legacy session-file transport.
  */
 export function registerWorkflowCommands(program: Command): void {
   const workflow = program

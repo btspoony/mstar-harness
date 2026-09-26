@@ -24,6 +24,9 @@
  * (`--session`, `--ended-at`, `--declare-kind`) belong to the file route only.
  * A mixed invocation is a usage refusal (exit 2), and a pre-activation `--expect`
  * revision integer is never coerced into a token.
+
+ * `@mstar-harness/commands` exposes the same nine workflow identities to MCP;
+ * its four active transition definitions correspond to this closed CLI loop.
  */
 import { isAbsolute } from "node:path";
 import { Command } from "commander";

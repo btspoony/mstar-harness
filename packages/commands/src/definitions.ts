@@ -4,6 +4,9 @@ import { getStatusCommandDefinitions } from "./families/status.js";
 import { getCoordinationChecksCommandDefinitions } from "./families/coordination-checks.js";
 import { getPersistCommandDefinitions } from "./families/persist.js";
 import { getPlanCommandDefinitions } from "./families/plan.js";
+import { getSessionCommandDefinitions } from "./families/session.js";
+import { getWorkflowCommandDefinitions } from "./families/workflow.js";
+
 
 
 const failureEnvelopeSchema = z.object({
@@ -110,6 +113,8 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getPersistCommandDefinitions(),
   ...getCoordinationChecksCommandDefinitions(),
   ...getPlanCommandDefinitions(),
+  ...getSessionCommandDefinitions(),
+  ...getWorkflowCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

@@ -25,6 +25,10 @@
  * JSON with one terminal LF. There is no second codec: decode is `JSON.parse`
  * plus the SHARED `validateExecutionIdentity` (the §3.1 identity SSOT), so no
  * CLI-local id policy can drift from the engine's.
+
+ * The MCP family counterpart lives in `@mstar-harness/commands`; its active
+ * caller comes from the invocation's main `sessionId`, never a model-supplied
+ * role or child-agent session. This CLI adapter keeps `session run` local.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -384,6 +388,9 @@ function launchUnderIdentity(argv: readonly string[], identity: ExecutionIdentit
  * recover-coordinator` (JSON/Prepare only, prerequisite contract §3.3): the
  * active route never invokes the JSON writer, and the JSON route never activates
  * a store to obtain DB recovery.
+ * The MCP definitions expose both identities separately: `session.run` remains
+ * a process-effect request returning child outcome data, while `session.recover`
+ * uses the main conversation identity and the active DB recovery verb.
  */
 export function registerSessionCommands(program: Command): void {
   const session = program
