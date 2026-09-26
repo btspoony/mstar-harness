@@ -7,6 +7,8 @@ import { getPlanCommandDefinitions } from "./families/plan.js";
 import { getSessionCommandDefinitions } from "./families/session.js";
 import { getWorkflowCommandDefinitions } from "./families/workflow.js";
 import { getIssueCommandDefinitions } from "./families/issue.js";
+import { getCatalogCommandDefinitions } from "./families/catalog.js";
+import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 
 
 
@@ -125,6 +127,8 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getSessionCommandDefinitions(),
   ...getWorkflowCommandDefinitions(),
   ...getIssueCommandDefinitions(),
+  ...getCatalogCommandDefinitions(),
+  ...getRoadmapCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

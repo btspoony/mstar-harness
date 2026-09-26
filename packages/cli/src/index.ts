@@ -178,7 +178,7 @@ import {
   registerActiveWorkflow,
   registerExecutionWorkflowCommands,
 } from "./execution-workflow";
-import { getIssueCommandDefinitions } from "@mstar-harness/commands";
+import { getCatalogCommandDefinitions, getIssueCommandDefinitions, getRoadmapCommandDefinitions } from "@mstar-harness/commands";
 import { issueUsageFailurePayload, registerIssueCommands } from "./issue";
 import { catalogUsageFailurePayload, registerCatalogCommands } from "./catalog";
 import { roadmapUsageFailurePayload, registerRoadmapCommands } from "./roadmap";
@@ -6455,9 +6455,8 @@ registerSessionCommands(program);
 // a thin local adapter. Session run keeps its process-launch semantics.
 
 registerIssueCommands(program, getIssueCommandDefinitions());
-
-registerCatalogCommands(program);
-registerRoadmapCommands(program);
+registerCatalogCommands(program, getCatalogCommandDefinitions());
+registerRoadmapCommands(program, getRoadmapCommandDefinitions());
 registerJudgmentCommands(program);
 
 // `mstar store` — the store lifecycle family (init/upgrade/migrate) over the
@@ -6487,7 +6486,7 @@ registerExecutionMigrationCommands(program);
  * (`{ok:true,data}` / `{ok:false,code,message}`, exit 0 success, 1
  * domain/runtime/IO refusal, 2 usage).
  */
-function registerCatalogReconcileCommand(target: Command): void {
+function registerCatalogReconcileCommand(target: Command, definitions: readonly { id: string; description: string }[]): void {
   const catalogGroup = target.commands.find((command) => command.name() === "catalog");
   if (catalogGroup === undefined) {
     throw new Error("registerCatalogReconcileCommand: the `catalog` command group must be registered first");
@@ -6496,9 +6495,6 @@ function registerCatalogReconcileCommand(target: Command): void {
     "usage: catalog reconcile --operation-id <id> [--abort] [--harness <dir>] [--json]\n" +
     "       catalog reconcile --list [--harness <dir>] [--json]";
 
-  // The group's own blurb enumerates its verbs (`catalog.ts`, outside this
-  // round's file set): keep the enumeration truthful now that it has a ninth.
-  catalogGroup.description(`${catalogGroup.description()} \`reconcile\` recovers a pending execution registration.`);
 
   const printFailure = (error: unknown, json: boolean): void => {
     if (error instanceof SddScriptError) {
@@ -6522,13 +6518,7 @@ function registerCatalogReconcileCommand(target: Command): void {
   catalogGroup
     .command("reconcile")
     .exitOverride()
-    .description(
-      "Recover a pending execution registration (contract \u00a73 step 4, engine-backed): re-checks the exact request identity and " +
-        "the recorded byte versions, finishes the writes the operation owns, publishes the catalog delta and commits. A " +
-        "committed operation returns its recorded receipt and writes nothing (idempotent); a state that cannot be finished " +
-        "without replacing or adopting bytes refuses `catalog.reconcile-conflict` and leaves everything in place. --list " +
-        "reports the pending operations without writing",
-    )
+    .description(definitions.find(({ id }) => id === "catalog.reconcile")!.description)
     .option("--operation-id <id>", "Pending operation id to reconcile (named by the refusal that reported it)")
     .option("--abort", "Abandon the pending operation instead of finishing it (refused once it wrote execution bytes)")
     .option("--list", "List the pending registration operations, read-only")
@@ -6586,7 +6576,7 @@ function registerCatalogReconcileCommand(target: Command): void {
     });
 }
 
-registerCatalogReconcileCommand(program);
+registerCatalogReconcileCommand(program, getCatalogCommandDefinitions());
 
 /**
  * Attach the detached `mstar workflow` group built above (see its declaration).

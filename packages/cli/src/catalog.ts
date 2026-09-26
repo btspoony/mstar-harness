@@ -46,17 +46,9 @@ import {
   type CatalogRootKind,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { getCatalogCommandDefinitions, type CommandDefinition } from "@mstar-harness/commands";
+const CATALOG_VERBS: Record<string, true> = Object.fromEntries(getCatalogCommandDefinitions().map(({ id }) => [id.slice("catalog.".length), true]));
 
-const CATALOG_VERBS: Record<string, true> = {
-  list: true,
-  show: true,
-  register: true,
-  update: true,
-  link: true,
-  discover: true,
-  import: true,
-  export: true,
-};
 
 const COMMAND_POSITION = 2;
 
@@ -310,21 +302,22 @@ function importSummary(plan: CatalogImportPlan): Record<string, unknown> {
   };
 }
 
-export function registerCatalogCommands(program: Command): void {
+export function registerCatalogCommands(program: Command, definitions: readonly CommandDefinition[]): void {
+  const definitionsByVerb = new Map(definitions.map((definition) => [definition.id.slice("catalog.".length), definition]));
+  const description = (verb: string) => definitionsByVerb.get(verb)!.description;
   const catalog = program
     .command("catalog")
     .description(
-      "Catalog authority verbs (engine-backed): list, show, register, update, link, discover, import, export. " +
-        "`discover` is a read-only proposal over the configured roots; `import` applies a reviewed plan " +
-        "(conflicts and source drift refuse the whole import); `export` is versioned transport, never a file " +
-        "authority. JSON envelope on stdout with --json; exit 0 success, 1 domain/runtime/IO refusal, 2 usage",
+      `Catalog authority verbs (engine-backed): ${[...definitionsByVerb.keys()].join(", ")}. ` +
+        "`discover` is a read-only proposal; `import` applies a reviewed plan with whole-order conflict/source-drift refusal. " +
+        "Catalog identity remains in store.db; execution JSON remains separate.",
     )
     .exitOverride();
 
   filterFlags(
     catalog
       .command("list")
-      .description("List catalog rows with their incident relations (deterministic kind/title/id order)"),
+      .description(description("list")),
   ).action(async (options: CatalogCliOptions) =>
     runVerb("list", options, async (json) => {
       const page = await listCatalog(storeContext(options), listFilterOf(options));
@@ -334,7 +327,7 @@ export function registerCatalogCommands(program: Command): void {
 
   catalog
     .command("show")
-    .description("Show one catalog row with every relation incident to it")
+    .description(description("show"))
     .argument("<kind>", "project | iteration | plan | document")
     .argument("<id>", "Catalog id")
     .option("--harness <path>", "Harness dir override")
@@ -349,10 +342,7 @@ export function registerCatalogCommands(program: Command): void {
   mutationFlags(
     catalog
       .command("register")
-      .description(
-        "Register a catalog row, or attach to the row that already owns the canonical location " +
-          "(a different id at a registered location attaches rather than minting a duplicate)",
-      )
+      .description(description("register"))
       .requiredOption("--kind <kind>", "project | iteration | plan | document")
       .requiredOption("--id <id>", "Catalog id")
       .requiredOption("--title <title>", "Catalog title")
@@ -388,7 +378,7 @@ export function registerCatalogCommands(program: Command): void {
   mutationFlags(
     catalog
       .command("update")
-      .description("Change catalog-only metadata/lifecycle; identity is never patched and `--expect` guards the revision")
+      .description(description("update"))
       .argument("<kind>", "project | iteration | plan | document")
       .argument("<id>", "Catalog id")
       .requiredOption("--expect <n>", "Revision from `mstar catalog show`")
@@ -415,7 +405,7 @@ export function registerCatalogCommands(program: Command): void {
   mutationFlags(
     catalog
       .command("link")
-      .description("Record a relation between two registered catalog rows (both endpoints must exist)"),
+      .description(description("link")),
   )
     .requiredOption("--from-kind <kind>", "Relation source entity kind")
     .requiredOption("--from-id <id>", "Relation source id")
@@ -435,11 +425,7 @@ export function registerCatalogCommands(program: Command): void {
 
   catalog
     .command("discover")
-    .description(
-      "Read-only dry-run inventory (contract \u00a74): legacy index rows plus the tracked bodies of the configured " +
-        "roots, as proposals with their reviewed source hashes, undisclosed metadata and index sections proposed " +
-        "for retirement. Writes nothing",
-    )
+    .description(description("discover"))
     .option("--out <file>", "Absolute path to write the proposed plan JSON to (review artifact)")
     .option("--harness <path>", "Harness dir override")
     .option("--json", "Machine-readable envelope on stdout")
@@ -459,13 +445,7 @@ export function registerCatalogCommands(program: Command): void {
   mutationFlags(
     catalog
       .command("import")
-      .description(
-        "Apply a reviewed plan through the shared catalog mutations. --plan takes a CatalogImportPlan JSON " +
-          "(from `catalog discover` or a host-built plan); --inputs takes a reviewed input array or a " +
-          "`catalog export` payload. Conflicts and reviewed-source drift refuse the whole import before the " +
-          "first write; no workflow session is created and no index is retired. --dry-run re-checks the plan " +
-          "against the store and sources and writes nothing (exit 1 when it would be refused)",
-      )
+      .description(description("import"))
       .option("--plan <file>", "Reviewed CatalogImportPlan JSON (absolute path)")
       .option("--inputs <file>", "Reviewed CatalogImportInput[] JSON, or a CatalogExport payload (absolute path)")
       .option("--dry-run", "Report whether the plan would be accepted, without writing"),
@@ -493,10 +473,7 @@ export function registerCatalogCommands(program: Command): void {
 
   catalog
     .command("export")
-    .description(
-      "Versioned transport dump of the whole catalog (ids, relations, revisions and provenance). " +
-        "Not a continuously maintained file authority: import it with `catalog import --inputs`",
-    )
+    .description(description("export"))
     .option("--out <file>", "Absolute path to write the export payload to")
     .option("--harness <path>", "Harness dir override")
     .option("--json", "Machine-readable envelope on stdout")

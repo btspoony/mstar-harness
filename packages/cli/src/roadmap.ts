@@ -16,10 +16,11 @@ import {
   type RoadmapImportReview,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { getRoadmapCommandDefinitions, type CommandDefinition } from "@mstar-harness/commands";
 
 type RoadmapOptions = Record<string, string | boolean | undefined>;
 const COMMAND_POSITION = 2;
-const VERBS: Record<string, true> = { show: true, import: true, replace: true, export: true };
+const VERBS: Record<string, true> = Object.fromEntries(getRoadmapCommandDefinitions().map(({ id }) => [id.slice("roadmap.".length), true]));
 class RoadmapAbsentError extends Error {
   readonly code = "roadmap.absent";
 }
@@ -125,9 +126,11 @@ function readReview(value: string): RoadmapImportReview {
   return review as RoadmapImportReview;
 }
 
-export function registerRoadmapCommands(program: Command): void {
+export function registerRoadmapCommands(program: Command, definitions: readonly CommandDefinition[]): void {
+  const definitionsByVerb = new Map(definitions.map((definition) => [definition.id.slice("roadmap.".length), definition]));
+  const description = (verb: string) => definitionsByVerb.get(verb)!.description;
   const roadmap = program.command("roadmap")
-    .description("Roadmap content authority: show, reviewed import, revision-guarded replace, and transport export")
+    .description(`Roadmap content authority: ${[...definitionsByVerb.keys()].join(", ")}`)
     .exitOverride()
     .addHelpText("after", [
       "",
@@ -144,7 +147,7 @@ export function registerRoadmapCommands(program: Command): void {
     ].join("\n"));
 
   roadmap.command("show")
-    .description("Show project/catalog revisions, authority record (or roadmap:null), hash and full Markdown content")
+    .description(description("show"))
     .requiredOption("--project <id>", "Explicit catalog project id")
     .option("--harness <root>", "Canonical harness root override")
     .option("--json", "Machine-readable {ok:true,data} envelope")
@@ -155,7 +158,7 @@ export function registerRoadmapCommands(program: Command): void {
     }));
 
   roadmap.command("import")
-    .description("Preview import read-only with --file; apply only a saved reviewed RoadmapImportReview JSON using --review, --apply and --operation")
+    .description(description("import"))
     .option("--project <id>", "Catalog project id for preview")
     .option("--file <absolute-md>", "Absolute Markdown source file for read-only preview")
     .option("--review <absolute-json>", "Absolute RoadmapImportReview JSON file for apply")
@@ -177,7 +180,7 @@ export function registerRoadmapCommands(program: Command): void {
     }));
 
   roadmap.command("replace")
-    .description("Replace the complete Markdown record using observed catalog and roadmap revisions (or absent)")
+    .description(description("replace"))
     .requiredOption("--project <id>", "Explicit catalog project id")
     .requiredOption("--file <absolute-md>", "Absolute Markdown content candidate; never modified")
     .requiredOption("--expect-project <n>", "Observed catalog project revision")
@@ -204,7 +207,7 @@ export function registerRoadmapCommands(program: Command): void {
     }));
 
   roadmap.command("export")
-    .description("Export the stored document as raw Markdown or version-1 JSON transport; refuses absent authority")
+    .description(description("export"))
     .requiredOption("--project <id>", "Explicit catalog project id")
     .requiredOption("--format <markdown|json>", "Transport format")
     .option("--harness <root>", "Canonical harness root override")

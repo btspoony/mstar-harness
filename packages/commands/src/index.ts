@@ -9,5 +9,7 @@ export { getPlanCommandDefinitions, PLAN_COORDINATOR_TRANSITIONS } from "./famil
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";
 export { getIssueCommandDefinitions } from "./families/issue.js";
+export { getCatalogCommandDefinitions } from "./families/catalog.js";
+export { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 export { getCommandSchemas, getPayloadSchema } from "./families/schema.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";

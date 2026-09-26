@@ -71,6 +71,19 @@ describe("command definitions", () => {
       "issue.supersede",
       "issue.link",
       "issue.export",
+      "catalog.discover",
+      "catalog.import",
+      "catalog.register",
+      "catalog.update",
+      "catalog.link",
+      "catalog.list",
+      "catalog.show",
+      "catalog.export",
+      "catalog.reconcile",
+      "roadmap.import",
+      "roadmap.replace",
+      "roadmap.show",
+      "roadmap.export",
     ]);
   });
 
