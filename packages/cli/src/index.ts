@@ -116,6 +116,7 @@ import {
   validateFindingDoc,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
+  verifyPlanExecutionLease,
   validateIntegrationMergeLease,
   validateMstarReviewV1,
   validateRoleMapping,
@@ -157,7 +158,6 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
-import { verifyPlanExecutionLease } from "./lease-verify";
 import { registerSddEvidenceCommands } from "./sdd-evidence";
 import { planUsageFailurePayload, registerPlanCommands, registerWorkflowCommands } from "./plan-coordination";
 import {

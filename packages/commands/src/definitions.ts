@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CommandDefinition } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
+import { getCoordinationChecksCommandDefinitions } from "./families/coordination-checks.js";
 import { getPersistCommandDefinitions } from "./families/persist.js";
 
 
@@ -105,6 +106,7 @@ export function validateCommandDefinitions(definitions: readonly CommandDefiniti
 const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getStatusCommandDefinitions(),
   ...getPersistCommandDefinitions(),
+  ...getCoordinationChecksCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 
