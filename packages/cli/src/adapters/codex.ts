@@ -5,6 +5,7 @@ import {
   CODEX_MARKETPLACE_NAME as MARKETPLACE_NAME,
   diagnoseCodexHost,
   detectCodexPluginVersion as detectCodexPluginVersionFromHealth,
+  parseCodexMarketplaceNames,
 } from "@mstar-harness/commands";
 import { ensureCodexAgentFile, validateCodexAgentFile } from "./codex-agent-files";
 import type { AgentAdapter, Scope } from "../types";
@@ -51,6 +52,7 @@ import {
  */
 
 const CODEX_BIN = "codex";
+const CODEX_INSTALL_HINT = "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
 const CODEX_LOCAL_TIMEOUT_MS = 10_000;
 const CODEX_MARKETPLACE_TIMEOUT_MS = 300_000;
 
@@ -90,7 +92,19 @@ function runCodex(args: string[], dryRun: boolean, timeoutMs: number): string {
   return runCliCommand([CODEX_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
 
+function codexAvailable(): boolean {
+  try {
+    runCodex(["--version"], false, CODEX_LOCAL_TIMEOUT_MS);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
+function configuredMarketplaceNames(dryRun: boolean): string[] {
+  if (dryRun) return [];
+  return parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"], false, CODEX_LOCAL_TIMEOUT_MS));
+}
 /** CLI-owned subprocess boundary for the shared read-only Codex version probe. */
 export function detectCodexPluginVersion(): string | null {
   return detectCodexPluginVersionFromHealth((args) => runCodex(args, false, CODEX_LOCAL_TIMEOUT_MS));

@@ -11,6 +11,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 async function testContext(): Promise<InvocationContext> {
   const root = mkdtempSync(path.join(os.tmpdir(), "commands-issue-"));
+  roots.push(root);
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   await (await initializeStore({ harnessDir: harness })).close();

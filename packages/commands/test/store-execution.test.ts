@@ -189,6 +189,7 @@ describe("store and execution command surface", () => {
     mkdirSync(harness, { recursive: true });
     const init = await invoke(definition("store.init"), { harness }, root);
     expect(init.status).toBe("ok");
+    const before = await storeSnapshot(harness);
     const activateDefinition = definition("store.execution.activate");
     const activate = await activateDefinition.execute(activateDefinition.input.parse({
       harness,
@@ -198,5 +199,8 @@ describe("store and execution command surface", () => {
       coverage: join(root, "coverage.json"),
       attestation: join(root, "attestation.json"),
     }), invocation(root, harness));
+    expect(activate.status).not.toBe("ok");
+    if (activate.status !== "ok") expect(activate.message).toContain("control-root");
+    expect(await storeSnapshot(harness)).toEqual(before);
   });
 });

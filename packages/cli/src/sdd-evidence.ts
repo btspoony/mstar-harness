@@ -1,21 +1,6 @@
 /**
- * Local SDD test-evidence facility (locked CLI evidence contract): input
- * collectors, the capture runner and the read-only
- * `sdd evidence capture|verify` commands.
- *
- * Division of labor (locked): the pure engine owns schema, digests over
- * supplied facts and comparison; this module alone reads files/Git,
- * launches the child, streams logs and stores the evidence bundle. Four
- * outputs stay separate everywhere — integrity, outcome, applicability and
- * coverage (always review-required).
- *
- * Capture is a new developer entry for an ALREADY-AUTHORIZED argv: it
- * resolves and gates the dispatched context (source cwd, launch, artifact
- * target) before any child, records literal argv without shell synthesis,
- * streams raw stdout/stderr into fixed-name logs under
- * `{SDD_DIR}/evidence/<run-uuid>/`, and finalizes a finished record with
- * the tagged outcome. POSIX linux/darwin only for capture; verify is
- * read-only and portable.
+ * Local SDD test-evidence facility: input collectors, the capture runner,
+ * and the read-only verify assessment. CLI registration is generated.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -24,9 +9,6 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
-import pc from "picocolors";
-import type { Command } from "commander";
-import type { CommandDefinition } from "@mstar-harness/commands";
 import {
   assessSddEvidenceReuse,
   checkSddAction,
@@ -1739,96 +1721,3 @@ export async function verifySddEvidence(invocation: VerifyInvocation): Promise<E
   return runEvidenceVerify(invocation);
 }
 
-// ---------------------------------------------------------------------------
-// Command registration.
-// ---------------------------------------------------------------------------
-
-function failEvidence(error: unknown, context: string): void {
-  if (error instanceof SddScriptError) {
-    console.error(pc.red(`${context} failed: ${error.message}`));
-    process.exitCode = error.exitCode;
-    return;
-  }
-  console.error(pc.red(`${context} failed: ${(error as Error).message}`));
-  process.exitCode = 1;
-}
-
-/**
- * Register `sdd evidence capture` and `sdd evidence verify` beside the
- * SDD commands. `sdd.exec` is represented in the shared process family;
- * this CLI keeps its native terminal-oriented entry point.
- */
-export function registerSddEvidenceCommands(sddCommand: Command, definitions: readonly CommandDefinition[]): void {
-  const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));
-  const captureDefinition = definitionsById.get("sdd.evidence.capture");
-  const verifyDefinition = definitionsById.get("sdd.evidence.verify");
-  if (!captureDefinition || !verifyDefinition) throw new Error("SDD evidence command definitions are missing");
-  const evidenceCommand = sddCommand
-    .command("evidence")
-    .description("Capture and verify SDD test evidence bundles.");
-
-  evidenceCommand
-    .command("capture")
-    .description(captureDefinition.description)
-    .option("--request <path>", "Absolute path to the immutable task capture request JSON")
-    .argument("[argv...]", "Child executable + args placed after -- (passed through unchanged)")
-    .action(async (argv: string[], options: { request?: string }) => {
-      try {
-        if (!options.request) throw usageError(CAPTURE_USAGE);
-        if (argv.length === 0) {
-          throw usageError(`${CAPTURE_USAGE}\n  The argv after -- is passed to the child literally (no shell).`);
-        }
-        const requestDoc = loadJsonFileUsage(options.request, "--request");
-        const request = validateRequestUsage(requestDoc);
-        const result = await captureSddEvidence(request, argv);
-        // Prefixed evidence paths on stderr — never an acceptance-success label.
-        console.error(`evidence run: ${result.runDir}`);
-        console.error(`evidence record: ${join(result.runDir, "record.json")}`);
-        process.exitCode = result.exitCode;
-      } catch (error) {
-        failEvidence(error, "sdd evidence capture");
-      }
-    });
-
-  evidenceCommand
-    .command("verify")
-    .description(verifyDefinition.description)
-    .option("--sdd-dir <path>", "Absolute path to the plan's SDD dir")
-    .option("--plan <id>", "Expected plan id")
-    .option("--task <id>", "Expected task id")
-    .option("--run <uuid>", "Expected run id (canonical RFC4122 v4 UUID)")
-    .option("--target <path>", "Absolute path to an EvidenceTargetRequest JSON for applicability assessment")
-    .action(async (options: { sddDir?: string; plan?: string; task?: string; run?: string; target?: string }) => {
-      try {
-        if (!options.sddDir || !options.plan || !options.task || !options.run) throw usageError(VERIFY_USAGE);
-        if (!isAbsolute(options.sddDir)) throw usageError(`${VERIFY_USAGE}\n  --sdd-dir must be an absolute path`);
-        if (!SAFE_COMPONENT_RE.test(options.plan)) throw usageError(`${VERIFY_USAGE}\n  --plan must be a single safe path component`);
-        if (!isIdLike(options.task)) throw usageError(`${VERIFY_USAGE}\n  --task must be a nonempty trimmed id without path semantics`);
-        if (!UUID_V4_RE.test(options.run)) throw usageError(`${VERIFY_USAGE}\n  --run must be a canonical lowercase RFC4122 v4 UUID`);
-        if (options.target !== undefined && !isAbsolute(options.target)) {
-          throw usageError(`${VERIFY_USAGE}\n  --target must be an absolute path`);
-        }
-        const assessment = await runEvidenceVerify({
-          sddDir: options.sddDir,
-          planId: options.plan,
-          taskId: options.task,
-          runId: options.run,
-          targetPath: options.target,
-        });
-        // Exactly one JSON assessment on stdout; the verifier never writes
-        // an assessment artifact.
-        console.log(JSON.stringify(assessment));
-        if (options.target === undefined) {
-          console.error(`evidence verify: integrity only; outcome=${assessment.outcome}; acceptance not assessed`);
-          process.exitCode = assessment.integrity.ok ? 0 : 1;
-        } else if (assessment.applicability === "candidate") {
-          console.error("reuse candidate; coverage review required");
-          process.exitCode = 0;
-        } else {
-          process.exitCode = 1;
-        }
-      } catch (error) {
-        failEvidence(error, "sdd evidence verify");
-      }
-    });
-}

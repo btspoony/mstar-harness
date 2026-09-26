@@ -15,6 +15,7 @@ import {
   projectInstallPath as cursorProjectInstallPath,
   findInstalledPlugin,
 } from "@mstar-harness/commands";
+import { DSH_HOME_ENV, DSH_HOME_SUBDIR } from "./adapters/dsh";
 import { detectCodexPluginVersion } from "./adapters/codex";
 import { listInstalledPlugins } from "./adapters/omp";
 

@@ -15,6 +15,7 @@
   // write the module consumed by that package.
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ES2024"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,

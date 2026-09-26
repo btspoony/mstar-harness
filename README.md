@@ -153,6 +153,15 @@ mstar dashboard            # prints the resolved URL after the server is listeni
 mstar dashboard --help     # --port / --open / --project
 ```
 
+### Command contract
+
+Non-installer commands are generated from one canonical definition in `@mstar-harness/commands`. `mstar init` remains the installer and is not a generated command. Success, refusal, and usage each print a version-1 JSON envelope; ordinary exits are 0, 1, and 2. A missing SDD task still exits 3, and child processes still propagate 124, 127, and 128+n. Examples below are synthetic. This README does not claim an installed-host, browser, or live-service run.
+
+```text
+mstar schema CaptureInput
+mstar host detect --signals question
+```
+
 ## Harness Workflow
 
 ```mermaid

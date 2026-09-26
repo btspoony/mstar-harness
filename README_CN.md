@@ -154,6 +154,15 @@ mstar dashboard            # 服务开始监听后打印解析得到的 URL
 mstar dashboard --help     # --port / --open / --project
 ```
 
+### 命令契约
+
+除安装器以外的命令都由 `@mstar-harness/commands` 的同一份规范定义生成。`mstar init` 仍是安装器，不是生成命令。成功、拒绝和用法各自打印 version-1 JSON 信封；普通退出码是 0、1、2。缺失的 SDD task 仍退出 3，子进程仍原样传播 124、127 和 128+n。下面的例子是合成示例。本文不声称已在已安装宿主、浏览器或在线服务上运行过。
+
+```text
+mstar schema CaptureInput
+mstar host detect --signals question
+```
+
 ## Harness Workflow（统一流程）
 
 ```mermaid

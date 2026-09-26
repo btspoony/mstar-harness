@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CommandDefinition } from "./types.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
 import { getCoordinationChecksCommandDefinitions } from "./families/coordination-checks.js";
 import { getPersistCommandDefinitions } from "./families/persist.js";
@@ -19,6 +19,8 @@ import { getJudgmentCommandDefinitions } from "./families/judgment.js";
 import { getProcessCommandDefinitions } from "./families/process.js";
 
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
+import { getLocalCommandDefinitions } from "./families/local.js";
+import { getSchemaCommandDefinitions } from "./families/schema.js";
 
 
 const failureEnvelopeSchema = z.object({
@@ -147,9 +149,46 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getProcessCommandDefinitions(),
   ...getJudgmentCommandDefinitions(),
   ...getDashboardCommandDefinitions(),
+  ...getLocalCommandDefinitions(),
+  ...getSchemaCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 
 export function getCommandDefinitions(): readonly CommandDefinition[] {
   return canonicalDefinitions;
+}
+
+export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
+  const definition = canonicalDefinitions.find((entry) => entry.id === id);
+  if (definition === undefined) {
+    return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
+  }
+  const parsed = definition.input.safeParse(input);
+  if (!parsed.success) {
+    return {
+      version: 1,
+      command: id,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message: parsed.error.issues.map((issue) => issue.message).join("; "),
+    };
+  }
+  const sessionKey = definition.cli.options.find((option) => option.context === "sessionId")?.key;
+  const sessionValue = sessionKey === undefined || parsed.data === null || typeof parsed.data !== "object"
+    ? undefined
+    : Object.entries(parsed.data).find(([key]) => key === sessionKey)?.[1];
+  const request = typeof sessionValue === "string" ? { ...context, sessionId: sessionValue } : context;
+  try {
+    const envelope = await definition.execute(parsed.data, request);
+    if (!definition.output.safeParse(envelope).success) {
+      return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
+    }
+    return envelope;
+  } catch (error) {
+    if (request.signal.aborted) {
+      return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+    }
+    return { version: 1, command: id, status: "error", code: "command.internal", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+  }
 }

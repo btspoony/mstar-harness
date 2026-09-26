@@ -30,6 +30,7 @@ const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
 const ZCODE_PLUGINS_ROOT = path.join(os.homedir(), ".zcode", "cli", "plugins");
 const KNOWN_MARKETPLACES_PATH = path.join(ZCODE_PLUGINS_ROOT, "known_marketplaces.json");
 const MARKETPLACE_DIR = path.join(ZCODE_PLUGINS_ROOT, "marketplaces", MARKETPLACE_ID);
+const MARKETPLACE_JSON_PATH = path.join(MARKETPLACE_DIR, "marketplace.json");
 
 type GithubSource = { source: "github"; repo: string; ref?: string };
 

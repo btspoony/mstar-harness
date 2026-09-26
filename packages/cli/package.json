@@ -1,8 +1,7 @@
 {
   "name": "@mstar-harness/cli",
   "version": "3.11.2",
-  "description": "Morning Star harness CLI — installer bootstrap + mstar workflow verbs (path/status/lease/sdd/iteration/dispatch/worktree/lint/design-md/audit/compound/host/skill) and synthetic-only judgment review advice.",
-  "license": "MIT",
+  "description": "Morning Star harness CLI — installer bootstrap plus a generated adapter over the canonical command definitions.",
   "repository": {
     "type": "git",
     "url": "https://github.com/btspoony/mstar-harness.git",
