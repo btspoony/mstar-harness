@@ -11,10 +11,11 @@ import {
   formatPluginVersionDoctorNote,
   ompEntryVersion,
   PLUGIN_VERSION_SHAPE_RE,
+  globalInstallPath as cursorGlobalInstallPath,
+  projectInstallPath as cursorProjectInstallPath,
 } from "@mstar-harness/commands";
 import { detectCodexPluginVersion } from "./adapters/codex";
 import { DSH_HOME_ENV, DSH_HOME_SUBDIR } from "./adapters/dsh";
-import { globalInstallPath as cursorGlobalInstallPath, projectInstallPath as cursorProjectInstallPath } from "./adapters/cursor";
 import { findInstalledPlugin, listInstalledPlugins } from "./adapters/omp";
 
 function detectOmpPluginVersion(): string | null {

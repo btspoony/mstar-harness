@@ -5,11 +5,11 @@ import path from "node:path";
 import {
   compareSemver,
   diagnoseCodexHost,
+  diagnoseCursorHost,
   detectCodexPluginVersion,
   detectCursorPluginVersionForScope,
-  detectZcodePluginVersion,
-  formatPluginVersionDoctorNote,
-  isCodexAvailable,
+  globalInstallPath,
+  projectInstallPath,
   joinWithinRoot,
   legacyCodexMarketplaceNote,
   parseCodexInstalledEntries,
@@ -123,5 +123,40 @@ describe("codex host health", () => {
     expect(parseCodexMarketplaceNames(JSON.stringify({ marketplaces: [{ name: "mstar-repo" }, {}, null] })))
       .toEqual(["mstar-repo"]);
     expect(legacyCodexMarketplaceNote(JSON.stringify({ plugins: [] }), missingPath)).toBeNull();
+  });
+});
+describe("cursor host health", () => {
+  test("discovers and validates a synthetic project plugin checkout", () => {
+    const projectRoot = fixture();
+    const pluginRoot = projectInstallPath(projectRoot);
+    mkdirSync(path.join(pluginRoot, ".git"), { recursive: true });
+    writeJson(pluginRoot, ".cursor-plugin/plugin.json", { version: "1.0.0" });
+    for (const agent of ["fullstack-dev", "qc-specialist"]) {
+      const file = path.join(pluginRoot, "agents", `${agent}.md`);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `---\nname: ${agent}\ndescription: test\nmodel: test\n---\n`);
+    }
+
+    expect(globalInstallPath(projectRoot)).toBe(
+      path.join(projectRoot, ".cursor", "plugins", "local", "morning-star-harness"),
+    );
+    expect(diagnoseCursorHost("project", { project: pluginRoot })).toEqual({
+      location: pluginRoot,
+      errors: [],
+    });
+  });
+
+  test("reports a missing Cursor plugin marker from a synthetic root", () => {
+    const pluginRoot = fixture();
+    mkdirSync(path.join(pluginRoot, ".git"), { recursive: true });
+    for (const agent of ["fullstack-dev", "qc-specialist"]) {
+      const file = path.join(pluginRoot, "agents", `${agent}.md`);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `---\nname: ${agent}\ndescription: test\nmodel: test\n---\n`);
+    }
+
+    expect(diagnoseCursorHost("global", { global: pluginRoot }).errors).toEqual([
+      `Missing marker file: ${path.join(pluginRoot, ".cursor-plugin/plugin.json")}`,
+    ]);
   });
 });
