@@ -20,16 +20,30 @@ const transitions = [
 ];
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function usage(id: string, message: string): CommandEnvelope<never> { return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message }; }
+class WorkflowInputError extends Error {}
 function refused(id: string, error: unknown): CommandEnvelope<never> {
+  if (error instanceof WorkflowInputError) return usage(id, error.message);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error), ...(details === undefined ? {} : { details }) };
 }
 function object(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${field} must be an object`);
-  return value as Record<string, unknown>;
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      throw new WorkflowInputError(`${field} must be a JSON object`);
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new WorkflowInputError(`${field} must be an object`);
+  return parsed as Record<string, unknown>;
 }
 function absolute(value: string | undefined, field: string): string {
-  if (value === undefined || !path.isAbsolute(value)) throw new Error(`${field} must be an absolute path`);
+  if (value === undefined || !path.isAbsolute(value)) throw new WorkflowInputError(`${field} must be an absolute path`);
   return value;
 }
 

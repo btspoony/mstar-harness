@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Command, CommanderError } from "commander";
 import {
   executeCommand,
+  getCommandDefinitions,
   spawnProcess,
   startDashboard,
   type CommandDefinition,
@@ -22,8 +23,15 @@ export function writeEnvelope(envelope: CommandEnvelope, signal?: NodeJS.Signals
 }
 
 export function commandIdFromArgv(argv: readonly string[]): string {
-  const tokens = argv.slice(2).filter((token) => token !== "--" && !token.startsWith("-"));
-  return tokens.length === 0 ? "mstar" : tokens.join(".");
+  const tokens = argv.slice(2).filter((token) => token !== "--");
+  const commandTokens = tokens.slice(0, tokens.findIndex((token) => token.startsWith("-")) < 0
+    ? tokens.length
+    : tokens.findIndex((token) => token.startsWith("-")));
+  const definition = getCommandDefinitions()
+    .filter((candidate) => candidate.cli.path.every((part, index) => commandTokens[index] === part))
+    .sort((left, right) => right.cli.path.length - left.cli.path.length)[0];
+  if (definition !== undefined) return definition.cli.path.join(".");
+  return commandTokens.length === 0 ? "mstar" : commandTokens.join(".");
 }
 
 export function mapParserError(error: unknown, argv: readonly string[]): CommandEnvelope | null {
