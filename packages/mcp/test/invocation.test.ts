@@ -143,3 +143,35 @@ test("generated MCP calls preserve request-local session admission and host cont
     await server.close();
   }
 });
+
+test("generated MCP mutations refuse unregistered workflow state", async () => {
+  const data = fixture();
+  const storeContext = { harnessDir: data.root };
+  (await initializeStore(storeContext)).close();
+  const initialized = await initializeExecutionAuthority(storeContext);
+
+  const server = createMcpServer((_definition, _input, signal, _services, effects) => context(data.root, signal, effects));
+  const client = new Client({ name: "invocation-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = transportPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const refused = resultEnvelope(await client.callTool({
+      name: "mstar_plan_bind",
+      arguments: {
+        execution: true,
+        coordinator: true,
+        workflow: data.workflow,
+        harness: data.harness,
+        expect: initialized.token,
+        operation: "bind-missing-workflow",
+        sessionId: "main-session",
+      },
+    }));
+    assert.equal(refused.status, "refused");
+    assert.equal(refused.code, "coordination.workflow-not-found");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
