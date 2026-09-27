@@ -8,6 +8,7 @@ import {
   assertSddTddTriple,
   assertTriIdentity,
   classifySkillLint,
+  collectActiveLifecycleBranches,
   completenessLevel,
   executionModeToN,
   findEphemeralCitations,
@@ -189,18 +190,27 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!plan) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)", 2);
         const workflow = required(input.workflow, "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)");
         if (input.control !== undefined && input.integration !== undefined) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both", 2);
+        if (input.control !== undefined) context.effects.writeStderr?.("[mstar-harness] --control is deprecated; use --integration");
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
         const snapshotPath = path.join(harness, "workflows", workflow, "snapshot.json");
         if (!existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         let snapshot: Record<string, any>;
+        let snapshotDiagnostics: Array<{ ok: boolean; code: string; message: string }> = [];
         try {
-          snapshot = readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot as Record<string, any>;
+          const read = readWorkflowSnapshot(path.dirname(snapshotPath));
+          snapshot = read.snapshot as Record<string, any>;
+          snapshotDiagnostics = read.diagnostics;
         } catch (error) {
           if (!(error instanceof WorkflowSnapshotValidationError)) throw error;
           const first = error.violations[0];
           return refusal(id, first?.code ?? "workflow.snapshot.invalid", first?.message ?? "invalid workflow snapshot", { violations: error.violations });
+        }
+        for (const diagnostic of snapshotDiagnostics) {
+          if (!diagnostic.ok) {
+            context.effects.writeStderr?.(`[mstar-harness] ${diagnostic.code}: ${diagnostic.message}`);
+          }
         }
         const rows = Array.isArray(snapshot.plans) ? snapshot.plans.filter((row: Record<string, unknown>) => row?.id === plan || row?.plan_id === plan) : [];
         if (!rows.length) return refusal(id, "worktree.l1.plan-not-found", `no plan row with id/plan_id ${plan}`, { snapshotPath, planId: plan });
@@ -216,10 +226,21 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
         for (const other of siblingScan.branches) lifecycleBranches.add(other);
+        // The selected lease branch is checked by the dedicated lease-vs-main
+        // identity guard; other current-snapshot ownership still blocks main.
+        const snapshotWithoutSelectedLease = {
+          ...snapshot,
+          plans: snapshot.plans.map((row: Record<string, unknown>) =>
+            row.id === plan || row.plan_id === plan ? { ...row, execution_lease: undefined } : row,
+          ),
+        };
+        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedLease])) lifecycleBranches.add(branch);
+        const integrationPath = input.integration ?? input.control ?? snapshot.integration_worktree_path;
+        const integrationBranch = snapshot.branch?.integration;
         const gate = l1PreDispatchCheck({
           workflowType: snapshot.type,
-          integrationWorktreePath: path.resolve(input.integration ?? input.control ?? snapshot.integration_worktree_path ?? ""),
-          integrationBranch: String(snapshot.branch?.integration ?? ""),
+          integrationWorktreePath: integrationPath === undefined ? "" : path.resolve(integrationPath),
+          integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
           mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
           expectedMainBranch: input.mainBranch ?? String(snapshot.branch?.base ?? ""),
           lifecycleBranches: [...lifecycleBranches],
