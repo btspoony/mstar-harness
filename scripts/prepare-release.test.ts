@@ -4,9 +4,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { bumpJsonVersion, bumpVersion, parseFragment, syncRootEngineSpec, validateFragmentPackages } from "./prepare-release.ts";
+import { bumpJsonVersion, bumpVersion, parseFragment, syncRootDependencySpecs, validateFragmentPackages } from "./prepare-release.ts";
 import {
   DEFAULT_VERSION_PATH,
+  CHANGELOGS,
   RELEASE_VERSION_RE,
   VERSION_SURFACES,
   compareSemver,
@@ -27,8 +28,12 @@ packages: CLI, Root
   test("single unknown token produces one error naming file + token", () => {
     const errors = validateFragmentPackages(["root", "scripts"], "typo.md");
     expect(errors).toEqual([
-      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh|omp)',
+      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
     ]);
+  });
+
+  test("accepts newly published command and MCP package tokens", () => {
+    expect(validateFragmentPackages(["commands", "mcp"], "new-packages.md")).toEqual([]);
   });
 
   test("collects every error across files/tokens (not first-error only)", () => {
@@ -37,9 +42,9 @@ packages: CLI, Root
       ...validateFragmentPackages(["engine", "dshh"], "b.md"),
     ];
     expect(errors).toEqual([
-      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|dsh|omp)',
-      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|dsh|omp)',
-      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|dsh|omp)',
+      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
+      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
+      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
     ]);
   });
 
@@ -60,33 +65,30 @@ packages: root, , cli,
   });
 });
 
-describe("syncRootEngineSpec (root manifest engine dependency)", () => {
+describe("syncRootDependencySpecs (hosted root manifest)", () => {
   const manifest = (spec: string) => `{
-  "name": "morning-star",
   "dependencies": {
-    "@mstar-harness/engine": "${spec}"
+    "@mstar-harness/commands": "${spec}",
+    "@mstar-harness/engine": "${spec}",
+    "@mstar-harness/mcp": "${spec}"
   },
   "devDependencies": {
-    "@mstar-harness/engine": "workspace:*"
+    "@mstar-harness/commands": "workspace:*"
   }
 }
 `;
 
-  test("rewrites workspace:* to the release range, devDependencies untouched", () => {
-    const out = syncRootEngineSpec(manifest("workspace:*"), "3.5.0");
-    expect(out).toContain('"dependencies": {\n    "@mstar-harness/engine": "^3.5.0"\n  }');
-    expect(out).toContain('"devDependencies": {\n    "@mstar-harness/engine": "workspace:*"\n  }');
+  test("rewrites every workspace runtime dependency and leaves build links untouched", () => {
+    const out = syncRootDependencySpecs(manifest("workspace:*"), "3.5.0");
+    for (const name of ["commands", "engine", "mcp"]) {
+      expect(out).toContain(`"@mstar-harness/${name}": "^3.5.0"`);
+    }
+    expect(out).toContain('"devDependencies": {\n    "@mstar-harness/commands": "workspace:*"\n  }');
   });
 
-  test("rewrites a stale semver range to the new release range", () => {
-    const out = syncRootEngineSpec(manifest("^3.4.0"), "3.5.0");
-    expect(out).toContain('"@mstar-harness/engine": "^3.5.0"');
-    expect(out).not.toContain("^3.4.0");
-  });
-
-  test("rewrites the engine spec to a prerelease range (^3.6.0-alpha.1)", () => {
-    const out = syncRootEngineSpec(manifest("workspace:*"), "3.6.0-alpha.1");
-    expect(out).toContain('"@mstar-harness/engine": "^3.6.0-alpha.1"');
+  test("rewrites stale ranges to stable and prerelease release ranges", () => {
+    expect(syncRootDependencySpecs(manifest("^3.4.0"), "3.5.0")).not.toContain("^3.4.0");
+    expect(syncRootDependencySpecs(manifest("workspace:*"), "3.6.0-alpha.1")).toContain('"@mstar-harness/mcp": "^3.6.0-alpha.1"');
   });
 });
 
@@ -161,6 +163,12 @@ describe("marketplace manifest surfaces (nested version locator)", () => {
     const nested = VERSION_SURFACES.filter((s) => s.versionPath !== undefined);
     expect(nested.map((s) => s.path).sort()).toEqual([".claude-plugin/marketplace.json", "marketplace.json"]);
     for (const s of nested) expect(s.versionPath).toBe("plugins.0.version");
+  });
+  test("commands and MCP join version and package changelog surfaces", () => {
+    expect(VERSION_SURFACES.map((surface) => surface.path)).toContain("packages/commands/package.json");
+    expect(VERSION_SURFACES.map((surface) => surface.path)).toContain("packages/mcp/package.json");
+    expect(CHANGELOGS.map((surface) => surface.pkg)).toContain("commands");
+    expect(CHANGELOGS.map((surface) => surface.pkg)).toContain("mcp");
   });
 
   test("readVersionAt walks the dotted locator; default reads the root version", () => {

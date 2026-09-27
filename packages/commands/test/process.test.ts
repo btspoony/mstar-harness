@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions, spawnProcess } from "../src/index.js";
@@ -96,6 +96,16 @@ describe("process command family", () => {
   test("spawn returns actual child output and exact exit status without a shell", async () => {
     const result = await spawnProcess({ argv: [process.execPath, "-e", "process.stdout.write(process.argv[1]); process.stderr.write('err'); process.exit(124)", "literal;value"], cwd: process.cwd(), env: {}, signal: new AbortController().signal });
     expect(result).toMatchObject({ stdout: "literal;value", stderr: "err", exitCode: 124, signal: null });
+  });
+  test("operator child inherits the caller stdin descriptor when no payload is supplied", async () => {
+    const parent = fstatSync(0);
+    const result = await spawnProcess({
+      argv: [process.execPath, "-e", "const s=require('node:fs').fstatSync(0);process.stdout.write(JSON.stringify({dev:s.dev,ino:s.ino,mode:s.mode}))"],
+      cwd: process.cwd(),
+      env: {},
+      signal: new AbortController().signal,
+    });
+    expect(JSON.parse(result.stdout)).toEqual({ dev: parent.dev, ino: parent.ino, mode: parent.mode });
   });
 
   test("abort terminates and drains an admitted child", async () => {

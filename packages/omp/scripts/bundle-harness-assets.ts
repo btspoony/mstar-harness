@@ -54,8 +54,11 @@ if (!fs.existsSync(sourcePluginManifest)) {
   process.exit(1);
 }
 fs.copyFileSync(sourcePluginManifest, path.join(packageRoot, "plugin.json"));
-await buildMcpPlugin("omp");
+const builtMcpBundle = await buildMcpPlugin("omp");
+const mcpDir = path.join(packageRoot, "mcp");
+fs.rmSync(mcpDir, { recursive: true, force: true });
+fs.cpSync(builtMcpBundle, mcpDir, { recursive: true });
 
 console.log(
-  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json`,
+  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json, MCP -> ${mcpDir}`,
 );

@@ -40,9 +40,11 @@ if (import.meta.main) {
   copyTree("skills", sourceSkills, destSkills);
   copyTree("commands", sourceCommands, destCommands);
   copyTree("agents", sourceAgents, destHarnessAgents);
-  // Copy the self-contained MCP stdio server and build metadata into the package root.
-  await buildMcpPlugin("dsh");
+  const builtMcpBundle = await buildMcpPlugin("dsh");
+  const mcpDir = path.join(packageRoot, "mcp");
+  fs.rmSync(mcpDir, { recursive: true, force: true });
+  fs.cpSync(builtMcpBundle, mcpDir, { recursive: true });
   console.log(
-    `bundle-harness-assets: synced skills -> ${destSkills}, commands -> ${destCommands}, agents -> ${destHarnessAgents}`,
+    `bundle-harness-assets: synced skills -> ${destSkills}, commands -> ${destCommands}, agents -> ${destHarnessAgents}, MCP -> ${mcpDir}`,
   );
 }

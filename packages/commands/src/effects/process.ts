@@ -5,6 +5,7 @@ export type ProcessRequest = {
   cwd: string;
   env: Readonly<Record<string, string>>;
   stdin?: string;
+  stdinMode?: "inherit" | "ignore";
   signal: AbortSignal;
 };
 export type ProcessResult = { exitCode: number | null; signal: string | null; stdout: string; stderr: string };
@@ -42,7 +43,7 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
       cwd: request.cwd,
       env: { ...request.env },
       shell: false,
-      stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      stdio: [request.stdin !== undefined ? "pipe" : request.stdinMode === "ignore" ? "ignore" : "inherit", "pipe", "pipe"],
     });
   } catch (error) {
     cleanup();

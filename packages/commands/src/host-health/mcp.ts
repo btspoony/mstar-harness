@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
+import { resolveDshProfileDir } from "./dsh.js";
+import { resolveOpencodePluginPackageRoot } from "./plugin-version-alignment.js";
 import { compareSemver } from "./version-compare.js";
 import type { HostTarget } from "./plugin-version-alignment.js";
 
@@ -114,9 +116,13 @@ export function diagnoseMcpTarget(
   };
 }
 
-/** Resolve a target's build/package root inside a checkout containing the seven-host plugin artifacts. */
-export function mcpTargetPackageRoot(target: HostTarget, repositoryRoot: string): string {
-  return target === "omp" || target === "opencode" || target === "dsh"
-    ? path.join(repositoryRoot, "packages", target)
-    : repositoryRoot;
+/** Resolve the installed npm package for cache-based hosts, not ignored checkout build outputs. */
+export function mcpTargetPackageRoot(
+  target: HostTarget,
+  repositoryRoot: string,
+  options: { opencodePackagesRoot?: string; dshHome?: string } = {},
+): string {
+  if (target === "opencode") return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
+  if (target === "dsh") return path.join(resolveDshProfileDir(options.dshHome), "node_modules", "@mstar-harness", "dsh");
+  return target === "omp" ? path.join(repositoryRoot, "packages", "omp") : repositoryRoot;
 }

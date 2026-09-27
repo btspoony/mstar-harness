@@ -58,9 +58,10 @@ test("registration preserves every canonical identity and Zod schema through the
   try {
     const listed = await client.listTools();
     const toolsByName = new Map(listed.tools.map((tool) => [tool.name, tool]));
-    assert.equal(listed.tools.length, definitions.length);
+    assert.equal(listed.tools.length, 123);
+    assert.equal(definitions.length, 123);
     assert.equal(toolsByName.has("mstar_init"), false);
-    assert.equal(toolsByName.has("mstar_report"), false);
+    assert.equal(toolsByName.has("mstar_report"), true);
 
     for (const definition of definitions) {
       const name = mcpToolName(definition.id);

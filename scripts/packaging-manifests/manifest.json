@@ -24,7 +24,7 @@
           {
             "root": "packages/cli/src",
             "files": 24,
-            "sha256": "e14937f558fb2e202dd185a953dd1766fd342d50076dea17ffbdc186119f0b78"
+            "sha256": "c1575b6c675d0aa1c06484c74f407aad0c1103030c03f9ff24099ce692be4482"
           }
         ],
         "files": [
@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "3614d9cabc3e09cd227694ffe6bf2730f4e0cb18463f4b1167985a740efee311",
+            "sha256": "34d43c31d8b726b8d24534ec81eeba713eeac321ebb785c11edf6244c1b8e995",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "c67432fa04621c656e8538021cdbd4e7d1609749f2ace4f8be9a93212e5217f5"
+            "sha256": "142e783f06c8223af50f50d8ce0daf60178b7f345feb27c13ff627b39ed81a5d"
           }
         ]
       },
@@ -82,12 +82,12 @@
           {
             "root": "packages/dsh/scripts",
             "files": 2,
-            "sha256": "c6bee590b96be43b7b7899d31d753b9227b4da1fbb2bbfd4a59ea232fdfd5bed"
+            "sha256": "bdcdadb9aacaf08689ff59349daef07c4093b309324ba797c695af3a265e0273"
           },
           {
             "root": "packages/dsh/src",
             "files": 62,
-            "sha256": "09bd248664ffa186b8883683efeea068d4ec6a4c285352cb038e7d92bc010108"
+            "sha256": "6426b3adfedf195d7b5d5ba6709df1554c99f39edbc879477a3c6cdcaa124ef0"
           }
         ],
         "files": [
@@ -106,7 +106,7 @@
           {
             "root": "packages/dsh/dist",
             "files": 60,
-            "sha256": "94f28f7c7d45be8dee59c89441a5bb085564578e89d9fd2f8c2dc8a0c71174ba",
+            "sha256": "934d4de4ad962119523a5989e2f7b548faf8f9c18dc8542a9aaaca8c36b90a1b",
             "exclude": [
               "client.js",
               "execution-consumer.json"
@@ -116,7 +116,7 @@
         "files": [
           {
             "path": "packages/dsh/dist/index.js",
-            "sha256": "26f96d2aa225f70940ea1df5a2daed78df331cda8985497ea4f573d2913f440a"
+            "sha256": "b75b49d28a3fe470f4a9a1e685a9ff4e1ba16f57fd04c3d23176ad5a9199c1b7"
           },
           {
             "path": "packages/dsh/dist/invariant.js",
@@ -183,7 +183,7 @@
           {
             "root": "packages/engine/dist",
             "files": 84,
-            "sha256": "4c86674857e5a87e3932b8c483ae6bf22492569c6ba60c39c9f9cae0ffbc19e8",
+            "sha256": "6c4114b5b53a5e0da7bbd9936265b989d0bc0806f59246319b808f7cab7914f8",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -196,7 +196,7 @@
           },
           {
             "path": "packages/engine/dist/engine.js",
-            "sha256": "8c8054070a713f0539f7abeea01fbf630a65aa76f6a8b15323dbdd96ec685ad4"
+            "sha256": "ad3b850d3921898d37017476afccd712d3d77907ea600e6d680908413002a099"
           }
         ]
       },
@@ -217,13 +217,13 @@
         "trees": [
           {
             "root": "packages/mcp/scripts",
-            "files": 3,
-            "sha256": "9718f74796e6818e558304b62fb7fec4fa0100167a4eb4a5f841556a1bc5a9dd"
+            "files": 4,
+            "sha256": "b17deb4b85e18c0b59e3ebe9f300f686856432f6e9770827b54bb27c7c715027"
           },
           {
             "root": "packages/mcp/src",
             "files": 7,
-            "sha256": "a0787f362761991c922b9ccada9841625b6e8ca1365a4a2d9ca7220b6601a3ef"
+            "sha256": "1c1c5ffae90d55ca814858fb6ca2a0e66a601a372a82582e5319eedf89530edf"
           }
         ],
         "files": [
@@ -252,6 +252,10 @@
             "sha256": "5eff3780322e931966f844b1a50d36ade67b68db53061f519e13c2483a661c77"
           },
           {
+            "path": "packages/dsh/scripts/bundle-harness-assets.ts",
+            "sha256": "470d2b163709d387e4bf39bf7f2b198a8d9dade86f2196204e9106bc2dc2e810"
+          },
+          {
             "path": "packages/mcp/package.json",
             "sha256": "e64df0e2ee5a019aeea951528b0d3418ef6d87214a241c7fdb5bca8ee5e426ce"
           },
@@ -260,8 +264,16 @@
             "sha256": "50fb55614cdbdf614305d99b83832071e2a48bdc96f124f6ac6ff01d34b2e58a"
           },
           {
+            "path": "packages/omp/scripts/bundle-harness-assets.ts",
+            "sha256": "fe21354c2676c1960b605ed5b8688642a2ad13ca2f9410bfebb2580ce3211561"
+          },
+          {
+            "path": "packages/opencode/scripts/bundle-harness-assets.ts",
+            "sha256": "0390e73d1b5e2e03176cd65e758c5c37c1a3f19552fced10716da0055db5a1e4"
+          },
+          {
             "path": "scripts/build-mcp-plugins.ts",
-            "sha256": "2dd0820129903cd194fbe7913dc2db432bde08933ce111e122909732e012602b"
+            "sha256": "a11276b40fd555f56bf0fe71ca5f097c881aee1d54d0e140d6dd4969c6e929a6"
           }
         ]
       },
@@ -270,15 +282,15 @@
           {
             "root": "packages/dsh/mcp",
             "files": 2,
-            "sha256": "acf146c09d9db9a2fdbe43a7e0645e8c55934cee36534d5c3b225267ad1d6b17",
+            "sha256": "f85d66ee01eab2136a2fe916eb27b2398e08300b3f26710b68023fc2bf91ef91",
             "exclude": [
               "execution-consumer.json"
             ]
           },
           {
             "root": "packages/mcp/dist",
-            "files": 24,
-            "sha256": "5de26a28601b7d8118c71a18271989d10c84df8767c7a3d5490f9becede8b140",
+            "files": 26,
+            "sha256": "2bd0bfda405ea2af664d5621b3ca1dcefc6883e5c1da96d9a24fc378eea397ad",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -286,7 +298,7 @@
           {
             "root": "packages/omp/mcp",
             "files": 2,
-            "sha256": "bb5dee8bb520fb3c226a660220623615504f1e142a586c29dc086ee4a08b1082",
+            "sha256": "6fceaaa76f13cc9144c2714f294897aa120ab8d0f5c7e3781e34940d59a65106",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -294,7 +306,7 @@
           {
             "root": "packages/opencode/mcp",
             "files": 2,
-            "sha256": "6f9f7afa6d979c266f60406fe0285bc71416c0268d136e4212a7d174714baf20",
+            "sha256": "88e0a2b96434ad30bd72285e461103de11a7ffe3888e07d42985c9855e055dc2",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -307,7 +319,7 @@
           },
           {
             "path": "mcp/bundles/codex/dist/mcp/stdio.js",
-            "sha256": "67c70161d8dccf925520d1dc5882422574774ae00ddc833b034c7f47693c7285"
+            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
           },
           {
             "path": "mcp/bundles/cursor/dist/mcp/build-info.json",
@@ -315,7 +327,15 @@
           },
           {
             "path": "mcp/bundles/cursor/dist/mcp/stdio.js",
-            "sha256": "67c70161d8dccf925520d1dc5882422574774ae00ddc833b034c7f47693c7285"
+            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+          },
+          {
+            "path": "mcp/bundles/dsh/dist/mcp/build-info.json",
+            "sha256": "2c65a1b2331ef13685209f6f65acd60b8fa4b70b58817effcc287d289445b197"
+          },
+          {
+            "path": "mcp/bundles/dsh/dist/mcp/stdio.js",
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
           },
           {
             "path": "mcp/bundles/kimi/dist/mcp/build-info.json",
@@ -323,7 +343,23 @@
           },
           {
             "path": "mcp/bundles/kimi/dist/mcp/stdio.js",
-            "sha256": "67c70161d8dccf925520d1dc5882422574774ae00ddc833b034c7f47693c7285"
+            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+          },
+          {
+            "path": "mcp/bundles/omp/dist/mcp/build-info.json",
+            "sha256": "cff75c66b73ef452a1ec9eafceb866b24477875dc73c603d291e899ef91bcf2a"
+          },
+          {
+            "path": "mcp/bundles/omp/dist/mcp/stdio.js",
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
+          },
+          {
+            "path": "mcp/bundles/opencode/dist/mcp/build-info.json",
+            "sha256": "9ef2f844147bce45b02ea9ccc134c768c56852b9e7f01d4c6a853e00f700a1b6"
+          },
+          {
+            "path": "mcp/bundles/opencode/dist/mcp/stdio.js",
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
           },
           {
             "path": "mcp/bundles/zcode/dist/mcp/build-info.json",
@@ -331,7 +367,7 @@
           },
           {
             "path": "mcp/bundles/zcode/dist/mcp/stdio.js",
-            "sha256": "67c70161d8dccf925520d1dc5882422574774ae00ddc833b034c7f47693c7285"
+            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
           },
           {
             "path": "packages/dsh/mcp/build-info.json",
@@ -339,11 +375,11 @@
           },
           {
             "path": "packages/dsh/mcp/stdio.js",
-            "sha256": "a4c0c055e5190632f52816127c68782f8b06159aa624c500f3e8346c9f61bc29"
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
           },
           {
             "path": "packages/mcp/dist/stdio.js",
-            "sha256": "a4c0c055e5190632f52816127c68782f8b06159aa624c500f3e8346c9f61bc29"
+            "sha256": "24eba5835bebe5cd39bba18fdbf4b7a44a5bb43031b4171e165eeedfe5a31d51"
           },
           {
             "path": "packages/omp/mcp/build-info.json",
@@ -351,7 +387,7 @@
           },
           {
             "path": "packages/omp/mcp/stdio.js",
-            "sha256": "a4c0c055e5190632f52816127c68782f8b06159aa624c500f3e8346c9f61bc29"
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
           },
           {
             "path": "packages/opencode/mcp/build-info.json",
@@ -359,7 +395,7 @@
           },
           {
             "path": "packages/opencode/mcp/stdio.js",
-            "sha256": "a4c0c055e5190632f52816127c68782f8b06159aa624c500f3e8346c9f61bc29"
+            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
           }
         ]
       },
@@ -381,7 +417,7 @@
           {
             "root": "packages/omp/scripts",
             "files": 1,
-            "sha256": "0f233f779cea11feebf54b4eee279cbf4649f92b8048d6f4aca206d33fef413a"
+            "sha256": "2532f5748e06c27208031d827e0918f42723be5aaba3537833e85e0dc29a0bbc"
           },
           {
             "root": "packages/omp/src",
@@ -409,7 +445,7 @@
           {
             "root": "packages/omp/dist",
             "files": 4,
-            "sha256": "b44a14cd5561c3eb1e50cd90ae4b48a0332e445054241c3a51bf518627140270",
+            "sha256": "05bfeee2d463fb40c04475a4b2a1adc1627faf48c632502eabbfe671dd2e0f47",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -417,7 +453,7 @@
           {
             "root": "packages/omp/extensions",
             "files": 3,
-            "sha256": "93cb69de403912fabfa577d76092e87de1d1864c56e24a6f7494a9a3649165e2",
+            "sha256": "0ccb07133f8fcc62b4fe8558ec188ebffeaa536bdef04516a2aec6be05b57989",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -425,7 +461,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "382ad4d62b9012292af85095c872b472fab63c66a0d49629cf0b7beadf8f6c08",
+            "sha256": "78829ca70be19f1bdcb540f5d4940f78c0ce4f5cc3bd97029d4d8bc11a4f6a82",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -442,7 +478,7 @@
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "dbf3ce0995349ec24b71bc18c2f3e7918310998dfde5ac6fe8bb479b0e534029"
+            "sha256": "796f611f2d51f86eba244a3d2a2dc2d6caab97e7fba310c95b3c18eb041d5607"
           },
           {
             "path": "packages/omp/plugin.json",
@@ -518,12 +554,12 @@
           {
             "root": "packages/opencode/scripts",
             "files": 1,
-            "sha256": "fdda930b65672d8eea6938124822f6e56ffb084c6af17762b163d1c7b3a93a4d"
+            "sha256": "9dbfa9e266db2c960de7faeb2aaa82baedb7501a12148d4ab7474fe4bc220d25"
           },
           {
             "root": "packages/opencode/src",
             "files": 2,
-            "sha256": "ec346b2b631d22e4214dbe9ad747a066da5dd1ccddf59c95e99dbd1f3e4da8bb"
+            "sha256": "31027c6e4c181e906cb9b7c8cadadc1fbc4f5507aba92ace4328206c297975ac"
           }
         ],
         "files": [
@@ -538,7 +574,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "9ff65b3b69f99bd4701d8a2c010e17dc09711e0d5f9f78f7e67468636746d495",
+            "sha256": "d223f5b0e42275d707aa9de7e967f6f05035470cf945223bfde391cb065c7e92",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -547,7 +583,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "fc55371d7391cef28cdf621fdd7e761eb55280d98262ea4fbfb6adaac24e7d9f"
+            "sha256": "640905916a76f504ad17c9043e788542b661f169acaf42e6f2177dc9279c8f68"
           }
         ]
       },

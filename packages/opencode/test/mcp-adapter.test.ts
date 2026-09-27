@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { createExecutionWorkflow, executionContextFor, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "@mstar-harness/commands";
 import { mcpToolName } from "@mstar-harness/mcp";
+import { closeOpenCodeMcpSession, type OpenCodeMcpServices } from "../src/mcp.js";
 import { MorningStarHarnessPlugin } from "../src/mstar.js";
 
 function commandResult(output: string): { status: string; code: string } {
@@ -97,4 +98,15 @@ test("OpenCode MCP exposes canonical commands and admits only the native main se
     else process.env.MSTAR_EXECUTION_CLI = oldExecutionCli;
     rmSync(root, { recursive: true, force: true });
   }
+});
+test("OpenCode MCP dashboard handles close only when their host session ends", async () => {
+  const closed: string[] = [];
+  const services: OpenCodeMcpServices = new Map([
+    ["session-a", [{ async close() { closed.push("a"); } }]],
+    ["session-b", [{ async close() { closed.push("b"); } }]],
+  ]);
+  await closeOpenCodeMcpSession(services, "session-a");
+  assert.deepEqual(closed, ["a"]);
+  assert.equal(services.has("session-a"), false);
+  assert.equal(services.has("session-b"), true);
 });

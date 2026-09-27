@@ -24,6 +24,7 @@ export interface CommandEffects {
     cwd: string;
     env: Readonly<Record<string, string>>;
     stdin?: string;
+    stdinMode?: "inherit" | "ignore";
     signal: AbortSignal;
   }): Promise<{ exitCode: number | null; signal: string | null; stdout: string; stderr: string }>;
   startDashboard(request: { harnessDir: string; port: number; projectId?: string }): Promise<{ url: string; close(): Promise<void> }>;
@@ -51,7 +52,7 @@ export interface InvocationContext {
 export type CliSyntax = Readonly<{
   path: readonly string[];
   aliases: readonly string[];
-  arguments: readonly { key: string; required: boolean; variadic: boolean }[];
+  arguments: readonly { key: string; required: boolean; variadic: boolean; choices?: readonly string[] }[];
   options: readonly { key: string; flags: string; required: boolean; defaultValue?: unknown; context?: "sessionId"; variadic?: boolean }[];
 }>;
 

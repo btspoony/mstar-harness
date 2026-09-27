@@ -7,7 +7,6 @@ import {
   readCoordinatedArtifact,
   replaceCoordinatedArtifact,
   resolveProcessHarnessDir,
-  setArtifactStore,
   validateMstarReviewV1,
   validateStatusV2,
   validateWorkflowSnapshot,
@@ -52,14 +51,10 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
   if (!gate.ok) throw new Error(`refusing to persist invalid ${kind} document: ${gate.violations.map((v) => `[${v.severity}] ${v.code}: ${v.message}`).join("; ")}`);
 }
 
-async function resolveStore(storeFlag: string | undefined, cwd: string): Promise<void> {
-  const modulePath = storeFlag ?? process.env.MSTAR_STORE_MODULE;
-  if (modulePath !== undefined) {
-    setArtifactStore(await loadStoreModule(modulePath));
-    return;
-  }
+async function resolveStore(storeFlag: string | undefined, cwd: string): Promise<ArtifactStore> {
+  if (storeFlag !== undefined) return loadStoreModule(storeFlag);
   const harnessDir = resolveProcessHarnessDir(cwd);
-  if (harnessDir !== null) setArtifactStore(createFsStore(harnessDir));
+  return harnessDir === null ? getArtifactStore() : createFsStore(harnessDir);
 }
 
 function parseKind(kind: unknown, command: string): PersistKind | CommandEnvelope<never> {
@@ -99,7 +94,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     command({
       id: "persist.write",
       cli: {
-        path: ["persist"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false }],
+        path: ["persist"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }],
         options: [
           { key: "key", flags: "--key <key>", required: true },
           { key: "input", flags: "--input <json>", required: false },
@@ -131,8 +126,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           if (kind === "snapshot" && sessionPath === undefined) return usage(id, "coordinated snapshot replacement requires a coordinator session");
           if (sessionPath !== undefined && !path.isAbsolute(sessionPath)) return usage(id, "session must be an absolute path");
           if (kind === "status" && sessionPath !== undefined) return usage(id, "session applies to snapshot replacement only");
-          await resolveStore(input.store, context.cwd);
-          const store = getArtifactStore();
+          const store = await resolveStore(input.store, context.cwd);
           if (coordinated) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
             if (typeof root !== "string") return refused(id, "coordination.local-store-required", "coordinated replacement requires the local FsStore");
@@ -154,7 +148,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.get",
-      cli: { path: ["persist", "get"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "validate", flags: "--validate", required: false }, { key: "versioned", flags: "--versioned", required: false }, { key: "store", flags: "--store <module>", required: false }] },
+      cli: { path: ["persist", "get"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "validate", flags: "--validate", required: false }, { key: "versioned", flags: "--versioned", required: false }, { key: "store", flags: "--store <module>", required: false }] },
       input: z.object({ kind: z.string(), key: z.string().min(1), validate: z.boolean().optional(), versioned: z.boolean().optional(), store: z.string().optional() }),
       output, effects: ["read"], description: "Read one persisted document.",
       async execute(input, context) {
@@ -162,8 +156,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
         try {
-          await resolveStore(input.store, context.cwd);
-          const store = getArtifactStore();
+          const store = await resolveStore(input.store, context.cwd);
           if (input.versioned === true) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
             if (typeof root !== "string") return refused(id, "coordination.local-store-required", "versioned reads require the local FsStore");
@@ -184,7 +177,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.list",
-      cli: { path: ["persist", "list"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false }], options: [{ key: "store", flags: "--store <module>", required: false }] },
+      cli: { path: ["persist", "list"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "store", flags: "--store <module>", required: false }] },
       input: z.object({ kind: z.string(), store: z.string().optional() }), output, effects: ["read"], description: "List persisted keys.",
       async execute(input, context) {
         const id = "persist.list";
@@ -192,8 +185,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         if (isFailure(kind)) return kind;
         if (kind === "json") return usage(id, "ArtifactStore json keys are absolute paths and cannot be listed");
         try {
-          await resolveStore(input.store, context.cwd);
-          const store = getArtifactStore();
+          const store = await resolveStore(input.store, context.cwd);
           if (typeof store.list !== "function") return usage(id, "store does not support list");
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
@@ -204,15 +196,14 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.delete",
-      cli: { path: ["persist", "delete"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "store", flags: "--store <module>", required: false }] },
+      cli: { path: ["persist", "delete"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "store", flags: "--store <module>", required: false }] },
       input: z.object({ kind: z.string(), key: z.string().min(1), store: z.string().optional() }), output, effects: ["write"], description: "Delete one persisted document.",
       async execute(input, context) {
         const id = "persist.delete";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
         try {
-          await resolveStore(input.store, context.cwd);
-          const store = getArtifactStore();
+          const store = await resolveStore(input.store, context.cwd);
           if (typeof store.delete !== "function") return usage(id, "store does not support delete");
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });

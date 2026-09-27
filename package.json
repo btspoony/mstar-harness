@@ -13,8 +13,9 @@
     "omp:bundle-assets": "bun run --cwd packages/omp bundle-assets",
     "typecheck": "bunx tsc --pretty false && bun run --cwd packages/cli typecheck:src && bun run --cwd packages/dsh typecheck:src",
     "engine:build": "bun run --cwd packages/engine build",
+    "commands:build": "bun run --cwd packages/commands build",
+    "commands:pack": "npm pack --workspace @mstar-harness/commands",
     "judgment:build": "bun run --cwd packages/judgment build",
-    "engine:pack": "npm pack --workspace @mstar-harness/engine",
     "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
     "cli:build": "bun run --cwd packages/cli build",
     "cli:pack": "npm pack --workspace @mstar-harness/cli",
@@ -36,9 +37,9 @@
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {
-    "@mstar-harness/commands": "workspace:*",
+    "@mstar-harness/commands": "^3.11.2",
     "@mstar-harness/engine": "^3.11.2",
-    "@mstar-harness/mcp": "workspace:*"
+    "@mstar-harness/mcp": "^3.11.2"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.11",

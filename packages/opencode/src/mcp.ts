@@ -1,6 +1,6 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
-import { executeCommand, getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
+import { executeCommand, getCommandDefinitions, type CommandDefinition, type InvocationContext, type CliSyntax } from "@mstar-harness/commands";
 import { createMcpEffects, mcpToolName } from "@mstar-harness/mcp";
 export type OpenCodeMcpTool = ToolDefinition;
 const versions: InvocationContext["versions"] = Object.freeze({
@@ -40,10 +40,18 @@ function hostForContext(definition: CommandDefinition, input: unknown): string {
   if (input === null || typeof input !== "object" || !("host" in input) || typeof input.host !== "string") return "opencode";
   return input.host;
 }
-export function createOpenCodeMcpTools(services: Array<{ close(): Promise<void> }>): Record<string, OpenCodeMcpTool> {
+export type OpenCodeMcpServices = Map<string, Array<{ close(): Promise<void> }>>;
+
+export async function closeOpenCodeMcpSession(servicesBySession: OpenCodeMcpServices, sessionId: string): Promise<void> {
+  const services = servicesBySession.get(sessionId);
+  if (services === undefined) return;
+  servicesBySession.delete(sessionId);
+  await Promise.allSettled(services.map((service) => service.close()));
+}
+
+export function createOpenCodeMcpTools(servicesBySession: OpenCodeMcpServices): Record<string, OpenCodeMcpTool> {
   const definitions = getCommandDefinitions();
   const registeredNames = new Set<string>();
-  const effects = createMcpEffects(services);
   const tools: Record<string, OpenCodeMcpTool> = {};
   for (const definition of definitions) {
     const name = mcpToolName(definition.id);
@@ -53,10 +61,15 @@ export function createOpenCodeMcpTools(services: Array<{ close(): Promise<void> 
 
     tools[name] = tool({
       description: definition.description,
-      args: schema.shape,
       async execute(params, context) {
         const nativeContext = context;
-        const selector = definition.cli.options.find((option) => option.context === "sessionId");
+        let sessionServices = servicesBySession.get(nativeContext.sessionID);
+        if (sessionServices === undefined) {
+          sessionServices = [];
+          servicesBySession.set(nativeContext.sessionID, sessionServices);
+        }
+        const effects = createMcpEffects(sessionServices);
+        const selector = definition.cli.options.find((option: CliSyntax["options"][number]) => option.context === "sessionId");
         const requestContext: InvocationContext = Object.freeze({
           cwd: nativeContext.directory,
           controlRoot: resolveProcessHarnessDir(nativeContext.directory),
