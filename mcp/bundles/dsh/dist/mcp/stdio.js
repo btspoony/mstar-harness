@@ -76801,6 +76801,8 @@ var transitions = [
   ["repair-delivery-source", "Replace a wrong registered delivery source from the accepted handoff pin"],
   ["reconcile", "Recover an interrupted integration attempt from the observed checkout"]
 ];
+class PlanInputError extends Error {
+}
 function ok4(id, data) {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
@@ -76811,32 +76813,39 @@ function usage3(id, message) {
   return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
 function failure2(id, error62) {
+  if (error62 instanceof PlanInputError)
+    return usage3(id, error62.message);
   const message = error62 instanceof Error ? error62.message : String(error62);
   const code2 = error62 !== null && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : `${id}.internal-error`;
-  return refused4(id, code2, message);
+  const details = error62 !== null && typeof error62 === "object" && "details" in error62 && error62.details !== null && typeof error62.details === "object" && !Array.isArray(error62.details) ? error62.details : undefined;
+  return { ...refused4(id, code2, message), ...details !== undefined ? { details } : {} };
 }
 function command4(definition2) {
   return definition2;
 }
 function absolutePath(value, key) {
   if (value === undefined || !path4.isAbsolute(value))
-    throw new Error(`${key} must be an absolute path`);
+    throw new PlanInputError(`${key} must be an absolute path`);
   return value;
 }
 function expectedRevision(value) {
   const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
   if (!Number.isSafeInteger(parsed) || parsed < 0)
-    throw new Error("expect must be a nonnegative integer revision");
+    throw new PlanInputError("expect must be a nonnegative integer revision");
   return parsed;
 }
 function jsonObject(value, field) {
   if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error(`${field} must be an object`);
+    throw new PlanInputError(`${field} must be an object`);
   return value;
 }
 function payloadFromFile(file2, field) {
   const absolute = absolutePath(file2, field);
-  return JSON.parse(readFileSync23(absolute, "utf8"));
+  try {
+    return JSON.parse(readFileSync23(absolute, "utf8"));
+  } catch (error62) {
+    throw new PlanInputError(error62 instanceof SyntaxError ? `${field} is not valid JSON` : `${field} payload file not found`);
+  }
 }
 function fileOperation(id, input2) {
   switch (id) {
@@ -76844,14 +76853,15 @@ function fileOperation(id, input2) {
       return { kind: "prepare", assignmentPath: absolutePath(input2.assignment, "assignment") };
     case "plan.progress":
       return { kind: "progress", progress: jsonObject(input2.progress ?? payloadFromFile(input2.file, "file"), "progress") };
-    case "plan.issue-add":
+    case "plan.issue-add": {
       const entries = input2.entries ?? payloadFromFile(input2.file, "file");
       if (!Array.isArray(entries))
-        throw new Error("entries must be a JSON array");
+        throw new PlanInputError("entries must be a JSON array");
       return { kind: "residual-add", entries };
+    }
     case "plan.issue-close":
       if (input2.issue === undefined || input2.disposition === undefined || input2.expectIssue === undefined) {
-        throw new Error("issue, disposition and expectIssue are required");
+        throw new PlanInputError("issue, disposition and expectIssue are required");
       }
       return {
         kind: "residual-close",
@@ -76870,15 +76880,15 @@ function fileOperation(id, input2) {
     case "plan.repair-delivery-source":
     case "plan.reconcile":
       if (input2.handoff === undefined)
-        throw new Error("handoff is required");
+        throw new PlanInputError("handoff is required");
       if (id === "plan.return") {
         if (input2.reason === undefined)
-          throw new Error("reason is required for return");
+          throw new PlanInputError("reason is required for return");
         return { kind: "return", handoffId: input2.handoff, reason: input2.reason };
       }
       return { kind: id.slice("plan.".length), handoffId: input2.handoff };
     default:
-      throw new Error(`unsupported plan operation ${id}`);
+      throw new PlanInputError(`unsupported plan operation ${id}`);
   }
 }
 function pinSessionStore(sessionPath) {
@@ -76887,7 +76897,11 @@ function pinSessionStore(sessionPath) {
 async function execute(id, input2, context) {
   try {
     if (id === "plan.residual-add" || id === "plan.residual-close") {
-      return refused4(id, "plan.verb-retired", `${id.replace(".", " ")}: retired; use the corresponding plan issue verb`);
+      const replacement = id.endsWith("residual-add") ? "issue-add" : "issue-close";
+      return refused4(id, "plan.verb-retired", `\`mstar plan ${replacement}\` is the replacement for \`${id.replace("plan.", "mstar plan ")}\``);
+    }
+    if (input2.session !== undefined && input2.sessionRef !== undefined) {
+      return usage3(id, "pre-activation and active transports are disjoint");
     }
     if (id === "plan.bind") {
       const cwd = context.cwd;
@@ -76941,6 +76955,9 @@ async function execute(id, input2, context) {
       }
       let bindInput;
       if (input2.resume !== undefined) {
+        if (context.sessionId !== undefined || input2.harness !== undefined) {
+          return usage3(id, "--resume accepts no --session-id or --harness");
+        }
         const resumePath = absolutePath(input2.resume, "resume");
         pinSessionStore(resumePath);
         bindInput = { resumePath, cwd };
@@ -77214,18 +77231,32 @@ function ok6(id, data) {
 function usage5(id, message) {
   return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
+
+class WorkflowInputError extends Error {
+}
 function refused6(id, error62) {
+  if (error62 instanceof WorkflowInputError)
+    return usage5(id, error62.message);
   const code2 = error62 !== null && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code: code2, exitCode: 1, message: error62 instanceof Error ? error62.message : String(error62) };
+  const details = error62 !== null && typeof error62 === "object" && "details" in error62 && error62.details !== null && typeof error62.details === "object" && !Array.isArray(error62.details) ? error62.details : undefined;
+  return { version: 1, command: id, status: "refused", code: code2, exitCode: 1, message: error62 instanceof Error ? error62.message : String(error62), ...details === undefined ? {} : { details } };
 }
 function object2(value, field) {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error(`${field} must be an object`);
-  return value;
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      throw new WorkflowInputError(`${field} must be a JSON object`);
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    throw new WorkflowInputError(`${field} must be an object`);
+  return parsed;
 }
 function absolute(value, field) {
   if (value === undefined || !path5.isAbsolute(value))
-    throw new Error(`${field} must be an absolute path`);
+    throw new WorkflowInputError(`${field} must be an absolute path`);
   return value;
 }
 async function assertLegacyRoute(harnessDir2, operation) {
