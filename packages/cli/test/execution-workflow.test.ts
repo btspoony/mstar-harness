@@ -633,8 +633,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(mixed.exitCode).toBe(2);
-    expect(mixed.stderr).toContain("--session");
+    expect(jsonOf(mixed)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
 
     // `workflow evidence` does own both transports, so its mix is refused with
     // the explicit diagnostic before any IO.
@@ -664,9 +663,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(evidenceMix.exitCode).toBe(2);
-    expect(jsonOf(evidenceMix).status).toBe("usage");
-    expect(String(jsonOf(evidenceMix).message)).toBe("active evidence cannot use legacy session or at fields");
+    expect(jsonOf(evidenceMix)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
 
     // The one-time delivery-kind rewrite has no active operation.
     const declare = runCli(
