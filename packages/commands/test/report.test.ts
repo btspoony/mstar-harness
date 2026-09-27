@@ -112,6 +112,7 @@ describe("report command", () => {
 
   test("redacts a PEM split across argument items without leaking or miscounting", () => {
     const report = createReport({
+      title: "````",
       arguments: [
         "first item",
         "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
@@ -122,15 +123,12 @@ describe("report command", () => {
     }, versions);
     expect(report.prompt).not.toContain("BEGIN PRIVATE KEY");
     expect(report.prompt).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
-    expect(report.redactions).toEqual([{ field: "arguments", count: 1 }]);
-    const lines = report.prompt.split("\n");
-    const opening = lines.findIndex((line) => /^`+$/.test(line));
-    expect(opening).toBeGreaterThanOrEqual(0);
-    expect(lines.at(-1)).toBe(lines[opening]);
-    expect(report.prompt).toContain("first item");
-    expect(report.prompt).toContain("last item");
-    expect(report.prompt).toContain("Arguments: ");
-    expect(report.prompt).toContain("````");
+    expect(report.redactions).toEqual([{ field: "arguments", count: 5 }]);
+    const argumentsLine = report.prompt.split("\n").find((line) => line.startsWith("Arguments: "));
+    expect(argumentsLine).toBeDefined();
+    expect(JSON.parse(argumentsLine!.slice("Arguments: ".length))).toEqual(Array(5).fill("[REDACTED]"));
+    const fences = report.prompt.split("\n").filter((line) => /^`+$/.test(line));
+    expect(fences).toEqual(["`````", "`````"]);
   });
 
   test("preserves argument arrays when no match crosses an item boundary", () => {
