@@ -163,6 +163,30 @@ mstar schema CaptureInput
 mstar host detect --signals question
 ```
 
+### MCP 运行时 peer
+
+`@mstar-harness/mcp` 是 CLI 的 stdio peer，而不是第二套命令实现：它导入同一份规范命令定义，并在进程内调用共享命令处理器。宿主启动打包后的 server；运行时不需要全局 `mstar` 可执行文件，server 也不会调用 CLI。包提供 Node.js 入口 `dist/stdio.js` 和 Bun 入口 `dist/bun/stdio.js`。
+
+运行 `dist/stdio.js` 需要 Node.js >=24.18.0，运行 `dist/bun/stdio.js` 需要 Bun >=1.4.0；此下限包含引擎对原生 SQLite 的要求。
+
+Server 将规范定义中的非安装器命令注册为 MCP tools；工具名以 `mstar_` 开头，并将命令 ID 中的点和连字符替换为下划线。以下是合成的 Node 宿主注册示例：
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "node",
+      "args": ["/path/to/@mstar-harness/mcp/dist/stdio.js"]
+    }
+  }
+}
+```
+
+`sessionId` 选择主对话会话，不是派生子代理的会话。可选的 `host` 用于选择受支持的宿主上下文；它不是角色，也不授予权限。请求是否允许，仍由现有共享处理器中的 workflow ownership、路径、状态转换和 CAS 检查决定。拒绝结果保留稳定的命令信封与 code（并作为 MCP tool error 返回）；调用方应解释或解决拒绝原因，而不是换一种身份或路径重试绕过检查。这里说明的是软件包契约，不代表已在已安装宿主中运行。
+
+示例均为合成示例；本文不声称已在已安装宿主、浏览器或在线服务上运行。
+MCP 捕获的 SDD 证据记录为 `stable:false`；与 CLI 的采集器一致性仍是已记录的跨计划 residual。
+
 ## Harness Workflow（统一流程）
 
 ```mermaid

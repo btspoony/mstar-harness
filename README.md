@@ -162,6 +162,30 @@ mstar schema CaptureInput
 mstar host detect --signals question
 ```
 
+### MCP runtime peer
+
+`@mstar-harness/mcp` is the stdio peer to the CLI, not a second command implementation: it imports the same canonical definitions and invokes the shared command handlers in-process. The host launches the packaged server; it does not need a global `mstar` executable, and the server does not invoke the CLI. The package provides `dist/stdio.js` for Node.js and `dist/bun/stdio.js` for Bun.
+
+Use Node.js >=24.18.0 for `dist/stdio.js` or Bun >=1.4.0 for `dist/bun/stdio.js`; these floors include the engine's native SQLite requirement.
+
+The server registers the canonical non-installer commands as MCP tools; tool names use the `mstar_` prefix and replace command dots and hyphens with underscores. A synthetic Node host registration looks like:
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "node",
+      "args": ["/path/to/@mstar-harness/mcp/dist/stdio.js"]
+    }
+  }
+}
+```
+
+`sessionId` selects the main conversation session, not a spawned child-agent session. An optional `host` selects a supported host context; it is not a role or authority grant. Existing shared-handler workflow ownership, path, state-transition, and CAS checks still decide whether a request is allowed. A refusal keeps its stable command envelope and code (and is returned as an MCP tool error); callers should explain or resolve that refusal, not retry through a different identity or path. This documents the package contract, not an installed-host run.
+
+Examples are synthetic; this README does not claim an installed-host, browser, or live-service run.
+MCP-captured SDD evidence records are `stable:false`; collector parity with the CLI remains a documented cross-plan residual.
+
 ## Harness Workflow
 
 ```mermaid
