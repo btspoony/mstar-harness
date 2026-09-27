@@ -20,10 +20,8 @@ const ROOT = join(import.meta.dir, "..");
 const DIST = join(ROOT, "dist");
 const HOOK_BUNDLE = join(DIST, "hooks", "pre", "mstar-gates.js");
 const EXTENSION_BUNDLE = join(DIST, "extensions", "model-handoff.js");
-const MCP_EXTENSION_BUNDLE = join(DIST, "extensions", "mcp.js");
 /** Package-root paths the manifest `omp.extensions` entries must resolve to. */
 const EXTENSION_MIRROR = join(ROOT, "extensions", "model-handoff.js");
-const MCP_EXTENSION_MIRROR = join(ROOT, "extensions", "mcp.js");
 /** Suffix the discovered entry is matched by inside the child process. */
 const EXTENSION_SUFFIX = "/extensions/model-handoff.js";
 const SOURCE_ENTRY = join(ROOT, "src", "extensions", "model-handoff.ts");
@@ -611,9 +609,6 @@ describe("@mstar-harness/omp bundle smoke", () => {
     expect(existsSync(PHASE2_EXTENSION_BUNDLE)).toBe(true);
   });
 
-  test("dist/extensions/mcp.js carries generated native commands", () => {
-    expect(existsSync(MCP_EXTENSION_BUNDLE)).toBe(true);
-  });
 
   test("standalone validator tool bundles are not emitted", () => {
     expect(existsSync(join(DIST, "tools"))).toBe(false);
@@ -624,7 +619,6 @@ describe("@mstar-harness/omp bundle smoke", () => {
     expect(existsSync(join(ROOT, "tools"))).toBe(false);
     expect(existsSync(EXTENSION_MIRROR)).toBe(true);
     expect(existsSync(PHASE2_EXTENSION_MIRROR)).toBe(true);
-    expect(existsSync(MCP_EXTENSION_MIRROR)).toBe(true);
   });
 });
 
@@ -641,13 +635,12 @@ describe("@mstar-harness/omp packed artifact", () => {
         // Hook and extension bundles at both layouts (dist/ canonical, root discovery).
         expect(existsSync(join(pkgRoot, "dist", "hooks", "pre", "mstar-gates.js"))).toBe(true);
         expect(existsSync(join(pkgRoot, "hooks", "pre", "mstar-gates.js"))).toBe(true);
-        for (const extension of ["model-handoff.js", "phase2-orchestration.js", "mcp.js"]) {
+        for (const extension of ["model-handoff.js", "phase2-orchestration.js"]) {
           expect(existsSync(join(pkgRoot, "dist", "extensions", extension))).toBe(true);
           expect(existsSync(join(pkgRoot, "extensions", extension))).toBe(true);
         }
         expect(existsSync(join(pkgRoot, "tools"))).toBe(false);
-        expect(existsSync(join(pkgRoot, "mcp", "stdio.js"))).toBe(true);
-        expect(existsSync(join(pkgRoot, "mcp", "build-info.json"))).toBe(true);
+        // MCP transport is served by the standalone `mstar mcp` CLI, not this plugin package.
         // Skills/commands/agents (both layout names) with the PM entry set.
         for (const dir of ["skills", "harness-skills"]) {
           expect(existsSync(join(pkgRoot, dir, "mstar-harness-core", "SKILL.md"))).toBe(true);
