@@ -36,7 +36,7 @@
  * injected via PATH.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
@@ -65,6 +65,26 @@ interface RunResult {
   stderr: string;
 }
 
+interface CommandEnvelope {
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function responseData(result: RunResult): Record<string, unknown> {
+  const value = envelope(result);
+  const payload = value.data ?? value.details;
+  if (!payload) throw new Error("expected command response data");
+  return payload;
+}
+
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
 function runCli(args: string[], opts: { env?: Record<string, string> } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
@@ -79,6 +99,8 @@ function runCli(args: string[], opts: { env?: Record<string, string> } = {}): Ru
 interface FakeDsh {
   binDir: string;
   logFile: string;
+  homeDir: string;
+  dshHome: string;
   remove: () => void;
 }
 
@@ -95,6 +117,9 @@ function makeFakeDsh(
   opts: { dumpExit?: number; addExit?: number; addSleepSec?: number } = {},
 ): FakeDsh {
   const binDir = mkdtempSync(join(tmpdir(), "dsh-fake-"));
+  const homeDir = mkdtempSync(join(tmpdir(), "dsh-user-"));
+  const dshHome = join(homeDir, ".dsh");
+  mkdirSync(dshHome);
   const logFile = join(binDir, "argv.log");
   const dumpFile = join(binDir, "dump.yml");
   writeFileSync(dumpFile, dumpFixture);
@@ -120,7 +145,16 @@ function makeFakeDsh(
     ].join("\n") + "\n",
   );
   chmodSync(binPath, 0o755);
-  return { binDir, logFile, remove: () => rmSync(binDir, { recursive: true, force: true }) };
+  return {
+    binDir,
+    logFile,
+    homeDir,
+    dshHome,
+    remove: () => {
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(homeDir, { recursive: true, force: true });
+    },
+  };
 }
 
 /** Run fn with PATH restricted to `pathEntry` (snapshot/restore). */
@@ -704,15 +738,16 @@ describe("dshAdapter.runInstallDoctor", () => {
 // enough to the CI runner's cost that a single slow start fails the suite.
 // The budget is set per test: bun's `describe` takes no options object.
 describe("CLI init --target dsh (fake dsh on PATH)", () => {
-  const fakePathEnv = (fake: FakeDsh): { PATH: string } => ({
+  const fakePathEnv = (fake: FakeDsh): Record<string, string> => ({
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+    HOME: fake.homeDir,
+    DSH_HOME: fake.dshHome,
   });
 
   test("wires --target dsh through the adapter (two adds, exit 0)", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
       const result = runCli(["init", "--target", "dsh"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`installed: ${MSTAR_SPEC}`);
       expect(result.stdout).toContain(`installed: ${FALLBACKS_SPEC}`);
       expect(addLines(fake)).toEqual([
@@ -728,7 +763,6 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
       const result = runCli(["init", "--target", "dsh", "--no-fallbacks"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`skipped-by-flag: ${FALLBACKS_SPEC}`);
       expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
     } finally {
@@ -738,6 +772,9 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
 
   test("missing dsh bin: Setup failed + exit 1 (fail-loud, no silent skip)", { timeout: 30_000 }, () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dsh-nobin-"));
+    const gitPath = Bun.which("git");
+    if (!gitPath) throw new Error("git is required to run the CLI fixture");
+    symlinkSync(gitPath, join(emptyDir, "git"));
     try {
       const result = runCli(["init", "--target", "dsh"], { env: { PATH: emptyDir } });
       expect(result.exitCode).toBe(1);
@@ -749,22 +786,28 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
 });
 
 describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
-  const fakePathEnv = (fake: FakeDsh): { PATH: string } => ({
+  const fakePathEnv = (fake: FakeDsh): Record<string, string> => ({
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+    HOME: fake.homeDir,
+    DSH_HOME: fake.dshHome,
   });
 
-  test("both mounted: exit 0 and capability words are printed on the healthy run (AC-2)", { timeout: 30_000 }, () => {
+  test("both plugins mounted: DSH MCP is unavailable until Cordis config exists", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_BOTH);
-    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
-    seedProfileFallbacksPkg(dshHome, DSH_LLM_FALLBACKS_VERSION);
+    seedProfileFallbacksPkg(fake.dshHome, DSH_LLM_FALLBACKS_VERSION);
     try {
-      const result = runCli(["doctor", "--target", "dsh"], { env: { ...fakePathEnv(fake), DSH_HOME: dshHome } });
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`${MSTAR_SPEC}: mounted`);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: mounted`);
-      expect(result.stdout).toContain("Doctor result: healthy");
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      const data = responseData(result);
+      expect(result.exitCode).toBe(1);
+      expect((data.mcpHealth as { status: string }).status).toBe("unavailable");
+      expect(data.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining("no Cordis MCP launch configuration"),
+      ]));
+      expect(data.notes).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${MSTAR_SPEC}: mounted`),
+        expect.stringContaining(`${FALLBACKS_SPEC}: mounted`),
+      ]));
     } finally {
-      rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
     }
   });
@@ -773,9 +816,13 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: disabled`);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is disabled`);
+      const data = responseData(result);
+      expect(data.notes).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${FALLBACKS_SPEC}: disabled`),
+      ]));
+      expect(data.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${FALLBACKS_SPEC} is disabled`),
+      ]));
     } finally {
       fake.remove();
     }
@@ -785,9 +832,13 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED_TRUE);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: disabled`);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is disabled`);
+      const data = responseData(result);
+      expect(data.notes).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${FALLBACKS_SPEC}: disabled`),
+      ]));
+      expect(data.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${FALLBACKS_SPEC} is disabled`),
+      ]));
     } finally {
       fake.remove();
     }
@@ -797,22 +848,29 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_MISSING);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain(`${MSTAR_SPEC}: mounted`);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: uninstalled`);
-      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is uninstalled`);
+      const data = responseData(result);
+      expect(data.notes).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${MSTAR_SPEC}: mounted`),
+        expect.stringContaining(`${FALLBACKS_SPEC}: uninstalled`),
+      ]));
+      expect(data.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining(`${FALLBACKS_SPEC} is uninstalled`),
+      ]));
     } finally {
       fake.remove();
     }
   });
 
   test("probe failure: exit 1 with the explicit degradation line (no silent pass)", { timeout: 30_000 }, () => {
-    const fake = makeFakeDsh(DUMP_BOTH, { dumpExit: 1 });
+    const fake = makeFakeDsh(DUMP_EMPTY, { dumpExit: 1 });
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("could not probe installed plugins");
-      expect(result.stdout).toContain("cannot verify install state");
+      const data = responseData(result);
+      expect(data.errors).toEqual(expect.arrayContaining([
+        expect.stringContaining("could not probe installed plugins"),
+      ]));
+      expect(envelope(result).status).toBe("refused");
+      expect(envelope(result).code).toBe("doctor.unhealthy");
     } finally {
       fake.remove();
     }

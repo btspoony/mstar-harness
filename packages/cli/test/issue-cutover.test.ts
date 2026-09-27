@@ -490,7 +490,7 @@ describe("mstar issue — the retired commands refuse with the migration path (G
     expectNoRegister(fixture);
   });
 
-  test("persist residuals and a json alias to a project register: refused, no file written", async () => {
+  test("removed persist residuals and the json alias cannot write a register", async () => {
     const fixture = await makeFixture();
     const payloadPath = join(fixture.root, "register.json");
     writeJson(payloadPath, { entries: {} });
@@ -500,16 +500,16 @@ describe("mstar issue — the retired commands refuse with the migration path (G
       fixture.root,
       { MSTAR_HARNESS_DIR: fixture.harness },
     );
-    expect(retiredKind.exitCode).toBe(1);
-    expect(jsonOf(retiredKind).message).toContain("persist residuals");
+    expect(retiredKind.exitCode).toBe(2);
+    expect(jsonOf(retiredKind).code).toBe("command.invalid-input");
 
     const alias = runCli(
       ["persist", "json", "--key", fixture.registerPath, "--file", payloadPath],
       fixture.root,
       { MSTAR_HARNESS_DIR: fixture.harness },
     );
-    expect(alias.exitCode).toBe(1);
-    expect(jsonOf(alias).message).toContain("project registers are retired migration history");
+    expect(alias.exitCode).toBe(2);
+    expect(jsonOf(alias).code).toBe("command.invalid-input");
     expectNoRegister(fixture);
   });
 });

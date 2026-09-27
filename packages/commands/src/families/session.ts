@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { z } from "zod";
 import {
@@ -32,7 +33,7 @@ function usage(id: string, message: string): CommandEnvelope<never> {
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
   const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), plan: z.string().min(1).optional(), argv: z.array(z.string()).optional(), harness: z.string().min(1).optional() });
-  const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.unknown().optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
+  const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
   return [
     command({
       id: "session.run",
@@ -77,6 +78,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         { key: "unowned", flags: "--unowned", required: false }, { key: "reason", flags: "--reason <text>", required: true },
         { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
+        { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
       description: "Recover a stopped workflow coordinator through active DB authority. Recovery never resumes a session.",
@@ -92,10 +94,10 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           const root = resolveProcessHarnessDir(context.cwd, harness);
           if (root === null) return usage("session.recover", "no control harness resolved; supply an absolute harness");
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null };
-          setArtifactStore(createFsStore(root));
+          const parsedAttestation = JSON.parse(readFileSync(attestation, "utf8")) as ActivationAttestation;
           const receipt = await recoverExecutionCoordinator(executionContextFor({ harnessDir: root }, identity), {
             expected: expect as never, operationId: operation, priorSessionId: unowned ? null : priorSession!, reason,
-            attestation: attestation as ActivationAttestation,
+            attestation: parsedAttestation,
           });
           return ok("session.recover", receipt);
         } catch (error) {

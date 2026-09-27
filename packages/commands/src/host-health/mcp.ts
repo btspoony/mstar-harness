@@ -14,10 +14,9 @@ type McpPackageLayout = {
   versionManifest: string;
 };
 
-const MCP_PACKAGE_LAYOUTS: Record<HostTarget, McpPackageLayout> = {
+const MCP_PACKAGE_LAYOUTS: Record<Exclude<HostTarget, "dsh">, McpPackageLayout> = {
   omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
   opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  dsh: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
   cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
   codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
   kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
@@ -61,6 +60,16 @@ export function diagnoseMcpTarget(
   packageRoot: string,
   runtime: McpRuntime = actualRuntime(),
 ): McpTargetHealth {
+  if (target === "dsh") {
+    return {
+      target,
+      status: "unavailable",
+      location: resolveDshProfileDir(),
+      runtimeFloor: MIN_BUN_VERSION,
+      errors: ["MCP client configuration unavailable for dsh; no Cordis MCP launch configuration is installed."],
+      notes: [],
+    };
+  }
   const layout = MCP_PACKAGE_LAYOUTS[target];
   const buildInfoPath = path.join(packageRoot, layout.buildInfo);
   const executablePath = path.join(packageRoot, layout.executable);
@@ -116,13 +125,12 @@ export function diagnoseMcpTarget(
   };
 }
 
-/** Resolve the installed npm package for cache-based hosts, not ignored checkout build outputs. */
+/** Resolve the installed package for cache-based hosts, not ignored checkout build outputs. */
 export function mcpTargetPackageRoot(
   target: HostTarget,
   repositoryRoot: string,
-  options: { opencodePackagesRoot?: string; dshHome?: string } = {},
+  options: { opencodePackagesRoot?: string } = {},
 ): string {
   if (target === "opencode") return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
-  if (target === "dsh") return path.join(resolveDshProfileDir(options.dshHome), "node_modules", "@mstar-harness", "dsh");
   return target === "omp" ? path.join(repositoryRoot, "packages", "omp") : repositoryRoot;
 }

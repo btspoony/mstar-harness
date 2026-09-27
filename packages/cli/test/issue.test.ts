@@ -226,30 +226,37 @@ describe("mstar issue CLI bundle", () => {
     expect(String(response.message)).toContain("unknown payload type");
   });
 
-  test("link validation reports invalid relation form and its missing pair field together", async () => {
+  test("link creates a relation against an existing issue at the reviewed revision", async () => {
     const { root, harness } = await makeHarness();
-    const file = join(root, "link.json");
-    writeJson(file, { relation: "related", kind: "ticket" });
-    const result = runBundle("bun-shebang", [
-      "issue",
-      "link",
-      "--id",
-      "I-000001",
-      "--file",
-      file,
-      "--operation-id",
-      "link-invalid",
-      "--actor",
-      "project-manager",
-      "--harness",
-      harness,
+    const firstFile = join(root, "issue.json");
+    writeJson(firstFile, capturePayload());
+    const created = runBundle("bun-shebang", [
+      "issue", "add", "--file", firstFile, "--operation-id", "link-setup-1", "--actor", "project-manager", "--harness", harness,
     ], root);
-    expect(result.exitCode).toBe(1);
-    const body = jsonOf(result);
-    expect(body.status).toBe("refused");
-    expect(String(body.message)).toContain("invalid provenance kind");
-    expect(String(body.message)).toContain("issueId");
-    expect(String(body.message)).toContain("target");
+    expect(created.exitCode).toBe(0);
+    expect((jsonOf(created).data as { issueId?: string }).issueId).toBe("I-000001");
+
+    const secondFile = join(root, "second-issue.json");
+    writeJson(secondFile, capturePayload({ rootCauseKey: "second-finding", occurrenceKey: "run-2" }));
+    const second = runBundle("bun-shebang", [
+      "issue", "add", "--file", secondFile, "--operation-id", "link-setup-2", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(second.exitCode).toBe(0);
+    expect((jsonOf(second).data as { issueId?: string }).issueId).toBe("I-000002");
+
+    const shown = runBundle("bun-shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
+    expect(shown.exitCode).toBe(0);
+    const expectedRevision = String((jsonOf(shown).data as { revision: number }).revision);
+    const file = join(root, "link.json");
+    writeJson(file, { relation: "related", issueId: "I-000002" });
+    const result = runBundle("bun-shebang", [
+      "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
+      "--operation-id", "link-related", "--actor", "project-manager", "--session",
+      writeBoundEnvelope(harness), "--harness", harness,
+    ], root);
+    expect(result.exitCode).toBe(0);
+    expect(jsonOf(result).status).toBe("ok");
+    expect((jsonOf(result).data as { revision: number }).revision).toBe(Number(expectedRevision) + 1);
   });
 
   test("capture reports every missing payload field in one refusal", async () => {

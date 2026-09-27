@@ -6,7 +6,7 @@ import { createMcpBuildInfo, MCP_BUILD_INFO_FILENAME } from "../../mcp/src/build
 import { diagnoseMcpTarget, mcpTargetPackageRoot, type McpRuntime } from "../src/host-health.js";
 import type { HostTarget } from "../src/host-health.js";
 
-const targets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"];
+const targets: readonly Exclude<HostTarget, "dsh">[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi"];
 const roots: string[] = [];
 const version = "3.11.2";
 const currentRuntime: McpRuntime = { kind: "node", version: "24.18.0" };
@@ -23,7 +23,7 @@ function fixtureRoot(target: HostTarget): string {
     : target === "kimi" ? ".kimi-plugin/plugin.json"
     : target === "zcode" ? ".zcode-plugin/plugin.json"
     : "package.json";
-  const metadataDir = target === "omp" || target === "opencode" || target === "dsh"
+  const metadataDir = target === "omp" || target === "opencode"
     ? "mcp"
     : `mcp/bundles/${target}/dist/mcp`;
   mkdirSync(path.dirname(path.join(root, manifest)), { recursive: true });
@@ -39,7 +39,7 @@ function fixtureRoot(target: HostTarget): string {
 }
 
 describe("MCP package health", () => {
-  test("all seven injected target roots report aligned packaged metadata and files", () => {
+  test("packaged targets report aligned metadata and files", () => {
     for (const target of targets) {
       const result = diagnoseMcpTarget(target, fixtureRoot(target), currentRuntime);
       expect(result.status).toBe("aligned");
@@ -47,28 +47,25 @@ describe("MCP package health", () => {
       expect(result.notes.join(" ")).toContain(target);
     }
   });
-  test("opencode and dsh inspect installed npm package roots instead of checkout outputs", () => {
+  test("opencode inspects its installed npm package root instead of checkout outputs", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-installed-health-"));
     roots.push(root);
     const opencodePackagesRoot = path.join(root, "opencode-packages");
-    const dshHome = path.join(root, "dsh-home");
-    const installedRoots = [
-      mcpTargetPackageRoot("opencode", "/checkout", { opencodePackagesRoot }),
-      mcpTargetPackageRoot("dsh", "/checkout", { dshHome }),
-    ];
-
-    for (const [index, target] of ["opencode", "dsh"].entries()) {
-      const packageRoot = installedRoots[index]!;
-      mkdirSync(path.join(packageRoot, "mcp"), { recursive: true });
-      writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version }), "utf8");
-      writeFileSync(path.join(packageRoot, "mcp", "stdio.js"), "// installed package\n", "utf8");
-      writeFileSync(path.join(packageRoot, "mcp", MCP_BUILD_INFO_FILENAME), JSON.stringify(createMcpBuildInfo({
-        pluginVersion: version,
-        engineVersion: version,
-        mcpVersion: version,
-      }, target as "opencode" | "dsh")), "utf8");
-      expect(diagnoseMcpTarget(target as "opencode" | "dsh", packageRoot, currentRuntime).status).toBe("aligned");
-    }
+    const packageRoot = mcpTargetPackageRoot("opencode", "/checkout", { opencodePackagesRoot });
+    mkdirSync(path.join(packageRoot, "mcp"), { recursive: true });
+    writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version }), "utf8");
+    writeFileSync(path.join(packageRoot, "mcp", "stdio.js"), "// installed package\n", "utf8");
+    writeFileSync(path.join(packageRoot, "mcp", MCP_BUILD_INFO_FILENAME), JSON.stringify(createMcpBuildInfo({
+      pluginVersion: version,
+      engineVersion: version,
+      mcpVersion: version,
+    }, "opencode")), "utf8");
+    expect(diagnoseMcpTarget("opencode", packageRoot, currentRuntime).status).toBe("aligned");
+  });
+  test("dsh reports unavailable until a Cordis MCP launch configuration exists", () => {
+    const result = diagnoseMcpTarget("dsh", "/unused", currentRuntime);
+    expect(result.status).toBe("unavailable");
+    expect(result.errors.join(" ")).toContain("no Cordis MCP launch configuration");
   });
 
   test("version, target, and metadata divergence report mismatch", () => {
@@ -95,7 +92,7 @@ describe("MCP package health", () => {
     expect(result.errors.join(" ")).toContain("mcp/stdio.js");
   });
 
-  test("refuses a native runtime below its floor for every target", () => {
+  test("refuses a native runtime below its floor for every packaged target", () => {
     for (const target of targets) {
       const result = diagnoseMcpTarget(target, fixtureRoot(target), { kind: "node", version: "24.17.0" });
       expect(result.status).toBe("mismatch");
