@@ -14,6 +14,10 @@
     "./stdio": {
       "types": "./dist/mcp/src/stdio.d.ts",
       "default": "./dist/stdio.js"
+    },
+    "./stdio/bun": {
+      "types": "./dist/mcp/src/stdio.d.ts",
+      "default": "./dist/bun/stdio.js"
     }
   },
   "files": ["dist"],
@@ -23,6 +27,7 @@
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
     "@mstar-harness/commands": "workspace:*",
+    "@mstar-harness/engine": "workspace:*",
     "zod": "^4.2.0"
   },
   "devDependencies": {
