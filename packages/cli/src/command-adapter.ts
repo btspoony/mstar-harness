@@ -73,7 +73,27 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
   const decoded = { ...input };
   for (const option of definition.cli.options) {
     const value = decoded[option.key];
-    if (typeof value !== "string" || !hasType(optionJsonSchema(definition, option.key), "number")) continue;
+    const schema = optionJsonSchema(definition, option.key);
+    if (typeof value === "string" && hasType(schema, "array")) {
+      if (value.trimStart().startsWith("[") || value.trimStart().startsWith("{")) {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            decoded[option.key] = parsed;
+            continue;
+          }
+          if (parsed !== null && typeof parsed === "object") {
+            decoded[option.key] = [parsed];
+            continue;
+          }
+        } catch {
+          // Fall through to the comma-separated list syntax below.
+        }
+      }
+      decoded[option.key] = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+      continue;
+    }
+    if (typeof value !== "string" || !hasType(schema, "number")) continue;
     const number = Number(value);
     if (Number.isFinite(number)) decoded[option.key] = number;
   }
@@ -204,8 +224,11 @@ export function registerCliCommands(
           writeEnvelope(usageEnvelope(definition.id, "Invalid command input."));
           return;
         }
+        const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
+        const sessionId = sessionOption === undefined ? undefined : collected[sessionOption.key];
         const envelope = await executeCommand(definition.id, input ?? collected, {
           ...baseContext,
+          ...(typeof sessionId === "string" ? { sessionId } : {}),
           signal: controller.signal,
           effects: cliEffects(services),
         });

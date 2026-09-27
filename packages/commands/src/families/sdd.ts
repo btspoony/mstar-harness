@@ -25,7 +25,7 @@ const inputSchemas: Record<(typeof verbs)[number], z.ZodType<SddInput>> = {
   "review-package": z.object({ base: z.string().optional(), head: z.string().optional(), outfile: z.string().optional(), context: z.string().optional() }) as z.ZodType<SddInput>,
   "check-context": z.object({ context: z.string().optional(), kind: z.enum(["source", "artifact", "launch"]).optional(), target: z.string().optional() }) as z.ZodType<SddInput>,
   "evidence.capture": z.object({ request: z.string().optional(), argv: z.array(z.string()).optional() }) as z.ZodType<SddInput>,
-  "evidence.verify": z.object({ sddDir: z.string().optional(), plan: z.string().optional(), task: z.string().optional(), run: z.string().optional(), target: z.string().optional() }) as z.ZodType<SddInput>,
+  "evidence.verify": z.object({ sddDir: z.string().optional(), plan: z.string().optional(), task: z.string().optional(), run: z.string().uuid().optional(), target: z.string().optional() }) as z.ZodType<SddInput>,
 };
 
 function ok(id: string, data: unknown): CommandEnvelope {
@@ -100,6 +100,18 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
         runId: required(input.run, "--run"),
         ...(input.target !== undefined ? { targetPath: input.target } : {}),
       });
+      const assessment = result as { integrity?: { ok?: boolean }; applicability?: string };
+      if (assessment.integrity?.ok === false || assessment.applicability === "uncertain" || assessment.applicability === "changed") {
+        return {
+          version: 1,
+          command: id,
+          status: "refused",
+          code: "sdd.evidence.assessment-failed",
+          exitCode: 1,
+          message: "SDD evidence assessment did not pass",
+          details: result as Record<string, unknown>,
+        };
+      }
       return ok(id, result);
     }
     throw new SddScriptError(`unsupported SDD command: ${id}`, 2);

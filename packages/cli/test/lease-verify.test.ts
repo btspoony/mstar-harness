@@ -65,6 +65,10 @@ function runVerify(
   );
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
+function jsonOf(stdout: string): Record<string, unknown> {
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
 
 function planRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { plan_id: "plan-a", title: "Plan A", status: "InProgress", ...overrides };
@@ -103,9 +107,9 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
     withFixture(snapshot([planRow({ execution_lease: VALID_LEASE })]), (dir) => {
       const result = runVerify(dir);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK plan plan-a");
-      expect(result.stdout).toContain("holder omp-pm-session-test");
-      expect(result.stderr).toBe("");
+      const data = jsonOf(result.stdout).data as Record<string, unknown>;
+      expect(data.plan).toBe("plan-a");
+      expect((data.lease as Record<string, unknown>).holder).toBe("omp-pm-session-test");
     });
   });
 
@@ -116,7 +120,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(0);
-      expect(proc.stdout.toString()).toContain("OK plan plan-a");
+      expect((jsonOf(proc.stdout.toString()).data as Record<string, unknown>).plan).toBe("plan-a");
     });
   });
 
@@ -127,8 +131,8 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(1);
-      expect(proc.stderr.toString()).toContain("no plan rows");
-      expect(proc.stderr.toString()).toContain("--plan");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("0 plan rows");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("planId");
     });
   });
 
@@ -139,8 +143,8 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(1);
-      expect(proc.stderr.toString()).toContain("2 plan rows");
-      expect(proc.stderr.toString()).toContain("--plan");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("2 plan rows");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("planId");
     });
   });
 
@@ -148,7 +152,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
     withFixture(snapshot([planRow({ status: "Todo" })]), (dir) => {
       const result = runVerify(dir);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lease.verify.missing");
+      expect(jsonOf(result.stdout).code).toBe("lease.verify.missing");
     });
   });
 
@@ -156,7 +160,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
     withFixture(snapshot([planRow({})]), (dir) => {
       const result = runVerify(dir);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lease.verify.orphan");
+      expect(jsonOf(result.stdout).code).toBe("lease.verify.orphan");
     });
   });
 
@@ -166,8 +170,8 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
       (dir) => {
         const result = runVerify(dir);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("lease.execution-lease.invalid-worktree-path");
-        expect(result.stdout).not.toContain("OK plan");
+        expect(jsonOf(result.stdout).code).toBe("lease.execution-lease.invalid-worktree-path");
+        expect(jsonOf(result.stdout).status).toBe("refused");
       },
     );
   });
@@ -176,7 +180,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
     withFixture(snapshot([planRow({ plan_id: "plan-b" })]), (dir) => {
       const result = runVerify(dir);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lease.verify.plan-not-found");
+      expect(jsonOf(result.stdout).code).toBe("lease.verify.plan-not-found");
     });
   });
 
@@ -187,7 +191,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(1);
-      expect(proc.stderr.toString()).toContain("workflow snapshot not found");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("workflow snapshot not found");
     });
   });
 
@@ -197,7 +201,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
       { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
     );
     expect(proc.exitCode).toBe(2);
-    expect(proc.stderr.toString()).toContain("usage: lease verify --workflow <id>");
+    expect(proc.stderr.toString()).toBe("error: required option '--workflow <id>' not specified\n");
   });
 
   test("hostile workflow id (path traversal) is rejected, exit 1", () => {
@@ -208,7 +212,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(1);
-      expect(proc.stderr.toString()).toContain("invalid workflow id");
+      expect(String(jsonOf(proc.stdout.toString()).message)).toContain("invalid workflow id");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -229,7 +233,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
         { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
       );
       expect(proc.exitCode).toBe(0);
-      expect(proc.stdout.toString()).toContain("OK plan plan-a");
+      expect((jsonOf(proc.stdout.toString()).data as Record<string, unknown>).plan).toBe("plan-a");
       // The hardcoded default-layout dir is NEVER consulted.
       expect(existsSync(join(dir, "workflows"))).toBe(false);
     } finally {

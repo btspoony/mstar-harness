@@ -347,7 +347,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         arguments: [],
         options: [
           ...optionKeys.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`, required: false })),
-          ...(verb === "bind" ? [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const }] : []),
+          { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },
       input: inputSchema,

@@ -126,6 +126,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "operation", flags: "--operation <id>", required: false },
         { key: "reason", flags: "--reason <text>", required: false },
         { key: "json", flags: "--json", required: false },
+        { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" },
       ] },
       input: z.object({
         workflow: z.string().min(1), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
@@ -152,6 +153,9 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           const activeRequested = activeFields.some((field) => field !== undefined);
           const active = (await resolveExecutionReadRoute({ harnessDir })) === "execution";
           if (activeRequested || active) {
+            if (active && !activeRequested) {
+              return refused("status.workflow-close", "execution.consumer-not-ready", "File-based workflow close is unavailable while active execution authority is enabled");
+            }
             if (endedAt !== undefined || session !== undefined) {
               return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active execution close cannot combine --ended-at or --session with its CAS envelope" };
             }

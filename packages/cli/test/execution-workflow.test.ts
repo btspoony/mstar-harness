@@ -116,8 +116,8 @@ function dataOf(result: RunResult): Record<string, unknown> {
   return data as Record<string, unknown>;
 }
 
-function coordinatorIdentity(workflowId = WORKFLOW_ID): ExecutionIdentity {
-  return { source: "local", sessionId: COORDINATOR_ID, workflowId, role: "coordinator", planId: null };
+function coordinatorIdentity(workflowId = WORKFLOW_ID, sessionId = COORDINATOR_ID): ExecutionIdentity {
+  return { source: "local", sessionId, workflowId, role: "coordinator", planId: null };
 }
 
 async function activeFixture(label: string): Promise<Fixture> {
@@ -193,6 +193,8 @@ function registerPlanWorkflow(
       operationId,
       "--harness",
       fixture.harnessDir,
+      "--session-id",
+      identity.sessionId,
       "--json",
     ],
     fixture,
@@ -224,6 +226,8 @@ function registerReportOnlyWorkflow(fixture: Fixture, identity: ExecutionIdentit
       "register-report-only-1",
       "--harness",
       fixture.harnessDir,
+      "--session-id",
+      identity.sessionId,
       "--json",
     ],
     fixture,
@@ -252,13 +256,15 @@ function bindCoordinator(
       operationId,
       "--harness",
       fixture.harnessDir,
-      "--json",
+      "--session-id",
+      coordinatorIdentity(workflowId).sessionId,
     ],
     fixture,
     coordinatorIdentity(workflowId),
   );
-  expect(bound.exitCode).toBe(0);
-  return jsonOf(bound).data as unknown as ExecutionSessionRef;
+  if (bound.exitCode !== 0) throw new Error(`plan bind failed: ${bound.stdout}${bound.stderr}`);
+  const receipt = jsonOf(bound).data as Record<string, unknown>;
+  return receipt.data as ExecutionSessionRef;
 }
 
 /** One active workflow verb invocation, in the documented §3.2 shape. */
@@ -269,6 +275,7 @@ function workflowVerbArgs(
   token: string,
   operationId: string,
   options: string[],
+  sessionId = ref.sessionId,
 ): string[] {
   return [
     "workflow",
@@ -283,8 +290,9 @@ function workflowVerbArgs(
     operationId,
     "--harness",
     fixture.harnessDir,
+    "--session-id",
+    sessionId,
     ...options,
-    "--json",
   ];
 }
 
@@ -297,7 +305,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // (a `development` tail — compound/pr/merge — is refused until then, §3).
     const registered = registerReportOnlyWorkflow(fixture, identity, await rootTokenOf(fixture));
     expect(registered.exitCode).toBe(0);
-    expect(jsonOf(registered).route).toBe("execution");
+    expect(jsonOf(registered).status).toBe("ok");
     expect(dataOf(registered).workflowId).toBe(WORKFLOW_ID);
     expect(await storedHeader(fixture)).toMatchObject({
       id: WORKFLOW_ID,
@@ -362,8 +370,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(replayed.exitCode).toBe(0);
-    expect(jsonOf(replayed).replayed).toBe(true);
+    expect(dataOf(replayed).replayed).toBe(true);
   });
 
   test("the terminal lifecycle is atomic and the retired file close has no active route", async () => {
@@ -390,7 +397,8 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "terminal close",
         "--harness",
         fixture.harnessDir,
-        "--json",
+        "--session-id",
+        identity.sessionId,
       ],
       fixture,
       identity,
@@ -401,7 +409,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
 
     // The retired file close has no route at all on an active authority.
     const legacy = runCli(
-      ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", fixture.harnessDir, "--json"],
+      ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", fixture.harnessDir],
       fixture,
     );
     expect(legacy.exitCode).toBe(1);
@@ -421,9 +429,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(stopped.exitCode).toBe(0);
-    expect(jsonOf(stopped).operation_id).toBe("stop-1");
-    expect(jsonOf(stopped).replayed).toBe(false);
-    expect(jsonOf(stopped).token).not.toBe(beforeStopToken);
+    expect(dataOf(stopped).operationId).toBe("stop-1");
+    expect(dataOf(stopped).replayed).toBe(false);
+    expect(dataOf(stopped).token).not.toBe(beforeStopToken);
 
     // The terminal state IS persisted — witnessed at the store boundary the
     // engine's own readers use (`openStore`), because EVERY execution-adapter
@@ -456,7 +464,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // A closed lifecycle is never reopened: the authority holds no active
     // lifecycle for it, so any further transition is its own refusal.
     const reopened = runCli(
-      workflowVerbArgs("lifecycle", fixture, bound, jsonOf(stopped).token as string, "stop-2", [
+      workflowVerbArgs("lifecycle", fixture, bound, dataOf(stopped).token as string, "stop-2", [
         "--status",
         "running",
         "--reason",
@@ -484,7 +492,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "main",
         "--branch-integration",
         INTEGRATION_BRANCH,
-        "--branch-target",
+        "--branch-target-iteration",
         "main",
         "--row",
         JSON.stringify({ id: PLAN_ID, title: "Iteration row", file: `plans/${PLAN_ID}.md` }),
@@ -494,12 +502,13 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "register-iteration-1",
         "--harness",
         fixture.harnessDir,
-        "--json",
+        "--session-id",
+        identity.sessionId,
       ],
       fixture,
       identity,
     );
-    expect(registered.exitCode).toBe(0);
+    if (registered.exitCode !== 0) throw new Error(`iteration registration failed: ${registered.stdout}${registered.stderr}`);
     expect((await storedHeader(fixture, ITERATION_ID)).type).toBe("iteration");
 
     const bound = bindCoordinator(fixture, ITERATION_ID, await workflowTokenOf(fixture, ITERATION_ID), "bind-iteration-coordinator");
@@ -583,14 +592,14 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect((await storedHeader(fixture)).status).toBe("paused");
 
     // A foreign identity (another workflow's coordinator) is refused.
-    const foreign = coordinatorIdentity("wf-somewhere-else");
+    const foreign = coordinatorIdentity("wf-somewhere-else", "omp-foreign-session");
     const wrongScope = runCli(
       workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "lifecycle-foreign", [
         "--status",
         "running",
         "--reason",
         "foreign",
-      ]),
+      ], foreign.sessionId),
       fixture,
       foreign,
     );
@@ -649,12 +658,15 @@ describe("mstar workflow \u2014 documented invocation", () => {
         deliveryPath,
         "--harness",
         fixture.harnessDir,
+        "--session-id",
+        identity.sessionId,
       ],
       fixture,
       identity,
     );
     expect(evidenceMix.exitCode).toBe(2);
-    expect(evidenceMix.stderr).toContain("disjoint transports");
+    expect(jsonOf(evidenceMix).status).toBe("usage");
+    expect(String(jsonOf(evidenceMix).message)).toBe("active evidence cannot use legacy session or at fields");
 
     // The one-time delivery-kind rewrite has no active operation.
     const declare = runCli(
@@ -667,7 +679,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "development",
         "--harness",
         fixture.harnessDir,
-        "--json",
       ],
       fixture,
       identity,
@@ -700,7 +711,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "main",
         "--harness",
         fixture.harnessDir,
-        "--json",
       ],
       fixture,
       identity,

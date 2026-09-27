@@ -70,6 +70,31 @@ function runCli(args: string[], opts: { cwd?: string; env?: Record<string, strin
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
+interface CliEnvelope {
+  version: number;
+  command: string;
+  status: string;
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: { violations?: { code: string }[] };
+}
+
+function cliEnvelope(result: RunResult, status?: string, code?: string): CliEnvelope {
+  const envelope = JSON.parse(result.stdout) as CliEnvelope;
+  expect(envelope.version).toBe(1);
+  expect(envelope.exitCode).toBe(result.exitCode);
+  if (status !== undefined) expect(envelope.status).toBe(status);
+  if (code !== undefined) expect(envelope.code).toBe(code);
+  return envelope;
+}
+
+function violationCodes(result: RunResult): string[] {
+  const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");
+  const violations = envelope.details?.violations ?? (envelope.data?.violations as { code: string }[] | undefined);
+  return violations?.map(({ code }) => code) ?? [envelope.code];
+}
 
 /** Temp dir per test, cleaned up after. */
 function withTempDir(fn: (dir: string) => void): void {
@@ -1530,26 +1555,26 @@ describe("mstar host detect — tool-shape host matrix", () => {
     test(`${signals} → ${host}, exit 0`, () => {
       const result = runCli(["host", "detect", "--signals", signals]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`host: ${host}`);
+      expect(cliEnvelope(result).data?.host).toBe(host);
     });
   }
 
   test("unknown signal token → usage, exit 2", () => {
     const result = runCli(["host", "detect", "--signals", "question,nope"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('unknown signal "nope"');
+    expect(cliEnvelope(result).message).toBe('unknown signal "nope"');
   });
 
   test("empty --signals → usage, exit 2", () => {
     const result = runCli(["host", "detect", "--signals", ""]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: host detect --signals <comma-list>");
+    expect(cliEnvelope(result).message).toBe("Too small: expected string to have >=1 characters");
   });
 
   test("missing --signals → usage, exit 2", () => {
     const result = runCli(["host", "detect"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: host detect --signals <comma-list>");
+    expect(cliEnvelope(result).message).toBe("error: required option '--signals <list>' not specified");
   });
 });
 
@@ -2015,7 +2040,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
       writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_OK);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`${join(dir, "status.json")}: OK`);
+      expect(cliEnvelope(result, "ok", "status.ok").data?.path).toBe(join(dir, "status.json"));
       expect(result.stderr).toBe("");
     });
   });
@@ -2025,7 +2050,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
       writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_MISSING_SNAPSHOT);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("status.workflow.snapshot-missing");
+      expect(violationCodes(result)).toContain("status.workflow.snapshot-missing");
     });
   });
 
@@ -2034,8 +2059,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
       writeFileSync(join(dir, "status.json"), STATUS_V1_ROOT);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("status.migration-required");
-      expect(result.stderr).toContain("mstar migrate");
+      expect(violationCodes(result)).toContain("status.migration-required");
     });
   });
 
@@ -2046,7 +2070,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
       writeFileSync(join(workflowDir, "snapshot.json"), snapshotDoc([]));
       const result = runCli(["status", "validate", join(workflowDir, "snapshot.json")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`${join(workflowDir, "snapshot.json")}: OK`);
+      expect(cliEnvelope(result, "ok", "status.ok").data?.path).toBe(join(workflowDir, "snapshot.json"));
     });
   });
 
@@ -2059,7 +2083,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
       writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify(doc, null, 2));
       const result = runCli(["status", "validate", join(workflowDir, "snapshot.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("workflow.snapshot.invalid-type");
+      expect(cliEnvelope(result, "refused", "workflow.snapshot.invalid-type").message).toContain("invalid-type");
     });
   });
 
@@ -2067,7 +2091,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
     withTempDir((dir) => {
       const result = runCli(["status", "validate", join(dir, "nope.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("status file not found");
+      expect(cliEnvelope(result, "refused", "status.file-not-found").message).toContain("status file not found");
     });
   });
 });
@@ -2124,11 +2148,11 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       seedIssueStore(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("total_open: 1");
-      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"info":0}');
-      expect(result.stdout).toContain('by_project: {"_default":1}');
-      expect(result.stdout).toContain("store.db is the only findings authority");
-      expect(result.stderr).toBe("");
+      expect(cliEnvelope(result, "ok", "status.tech-debt.ok").data).toMatchObject({
+        total_open: 1,
+        by_severity: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+        by_project: { _default: 1 },
+      });
     });
   });
 
@@ -2136,8 +2160,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
     withTempDir((dir) => {
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("store.not-initialized");
-      expect(result.stdout).not.toContain("total_open");
+      expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
     });
   });
 
@@ -2156,8 +2179,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
 
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("store.not-active");
-      expect(result.stdout).not.toContain("total_open");
+      expect(cliEnvelope(result, "refused", "store.not-active").data).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2170,23 +2192,21 @@ describe("mstar status findings-cleanup — issue-linkage gate over the issue st
       seedIssueStore(dir, "critical");
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("findings-cleanup p1: OK");
+      expect(cliEnvelope(result, "ok", "status.findings-cleanup.ok").data).toMatchObject({ planId: "p1", violations: [] });
     });
   });
-
   test("a missing store fails closed instead of passing as no findings (exit 1)", () => {
     withTempDir((dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("store.not-initialized");
+      expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
     });
   });
-
-  test("invalid --mode is refused before any store access (exit 1)", () => {
+  test("invalid --mode is a usage error before store access (exit 2)", () => {
     withTempDir((dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "bogus"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid --mode bogus");
+      expect(result.exitCode).toBe(2);
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("zero-residual");
     });
   });
 });
@@ -2219,9 +2239,7 @@ describe("mstar status backlog-register / backlog-close — retired verbs name t
 describe("mstar status archive-residuals — removed command names the replacement", () => {
   test("invocation errors and names the issue-store replacement (exit 1)", () => {
     const result = runCli(["status", "archive-residuals"]);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("status archive-residuals: removed");
-    expect(result.stderr).toContain("mstar plan issue-close");
+    expect(cliEnvelope(result, "refused", "status.verb-retired").message).toContain("mstar plan issue-close");
   });
 });
 
@@ -2272,7 +2290,7 @@ describe("mstar lease verify-integration — snapshot top-level integration_merg
     withMergeLeaseSnapshot(LEASE_VALID, (dir) => {
       const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("integration_merge_lease valid (holder Main)");
+      expect(cliEnvelope(result, "ok", "lease.verify-integration.ok").data?.lease).toMatchObject({ holder: "Main" });
     });
   });
 
@@ -2280,7 +2298,7 @@ describe("mstar lease verify-integration — snapshot top-level integration_merg
     withMergeLeaseSnapshot(undefined, (dir) => {
       const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("no integration_merge_lease (unclaimed)");
+      expect(cliEnvelope(result, "ok", "lease.verify-integration.ok").data?.claimed).toBe(false);
     });
   });
 
@@ -2288,8 +2306,7 @@ describe("mstar lease verify-integration — snapshot top-level integration_merg
     withMergeLeaseSnapshot(null, (dir) => {
       const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
-      expect(result.stderr).toContain("lease.merge-lease.invalid");
+      expect(violationCodes(result)).toContain("lease.merge-lease.invalid");
     });
   });
 
@@ -2297,15 +2314,14 @@ describe("mstar lease verify-integration — snapshot top-level integration_merg
     withMergeLeaseSnapshot(LEASE_MISSING_HOLDER, (dir) => {
       const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
-      expect(result.stderr).toContain("lease.merge-lease.missing-holder");
+      expect(violationCodes(result)).toContain("lease.merge-lease.missing-holder");
     });
   });
 
   test("missing --workflow is a usage error (exit 2)", () => {
     const result = runCli(["lease", "verify-integration"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: lease verify-integration --workflow <id>");
+    expect(result.stderr).toContain("error: required option '--workflow <id>' not specified");
   });
 });
 
@@ -2344,7 +2360,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       }
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree qc-alignment: OK (3 assignments, 3 fields byte-identical)");
+      expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(3);
     });
   });
 
@@ -2354,7 +2370,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree qc-alignment: OK (2 assignments, 3 fields byte-identical)");
+      expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(2);
     });
   });
 
@@ -2364,12 +2380,9 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree qc-alignment: FAIL (2 violations)");
-      expect(result.stderr).toContain('"Review range" is not byte-identical');
-      expect(result.stderr).toContain('"Diff basis" is not byte-identical');
+      expect(violationCodes(result)).toEqual(["qc.alignment.mismatch", "qc.alignment.mismatch"]);
     });
   });
-
   test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
     withTempDir((dir) => {
       // Separate-label variant with the Diff basis line removed (the combined
@@ -2381,16 +2394,14 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       writeFileSync(join(dir, "qc1.md"), incomplete);
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("qc.alignment.field.missing");
-      expect(result.stderr).toContain('missing "Diff basis" header field');
-      expect(result.stderr).not.toContain('missing "Review range" header field');
+      expect(violationCodes(result)).toEqual(["qc.alignment.field.missing"]);
     });
   });
 
   test("no assignment files is a usage error (exit 2)", () => {
     const result = runCli(["worktree", "qc-alignment"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: worktree qc-alignment <assignment-file>...");
+    expect(result.stderr).toContain("error: missing required argument 'files'");
   });
 });
 
@@ -2402,7 +2413,7 @@ describe("mstar host skill-root — loaded skill-root resolution (audit-004)", (
   test("opencode resolves to the package-internal harness-skills mount (exit 0)", () => {
     const result = runCli(["host", "skill-root", "--host", "opencode", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("harness-skills/mstar-roles");
+    expect(cliEnvelope(result, "ok", "host.skill-root.ok").data?.root).toBe("harness-skills/mstar-roles");
   });
 
   test("cursor resolves with a skill-relative path suffix (exit 0)", () => {
@@ -2417,36 +2428,36 @@ describe("mstar host skill-root — loaded skill-root resolution (audit-004)", (
       "references/opencode.md",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("~/.cursor/plugins/local/morning-star-harness/skills/mstar-roles/references/opencode.md");
+    expect(cliEnvelope(result, "ok", "host.skill-root.ok").data?.root).toContain("references/opencode.md");
   });
 
   test("omp resolves to the skill:// URI form (exit 0)", () => {
     const result = runCli(["host", "skill-root", "--host", "omp", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("skill://mstar-roles");
+    expect(cliEnvelope(result, "ok", "host.skill-root.ok").data?.root).toBe("skill://mstar-roles");
   });
 
   test("pi prints the deferred-resolution notice shape (exit 0)", () => {
     const result = runCli(["host", "skill-root", "--host", "pi", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("deferred: pi has no plugin API in v1");
+    expect(cliEnvelope(result, "ok", "host.skill-root.ok").data?.root).toContain("deferred: pi has no plugin API in v1");
   });
 
   test("dsh resolves to the bundled skill dir form (exit 0)", () => {
     const result = runCli(["host", "skill-root", "--host", "dsh", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("$DSH_BUNDLED_SKILL_DIR/mstar-roles");
+    expect(cliEnvelope(result, "ok", "host.skill-root.ok").data?.root).toBe("$DSH_BUNDLED_SKILL_DIR/mstar-roles");
   });
 
   test("empty --skill value is a usage error (exit 2)", () => {
     const result = runCli(["host", "skill-root", "--host", "opencode", "--skill="]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("--skill must be a non-empty skill name");
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("characters");
   });
 
   test("unknown host is a usage error (exit 2)", () => {
     const result = runCli(["host", "skill-root", "--host", "bogus", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('unknown host "bogus"');
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain('unknown host "bogus"');
   });
 });

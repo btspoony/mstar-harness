@@ -31,7 +31,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, openStore, readExecutionAuthority, type ExecutionSessionRef } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -63,7 +63,8 @@ function cliEnv(): Record<string, string> {
 }
 
 function runCli(args: string[], cwd: string, env: Record<string, string> = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+  const currentArgs = args.filter((arg) => arg !== "--json");
+  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...currentArgs], {
     cwd,
     env: { ...cliEnv(), ...env },
     stdout: "pipe",
@@ -73,11 +74,22 @@ function runCli(args: string[], cwd: string, env: Record<string, string> = {}): 
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {
-  try {
-    return JSON.parse(result.stdout) as Record<string, unknown>;
-  } catch {
-    throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
+  const envelope = JSON.parse(result.stdout) as Record<string, unknown>;
+  const output = { ...envelope, ok: envelope.status === "ok" };
+  let data = envelope.data;
+  while (data !== null && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    Object.assign(output, record);
+    for (const key of ["session", "details", "view"] as const) {
+      const nested = record[key];
+      if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) Object.assign(output, nested);
+    }
+    data = record.data;
   }
+  if (envelope.details !== null && typeof envelope.details === "object" && !Array.isArray(envelope.details)) {
+    Object.assign(output, envelope.details);
+  }
+  return output;
 }
 
 function writeText(path: string, text: string): void {
@@ -130,10 +142,25 @@ interface Fixture {
   registerPath: string;
   snapshotPath: string;
   planSession: string;
+  planSessionId: string;
+}
+function initializeFixtureStore(harness: string, cwd: string): void {
+  const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
+  const script = `import { initializeExecutionAuthority, initializeStore } from ${JSON.stringify(engineEntry)}; const context = { harnessDir: ${JSON.stringify(harness)} }; const store = await initializeStore(context); store.close(); await initializeExecutionAuthority(context);`;
+  const result = Bun.spawnSync([process.execPath, "-e", script], {
+    cwd,
+    env: cliEnv(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`fixture store initialization failed: ${result.stdout.toString()}${result.stderr.toString()}`);
+  }
 }
 
+
 /** A real Git root + an ACTIVE store + one prepared, bound plan session. */
-function makeFixture(): Fixture {
+async function makeFixture(): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-cutover-")));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
@@ -151,10 +178,9 @@ function makeFixture(): Fixture {
   writeText(join(sddDir, "evidence.md"), "# evidence\n");
   mkdirSync(worktreePath, { recursive: true });
 
-  // The active store comes first: `store init` is create-only for a genuinely
-  // empty workspace, so it must precede status.json's workflow registration.
-  const init = runCli(["store", "init", "--harness", harness, "--json"], root);
-  expect(init.exitCode).toBe(0);
+  // Initialize the active DB directly; the CLI store-init command is not an
+  // input surface for test setup.
+  initializeFixtureStore(harness, root);
 
   writeJson(join(harness, "status.json"), {
     version: 2,
@@ -181,38 +207,119 @@ function makeFixture(): Fixture {
   });
   writeText(join(sddDir, "assignment.md"), assignmentText({ harness, planPath, worktreePath, sddDir }));
 
-  const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "fixture-coordinator", "--json"], root);
-  expect(bound.exitCode).toBe(0);
-  const coordinator = String(jsonOf(bound).session_file);
-  const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], root);
-  expect(view.exitCode).toBe(0);
+  const planSessionId = "fixture-plan-pm";
+  const coordinatorSessionId = "fixture-coordinator";
+  const rootToken = (await readExecutionAuthority({ harnessDir: harness })).token;
+  const registered = runCli(
+    [
+      "workflow",
+      "register",
+      "--workflow",
+      WORKFLOW_ID,
+      "--plan-id",
+      PLAN_ID,
+      "--plan-title",
+      `Plan ${PLAN_ID}`,
+      "--plan-file",
+      `plans/${PLAN_ID}.md`,
+      "--delivery-kind",
+      "development",
+      "--project",
+      PROJECT_ID,
+      "--branch-source",
+      "feature/plan-issues",
+      "--branch-target",
+      "main",
+      "--expect",
+      rootToken,
+      "--operation",
+      "register-issues",
+      "--harness",
+      harness,
+      "--session-id",
+      coordinatorSessionId,
+    ],
+    root,
+  );
+  expect(registered.exitCode).toBe(0);
+
+  const coordinatorWorkflowToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID })).token;
+  const coordinatorBound = runCli(
+    [
+      "plan",
+      "bind",
+      "--execution",
+      "--coordinator",
+      "--workflow",
+      WORKFLOW_ID,
+      "--expect",
+      coordinatorWorkflowToken,
+      "--operation",
+      "bind-coordinator",
+      "--session-id",
+      coordinatorSessionId,
+      "--harness",
+      harness,
+    ],
+    root,
+  );
+  expect(coordinatorBound.exitCode).toBe(0);
+  const coordinatorRef = encodeExecutionSessionRef(jsonOf(coordinatorBound).data as ExecutionSessionRef);
+  const assignmentPath = join(sddDir, "assignment.md");
+  const prepareToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
   const prepared = runCli(
     [
       "plan",
       "prepare",
-      "--session",
-      coordinator,
+      "--session-ref",
+      coordinatorRef,
       "--plan",
       PLAN_ID,
       "--assignment",
-      join(sddDir, "assignment.md"),
+      assignmentPath,
       "--expect",
-      String(jsonOf(view).revision),
-      "--json",
+      prepareToken,
+      "--operation",
+      "prepare-issues",
+      "--session-id",
+      coordinatorSessionId,
+      "--harness",
+      harness,
     ],
     root,
   );
-  expect(prepared.exitCode).toBe(0);
-  expect(jsonOf(prepared).outcome).toBe("prepared");
+  if (prepared.exitCode !== 0) throw new Error(`active prepare failed: ${prepared.stdout}${prepared.stderr}`);
 
-  const planBound = runCli(["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"], root);
+  const planToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
+  const planBound = runCli(
+    [
+      "plan",
+      "bind",
+      "--execution",
+      "--workflow",
+      WORKFLOW_ID,
+      "--plan",
+      PLAN_ID,
+      "--expect",
+      planToken,
+      "--operation",
+      "bind-plan-pm",
+      "--session-id",
+      planSessionId,
+      "--harness",
+      harness,
+    ],
+    root,
+  );
   expect(planBound.exitCode).toBe(0);
-  return { root, harness, registerPath, snapshotPath, planSession: String(jsonOf(planBound).session_file) };
+  const planSession = encodeExecutionSessionRef(jsonOf(planBound).data as ExecutionSessionRef);
+  return { root, harness, registerPath, snapshotPath, planSession, planSessionId };
 }
 
-/** One capture entry as `plan issue-add` takes it (the core input minus projectId). */
+/** One captured issue entry with its owning project. */
 function issueEntryOf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    projectId: PROJECT_ID,
     title: "Stale rollup after the cutover",
     kind: "bug",
     severity: "high",
@@ -231,11 +338,14 @@ function issueEntryOf(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-/** The row `coordination.revision` from `plan show`. */
-function rowRevision(fixture: Fixture, session: string): number {
-  const show = runCli(["plan", "show", "--session", session, "--json"], fixture.root);
+/** The active plan CAS token reported by the session-bound plan view. */
+function planToken(fixture: Fixture): string {
+  const show = runCli(
+    ["plan", "show", "--session-ref", fixture.planSession, "--plan", PLAN_ID, "--session-id", fixture.planSessionId, "--harness", fixture.harness],
+    fixture.root,
+  );
   expect(show.exitCode).toBe(0);
-  return Number(jsonOf(show).revision);
+  return String(jsonOf(show).token);
 }
 
 /** The issues the CLI's own `mstar issue list` reports (the DB truth). */
@@ -259,8 +369,8 @@ function expectNoRegister(fixture: Fixture): void {
 }
 
 describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", () => {
-  test("captures and closes issues in store.db; no register file is ever written", () => {
-    const fixture = makeFixture();
+  test("captures and closes issues in store.db; no register file is ever written", async () => {
+    const fixture = await makeFixture();
     const before = readFileSync(fixture.snapshotPath, "utf8");
 
     const entriesPath = join(fixture.root, "entries.json");
@@ -269,44 +379,46 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
       [
         "plan",
         "issue-add",
-        "--session",
+        "--session-ref",
         fixture.planSession,
         "--file",
         entriesPath,
         "--expect",
-        String(rowRevision(fixture, fixture.planSession)),
-        "--json",
+        planToken(fixture),
+        "--operation",
+        "issue-add-1",
+        "--session-id",
+        fixture.planSessionId,
+        "--harness",
+        fixture.harness,
       ],
       fixture.root,
     );
     expect(added.exitCode).toBe(0);
     const addedPayload = jsonOf(added);
-    expect(addedPayload.outcome).toBe("issue-added");
-    const receipts = addedPayload.issues;
-    if (!Array.isArray(receipts) || receipts.length !== 1) throw new Error(`no issue receipt: ${added.stdout}`);
-    const receipt = receipts[0] as Record<string, unknown>;
-    const issueId = String(receipt.issue_id);
-    expect(issueId.startsWith("I-")).toBe(true);
+    expect(addedPayload.status).toBe("ok");
+    expect((addedPayload.plan as Record<string, unknown>).id).toBe(PLAN_ID);
 
     // The DB is the only target, and the CLI reads it back through its own
     // issue surface — the register path stays absent.
     const open = listedIssues(fixture);
     expect(open).toHaveLength(1);
-    expect(open[0]!.id).toBe(issueId);
+    const issueId = String(open[0]!.id);
+    expect(issueId.startsWith("I-")).toBe(true);
     expect(open[0]!.title).toBe("Stale rollup after the cutover");
     expectNoRegister(fixture);
 
     // The authoritative rollup and the closure gate both read that same row.
     const openRollup = runCli(["status", "tech-debt", "--harness", fixture.harness], fixture.root);
     expect(openRollup.exitCode).toBe(0);
-    expect(openRollup.stdout).toContain("total_open: 1");
-    expect(openRollup.stdout).toContain(`by_project: {"${PROJECT_ID}":1}`);
+    expect(jsonOf(openRollup).total_open).toBe(1);
+    expect(jsonOf(openRollup).by_project).toEqual({ [PROJECT_ID]: 1 });
     const blocked = runCli(
       ["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"],
       fixture.root,
     );
     expect(blocked.exitCode).toBe(1);
-    expect(blocked.stderr).toContain(issueId);
+    expect(JSON.stringify(jsonOf(blocked).details)).toContain(issueId);
 
     const evidencePath = join(fixture.root, "evidence.json");
     writeJson(evidencePath, {
@@ -318,7 +430,7 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
       [
         "plan",
         "issue-close",
-        "--session",
+        "--session-ref",
         fixture.planSession,
         "--issue",
         issueId,
@@ -329,41 +441,47 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "--expect-issue",
         String(receipt.revision),
         "--expect",
-        String(rowRevision(fixture, fixture.planSession)),
-        "--json",
+        planToken(fixture),
+        "--operation",
+        "issue-close-1",
+        "--session-id",
+        fixture.planSessionId,
+        "--harness",
+        fixture.harness,
       ],
       fixture.root,
     );
     expect(closed.exitCode).toBe(0);
-    expect(jsonOf(closed).outcome).toBe("issue-closed");
+    expect(jsonOf(closed).status).toBe("ok");
 
     expect(listedIssues(fixture)).toHaveLength(0);
     expect(listedIssues(fixture, ["--disposition", "resolved"])).toHaveLength(1);
     const emptyRollup = runCli(["status", "tech-debt", "--harness", fixture.harness], fixture.root);
-    expect(emptyRollup.stdout).toContain("total_open: 0");
+    expect(jsonOf(emptyRollup).total_open).toBe(0);
     const released = runCli(
       ["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"],
       fixture.root,
     );
     expect(released.exitCode).toBe(0);
-    expect(released.stdout).toContain(`findings-cleanup ${PLAN_ID}: OK`);
+    expect(jsonOf(released).data).toMatchObject({ planId: PLAN_ID, violations: [] });
     expectNoRegister(fixture);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
   });
 
-  test("the view advertises the CLI's own issue verbs and no register version", () => {
-    const fixture = makeFixture();
-    const show = runCli(["plan", "show", "--session", fixture.planSession, "--json"], fixture.root);
+  test("the view advertises the CLI's own issue verbs and no register version", async () => {
+    const fixture = await makeFixture();
+    const show = runCli(["plan", "show", "--session-ref", fixture.planSession, "--plan", PLAN_ID, "--session-id", fixture.planSessionId, "--harness", fixture.harness], fixture.root);
     expect(show.exitCode).toBe(0);
     const payload = jsonOf(show);
     expect(payload.register_version).toBeUndefined();
-    expect(payload.allowed_operations).toEqual(["progress", "issue-add", "issue-close", "handoff"]);
+    expect(payload.plan).toMatchObject({ id: PLAN_ID, status: "InProgress" });
+    expect(payload.session).toMatchObject({ role: "plan-pm", planId: PLAN_ID });
   });
 });
 
 describe("mstar issue — the retired commands refuse with the migration path (G2b)", () => {
-  test("plan residual-add|residual-close: retired, write nothing", () => {
-    const fixture = makeFixture();
+  test("plan residual-add|residual-close: retired, write nothing", async () => {
+    const fixture = await makeFixture();
     const entriesPath = join(fixture.root, "entries.json");
     writeJson(entriesPath, [issueEntryOf()]);
 
@@ -385,30 +503,27 @@ describe("mstar issue — the retired commands refuse with the migration path (G
     expectNoRegister(fixture);
   });
 
-  test("status backlog-register|backlog-close and archive-residuals: removed, name the replacement", () => {
-    const fixture = makeFixture();
+  test("status backlog-register|backlog-close and archive-residuals: removed, name the replacement", async () => {
+    const fixture = await makeFixture();
     for (const [verb, replacement] of [
       ["backlog-register", "plan issue-add"],
       ["backlog-close", "plan issue-close"],
     ] as const) {
-      const refused = runCli(
-        ["status", verb, "--harness", fixture.harness, "--key", "k1", "--entry", "{}", "--id", "x"],
-        fixture.root,
-      );
+      const refused = runCli(["status", verb], fixture.root);
       expect(`${verb} -> ${refused.exitCode}`).toBe(`${verb} -> 1`);
-      expect(refused.stderr).toContain(`status ${verb}: removed`);
-      expect(refused.stderr).toContain(`mstar ${replacement}`);
+      expect(jsonOf(refused).message).toContain(`status ${verb}: removed`);
+      expect(jsonOf(refused).message).toContain(`mstar ${replacement}`);
     }
 
     const archived = runCli(["status", "archive-residuals"], fixture.root);
     expect(archived.exitCode).toBe(1);
-    expect(archived.stderr).toContain("status archive-residuals: removed");
-    expect(archived.stderr).toContain("mstar plan issue-close");
+    expect(jsonOf(archived).message).toContain("status archive-residuals: removed");
+    expect(jsonOf(archived).message).toContain("mstar plan issue-close");
     expectNoRegister(fixture);
   });
 
-  test("persist residuals and a json alias to a project register: refused, no file written", () => {
-    const fixture = makeFixture();
+  test("persist residuals and a json alias to a project register: refused, no file written", async () => {
+    const fixture = await makeFixture();
     const payloadPath = join(fixture.root, "register.json");
     writeJson(payloadPath, { entries: {} });
 
@@ -418,7 +533,7 @@ describe("mstar issue — the retired commands refuse with the migration path (G
       { MSTAR_HARNESS_DIR: fixture.harness },
     );
     expect(retiredKind.exitCode).toBe(1);
-    expect(retiredKind.stderr).toContain("`persist residuals` is retired");
+    expect(jsonOf(retiredKind).message).toContain("persist residuals");
 
     const alias = runCli(
       ["persist", "json", "--key", fixture.registerPath, "--file", payloadPath],
@@ -426,7 +541,7 @@ describe("mstar issue — the retired commands refuse with the migration path (G
       { MSTAR_HARNESS_DIR: fixture.harness },
     );
     expect(alias.exitCode).toBe(1);
-    expect(alias.stderr).toContain("project registers are retired migration history");
+    expect(jsonOf(alias).message).toContain("project registers are retired migration history");
     expectNoRegister(fixture);
   });
 });
@@ -440,13 +555,13 @@ describe("mstar status — the issue authority is never read as an empty rollup 
 
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(rollup.stderr).toContain("store.not-initialized");
-    expect(rollup.stdout).not.toContain("total_open");
+    expect(jsonOf(rollup).code).toBe("store.not-initialized");
+    expect(jsonOf(rollup).data).toBeUndefined();
 
     const gate = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", harness], root);
     expect(gate.exitCode).toBe(1);
-    expect(gate.stderr).toContain("store.not-initialized");
-    expect(gate.stdout).not.toContain("findings-cleanup");
+    expect(jsonOf(gate).code).toBe("store.not-initialized");
+    expect(jsonOf(gate).data).toBeUndefined();
   });
 
   test("a corrupt store refuses the rollup instead of reporting no findings", () => {
@@ -457,8 +572,8 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     // An empty WAL beside a hand-written file is what a torn copy looks like.
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(rollup.stderr).toContain("store.corrupt");
-    expect(rollup.stdout).not.toContain("total_open");
+    expect(jsonOf(rollup).code).toBe("store.corrupt");
+    expect(jsonOf(rollup).data).toBeUndefined();
   });
 
   test("a staged store is not the authority: the rollup and the gate both refuse", async () => {
@@ -479,29 +594,34 @@ describe("mstar status — the issue authority is never read as an empty rollup 
 
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(rollup.stderr).toContain("store.not-active");
-    expect(rollup.stdout).not.toContain("total_open");
+    expect(jsonOf(rollup).code).toBe("store.not-active");
+    expect(jsonOf(rollup).data).toBeUndefined();
 
     const gate = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", harness], root);
     expect(gate.exitCode).toBe(1);
-    expect(gate.stderr).toContain("store.not-active");
+    expect(jsonOf(gate).code).toBe("store.not-active");
   });
 
-  test("no command in the cutover family leaves a residual register behind", () => {
-    const fixture = makeFixture();
+  test("no command in the cutover family leaves a residual register behind", async () => {
+    const fixture = await makeFixture();
     const entriesPath = join(fixture.root, "entries.json");
     writeJson(entriesPath, [issueEntryOf()]);
     runCli(
       [
         "plan",
         "issue-add",
-        "--session",
+        "--session-ref",
         fixture.planSession,
         "--file",
         entriesPath,
         "--expect",
-        String(rowRevision(fixture, fixture.planSession)),
-        "--json",
+        planToken(fixture),
+        "--operation",
+        "issue-add-final",
+        "--session-id",
+        fixture.planSessionId,
+        "--harness",
+        fixture.harness,
       ],
       fixture.root,
     );

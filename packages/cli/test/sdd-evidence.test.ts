@@ -410,11 +410,6 @@ function readRecord(runDir: string): SddEvidenceRecord {
   return JSON.parse(readFileSync(join(runDir, "record.json"), "utf8")) as SddEvidenceRecord;
 }
 
-function runDirFromStderr(stderr: string): string {
-  const match = /evidence run: (.+)/.exec(stderr);
-  if (!match) throw new Error(`no evidence run path in stderr: ${stderr}`);
-  return match[1]!.trim();
-}
 
 function listFilesRecursive(dir: string): string[] {
   const out: string[] = [];
@@ -451,6 +446,58 @@ function verifyCli(
   ];
   if (opts.target !== undefined) args.push("--target", opts.target);
   return runCli(args, { cwd: f.control, env: opts.env });
+}
+function envelopeOf(result: RunResult): {
+  version: number;
+  command: string;
+  status: string;
+  code: string;
+  exitCode: number;
+  data?: unknown;
+  details?: unknown;
+  message?: string;
+} {
+  return JSON.parse(result.stdout) as {
+    version: number;
+    command: string;
+    status: string;
+    code: string;
+    exitCode: number;
+    data?: unknown;
+    details?: unknown;
+    message?: string;
+  };
+}
+
+function dataOf(result: RunResult): Record<string, unknown> {
+  const envelope = envelopeOf(result);
+  expect(envelope).toMatchObject({
+    version: 1,
+    command: "sdd.evidence.verify",
+    status: result.exitCode === 0 ? "ok" : "refused",
+    exitCode: result.exitCode,
+  });
+  const data = envelope.data ?? envelope.details;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(`expected structured verification data, got ${result.stdout}`);
+  }
+  return data as Record<string, unknown>;
+}
+
+
+function envelopeFromStdout(stdout: string): Record<string, unknown> {
+  const start = stdout.lastIndexOf('{"version":1,');
+  if (start < 0) throw new Error(`no JSON envelope in stdout: ${JSON.stringify(stdout)}`);
+  return JSON.parse(stdout.slice(start)) as Record<string, unknown>;
+}
+
+function runDirFromStdout(stdout: string): string {
+  const envelope = envelopeFromStdout(stdout);
+  const details = envelope.details as Record<string, unknown> | undefined;
+  const data = envelope.data as Record<string, unknown> | undefined;
+  const runDir = details?.runDir ?? data?.runDir;
+  if (typeof runDir !== "string") throw new Error(`no evidence run directory in envelope: ${JSON.stringify(envelope)}`);
+  return runDir;
 }
 
 async function waitForMarker(marker: string, timeoutMs = 10000): Promise<void> {
@@ -608,12 +655,12 @@ describe("capture — outcomes", () => {
 
         const verify = verifyCli(f, result.record.runId);
         expect(verify.exitCode).toBe(0);
-        const assessment = JSON.parse(verify.stdout) as { outcome: string; applicability: string; changedInputs: string[]; coverage: string };
+        const assessment = dataOf(verify) as { outcome: string; applicability: string; changedInputs: string[]; coverage: string };
         expect(assessment.outcome).toBe("failed");
         expect(assessment.applicability).toBe("not-assessed");
         expect(assessment.coverage).toBe("review-required");
         expect(assessment.changedInputs).toEqual([]);
-        expect(verify.stderr).toContain("integrity only; outcome=failed; acceptance not assessed");
+        expect(verify.stderr).toBe("");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -756,9 +803,11 @@ describe("capture — outcomes", () => {
         proc.kill("SIGINT");
         const code = await proc.exited;
         expect(code).toBe(130);
+        const stdout = await new Response(proc.stdout as unknown as ReadableStream).text();
         const stderr = await new Response(proc.stderr as unknown as ReadableStream).text();
-        expect(stderr).toContain("evidence run: ");
-        const runDir = runDirFromStderr(stderr);
+        expect(stderr).toBe("");
+        expect(envelopeFromStdout(stdout)).toMatchObject({ command: "sdd.evidence.capture", status: "error", exitCode: 130 });
+        const runDir = runDirFromStdout(stdout);
         const record = readRecord(runDir);
         expect(record.outcome).toEqual({ kind: "interrupted", signal: "SIGINT" });
         expect(record.state).toBe("finished");
@@ -830,9 +879,13 @@ describe("capture — outcomes", () => {
           ["sdd", "evidence", "capture", "--request", f.requestFile, "--", process.execPath, f.children.bigOut],
           { cwd: f.feature },
         );
-        const runDir = runDirFromStderr(result.stderr);
+        const runDir = runDirFromStdout(result.stdout);
         const record = readRecord(runDir);
-        expect(result.stdout).toBe("x".repeat(9 * 1024 * 1024));
+        const envelopeStart = result.stdout.lastIndexOf('{"version":1,');
+        expect(envelopeStart).toBeGreaterThan(-1);
+        expect(result.stdout.slice(0, envelopeStart)).toBe("x".repeat(9 * 1024 * 1024));
+        const captureEnvelope = JSON.parse(result.stdout.slice(envelopeStart)) as Record<string, unknown>;
+        expect(captureEnvelope).toMatchObject({ command: "sdd.evidence.capture", status: "error", exitCode: 1 });
         expect(result.stderr).toContain("ERR-LINE\n");
         expect(record.outcome).toEqual({ kind: "exit", code: 0 });
         expect(result.exitCode).toBe(1); // child passed but capture incomplete
@@ -1124,7 +1177,7 @@ describe("capture — usage and gate refusals launch no child", () => {
       const f = evidenceFixture(root);
       const result = runCli(["sdd", "evidence", "capture", "--request", f.requestFile, "--", ...counterArgv(f)], { cwd: f.control });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("outside the feature worktree");
+      expect(String(envelopeOf(result).message)).toContain("outside the feature worktree");
       expect(existsSync(f.evidenceDir)).toBe(false);
       expect(existsSync(f.counterPath)).toBe(false);
     } finally {
@@ -1139,7 +1192,7 @@ describe("capture — usage and gate refusals launch no child", () => {
       git(["checkout", "-q", "-b", "feature/detour"], f.feature);
       const result = runCli(["sdd", "evidence", "capture", "--request", f.requestFile, "--", ...counterArgv(f)], { cwd: f.feature });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("branch");
+      expect(String(envelopeOf(result).message)).toContain("branch");
       expect(existsSync(f.evidenceDir)).toBe(false);
       expect(existsSync(f.counterPath)).toBe(false);
     } finally {
@@ -1272,7 +1325,7 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
       const target = targetFileFor(root, f.feature, f.head);
       const withTarget = verifyCli(f, result.record.runId, { target });
       expect(withTarget.exitCode).toBe(0);
-      expect(JSON.parse(withTarget.stdout).applicability).toBe("candidate");
+      expect(dataOf(withTarget).applicability).toBe("candidate");
 
       expect(snapshotState()).toEqual(before);
     } finally {
@@ -1299,12 +1352,12 @@ describe("verify — target applicability", () => {
         const target = targetFileFor(root, f.feature, f.head);
         const verify = verifyCli(f, result.record.runId, { target, env });
         expect(verify.exitCode).toBe(0);
-        const assessment = JSON.parse(verify.stdout) as { applicability: string; outcome: string; reasons: string[]; changedInputs: string[] };
+        const assessment = dataOf(verify) as { applicability: string; outcome: string; reasons: string[]; changedInputs: string[] };
         expect(assessment.applicability).toBe("candidate");
         expect(assessment.outcome).toBe("passed");
         expect(assessment.reasons).toContain("reuse.candidate");
         expect(assessment.changedInputs).toEqual([]);
-        expect(verify.stderr).toContain("reuse candidate; coverage review required");
+        expect(verify.stderr).toBe("");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -1321,7 +1374,7 @@ describe("verify — target applicability", () => {
       const target = targetFileFor(root, f.feature, wrongHead);
       const verify = verifyCli(f, result.record.runId, { target });
       expect(verify.exitCode).toBe(1);
-      const assessment = JSON.parse(verify.stdout) as { applicability: string; reasons: string[] };
+      const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("target.expected-head-mismatch");
     } finally {
@@ -1354,7 +1407,7 @@ describe("verify — target applicability", () => {
       const target = targetFileFor(root, other, otherHead);
       const verify = verifyCli(f, result.record.runId, { target });
       expect(verify.exitCode).toBe(1);
-      const assessment = JSON.parse(verify.stdout) as { applicability: string; reasons: string[]; changedInputs: string[] };
+      const assessment = dataOf(verify) as { applicability: string; reasons: string[]; changedInputs: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("input.repository");
       expect(assessment.changedInputs).toContain("$repository");
@@ -1376,7 +1429,7 @@ describe("verify — target applicability", () => {
         const target1 = targetFileFor(root, f.feature, f.head);
         const verify1 = verifyCli(f, result.record.runId, { target: target1 });
         expect(verify1.exitCode).toBe(1);
-        const assessment1 = JSON.parse(verify1.stdout) as { applicability: string; changedInputs: string[] };
+        const assessment1 = dataOf(verify1) as { applicability: string; changedInputs: string[] };
         expect(assessment1.applicability).toBe("changed");
         expect(assessment1.changedInputs).toContain("src/app.js");
 
@@ -1385,7 +1438,7 @@ describe("verify — target applicability", () => {
         const target2 = targetFileFor(root, f.feature, f.head);
         const verify2 = verifyCli(f, result.record.runId, { target: target2 });
         expect(verify2.exitCode).toBe(1);
-        const assessment2 = JSON.parse(verify2.stdout) as { applicability: string; changedInputs: string[] };
+        const assessment2 = dataOf(verify2) as { applicability: string; changedInputs: string[] };
         expect(assessment2.applicability).toBe("changed");
         expect(assessment2.changedInputs).toContain("deps/lib.js");
       } finally {
@@ -1426,7 +1479,7 @@ describe("verify — target applicability", () => {
         const target = targetFileFor(root, f.feature, f.head);
         const verify = verifyCli(f, result.record.runId, { target });
         expect(verify.exitCode).toBe(1);
-        const assessment = JSON.parse(verify.stdout) as { applicability: string; changedInputs: string[] };
+        const assessment = dataOf(verify) as { applicability: string; changedInputs: string[] };
         expect(assessment.applicability).toBe("changed");
         expect(assessment.changedInputs).toContain("ghost");
       } finally {
@@ -1445,7 +1498,7 @@ describe("verify — target applicability", () => {
       const target = targetFileFor(root, f.feature, f.head);
       const verify = verifyCli(f, result.record.runId, { target });
       expect(verify.exitCode).toBe(1);
-      const assessment = JSON.parse(verify.stdout) as { applicability: string; reasons: string[] };
+      const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("coverage.unknown");
     } finally {
@@ -1475,7 +1528,7 @@ describe("verify — target applicability", () => {
       const target = targetFileFor(root, f.feature, f.head);
       const verify = verifyCli(f, result!.record.runId, { target });
       expect(verify.exitCode).toBe(1);
-      const assessment = JSON.parse(verify.stdout) as { applicability: string; reasons: string[] };
+      const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("input.unknown");
     } finally {
@@ -1498,6 +1551,7 @@ describe("verify — target applicability", () => {
       expect(relativeSdd.exitCode).toBe(2);
       const badRun = verifyCli(f, "not-a-uuid");
       expect(badRun.exitCode).toBe(2);
+      expect(envelopeOf(badRun)).toMatchObject({ command: "sdd.evidence.verify", status: "usage", exitCode: 2 });
       const badTarget = verifyCli(f, result.record.runId, { target: join(root, "no-such-target.json") });
       expect(badTarget.exitCode).toBe(2);
       const badHead = join(root, "bad-head.json");
@@ -1508,7 +1562,7 @@ describe("verify — target applicability", () => {
       const foreignUuid = "00000000-0000-4000-8000-000000000000";
       const missingRun = verifyCli(f, foreignUuid);
       expect(missingRun.exitCode).toBe(1);
-      const assessment = JSON.parse(missingRun.stdout) as { integrity: { ok: boolean }; outcome: string; applicability: string };
+      const assessment = dataOf(missingRun) as { integrity: { ok: boolean }; outcome: string; applicability: string };
       expect(assessment.integrity.ok).toBe(false);
       expect(assessment.applicability).toBe("uncertain");
     } finally {
@@ -1536,7 +1590,7 @@ describe("verify — canonical sdd-dir containment", () => {
         // In place: the canonical location recorded at capture time still verifies.
         const inPlace = verifyCli(f, result.record.runId, { target, env });
         expect(inPlace.exitCode).toBe(0);
-        expect((JSON.parse(inPlace.stdout) as { applicability: string }).applicability).toBe("candidate");
+        expect(dataOf(inPlace).applicability).toBe("candidate");
 
         // The same bundle copied to another control root with the layout
         // preserved (basename still the plan id, parent still "sdd") must be
@@ -1546,8 +1600,8 @@ describe("verify — canonical sdd-dir containment", () => {
         cpSync(join(f.sddDir, "evidence"), join(relocatedSdd, "evidence"), { recursive: true });
         const relocated = verifyCli(f, result.record.runId, { target, sddDir: relocatedSdd, env });
         expect(relocated.exitCode).toBe(2);
-        expect(relocated.stdout).toBe("");
-        expect(relocated.stderr).toContain("canonical");
+        expect(String(envelopeOf(relocated).message)).toContain("canonical");
+        expect(relocated.stderr).toBe("");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -1582,7 +1636,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         //    applicability not-assessed even for the passed run.
         const integrity = verifyCli(f, first.record.runId);
         expect(integrity.exitCode).toBe(0);
-        const integrityAssessment = JSON.parse(integrity.stdout) as {
+        const integrityAssessment = dataOf(integrity) as {
           integrity: { ok: boolean };
           outcome: string;
           applicability: string;
@@ -1590,13 +1644,13 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         expect(integrityAssessment.integrity.ok).toBe(true);
         expect(integrityAssessment.outcome).toBe("passed");
         expect(integrityAssessment.applicability).toBe("not-assessed");
-        expect(integrity.stderr).toContain("integrity only; outcome=passed; acceptance not assessed");
+        expect(integrity.stderr).toBe("");
 
         // 3) Current-target assessment in the same checkout: candidate.
         const currentTarget = targetFileFor(root, f.feature, f.head);
         const candidate = verifyCli(f, first.record.runId, { target: currentTarget, env });
         expect(candidate.exitCode).toBe(0);
-        const candidateAssessment = JSON.parse(candidate.stdout) as {
+        const candidateAssessment = dataOf(candidate) as {
           applicability: string;
           changedInputs: string[];
         };
@@ -1612,7 +1666,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         writeFileSync(stdoutLog, `${originalLog.toString("utf8")}damaged\n`);
         const damaged = verifyCli(f, first.record.runId, { target: currentTarget, env });
         expect(damaged.exitCode).toBe(1);
-        const damagedAssessment = JSON.parse(damaged.stdout) as {
+        const damagedAssessment = dataOf(damaged) as {
           applicability: string;
           integrity: { ok: boolean };
           reasons: string[];
@@ -1628,7 +1682,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
         const changed = verifyCli(f, first.record.runId, { target: currentTarget, env });
         expect(changed.exitCode).toBe(1);
-        const changedAssessment = JSON.parse(changed.stdout) as { applicability: string; changedInputs: string[] };
+        const changedAssessment = dataOf(changed) as { applicability: string; changedInputs: string[] };
         expect(changedAssessment.applicability).toBe("changed");
         expect(changedAssessment.changedInputs).toContain("src/app.js");
         expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
@@ -1647,7 +1701,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         git(["worktree", "remove", "--force", f.feature], f.primary);
         const afterRemoval = verifyCli(f, first.record.runId);
         expect(afterRemoval.exitCode).toBe(0);
-        const afterRemovalAssessment = JSON.parse(afterRemoval.stdout) as {
+        const afterRemovalAssessment = dataOf(afterRemoval) as {
           integrity: { ok: boolean };
           outcome: string;
           applicability: string;
@@ -1669,7 +1723,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         const altTarget = targetFileFor(root, alt, altHead, "alt-checkout");
         const altCandidate = verifyCli(f, first.record.runId, { target: altTarget, env });
         expect(altCandidate.exitCode).toBe(0);
-        const altAssessment = JSON.parse(altCandidate.stdout) as {
+        const altAssessment = dataOf(altCandidate) as {
           applicability: string;
           changedInputs: string[];
         };
