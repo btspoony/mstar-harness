@@ -24,8 +24,3 @@ packages/commands/dist/
 # Generated dashboard assets (regenerated before every CLI build)
 packages/cli/src/dashboard/assets.generated.ts
 
-# MCP package build output is not committed; config-only plugin bundles are staged under mcp/bundles/.
-packages/mcp/dist/
-packages/omp/mcp/
-packages/opencode/mcp/
-packages/dsh/mcp/

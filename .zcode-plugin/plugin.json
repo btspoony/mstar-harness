@@ -25,7 +25,7 @@
   "skills": "./skills/",
   "commands": "./commands/",
   "agents": "./agents/",
-  "mcpServers": "./mcp/zcode.json",
+  "mcpServers": "./.zcode-plugin/mcp.json",
   "interface": {
     "displayName": "Morning Star Harness",
     "shortDescription": "Multi-agent code harness with role-based workflows and quality gates.",

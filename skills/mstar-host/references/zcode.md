@@ -26,9 +26,9 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## MCP delivery
 
-- **Native install and loading**: install **morning-star-harness** from the `mstar-local` marketplace. `.zcode-plugin/plugin.json` references `mcp/zcode.json`, whose `node` command expands `${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js`; this is a committed config-only bundle. `ZCODE_PLUGIN_ROOT` here is specifically the documented MCP plugin-root variable (not an inference from hook variables). Require **Node >=24.18.0** with native `node:sqlite`.
+- **Native install and loading**: install **morning-star-harness** from the `mstar-local` marketplace. `.zcode-plugin/mcp.json` launches `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`; its comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
 - **Context boundary**: optional `host` selects validated host context, not a role or authority; `sessionId` is the main conversation session. Per-call child-agent attribution is neither required nor performed. Shared workflow ownership, path, transition and CAS checks remain authoritative.
-- **Doctor and evidence**: `mstar-harness doctor --target zcode` reports aligned / mismatch / unavailable, checks Node's floor and package files, and never opens `store.db`. H6b's package smoke exercised the selected config from a foreign cwd and verified transport-close teardown; the loader contract was checked against **ZCode 3.10.2** docs, but installed-host behavior is not established by this repository. Live verification is separate authorized work.
+- **Doctor and evidence**: `mstar-harness doctor --target zcode` reports aligned / mismatch / unavailable from the MCP launch config, checks Node's floor, and never opens `store.db`. H6b's config-launched package smoke is superseded by the in-CLI server; installed-host behavior remains unverified and separately authorized.
 
 ## Coordination transport (no host-native seat)
 

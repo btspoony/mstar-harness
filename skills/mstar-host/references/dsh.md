@@ -134,9 +134,9 @@ or a custom profile).
 
 ## MCP delivery
 
-- **Native install and loading**: install `@mstar-harness/dsh` in the `web` profile (`dsh plugin --profile web add @mstar-harness/dsh`; `dsh-llm-fallbacks` remains a separate optional plugin). The established `ctx.inject(['tools'])` registration exposes generated native tools; the plugin package also carries the stdio peer at `mcp/stdio.js`, resolved from its installed module URL rather than consumer cwd. The host runtime floor is **Bun >=1.4.0** with native `node:sqlite`.
+- **Native install and loading**: install `@mstar-harness/dsh` in the `web` profile (`dsh plugin --profile web add @mstar-harness/dsh`; `dsh-llm-fallbacks` remains a separate optional plugin). DSH config is a Cordis YAML row, not `mcp.json`; its row to launch `npx @mstar-harness/cli mcp` is tracked as host-wiring follow-up, so no DSH MCP server is configured yet. The CLI process requires **Node >=24.18.0** when that row is added; the dsh plugin itself remains Bun-hosted.
 - **Context boundary**: optional `host` is validated context selection, not a role or authority grant. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared handler workflow ownership, path, state-transition and CAS checks remain authoritative.
-- **Doctor and evidence**: `mstar-harness doctor --target dsh` classifies the packaged executable and build metadata as aligned / mismatch / unavailable, checks Bun's runtime floor, and never opens `store.db`. H4 exercised the established native callback and the package smoke; neither claims installed-host behavior. A live installed-host check is separate authorized work.
+- **Doctor and evidence**: `mstar-harness doctor --target dsh` currently reports MCP launch as unavailable because the Cordis YAML launch row is follow-up work. It does not open `store.db`. An aligned config would not establish installed-host behavior; live verification is separately authorized.
 
 ## Skill loading
 

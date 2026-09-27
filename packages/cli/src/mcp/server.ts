@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import cliManifest from "../../package.json" with { type: "json" };
 import { getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "./register.js";
 
@@ -6,7 +7,7 @@ export function createMcpServer(
   resolveContext: ResolveContext,
   definitions: readonly CommandDefinition[] = getCommandDefinitions(),
 ): McpServer {
-  const server = new McpServer({ name: "mstar-harness", version: "3.11.2" });
+  const server = new McpServer({ name: "mstar-harness", version: cliManifest.version });
   const services: Array<{ close(): Promise<void> }> = [];
   const closeServices = async () => {
     const running = services.splice(0);

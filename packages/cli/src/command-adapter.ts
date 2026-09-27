@@ -87,13 +87,13 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
             continue;
           }
         } catch {
-          // Fall through to the comma-separated list syntax below.
+          continue;
         }
       }
       decoded[option.key] = value.split(",").map((entry) => entry.trim()).filter(Boolean);
       continue;
     }
-    if (typeof value !== "string" || !hasType(schema, "number")) continue;
+    if (typeof value !== "string" || !hasType(schema, "number") || value.trim() === "") continue;
     const number = Number(value);
     if (Number.isFinite(number)) decoded[option.key] = number;
   }

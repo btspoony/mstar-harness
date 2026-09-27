@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "morning-star": {
-      "command": "./mcp/kimi-launcher.mjs",
-      "args": [],
-      "cwd": "./"
-    }
-  }
-}

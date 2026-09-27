@@ -14,7 +14,6 @@
  *   2026-09-03). The `hooks/` + `tools/` root mirrors are produced by the
  *   `build` script from the `dist/` bundles.
  */
-import { buildMcpPlugin } from "../../../scripts/build-mcp-plugins.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +26,7 @@ const sourceCommands = path.join(repoRoot, "commands");
 const sourceAgents = path.join(repoRoot, "agents");
 const sourceAssets = path.join(repoRoot, "assets");
 const sourcePluginManifest = path.join(repoRoot, ".omp-plugin", "plugin.json");
+const sourceMcpConfig = path.join(repoRoot, ".omp-plugin", "mcp.json");
 
 function copyTree(label: string, from: string, to: string) {
   if (!fs.existsSync(from)) {
@@ -54,11 +54,12 @@ if (!fs.existsSync(sourcePluginManifest)) {
   process.exit(1);
 }
 fs.copyFileSync(sourcePluginManifest, path.join(packageRoot, "plugin.json"));
-const builtMcpBundle = await buildMcpPlugin("omp");
-const mcpDir = path.join(packageRoot, "mcp");
-fs.rmSync(mcpDir, { recursive: true, force: true });
-fs.cpSync(builtMcpBundle, mcpDir, { recursive: true });
+if (!fs.existsSync(sourceMcpConfig)) {
+  console.error(`bundle-harness-assets: missing omp MCP config: ${sourceMcpConfig}`);
+  process.exit(1);
+}
+fs.copyFileSync(sourceMcpConfig, path.join(packageRoot, "mcp.json"));
 
 console.log(
-  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json, MCP -> ${mcpDir}`,
+  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json, mcp.json`,
 );

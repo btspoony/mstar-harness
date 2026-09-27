@@ -30,12 +30,9 @@
  * when it exists and cannot be read) — canonical and symlinked targets alike.
  * This host has no refusal channel, so every one of those verdicts is a
  * decision record + error log, never an OS/tool fence.
- * Native command execution uses the OpenCode MCP tools: the tool's native
- * `sessionID` is supplied directly as the shared T1 invocation context, and
- * shared commands own every admission check, mutation and refusal. The file
- * write hook remains decision-only because `tool.execute.before` returns
- * `Promise<void>` and cannot stop a tool call; its validators report through
- * logs and structured results without claiming an OS/tool fence.
+ * The file write hook remains decision-only because `tool.execute.before`
+ * returns `Promise<void>` and cannot stop a tool call; its validators report
+ * through logs and structured results without claiming an OS/tool fence.
  * Engine-version compat : the snapshot/register
  * validators (`validateWorkflowSnapshot` / `validateProjectRegister`) are
  * P1-only exports absent from the published engine floor `^2.0.2` — they
@@ -80,7 +77,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { closeOpenCodeMcpSession, createOpenCodeMcpTools, type OpenCodeMcpServices } from "./mcp.js";
 type JsonPrimitive = string | number | boolean | null;
 type JsonObject = Record<string, unknown>;
 type FrontmatterAndBody = {
@@ -1200,21 +1196,19 @@ export function validateDispatchAssignment(
 }
 
 export const MorningStarHarnessPlugin: Plugin = async () => {
-  const mcpServices: OpenCodeMcpServices = new Map();
   return {
-    tool: createOpenCodeMcpTools(mcpServices),
-    event: async ({ event }) => {
-      const lifecycle = event as unknown as { type?: unknown; properties?: { info?: { id?: unknown } } };
-      const sessionId = lifecycle.properties?.info?.id;
-      if (lifecycle.type === "session.deleted" && typeof sessionId === "string") {
-        await closeOpenCodeMcpSession(mcpServices, sessionId);
-      }
-    },
     config: async (config: JsonObject) => {
       const runtimeConfig = config as JsonObject & {
         skills?: { paths?: string[] };
         agent?: Record<string, JsonObject>;
         command?: Record<string, JsonObject>;
+        mcp?: Record<string, JsonObject>;
+      };
+      runtimeConfig.mcp ??= {};
+      runtimeConfig.mcp["morning-star"] = {
+        type: "local",
+        command: ["npx", "@mstar-harness/cli", "mcp"],
+        enabled: true,
       };
       runtimeConfig.skills = runtimeConfig.skills || {};
       runtimeConfig.skills.paths = runtimeConfig.skills.paths || [];

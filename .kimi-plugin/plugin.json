@@ -26,9 +26,8 @@
   "commands": "./commands/",
   "mcpServers": {
     "morning-star": {
-      "command": "./mcp/kimi-launcher.mjs",
-      "args": [],
-      "cwd": "./"
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
     }
   },
   "sessionStart": {

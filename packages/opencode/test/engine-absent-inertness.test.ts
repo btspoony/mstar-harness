@@ -15,11 +15,10 @@
  * `node_modules/@mstar-harness/engine` is a STUB whose validation entry
  * points throw `engine unavailable`; loads the ACTUAL plugin source, drives
  * `tool.execute.before` on both the dispatch (`task`) and status-write
- * (`write`) paths, and asserts the hook completes without throwing and the
- * documented abort logs were emitted. The MCP registration module is stubbed
- * here because this test isolates validation-failure behavior; native MCP
- * registration and in-process execution are covered by `mcp-adapter.test.ts`.
- * It never depends on the real `mstar-harness` install.
+ * (`write`) paths, and asserts the hook completes without throwing while
+ * validation aborts are logged. The MCP stdio server runs in the CLI process
+ * and is not part of this plugin-hook validation-failure test. It never depends
+ * on the real `mstar-harness` install.
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";

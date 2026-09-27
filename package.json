@@ -19,8 +19,6 @@
     "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
     "cli:build": "bun run --cwd packages/cli build",
     "cli:pack": "npm pack --workspace @mstar-harness/cli",
-    "mcp:build": "bun run --cwd packages/mcp build",
-    "mcp:pack": "npm pack --workspace @mstar-harness/mcp",
     "opencode:build": "bun run --cwd packages/opencode build",
     "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
     "dsh:build": "bun run --cwd packages/dsh build",
@@ -38,8 +36,7 @@
   "packageManager": "bun@1.4.0",
   "dependencies": {
     "@mstar-harness/commands": "^3.11.2",
-    "@mstar-harness/engine": "^3.11.2",
-    "@mstar-harness/mcp": "^3.11.2"
+    "@mstar-harness/engine": "^3.11.2"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.11",

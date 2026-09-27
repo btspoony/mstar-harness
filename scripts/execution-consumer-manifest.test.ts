@@ -167,34 +167,21 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/cli/scripts/build-web.ts", "export const web = 1;\n");
   write(root, "packages/cli/dist/mstar-harness.js", "// cli bundle\n");
 
-  packageJson(root, "packages/mcp", { bun: ">=1.4.0", node: ">=24.18.0" });
-  write(root, "packages/mcp/tsconfig.json", '{ "include": ["src", "scripts"] }\n');
-  write(root, "packages/mcp/src/stdio.ts", "export const stdio = 1;\n");
-  write(root, "packages/mcp/src/build-info.ts", "export const buildInfo = 1;\n");
-  write(root, "packages/mcp/scripts/package-smoke.ts", "export const smoke = 1;\n");
-  write(root, "scripts/build-mcp-plugins.ts", "export const builder = 1;\n");
-  write(root, "packages/omp/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
-  write(root, "packages/opencode/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
-  write(root, "packages/dsh/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
-  write(root, "packages/mcp/dist/stdio.js", "// MCP server bundle\n");
-  for (const target of ["omp", "opencode", "dsh", "cursor", "codex", "kimi", "zcode"]) {
-    write(root, `mcp/bundles/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
-    write(root, `mcp/bundles/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
-  }
-  for (const file of [
-    "cursor.json",
-    "codex.json",
-    "codex-plugin.json",
-    "kimi.json",
-    "kimi-launcher.mjs",
-    "zcode.json",
+  for (const config of [
+    ".codex-plugin/mcp.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/mcp.json",
+    ".cursor-plugin/plugin.json",
+    ".kimi-plugin/mcp.json",
+    ".kimi-plugin/plugin.json",
+    ".omp-plugin/mcp.json",
+    ".zcode-plugin/mcp.json",
+    ".zcode-plugin/plugin.json",
+    "packages/opencode/mcp.json",
   ]) {
-    write(root, `mcp/${file}`, `// ${file} loader config\n`);
+    write(root, config, `// ${config}\n`);
   }
-  for (const target of ["omp", "opencode", "dsh"]) {
-    write(root, `packages/${target}/mcp/stdio.js`, `// ${target} server bundle\n`);
-    write(root, `packages/${target}/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
-  }
+  write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
 
   packageJson(root, "packages/dsh", { bun: ">=1.4.0" });
   write(root, "packages/dsh/tsconfig.json", '{ "include": ["src"] }\n');
@@ -242,6 +229,7 @@ function buildFixture(options: FixtureOptions = {}): string {
   bundleCopy(root, "assets", "packages/omp/assets");
   write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
   mirrorFile(root, ".omp-plugin/plugin.json", "packages/omp/plugin.json");
+  mirrorFile(root, ".omp-plugin/mcp.json", "packages/omp/mcp.json");
 
   packageJson(root, "packages/opencode", { bun: ">=1.4.0", node: ">=24.18.0" });
   write(root, "packages/opencode/src/mstar.ts", "export const mstar = 1;\n");
@@ -316,7 +304,6 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "cli",
       "dsh",
       "engine",
-      "mcp",
       "omp",
       "opencode",
       "zcode",
@@ -341,14 +328,14 @@ describe("execution-consumer-manifest — canonical collection", () => {
     const omp = manifest.consumers.find((consumer) => consumer.id === "omp");
     expect(omp?.runtime.target).toBe("bun");
     expect(omp?.runtime.floor).toBe(">=1.4.0");
-    // The plugin manifest source is a real copy input, not only its root mirror.
+    // The plugin manifest source and MCP launch config are real copy inputs.
     expect(omp?.sources.files.map((file) => file.path)).toEqual([
+      ".omp-plugin/mcp.json",
       ".omp-plugin/plugin.json",
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ]);
-    // The plugin loads the package-root convention mirrors, so they are part of
-    // the generated closure, not only `dist`.
+    // The plugin loads package-root convention mirrors, so they are part of the generated closure, not only `dist`.
     expect(omp?.generated.trees.map((tree) => tree.root)).toEqual([
       "packages/omp/dist",
       "packages/omp/extensions",
@@ -376,7 +363,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
       ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
     expect(engineDist?.files).toBe(4);
 
-    // OpenCode's native MCP tools execute mutating commands, so it is a writer.
+    // OpenCode dynamically injects the CLI MCP server, whose handlers mutate; it remains a writer.
     const opencode = manifest.consumers.find((consumer) => consumer.id === "opencode");
     expect(opencode?.capability).toBe("writer");
     expect(opencode?.capabilityNote).toBeNull();
@@ -465,7 +452,7 @@ describe("execution-consumer-manifest — verification refusals", () => {
     verifyExecutionConsumerManifest(manifest);
     const loaderDrift = buildFixture();
     const loaderManifest = collectExecutionConsumerManifest(loaderDrift);
-    writeFileSync(join(loaderDrift, "mcp/codex.json"), "// stale Codex loader config\n");
+    writeFileSync(join(loaderDrift, ".codex-plugin/mcp.json"), "// stale Codex loader config\n");
     expectRefusal(() => verifyExecutionConsumerManifest(loaderManifest), "consumer.digest-mismatch");
 
     writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
@@ -754,7 +741,6 @@ describe("execution-consumer-manifest — CLI", () => {
       "packages/cli/dist/execution-consumer.json",
       "packages/dsh/dist/execution-consumer.json",
       "packages/engine/dist/execution-consumer.json",
-      "packages/mcp/dist/execution-consumer.json",
       "packages/omp/dist/execution-consumer.json",
       "packages/opencode/dist/execution-consumer.json",
       "scripts/packaging-manifests/manifest.json",
@@ -968,7 +954,6 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
       "scripts/packaging-manifests/cli.json",
       "scripts/packaging-manifests/dsh.json",
       "scripts/packaging-manifests/engine.json",
-      "scripts/packaging-manifests/mcp.json",
       "scripts/packaging-manifests/omp.json",
       "scripts/packaging-manifests/opencode.json",
       "scripts/packaging-manifests/zcode.json",
@@ -1040,7 +1025,7 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
     }
     // And the manifest this producer already verifies stays valid with them on
     // disk: the evidence documents are not part of any digested closure.
-    expect(executionConsumerManifestPaths(root).length).toBe(7);
+    expect(executionConsumerManifestPaths(root).length).toBe(6);
   });
 
   test("--write publishes the evidence documents and --check verifies them", async () => {

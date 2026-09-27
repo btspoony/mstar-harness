@@ -7,7 +7,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildMcpPlugin } from "../../../scripts/build-mcp-plugins.ts";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const packageRoot = path.resolve(__dirname, "..");
 export const repoRoot = path.resolve(packageRoot, "..", "..");
@@ -47,9 +46,5 @@ if (import.meta.main) {
   // repo-root agents/ is the cross-host subagent surface and must not carry them.
   mergeTree("opencode-agents", sourceOpenCodeAgents, destAgents);
   copyTree("commands", sourceCommands, destCommands);
-  const builtMcpBundle = await buildMcpPlugin("opencode");
-  const mcpDir = path.join(packageRoot, "mcp");
-  fs.rmSync(mcpDir, { recursive: true, force: true });
-  fs.cpSync(builtMcpBundle, mcpDir, { recursive: true });
-  console.log(`bundle-harness-assets: synced skills -> ${destSkills}, agents -> ${destAgents} (+ OpenCode-only overlays), commands -> ${destCommands}, MCP -> ${mcpDir}`);
+  console.log(`bundle-harness-assets: synced skills -> ${destSkills}, agents -> ${destAgents} (+ OpenCode-only overlays), commands -> ${destCommands}`);
 }

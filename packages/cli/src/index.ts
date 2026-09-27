@@ -13,6 +13,7 @@ import { ensureGlobalCli } from "./global-cli";
 import type { InitOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
+import { registerMcpCommand } from "./mcp/command";
 
 const packageVersion = readHarnessVersion();
 const reportSurfaceVersions = {
@@ -131,6 +132,7 @@ registerCliCommands(program, getCommandDefinitions(), {
     async openBrowser() { throw new Error("browser effect is supplied per invocation"); },
   },
 });
+registerMcpCommand(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   const usage = mapParserError(error, process.argv);

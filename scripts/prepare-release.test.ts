@@ -28,12 +28,12 @@ packages: CLI, Root
   test("single unknown token produces one error naming file + token", () => {
     const errors = validateFragmentPackages(["root", "scripts"], "typo.md");
     expect(errors).toEqual([
-      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
+      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
     ]);
   });
 
-  test("accepts newly published command and MCP package tokens", () => {
-    expect(validateFragmentPackages(["commands", "mcp"], "new-packages.md")).toEqual([]);
+  test("accepts published command package token", () => {
+    expect(validateFragmentPackages(["commands"], "new-packages.md")).toEqual([]);
   });
 
   test("collects every error across files/tokens (not first-error only)", () => {
@@ -42,9 +42,9 @@ packages: CLI, Root
       ...validateFragmentPackages(["engine", "dshh"], "b.md"),
     ];
     expect(errors).toEqual([
-      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
-      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
-      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|commands|mcp|dsh|omp)',
+      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
+      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
+      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
     ]);
   });
 
@@ -70,7 +70,6 @@ describe("syncRootDependencySpecs (hosted root manifest)", () => {
   "dependencies": {
     "@mstar-harness/commands": "${spec}",
     "@mstar-harness/engine": "${spec}",
-    "@mstar-harness/mcp": "${spec}"
   },
   "devDependencies": {
     "@mstar-harness/commands": "workspace:*"
@@ -80,7 +79,7 @@ describe("syncRootDependencySpecs (hosted root manifest)", () => {
 
   test("rewrites every workspace runtime dependency and leaves build links untouched", () => {
     const out = syncRootDependencySpecs(manifest("workspace:*"), "3.5.0");
-    for (const name of ["commands", "engine", "mcp"]) {
+    for (const name of ["commands", "engine"]) {
       expect(out).toContain(`"@mstar-harness/${name}": "^3.5.0"`);
     }
     expect(out).toContain('"devDependencies": {\n    "@mstar-harness/commands": "workspace:*"\n  }');
@@ -88,7 +87,7 @@ describe("syncRootDependencySpecs (hosted root manifest)", () => {
 
   test("rewrites stale ranges to stable and prerelease release ranges", () => {
     expect(syncRootDependencySpecs(manifest("^3.4.0"), "3.5.0")).not.toContain("^3.4.0");
-    expect(syncRootDependencySpecs(manifest("workspace:*"), "3.6.0-alpha.1")).toContain('"@mstar-harness/mcp": "^3.6.0-alpha.1"');
+    expect(syncRootDependencySpecs(manifest("workspace:*"), "3.6.0-alpha.1")).toContain('"@mstar-harness/engine": "^3.6.0-alpha.1"');
   });
 });
 
@@ -164,11 +163,11 @@ describe("marketplace manifest surfaces (nested version locator)", () => {
     expect(nested.map((s) => s.path).sort()).toEqual([".claude-plugin/marketplace.json", "marketplace.json"]);
     for (const s of nested) expect(s.versionPath).toBe("plugins.0.version");
   });
-  test("commands and MCP join version and package changelog surfaces", () => {
+  test("commands remain versioned; the standalone MCP package is retired", () => {
     expect(VERSION_SURFACES.map((surface) => surface.path)).toContain("packages/commands/package.json");
-    expect(VERSION_SURFACES.map((surface) => surface.path)).toContain("packages/mcp/package.json");
+    expect(VERSION_SURFACES.map((surface) => surface.path)).not.toContain("packages/mcp/package.json");
     expect(CHANGELOGS.map((surface) => surface.pkg)).toContain("commands");
-    expect(CHANGELOGS.map((surface) => surface.pkg)).toContain("mcp");
+    expect(CHANGELOGS.map((surface) => surface.pkg)).not.toContain("mcp");
   });
 
   test("readVersionAt walks the dotted locator; default reads the root version", () => {

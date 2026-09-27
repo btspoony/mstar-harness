@@ -176,20 +176,18 @@ mstar report --title "Synthetic example" --command "mstar status" \
 
 The generated prompt asks you to review it before submission. For CLI and MCP details, see [report command usage](INSTALL.md#report-command).
 
-### MCP runtime peer
+### MCP runtime
 
-`@mstar-harness/mcp` is the stdio peer to the CLI, not a second command implementation: it imports the same canonical definitions and invokes the shared command handlers in-process. The host launches the packaged server; it does not need a global `mstar` executable, and the server does not invoke the CLI. The package provides `dist/stdio.js` for Node.js and `dist/bun/stdio.js` for Bun.
+`mstar mcp` runs the stdio MCP server from the same `@mstar-harness/cli` package as the command-line interface. It registers the canonical non-installer commands as MCP tools (names use the `mstar_` prefix and replace command dots and hyphens with underscores). There is no standalone `@mstar-harness/mcp` package, per-host bundle, or native bridge.
 
-Use Node.js >=24.18.0 for `dist/stdio.js` or Bun >=1.4.0 for `dist/bun/stdio.js`; these floors include the engine's native SQLite requirement.
-
-The server registers the canonical non-installer commands as MCP tools; tool names use the `mstar_` prefix and replace command dots and hyphens with underscores. A synthetic Node host registration looks like:
+Six host configurations launch the CLI with `npx @mstar-harness/cli mcp`; DSH’s Cordis YAML launch row remains follow-up work. This requires a published CLI version that contains the `mcp` command; until that release is published, `npx` may resolve an older CLI that does not recognize it. Node.js >=24.18.0 is required by the CLI and engine.
 
 ```json
 {
   "mcpServers": {
     "morning-star": {
-      "command": "node",
-      "args": ["/path/to/@mstar-harness/mcp/dist/stdio.js"]
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
     }
   }
 }
@@ -202,21 +200,22 @@ MCP-captured SDD evidence records are `stable:false`; collector parity with the 
 
 ### MCP host install paths
 
-Install the host plugin; each plugin owns its MCP configuration and packaged stdio server. A global CLI is not required to use the installed MCP tools. Runtime floors apply to the executable that launches the server, not to the host UI:
+The six JSON-backed host configs and OpenCode's plugin `config` hook launch the CLI with `npx @mstar-harness/cli mcp`; DSH's Cordis YAML launch row is a follow-up. `npx` may download the CLI package at launch, so the CLI version containing `mcp` must be published first:
 
-| Host | Native install / MCP entry | Runtime |
-|------|----------------------------|---------|
-| omp | `omp plugin install @mstar-harness/omp`; native tools and stdio peer are plugin-owned; the stdio entry resolves from the installed module URL, not the project cwd. | Bun >=1.4.0 |
-| OpenCode | Install `@mstar-harness/opencode`; its V1 plugin registers generated native tools and ships a package-relative `mcp/stdio.js` peer. Supported `@opencode-ai/plugin` version: **1.4.8**; no V2 migration or global-CLI fallback. | Node >=24.18.0 |
-| dsh | Install `@mstar-harness/dsh` in the `web` profile; the plugin registers generated native tools and bundles its stdio peer at `mcp/stdio.js`. | Bun >=1.4.0 |
-| Cursor | Install the plugin; its MCP config launches `node ${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js`. | Node >=24.18.0 |
-| Codex | Add `morning-star-harness@mstar-repo`; its config launches `node ${PLUGIN_ROOT}/mcp/bundles/codex/dist/mcp/stdio.js`. | Node >=24.18.0 |
-| Kimi | In Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`; the plugin-local `./mcp/kimi-launcher.mjs` resolves the bundled server relative to its own location. | Node >=24.18.0 |
-| ZCode | Install **morning-star-harness** from the `mstar-local` marketplace; its config launches `node ${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js`. | Node >=24.18.0 |
+| Host | MCP config | Runtime |
+|------|------------|---------|
+| omp | Plugin `mcp.json` | Node.js >=24.18.0 |
+| OpenCode | `packages/opencode/mcp.json` template; the plugin injects `mcp` into OpenCode config at load | Node.js >=24.18.0 |
+| dsh | Cordis profile YAML MCP launch row — follow-up (no JSON config in this package) | Not configured |
+| Cursor | `.cursor-plugin/mcp.json` | Node.js >=24.18.0 |
+| Codex | `.codex-plugin/mcp.json` | Node.js >=24.18.0 |
+| Kimi | `.kimi-plugin/mcp.json` | Node.js >=24.18.0 |
+| ZCode | `.zcode-plugin/mcp.json` | Node.js >=24.18.0 |
 
 For exact install commands and configuration details, see [INSTALL.md](INSTALL.md#installing-the-mcp-tools). The target-specific artifacts are also described in [`mstar-host` references](skills/mstar-host/SKILL.md).
 
-`doctor --target <host>` interprets MCP health as **aligned**, **mismatch**, or **unavailable** for that host's packaged executable and build metadata; a mismatch or unavailable artifact is a finding, not an installed-host success. Doctor checks the selected process runtime floor and package files; it does **not** open the issue store. MCP context keeps the shared contract: optional `host` selects validated host context, `sessionId` is the main conversation session, and child-agent attribution is neither required nor performed. Development unit/component/integration and package-smoke evidence is distinct from installed-host/live verification, which requires a separately authorized activity and is not claimed here.
+`doctor --target <host>` reports MCP config status as **aligned**, **mismatch**, or **unavailable**; an aligned config is not an installed-host success claim. Doctor checks the configured CLI launch and Node.js floor; it does **not** start the server or open the issue store. MCP context keeps the shared contract: optional `host` selects validated host context, `sessionId` is the main conversation session, and child-agent attribution is neither required nor performed. Development unit/component/integration evidence is distinct from installed-host/live verification, which requires a separately authorized activity and is not claimed here.
+OpenCode's plugin adds the MCP server through its dynamic config hook; its packaged `mcp.json` is a reference template, not a static user `opencode.json` requirement. DSH uses a Cordis YAML plugin row; its npx launch row is a separately tracked host-wiring follow-up and `doctor --target dsh` currently reports unavailable.
 
 ## Harness Workflow
 

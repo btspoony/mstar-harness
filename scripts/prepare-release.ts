@@ -54,7 +54,7 @@ const UNRELEASED_DIR = `${CHANGES_DIR}/unreleased`;
 const ARCHIVE_DIR = `${CHANGES_DIR}/archive`;
 
 // Valid `packages:` tokens for changelog fragments (.changes/README.md).
-const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "commands", "mcp", "dsh", "omp"];
+const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "commands", "dsh", "omp"];
 
 const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
@@ -62,7 +62,6 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
   engine: "Changed",
   commands: "Changed",
-  mcp: "Changed",
   dsh: "Changed",
   omp: "Changed",
 };
@@ -203,14 +202,14 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       lines.push(
         "### 版本对齐",
         "",
-        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、\`@mstar-harness/mcp\`、\`@mstar-harness/dsh\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ ${version}**。`,
+        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、\`@mstar-harness/dsh\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ ${version}**。`,
         "",
       );
     } else {
       lines.push(
         "### Version alignment",
         "",
-        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, \`@mstar-harness/mcp\`, \`@mstar-harness/dsh\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ ${version}**.`,
+        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, \`@mstar-harness/dsh\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ ${version}**.`,
         "",
       );
     }
@@ -273,7 +272,6 @@ export async function bumpJsonVersion(
 const ROOT_VERSIONED_DEPENDENCIES = [
   "@mstar-harness/commands",
   "@mstar-harness/engine",
-  "@mstar-harness/mcp",
 ] as const;
 
 /** Keep shipped root dependencies resolvable outside the workspace. */

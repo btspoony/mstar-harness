@@ -177,20 +177,18 @@ mstar report --title "Synthetic example" --command "mstar status" \
 
 生成的提示会要求你在提交前检查草稿。CLI 与 MCP 用法见[报告命令用法](INSTALL.md#report-command)。
 
-### MCP 运行时 peer
+### MCP 运行时
 
-`@mstar-harness/mcp` 是 CLI 的 stdio peer，而不是第二套命令实现：它导入同一份规范命令定义，并在进程内调用共享命令处理器。宿主启动打包后的 server；运行时不需要全局 `mstar` 可执行文件，server 也不会调用 CLI。包提供 Node.js 入口 `dist/stdio.js` 和 Bun 入口 `dist/bun/stdio.js`。
+`mstar mcp` 由 `@mstar-harness/cli` 直接运行 stdio MCP server，与 CLI 共用同一个包。它将规范定义中的非安装器命令注册为 MCP tools（工具名以 `mstar_` 开头，并将命令 ID 中的点和连字符替换为下划线）。不再提供独立的 `@mstar-harness/mcp` 包、宿主专属 bundle 或原生桥接。
 
-运行 `dist/stdio.js` 需要 Node.js >=24.18.0，运行 `dist/bun/stdio.js` 需要 Bun >=1.4.0；此下限包含引擎对原生 SQLite 的要求。
-
-Server 将规范定义中的非安装器命令注册为 MCP tools；工具名以 `mstar_` 开头，并将命令 ID 中的点和连字符替换为下划线。以下是合成的 Node 宿主注册示例：
+六个宿主配置通过 `npx @mstar-harness/cli mcp` 启动 CLI；DSH 的 Cordis YAML 启动项仍待后续接入。这要求 CLI 中包含 `mcp` 命令的版本已发布；在该版本发布前，`npx` 可能解析到尚不识别该命令的旧版 CLI。CLI 与引擎要求 Node.js >=24.18.0。
 
 ```json
 {
   "mcpServers": {
     "morning-star": {
-      "command": "node",
-      "args": ["/path/to/@mstar-harness/mcp/dist/stdio.js"]
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
     }
   }
 }
@@ -200,23 +198,25 @@ Server 将规范定义中的非安装器命令注册为 MCP tools；工具名以
 
 示例均为合成示例；本文不声称已在已安装宿主、浏览器或在线服务上运行。
 MCP 捕获的 SDD 证据记录为 `stable:false`；与 CLI 的采集器一致性仍是已记录的跨计划 residual。
+
 ### MCP 宿主安装路径
 
-安装宿主插件后，插件自带 MCP 配置与打包的 stdio server；使用已安装 MCP 工具不要求全局 CLI。运行时下限取决于启动 server 的可执行入口，而非宿主 UI：
+六个 JSON 宿主配置和 OpenCode 插件的 `config` hook 都通过 `npx @mstar-harness/cli mcp` 启动 CLI；DSH 的 Cordis YAML 启动行留待后续接入。`npx` 启动时可能下载 CLI 包，因此必须先发布包含 `mcp` 的 CLI 版本：
 
-| 宿主 | 原生安装 / MCP 入口 | 运行时 |
-|------|--------------------|--------|
-| omp | `omp plugin install @mstar-harness/omp`；工具与 stdio peer 随插件包提供，从已安装模块解析，不依赖项目 cwd。 | Bun >=1.4.0 |
-| OpenCode | 安装 `@mstar-harness/opencode`；其 V1 插件注册生成的原生工具，并随包提供相对路径 `mcp/stdio.js` 的 MCP peer。支持的 `@opencode-ai/plugin` 版本：**1.4.8**；不迁移 V2，也不回退到全局 CLI。 | Node >=24.18.0 |
-| dsh | 在 `web` profile 安装 `@mstar-harness/dsh`；原生工具与包内相对路径 `mcp/stdio.js` 由插件提供。 | Bun >=1.4.0 |
-| Cursor | 安装插件；MCP 配置通过 `node ${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js` 启动。 | Node >=24.18.0 |
-| Codex | 添加 `morning-star-harness@mstar-repo`；配置通过 `node ${PLUGIN_ROOT}/mcp/bundles/codex/dist/mcp/stdio.js` 启动。 | Node >=24.18.0 |
-| Kimi | 在 Kimi TUI 运行 `/plugins install https://github.com/btspoony/mstar-harness`，再运行 `/plugins reload`；插件内 `./mcp/kimi-launcher.mjs` 按自身位置解析打包的 server。 | Node >=24.18.0 |
-| ZCode | 从 `mstar-local` marketplace 安装 **morning-star-harness**；配置通过 `node ${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js` 启动。 | Node >=24.18.0 |
+| 宿主 | MCP 配置 | 运行时 |
+|------|----------|--------|
+| omp | 插件 `mcp.json` | Node.js >=24.18.0 |
+| OpenCode | `packages/opencode/mcp.json` 模板；插件加载时动态注入 OpenCode 的 `mcp` 配置 | Node.js >=24.18.0 |
+| dsh | Cordis profile YAML MCP 启动行 — 后续跟进（此包不提供 JSON 配置） | 未配置 |
+| Cursor | `.cursor-plugin/mcp.json` | Node.js >=24.18.0 |
+| Codex | `.codex-plugin/mcp.json` | Node.js >=24.18.0 |
+| Kimi | `.kimi-plugin/mcp.json` | Node.js >=24.18.0 |
+| ZCode | `.zcode-plugin/mcp.json` | Node.js >=24.18.0 |
 
 精确安装命令与配置细节见 [INSTALL.md](INSTALL.md#installing-the-mcp-tools)。宿主对应的实际产物也见 [`mstar-host` references](skills/mstar-host/SKILL.md)。
 
-`doctor --target <host>` 将该宿主打包的可执行文件与 build metadata 状态解释为 **aligned**、**mismatch** 或 **unavailable**；mismatch / unavailable 是诊断结果，不代表已安装宿主验证成功。Doctor 检查所选进程的运行时下限与包文件，**不会**打开 issue store。MCP 上下文遵循共享契约：可选 `host` 选择经校验的宿主上下文，`sessionId` 是主对话会话；不要求也不执行子代理归因。开发阶段的单测/组件/集成与 package-smoke 证据，不等于已安装宿主或在线验证；后者属于需单独授权的活动，本文不声称已完成。
+`doctor --target <host>` 将 MCP 配置状态报告为 **aligned**、**mismatch** 或 **unavailable**；配置 aligned 不代表已验证宿主实际运行。Doctor 检查配置的 CLI 启动参数和 Node.js 下限，**不会**启动 server 或打开 issue store。MCP 上下文遵循共享契约：可选 `host` 选择经校验的宿主上下文，`sessionId` 是主对话会话；不要求也不执行子代理归因。开发阶段的单测/组件/集成证据，不等于已安装宿主或在线验证；后者属于需单独授权的活动，本文不声称已完成。
+OpenCode 插件通过动态 config hook 注册 MCP server；包内 `mcp.json` 是参考模板，不要求静态修改用户的 `opencode.json`。DSH 使用 Cordis YAML 插件行；其 npx 启动行是单独跟踪的宿主接入后续工作，目前 `doctor --target dsh` 会报告 unavailable。
 
 
 ## Harness Workflow（统一流程）

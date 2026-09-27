@@ -24,7 +24,7 @@ export function getReportCommandDefinitions(): readonly CommandDefinition<Report
     output: commandEnvelopeSchema as CommandDefinition<ReportInput, ReportData>["output"],
     decodeCliInput(input) {
       const decoded = { ...input };
-      if (decoded.arguments !== undefined) {
+      if (decoded.arguments !== undefined && !Array.isArray(decoded.arguments)) {
         try {
           decoded.arguments = JSON.parse(String(decoded.arguments));
         } catch {

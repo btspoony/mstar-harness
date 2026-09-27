@@ -55,7 +55,6 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION, serializeExecutionValue } from "../packages/engine/src/index.ts";
-import { MCP_BUILD_INFO_FILENAME } from "../packages/mcp/src/build-info.ts";
 
 export const CONSUMER_MANIFEST_PROTOCOL = "consumer-v1" as const;
 
@@ -285,60 +284,6 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     copies: [],
   },
   {
-    id: "mcp",
-    packageRoot: "packages/mcp",
-    capability: "writer",
-    capabilityNote: null,
-    runtime: { target: "node", declaration: "package-engines" },
-    packageJson: "packages/mcp/package.json",
-    entrypoint: "packages/mcp/dist/stdio.js",
-    sourceTrees: [{ root: "packages/mcp/src" }, { root: "packages/mcp/scripts" }],
-    sourceFiles: [
-      "packages/mcp/package.json",
-      "packages/mcp/tsconfig.json",
-      "scripts/build-mcp-plugins.ts",
-      "packages/omp/scripts/bundle-harness-assets.ts",
-      "packages/opencode/scripts/bundle-harness-assets.ts",
-      "packages/dsh/scripts/bundle-harness-assets.ts",
-      "mcp/cursor.json",
-      "mcp/codex.json",
-      "mcp/codex-plugin.json",
-      "mcp/kimi.json",
-      "mcp/kimi-launcher.mjs",
-      "mcp/zcode.json",
-    ],
-    generatedTrees: [
-      { root: "packages/mcp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/opencode/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/dsh/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
-    ],
-    generatedFiles: [
-      "packages/mcp/dist/stdio.js",
-      "mcp/bundles/omp/dist/mcp/stdio.js",
-      `mcp/bundles/omp/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/opencode/dist/mcp/stdio.js",
-      `mcp/bundles/opencode/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/dsh/dist/mcp/stdio.js",
-      `mcp/bundles/dsh/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/cursor/dist/mcp/stdio.js",
-      `mcp/bundles/cursor/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/codex/dist/mcp/stdio.js",
-      `mcp/bundles/codex/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/kimi/dist/mcp/stdio.js",
-      `mcp/bundles/kimi/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "mcp/bundles/zcode/dist/mcp/stdio.js",
-      `mcp/bundles/zcode/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "packages/omp/mcp/stdio.js",
-      `packages/omp/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "packages/opencode/mcp/stdio.js",
-      `packages/opencode/mcp/${MCP_BUILD_INFO_FILENAME}`,
-      "packages/dsh/mcp/stdio.js",
-      `packages/dsh/mcp/${MCP_BUILD_INFO_FILENAME}`,
-    ],
-    copies: [],
-  },
-  {
     id: "dsh",
     packageRoot: "packages/dsh",
     capability: "writer",
@@ -376,11 +321,11 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     entrypoint: "packages/omp/dist/hooks/pre/mstar-gates.js",
     sourceTrees: [{ root: "packages/omp/src" }, { root: "packages/omp/scripts" }],
     sourceFiles: [
+      ".omp-plugin/mcp.json",
       ".omp-plugin/plugin.json",
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ],
-    // `dist` plus the package-root convention mirrors the build produces with
     // `cp -R` (hooks/extensions) — the plugin loads the mirrors.
     generatedTrees: [
       { root: "packages/omp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
@@ -391,7 +336,7 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "packages/omp/dist/extensions/model-handoff.js",
       "packages/omp/dist/extensions/phase2-orchestration.js",
       "packages/omp/dist/hooks/pre/mstar-gates.js",
-      // `bundle-assets` copies the omp plugin manifest to the package root.
+      "packages/omp/mcp.json",
       "packages/omp/plugin.json",
     ],
     copies: [
@@ -408,7 +353,7 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     packageJson: "packages/opencode/package.json",
     entrypoint: "packages/opencode/dist/mstar.js",
     sourceTrees: [{ root: "packages/opencode/src" }, { root: "packages/opencode/scripts" }],
-    sourceFiles: ["packages/opencode/package.json"],
+    sourceFiles: ["packages/opencode/mcp.json", "packages/opencode/package.json"],
     generatedTrees: [{ root: "packages/opencode/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
     generatedFiles: ["packages/opencode/dist/mstar.js"],
     copies: [
@@ -434,7 +379,19 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     // The hook bundle inlines the engine, so the engine source is part of this
     // consumer's input closure, not only the hook's own source.
     sourceTrees: [{ root: "hooks/src" }, { root: "packages/engine/src" }],
-    sourceFiles: ["scripts/build-zcode-hooks.ts"],
+    sourceFiles: [
+      ".codex-plugin/mcp.json",
+      ".codex-plugin/plugin.json",
+      ".cursor-plugin/mcp.json",
+      ".cursor-plugin/plugin.json",
+      ".kimi-plugin/mcp.json",
+      ".kimi-plugin/plugin.json",
+      ".omp-plugin/mcp.json",
+      ".omp-plugin/plugin.json",
+      ".zcode-plugin/mcp.json",
+      ".zcode-plugin/plugin.json",
+      "scripts/build-zcode-hooks.ts",
+    ],
     generatedTrees: [],
     generatedFiles: ["hooks/mstar-write-gate.mjs"],
     copies: [],

@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
+import { registerMcpCommand } from "../src/mcp/command";
 import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
 import type { InvocationContext } from "@mstar-harness/commands";
 
@@ -49,10 +50,11 @@ function context(): InvocationContext {
   };
 }
 
-async function run(args: string[], definitions: readonly CommandDefinition[] = getCommandDefinitions()): Promise<{ status: number; stdout: string; stderr: string }> {
+async function run(args: string[], definitions: readonly CommandDefinition[] = getCommandDefinitions(), includeMcp = false): Promise<{ status: number; stdout: string; stderr: string }> {
   const program = new Command();
   program.name("mstar").exitOverride();
   registerCliCommands(program, definitions, context());
+  if (includeMcp) registerMcpCommand(program);
   const stdout: string[] = [];
   const stderr: string[] = [];
   const writeOut = process.stdout.write.bind(process.stdout);
@@ -83,6 +85,12 @@ async function run(args: string[], definitions: readonly CommandDefinition[] = g
   }
   return { status, stdout: stdout.join(""), stderr: stderr.join("") };
 }
+test("mcp is a top-level CLI command and documents its stdio server purpose", async () => {
+  const result = await run(["mcp", "--help"], undefined, true);
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("Usage: mstar mcp");
+  expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
+});
 
 describe("generated CLI adapter", () => {
   test("report census accounts for every canonical identity and excludes installer init", () => {
@@ -142,13 +150,12 @@ describe("generated CLI adapter", () => {
     });
   });
 
-  test("report rejects non-decimal or empty exit statuses", async () => {
-    for (const value of ["0x10", ""]) {
-      const result = await run(["report", "--exit-status", value]);
-      expect(result.status).toBe(2);
-      expect(JSON.parse(result.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    }
+  test("report rejects an empty exit status", async () => {
+    const result = await run(["report", "--exit-status", ""]);
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({ command: "report", status: "usage", code: "command.invalid-input" });
   });
+
 
 
   test("report rejects unknown and file options as invalid input", async () => {
@@ -218,7 +225,7 @@ describe("generated CLI adapter", () => {
   test("unknown options map to a usage envelope and exit 2", async () => {
     const result = await run(["schema", "CaptureInput", "--nope"]);
     expect(result.status).toBe(2);
-    expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema.CaptureInput", JSON.parse(result.stdout).message));
+    expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
   });
 });
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {

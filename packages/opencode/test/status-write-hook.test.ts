@@ -454,8 +454,7 @@ describe("plugin wiring (tool.execute.before)", () => {
         { args: { filePath: statusPath, content: JSON.stringify(validDoc) } },
       );
       warnings = restore2();
-      // A valid document produces no validation warning. Native MCP execution
-      // does not consult the legacy global CLI for this hook.
+      // A valid document produces no validation warning.
       const harnessLines = warnings.filter((w) => w.includes("[mstar-harness]"));
       expect(harnessLines).toEqual([]);
     } finally {

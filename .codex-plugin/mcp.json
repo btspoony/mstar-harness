@@ -1,0 +1,11 @@
+// Requires a published @mstar-harness/cli version that includes the mcp subcommand.
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "morning-star": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  }
+}

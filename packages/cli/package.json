@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/cli",
   "version": "3.11.2",
-  "description": "Morning Star harness CLI — installer bootstrap plus a generated adapter over the canonical command definitions.",
+  "description": "Morning Star harness CLI — installer bootstrap, canonical command adapter, and stdio MCP server.",
   "repository": {
     "type": "git",
     "url": "https://github.com/btspoony/mstar-harness.git",
@@ -29,8 +29,10 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.2",
+    "@modelcontextprotocol/server": "2.1.0",
     "commander": "^14.0.3",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "^4.2.0"
   },
   "publishConfig": {
     "access": "public"
