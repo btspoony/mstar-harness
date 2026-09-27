@@ -218,7 +218,6 @@ MCP 捕获的 SDD 证据记录为 `stable:false`；与 CLI 的采集器一致性
 `doctor --target <host>` 将 MCP 配置状态报告为 **aligned**、**mismatch** 或 **unavailable**；配置 aligned 不代表已验证宿主实际运行。Doctor 检查配置的 CLI 启动参数和 Node.js 下限，**不会**启动 server 或打开 issue store。MCP 上下文遵循共享契约：可选 `host` 选择经校验的宿主上下文，`sessionId` 是主对话会话；不要求也不执行子代理归因。开发阶段的单测/组件/集成证据，不等于已安装宿主或在线验证；后者属于需单独授权的活动，本文不声称已完成。
 OpenCode 插件通过动态 config hook 注册 MCP server；包内 `mcp.json` 是参考模板，不要求静态修改用户的 `opencode.json`。DSH 使用 Cordis YAML 插件行；其 npx 启动行是单独跟踪的宿主接入后续工作，目前 `doctor --target dsh` 会报告 unavailable。
 
-
 ## Harness Workflow（统一流程）
 
 ```mermaid
