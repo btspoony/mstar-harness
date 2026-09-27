@@ -34778,7 +34778,7 @@ var R1_CONSUMER_CAPABILITY = {
   cli: "writer",
   dsh: "writer",
   omp: "writer",
-  opencode: "decision-only",
+  opencode: "writer",
   zcode: "writer"
 };
 var SURFACE_CONSUMERS = {
@@ -74434,9 +74434,9 @@ import fs from "node:fs";
 import { createHash as createHash20 } from "node:crypto";
 import path15 from "node:path";
 import { execFileSync as execFileSync22 } from "node:child_process";
-import fs12 from "node:fs";
+import fs13 from "node:fs";
 import os6 from "node:os";
-import path25 from "node:path";
+import path26 from "node:path";
 import path16 from "node:path";
 import fs4, { realpathSync as realpathSync10 } from "node:fs";
 import path18 from "node:path";
@@ -74456,6 +74456,592 @@ import path23 from "node:path";
 import fs11 from "node:fs";
 import os5 from "node:os";
 import path24 from "node:path";
+import fs12 from "node:fs";
+import path25 from "node:path";
+
+// ../engine/dist/audit.js
+import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage22 } from "node:async_hooks";
+import { createRequire as createRequire3 } from "node:module";
+var DATE_PART2 = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
+var RFC3339_Z_RE2 = new RegExp(String.raw`^${DATE_PART2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
+var DATE_ONLY_RE2 = new RegExp(String.raw`^${DATE_PART2}$`);
+var heldLockDirs2 = new AsyncLocalStorage4;
+var writeAuthorizations2 = new AsyncLocalStorage22;
+var requireDriver2 = createRequire3(import.meta.url);
+var MIGRATION_1_SQL2 = `
+create table store_meta(
+  id integer primary key check (id = 1),
+  store_id text not null,
+  authority_state text not null check (authority_state in ('staged','active')),
+  authority_epoch integer not null,
+  revision integer not null,
+  catalog_revision integer not null default 0,
+  created_at text not null,
+  activated_at text
+);
+create table issue_counter(
+  id integer primary key check (id = 1),
+  next_value integer not null check (next_value > 0)
+);
+create table issues(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','info')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique
+);
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create table occurrences(
+  id integer primary key,
+  issue_id text not null references issues(id),
+  occurrence_key text not null unique,
+  source_kind text not null,
+  source_identity text not null,
+  root_cause_key text not null,
+  acceptance_key text not null,
+  location text not null,
+  observed_behavior text not null,
+  evidence_json text not null,
+  discovered_at text,
+  recorded_at text not null,
+  imported integer not null default 0 check (imported in (0, 1))
+);
+create index occurrences_issue_activity on occurrences(issue_id, discovered_at, id);
+create table relations(
+  from_issue text not null references issues(id),
+  relation text not null check (relation in ('related','blocks','duplicate-of','superseded-by')),
+  to_issue text not null references issues(id),
+  primary key (from_issue, relation, to_issue),
+  check (from_issue != to_issue),
+  check (relation != 'related' or from_issue < to_issue)
+);
+create table provenance(
+  id integer primary key,
+  issue_id text not null references issues(id),
+  kind text not null,
+  target text not null,
+  source_hash text not null,
+  legacy_project text,
+  legacy_bucket text,
+  legacy_entry_id text,
+  legacy_json text,
+  imported_at text
+);
+create index provenance_lookup on provenance(kind, target, issue_id);
+create table issue_transitions(
+  id integer primary key,
+  issue_id text not null references issues(id),
+  from_disposition text not null,
+  to_disposition text not null,
+  actor text,
+  occurred_at text,
+  recorded_at text not null,
+  reason text not null,
+  evidence_json text not null,
+  imported integer not null default 0 check (imported in (0, 1)),
+  issue_revision integer not null
+);
+create table store_operations(
+  operation_id text primary key,
+  request_hash text not null,
+  result_json text not null,
+  committed_at text not null
+);
+create table migration_receipts(
+  id integer primary key,
+  manifest_hash text not null unique,
+  phase text not null check (phase in ('applied','activated','retired')),
+  manifest_json text not null,
+  mapping_json text not null,
+  source_counts_json text not null,
+  applied_at text not null,
+  activated_at text,
+  retired_at text
+);
+insert into store_meta(id, store_id, authority_state, authority_epoch, revision, catalog_revision, created_at)
+values (
+  1,
+  lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-' ||
+        substr('89ab', abs(random()) % 4 + 1, 1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))),
+  'staged',
+  1,
+  0,
+  0,
+  strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+);
+insert into issue_counter(id, next_value) values (1, 1);
+`;
+var MIGRATION_2_SQL2 = `
+create table catalog_entities(
+  kind text not null check (kind in ('project','iteration','plan','document')),
+  id text not null,
+  title text not null,
+  description text,
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  document_kind text check (document_kind in ('spec','knowledge','guide','compass','plan','roadmap','review','other')),
+  lifecycle text not null default 'active' check (lifecycle in ('active','archived','superseded')),
+  revision integer not null default 1 check (revision > 0),
+  registered_at text not null,
+  updated_at text not null,
+  source_hash text,
+  primary key (kind, id),
+  check (document_kind is null or kind = 'document')
+);
+create unique index catalog_entities_location on catalog_entities(kind, root_kind, relative_path);
+create index catalog_entities_document_kind on catalog_entities(document_kind) where document_kind is not null;
+create table catalog_links(
+  from_kind text not null check (from_kind in ('project','iteration','plan','document')),
+  from_id text not null,
+  relation text not null check (relation in ('belongs-to','documents','spec-ref','knowledge-ref','derived-from','supersedes')),
+  to_kind text not null check (to_kind in ('project','iteration','plan','document')),
+  to_id text not null,
+  ordinal integer,
+  primary key (from_kind, from_id, relation, to_kind, to_id),
+  foreign key (from_kind, from_id) references catalog_entities(kind, id),
+  foreign key (to_kind, to_id) references catalog_entities(kind, id),
+  check (from_kind != to_kind or from_id != to_id),
+  check (ordinal is null or ordinal >= 0),
+  check (
+    (relation = 'belongs-to' and from_kind in ('plan','iteration','document') and to_kind = 'project')
+    or (relation = 'belongs-to' and from_kind = 'plan' and to_kind = 'iteration')
+    or (relation = 'documents' and from_kind in ('iteration','project','plan') and to_kind = 'document')
+    or (relation in ('spec-ref','knowledge-ref','derived-from') and from_kind in ('plan','iteration','document') and to_kind = 'document')
+    or (relation = 'supersedes' and from_kind = to_kind)
+  )
+);
+create index catalog_links_target on catalog_links(to_kind, to_id);
+create table catalog_operations(
+  operation_id text primary key,
+  request_hash text not null,
+  phase text not null check (phase in ('prepared','execution-written','committed','aborted')),
+  catalog_delta_json text not null,
+  before_versions_json text not null,
+  after_versions_json text not null,
+  result_json text,
+  created_at text not null,
+  updated_at text not null
+);
+create table catalog_execution_bindings(
+  workflow_id text not null,
+  catalog_kind text not null check (catalog_kind in ('iteration','plan')),
+  catalog_id text not null,
+  workflow_root_kind text not null check (workflow_root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  workflow_relative_path text not null,
+  catalog_revision integer not null,
+  input_hash text not null,
+  pin_json text not null,
+  operation_id text not null,
+  primary key (workflow_id, catalog_kind, catalog_id),
+  foreign key (catalog_kind, catalog_id) references catalog_entities(kind, id)
+);
+`;
+var MIGRATION_3_SQL2 = `
+create table projection_meta(
+  id integer primary key check (id = 1),
+  generation integer,
+  format_version integer not null check (format_version >= 1),
+  source_set_hash text,
+  built_at text,
+  checked_at text not null,
+  freshness text not null check (freshness in ('current','stale','unavailable')),
+  last_error_json text
+);
+create table projection_sources(
+  generation integer not null,
+  source_key text not null,
+  kind text not null check (kind in ('root','workflow','compass','roadmap')),
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  sha256 text,
+  state text not null check (state in ('ok','missing','invalid','inaccessible')),
+  diagnostic text,
+  primary key (generation, source_key)
+);
+create table projection_workflows(
+  generation integer not null,
+  id text not null,
+  type text not null check (type in ('plan','iteration')),
+  status text not null,
+  phase text,
+  started_at text,
+  ended_at text,
+  updated_at text,
+  branch_base text,
+  branch_source text,
+  branch_integration text,
+  branch_target text,
+  active_registration integer not null check (active_registration in (0,1)),
+  primary key (generation, id)
+);
+create table projection_plans(
+  generation integer not null,
+  workflow_id text not null,
+  plan_id text not null,
+  status text,
+  progress text,
+  phase text,
+  done_at text,
+  catalog_pin_revision integer,
+  primary key (generation, workflow_id, plan_id)
+);
+create table projection_leases(
+  generation integer not null,
+  workflow_id text not null,
+  plan_id text not null,
+  kind text not null check (kind in ('execution','integration-merge')),
+  holder text,
+  worktree_path text,
+  expires_at text,
+  primary key (generation, workflow_id, plan_id, kind)
+);
+create table projection_compasses(
+  generation integer not null,
+  iteration_id text not null,
+  summary text,
+  milestones_json text not null,
+  started_at text,
+  ended_at text,
+  status text,
+  primary key (generation, iteration_id)
+);
+create table projection_roadmaps(
+  generation integer not null,
+  project_id text not null,
+  direction text,
+  goals_json text not null,
+  milestones_json text not null,
+  primary key (generation, project_id)
+);
+insert into projection_meta(id, generation, format_version, source_set_hash, built_at, checked_at, freshness, last_error_json)
+values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailable', null);
+`;
+var MIGRATION_4_SQL2 = `
+create table execution_meta(
+  id integer primary key check (id = 1),
+  protocol_version integer not null check (protocol_version = 1),
+  authority_state text not null check (authority_state in ('legacy','staged','active')),
+  revision integer not null check (revision > 0),
+  root_updated_at text not null,
+  manifest_id text,
+  activated_at text
+);
+insert into execution_meta(id, protocol_version, authority_state, revision, root_updated_at)
+values (1, 1, 'legacy', 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+create table execution_workflows(
+  workflow_id text primary key,
+  revision integer not null check (revision > 0),
+  creator_session_id text,
+  state_json text not null,
+  created_at text not null,
+  updated_at text not null
+);
+create table execution_registry(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  entry_json text not null
+);
+create table execution_plans(
+  workflow_id text not null references execution_workflows(workflow_id),
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  ordinal integer not null check (ordinal >= 0),
+  state_json text not null,
+  coordination_json text not null,
+  primary key (workflow_id, plan_id),
+  unique (workflow_id, ordinal)
+);
+create table execution_sessions(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role in ('coordinator','plan-pm')),
+  session_id text not null,
+  plan_id text,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+  check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+);
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+create unique index execution_sessions_active_plan_pm
+  on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+create table execution_leases(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_integration_leases(
+  workflow_id text primary key references execution_workflows(workflow_id),
+  revision integer not null check (revision > 0),
+  owner_epoch integer not null check (owner_epoch > 0),
+  lease_json text not null
+);
+create table execution_inputs(
+  workflow_id text not null,
+  plan_id text not null,
+  revision integer not null check (revision > 0),
+  input_json text not null,
+  input_hash text not null,
+  catalog_pin_json text,
+  primary key (workflow_id, plan_id),
+  foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+);
+create table execution_operations(
+  epoch integer not null check (epoch > 0),
+  operation_id text not null,
+  request_hash text not null,
+  store_id text not null,
+  workflow_id text not null,
+  plan_id text,
+  result_json text not null,
+  committed_at text not null,
+  primary key (epoch, operation_id)
+);
+create table execution_migrations(
+  manifest_id text primary key,
+  manifest_hash text not null,
+  phase text not null check (phase in ('staged','active','retired','aborted')),
+  manifest_json text not null,
+  activation_receipt_json text,
+  retirement_json text,
+  created_at text not null,
+  updated_at text not null
+);
+`;
+var MIGRATION_5_SQL2 = `
+alter table execution_migrations add column coverage_json text;
+`;
+var MIGRATION_6_SQL2 = `
+create table project_roadmaps(
+  project_id text primary key,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  content_markdown text not null,
+  content_hash text not null,
+  revision integer not null check (revision > 0),
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+drop table projection_roadmaps;
+`;
+var MIGRATIONS2 = [
+  { version: 1, name: "issue-core", sql: MIGRATION_1_SQL2 },
+  { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL2 },
+  { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL2 },
+  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL2 },
+  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL2 },
+  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL2 }
+];
+var EXECUTION_MIGRATION2 = MIGRATIONS2.find((migration) => migration.name === "execution-authority");
+var fsStoreInstances2 = new WeakSet;
+var MSTARC_HARNESS_DIR_KEY2 = "harness_dir";
+var MSTARC_PLAN_DIR_KEY2 = "plan_dir";
+var MSTARC_SDD_DIR_KEY2 = "sdd_dir";
+var MSTARC_ITERATION_DIR_KEY2 = "iteration_dir";
+var MSTARC_KNOWLEDGE_DIR_KEY2 = "knowledge_dir";
+var MSTARC_SPECS_DIR_KEY2 = "specs_dir";
+var MSTARC_WORKFLOW_DIR_KEY2 = "workflow_dir";
+var MSTARC_PROJECT_DIR_KEY2 = "project_dir";
+var MSTARC_ENFORCEMENT_KEY2 = "enforcement";
+var CONFIG_KEYS2 = {
+  [MSTARC_HARNESS_DIR_KEY2]: "harnessDir",
+  [MSTARC_PLAN_DIR_KEY2]: "planDir",
+  [MSTARC_SDD_DIR_KEY2]: "sddDir",
+  [MSTARC_ITERATION_DIR_KEY2]: "iterationDir",
+  [MSTARC_KNOWLEDGE_DIR_KEY2]: "knowledgeDir",
+  [MSTARC_SPECS_DIR_KEY2]: "specsDir",
+  [MSTARC_WORKFLOW_DIR_KEY2]: "workflowDir",
+  [MSTARC_PROJECT_DIR_KEY2]: "projectDir",
+  [MSTARC_ENFORCEMENT_KEY2]: "enforcement",
+  jev_mode: "jevMode",
+  jev_transport: "jevTransport"
+};
+var GIT_READ_MAX_BUFFER2 = 64 * 1024 * 1024;
+var GITIGNORE_SNIPPET2 = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
+`;
+var GITIGNORE_SNIPPET_AGENTS2 = `# Morning Star harness (.agents/) — legacy
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
+`;
+var GITIGNORE_PROCESS_ENTRIES2 = GITIGNORE_SNIPPET2.split(`
+`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
+var GITIGNORE_PROCESS_ENTRIES_AGENTS2 = GITIGNORE_SNIPPET_AGENTS2.split(`
+`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
+var WHOLE_MATCH_PATTERNS2 = [
+  { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
+  { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+  { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+  { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+  { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+  { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
+  { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
+  { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
+];
+var VALUE_PATTERNS2 = [
+  {
+    typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
+    re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
+  }
+];
+var CI_IAC_LEAK_SHAPES2 = [
+  {
+    kind: "actions-plaintext-env",
+    description: "GitHub Actions env assignment with plaintext literal",
+    re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
+  },
+  {
+    kind: "actions-secret-echo",
+    description: "echo of a GitHub Actions secrets context value",
+    re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
+  },
+  {
+    kind: "dockerfile-credential-env",
+    description: "Dockerfile ENV/ARG with credential-looking name",
+    re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
+  },
+  {
+    kind: "terraform-hardcoded-password",
+    description: "Terraform hardcoded password attribute",
+    re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
+  }
+];
+function buildLineStarts2(text7) {
+  const starts = [0];
+  for (let i = 0;i < text7.length; i++) {
+    if (text7[i] === `
+`)
+      starts.push(i + 1);
+  }
+  return starts;
+}
+function lineAt2(starts, index2) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (starts[mid] <= index2)
+      lo = mid;
+    else
+      hi = mid - 1;
+  }
+  return lo + 1;
+}
+function lineStartOf2(text7, index2) {
+  return text7.lastIndexOf(`
+`, index2 - 1) + 1;
+}
+function redactSecrets2(text7, filePath) {
+  const starts = buildLineStarts2(text7);
+  const marker = (type, index2) => `[REDACTED ${type}@${lineAt2(starts, index2)}${filePath === undefined ? "" : ` in ${filePath}`}]`;
+  const spans = [];
+  for (const pattern of WHOLE_MATCH_PATTERNS2) {
+    for (const match of text7.matchAll(pattern.re)) {
+      if (match.index === undefined)
+        continue;
+      spans.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        priority: 0,
+        text: marker(pattern.type, match.index),
+        type: pattern.type
+      });
+    }
+  }
+  for (const pattern of VALUE_PATTERNS2) {
+    for (const match of text7.matchAll(pattern.re)) {
+      if (match.index === undefined)
+        continue;
+      const type = pattern.typeOf(match[2]);
+      const replacement = `${match[1]}${match[2]}${match[3]}${match[4]}${marker(type, match.index)}`;
+      spans.push({ start: match.index, end: match.index + match[0].length, priority: 1, text: replacement, type });
+    }
+  }
+  for (const shape of CI_IAC_LEAK_SHAPES2) {
+    const lineScoped = new RegExp(shape.re.source, shape.re.ignoreCase ? "gim" : "gm");
+    for (const match of text7.matchAll(lineScoped)) {
+      if (match.index === undefined)
+        continue;
+      const lineEnd = text7.indexOf(`
+`, match.index);
+      const end = lineEnd === -1 ? text7.length : lineEnd;
+      spans.push({
+        start: match.index,
+        end,
+        priority: 2,
+        text: `${" ".repeat(match.index - lineStartOf2(text7, match.index))}${marker(shape.kind, match.index)}`,
+        type: shape.kind
+      });
+    }
+  }
+  spans.sort((a, b) => a.start - b.start || b.end - a.end || b.priority - a.priority);
+  const merged = [];
+  let groupMaxEnd = -1;
+  let best = null;
+  for (const span of spans) {
+    if (span.start < groupMaxEnd) {
+      if (groupMaxEnd < span.end)
+        groupMaxEnd = span.end;
+      if (span.end - span.start > best.end - best.start)
+        best = span;
+    } else {
+      if (best !== null)
+        merged.push(best);
+      groupMaxEnd = span.end;
+      best = span;
+    }
+  }
+  if (best !== null)
+    merged.push(best);
+  let out = text7;
+  for (let i = merged.length - 1;i >= 0; i--) {
+    const r = merged[i];
+    out = out.slice(0, r.start) + r.text + out.slice(r.end);
+  }
+  const findings = merged.map((r) => ({ line: lineAt2(starts, r.start), type: r.type }));
+  const deduped = new Map;
+  for (const f of findings)
+    deduped.set(`${f.line}:${f.type}`, f);
+  const sorted = [...deduped.values()].sort((a, b) => a.line - b.line || a.type.localeCompare(b.type));
+  return { text: out, findings: sorted };
+}
+
+// ../commands/dist/index.js
 var MAX_DASHBOARD_SEARCH_LENGTH = 200;
 var DASHBOARD_API_VIEWS = {
   "/api/issues": "issues",
@@ -80677,6 +81263,84 @@ function diagnoseZcodeHost(scope, roots = {}) {
   errors3.push(...validateMarketplaceJson(marketplacePath));
   return { location: knownMarketplacesPath, errors: errors3 };
 }
+var MCP_PACKAGE_LAYOUTS = {
+  omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  dsh: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
+  codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
+  kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
+  zcode: { buildInfo: "mcp/bundles/zcode/dist/mcp/build-info.json", executable: "mcp/bundles/zcode/dist/mcp/stdio.js", versionManifest: ".zcode-plugin/plugin.json" }
+};
+function record2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function readJson6(file2) {
+  try {
+    return record2(JSON.parse(fs12.readFileSync(file2, "utf8")));
+  } catch {
+    return null;
+  }
+}
+function actualRuntime() {
+  return process.versions.bun === undefined ? { kind: "node", version: process.versions.node } : { kind: "bun", version: process.versions.bun };
+}
+function diagnoseMcpTarget(target, packageRoot, runtime = actualRuntime()) {
+  const layout = MCP_PACKAGE_LAYOUTS[target];
+  const buildInfoPath = path25.join(packageRoot, layout.buildInfo);
+  const executablePath = path25.join(packageRoot, layout.executable);
+  const manifestPath = path25.join(packageRoot, layout.versionManifest);
+  const missing = [buildInfoPath, executablePath, manifestPath].filter((file2) => !fs12.existsSync(file2));
+  const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0 ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.` : null;
+  if (missing.length > 0) {
+    return {
+      target,
+      status: "unavailable",
+      location: buildInfoPath,
+      runtimeFloor,
+      errors: [
+        `MCP package unavailable for ${target}; missing ${missing.map((file2) => path25.relative(packageRoot, file2)).join(", ")}.`,
+        ...runtimeError === null ? [] : [runtimeError]
+      ],
+      notes: []
+    };
+  }
+  const manifest = readJson6(manifestPath);
+  const buildInfo = readJson6(buildInfoPath);
+  const version2 = manifest?.version;
+  const protocols = buildInfo?.supportedProtocols;
+  const mismatch = [];
+  if (manifest === null || buildInfo === null) {
+    mismatch.push("package manifest or MCP build metadata is not valid JSON object data.");
+  } else {
+    if (typeof version2 !== "string" || version2 === "")
+      mismatch.push("package manifest has no version.");
+    for (const key of ["pluginVersion", "engineVersion", "mcpVersion"]) {
+      if (typeof buildInfo[key] !== "string" || buildInfo[key] !== version2) {
+        mismatch.push(`${key} does not match packaged version ${String(version2 ?? "unknown")}.`);
+      }
+    }
+    if (buildInfo.hostTarget !== target)
+      mismatch.push(`hostTarget does not match ${target}.`);
+    if (!Array.isArray(protocols) || protocols.length === 0 || protocols.some((item) => typeof item !== "string" || item.length === 0)) {
+      mismatch.push("supportedProtocols is missing or invalid.");
+    }
+  }
+  if (runtimeError !== null)
+    mismatch.push(runtimeError);
+  return {
+    target,
+    status: mismatch.length === 0 ? "aligned" : "mismatch",
+    location: buildInfoPath,
+    runtimeFloor,
+    errors: mismatch,
+    notes: mismatch.length === 0 ? [`MCP package metadata and files aligned for ${target} (${String(version2)}).`] : []
+  };
+}
+function mcpTargetPackageRoot(target, repositoryRoot) {
+  return target === "omp" || target === "opencode" || target === "dsh" ? path25.join(repositoryRoot, "packages", target) : repositoryRoot;
+}
 var doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"];
 var hostSignals = [
   "subagent_type",
@@ -80696,7 +81360,7 @@ var hostSignals = [
   "tool_search"
 ];
 var hostIds = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"];
-var harnessRepoPath = path25.join(os6.homedir(), ".mstar", "harness");
+var harnessRepoPath = path26.join(os6.homedir(), ".mstar", "harness");
 var harnessMarkers = [".codex-plugin/plugin.json", ".zcode-plugin/plugin.json", ".omp-plugin/plugin.json"];
 var agentsTemplate = `# AGENTS.md — .mstar/ (harness layer)
 
@@ -80732,9 +81396,9 @@ function runBin(bin) {
   };
 }
 function localHarnessErrors() {
-  if (!fs12.existsSync(harnessRepoPath))
+  if (!fs13.existsSync(harnessRepoPath))
     return [`Missing local harness repo: ${harnessRepoPath}`];
-  const marker = harnessMarkers.map((entry) => path25.join(harnessRepoPath, entry)).find((entry) => fs12.existsSync(entry));
+  const marker = harnessMarkers.map((entry) => path26.join(harnessRepoPath, entry)).find((entry) => fs13.existsSync(entry));
   return marker === undefined ? [`Local harness repo is missing a plugin marker (expected one of: ${harnessMarkers.join(", ")}).`] : [];
 }
 function gitWorkspaceRoot(startDir) {
@@ -80749,7 +81413,7 @@ function gitWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = path25.dirname(boundary);
+        boundary = path26.dirname(boundary);
     }
     return boundary;
   } catch {
@@ -80758,10 +81422,10 @@ function gitWorkspaceRoot(startDir) {
 }
 function pluginRoot(explicit) {
   if (explicit !== undefined)
-    return path25.resolve(explicit);
+    return path26.resolve(explicit);
   let candidate = resolveProjectRoot2();
-  while (!fs12.existsSync(path25.join(candidate, "plugin.json"))) {
-    const parent = path25.dirname(candidate);
+  while (!fs13.existsSync(path26.join(candidate, "plugin.json"))) {
+    const parent = path26.dirname(candidate);
     if (parent === candidate)
       break;
     candidate = parent;
@@ -80784,14 +81448,14 @@ async function diagnose(target, scope) {
     return { location: result2.location, errors: result2.errors, notes: [] };
   }
   if (target === "codex") {
-    const result2 = diagnoseCodexHost(runBin("codex"), path25.join(os6.homedir(), ".agents", "plugins", "marketplace.json"));
+    const result2 = diagnoseCodexHost(runBin("codex"), path26.join(os6.homedir(), ".agents", "plugins", "marketplace.json"));
     return { location: result2.location, errors: [...localHarnessErrors(), ...result2.errors], notes: result2.notes };
   }
   if (target === "dsh")
     return diagnoseDshHost(runBin("dsh"));
   const projectRoot = scope === "project" ? resolveProjectRoot2() : undefined;
-  const gitignorePath = projectRoot === undefined ? undefined : path25.join(projectRoot, ".gitignore");
-  const gitignore = gitignorePath !== undefined && fs12.existsSync(gitignorePath) ? fs12.readFileSync(gitignorePath, "utf8") : "";
+  const gitignorePath = projectRoot === undefined ? undefined : path26.join(projectRoot, ".gitignore");
+  const gitignore = gitignorePath !== undefined && fs13.existsSync(gitignorePath) ? fs13.readFileSync(gitignorePath, "utf8") : "";
   let installed = [];
   let ompAvailable = true;
   try {
@@ -80823,17 +81487,17 @@ function getLocalCommandDefinitions() {
       effects: ["write"],
       description: "Create the harness directory, v2 status, default project, and the canonical ignore/AGENTS files when absent.",
       async execute(input2) {
-        const root = input2.path === undefined ? process.cwd() : path25.resolve(input2.path);
+        const root = input2.path === undefined ? process.cwd() : path26.resolve(input2.path);
         setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));
         const harnessDir2 = await scaffoldHarness(root);
         const projectDir = resolveProjectDir(root, { harnessDir: harnessDir2 });
         const created = [];
         const skipped = [];
         const workspaceRoot = gitWorkspaceRoot(root);
-        const defaultHarness = path25.join(workspaceRoot, ".mstar");
-        if (detectHarnessKind(harnessDir2) === "mstar" && path25.resolve(harnessDir2) === defaultHarness) {
-          const gitignorePath = path25.join(workspaceRoot, ".gitignore");
-          const current = fs12.existsSync(gitignorePath) ? fs12.readFileSync(gitignorePath, "utf8") : "";
+        const defaultHarness = path26.join(workspaceRoot, ".mstar");
+        if (detectHarnessKind(harnessDir2) === "mstar" && path26.resolve(harnessDir2) === defaultHarness) {
+          const gitignorePath = path26.join(workspaceRoot, ".gitignore");
+          const current = fs13.existsSync(gitignorePath) ? fs13.readFileSync(gitignorePath, "utf8") : "";
           if (hasHarnessRootDeclaration(current))
             skipped.push(".gitignore (author-owned harness-root declaration)");
           else {
@@ -80845,7 +81509,7 @@ function getLocalCommandDefinitions() {
               const prefix = current !== "" && !current.endsWith(`
 `) ? `
 ` : "";
-              fs12.appendFileSync(gitignorePath, `${prefix}${missing.join(`
+              fs13.appendFileSync(gitignorePath, `${prefix}${missing.join(`
 `)}
 `, "utf8");
               created.push(".gitignore (canonical harness snippet)");
@@ -80854,12 +81518,12 @@ function getLocalCommandDefinitions() {
           }
         } else
           skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
-        const agentsPath = path25.join(harnessDir2, "AGENTS.md");
-        if (!fs12.existsSync(agentsPath)) {
-          fs12.writeFileSync(agentsPath, agentsTemplate, "utf8");
-          created.push(`${path25.basename(harnessDir2)}/AGENTS.md`);
+        const agentsPath = path26.join(harnessDir2, "AGENTS.md");
+        if (!fs13.existsSync(agentsPath)) {
+          fs13.writeFileSync(agentsPath, agentsTemplate, "utf8");
+          created.push(`${path26.basename(harnessDir2)}/AGENTS.md`);
         } else
-          skipped.push(`${path25.basename(harnessDir2)}/AGENTS.md (already present)`);
+          skipped.push(`${path26.basename(harnessDir2)}/AGENTS.md (already present)`);
         return ok15("harness.scaffold", { harnessDir: harnessDir2, projectDir, created, skipped });
       }
     }),
@@ -80883,14 +81547,19 @@ function getLocalCommandDefinitions() {
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input2, context) {
         const result = await diagnose(input2.target, input2.scope);
+        const mcpHealth = diagnoseMcpTarget(input2.target, mcpTargetPackageRoot(input2.target, harnessRepoPath));
+        const errors3 = [...result.errors, ...mcpHealth.errors];
         const data = {
           ...result,
+          errors: errors3,
+          notes: [...result.notes, ...mcpHealth.notes],
+          mcpHealth,
           target: input2.target,
           scope: input2.scope,
           pluginVersionNote: formatPluginVersionDoctorNote(input2.target, context.versions.cli ?? "unknown", null),
           ...input2.output === undefined ? {} : { output: input2.output }
         };
-        return result.errors.length === 0 ? ok15("doctor", data) : refused10("doctor", "doctor.unhealthy", `${result.errors.length} issue(s)`, data);
+        return errors3.length === 0 ? ok15("doctor", data) : refused10("doctor", "doctor.unhealthy", `${errors3.length} issue(s)`, data);
       }
     }),
     command6("plugin.validate", {
@@ -80911,7 +81580,7 @@ function getLocalCommandDefinitions() {
       effects: ["read"],
       description: "Resolve harness, specs, workflow, and project directories from a start directory.",
       async execute(input2, context) {
-        const startDir = input2.path === undefined ? context.cwd : path25.resolve(context.cwd, input2.path);
+        const startDir = input2.path === undefined ? context.cwd : path26.resolve(context.cwd, input2.path);
         const harnessDir2 = resolveHarnessDir(startDir);
         if (harnessDir2 === null) {
           return refused10("path.resolve", "path.harness-not-found", `no harness dir found from ${startDir}`, {
@@ -80967,6 +81636,223 @@ function getLocalCommandDefinitions() {
       }
     })
   ];
+}
+var issueUrl = "https://github.com/btspoony/mstar-harness/issues/new";
+var FIELD_LIMIT = 8192;
+var TOTAL_LIMIT = 32768;
+var versionOverridesSchema = exports_external.object({
+  cli: exports_external.string().optional(),
+  engine: exports_external.string().optional(),
+  plugin: exports_external.string().optional()
+}).strict();
+var reportInputSchema = exports_external.object({
+  title: exports_external.string().optional(),
+  command: exports_external.string().optional(),
+  arguments: exports_external.union([exports_external.string(), exports_external.array(exports_external.string()).max(128)]).optional(),
+  expected: exports_external.string().optional(),
+  actual: exports_external.string().optional(),
+  reproduction: exports_external.string().optional(),
+  stableCode: exports_external.string().optional(),
+  exitStatus: exports_external.number().int().safe().optional(),
+  host: exports_external.string().optional(),
+  platform: exports_external.string().optional(),
+  versionOverrides: versionOverridesSchema.optional()
+}).strict();
+function suppliedTextFields(input2) {
+  const fields = [];
+  for (const field of ["title", "command", "expected", "actual", "reproduction", "stableCode", "host", "platform"]) {
+    if (input2[field] !== undefined)
+      fields.push([field, input2[field]]);
+  }
+  if (input2.arguments !== undefined) {
+    fields.push(["arguments", typeof input2.arguments === "string" ? input2.arguments : input2.arguments.join(`
+`)]);
+  }
+  if (input2.versionOverrides !== undefined) {
+    for (const field of ["cli", "engine", "plugin"]) {
+      const value = input2.versionOverrides[field];
+      if (value !== undefined)
+        fields.push([`versionOverrides.${field}`, value]);
+    }
+  }
+  return fields;
+}
+function failure8(field, limit) {
+  return {
+    version: 1,
+    command: "report",
+    status: "refused",
+    code: "report.input-too-large",
+    exitCode: 1,
+    message: `input field ${field} exceeds ${limit} UTF-8 bytes`,
+    details: { field, limit }
+  };
+}
+function redact(field, value) {
+  const result = redactSecrets2(value);
+  return {
+    value: result.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"),
+    count: result.findings.length
+  };
+}
+function json2(value) {
+  return JSON.stringify(value);
+}
+function maxBacktickRun(values2) {
+  let max = 0;
+  for (const value of values2) {
+    for (const match of value.matchAll(/`+/g))
+      max = Math.max(max, match[0].length);
+  }
+  return max;
+}
+function createReport(input2, versions2) {
+  const fields = suppliedTextFields(input2);
+  for (const [field, value] of fields) {
+    const bytes = field === "arguments" && Array.isArray(input2.arguments) ? input2.arguments.reduce((total, argument) => total + Buffer.byteLength(argument, "utf8"), 0) : Buffer.byteLength(value, "utf8");
+    if (bytes > FIELD_LIMIT)
+      throw failure8(field, FIELD_LIMIT);
+  }
+  const totalBytes = fields.reduce((total, [field, value]) => total + (field === "arguments" && Array.isArray(input2.arguments) ? input2.arguments.reduce((argumentTotal, argument) => argumentTotal + Buffer.byteLength(argument, "utf8"), 0) : Buffer.byteLength(value, "utf8")), 0);
+  if (totalBytes > TOTAL_LIMIT)
+    throw failure8("total", TOTAL_LIMIT);
+  const redactions = [];
+  const sanitized = new Map;
+  for (const [field, value] of fields) {
+    const result = redact(field, value);
+    if (!(field === "arguments" && Array.isArray(input2.arguments)))
+      sanitized.set(field, result.value);
+    if (result.count > 0)
+      redactions.push({ field, count: result.count });
+  }
+  const safe = (field, fallback = "absent") => sanitized.get(field) ?? fallback;
+  let safeArguments;
+  if (typeof input2.arguments === "string") {
+    safeArguments = safe("arguments");
+  } else if (input2.arguments !== undefined) {
+    const itemResults = input2.arguments.map((value) => redactSecrets2(value));
+    const itemValues = itemResults.map((result) => result.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"));
+    const joined = input2.arguments.join(`
+`);
+    const joinedResult = redactSecrets2(joined);
+    const joinedValue = joinedResult.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]");
+    const itemJoinedValue = itemValues.join(`
+`);
+    const crossesBoundary = joinedValue !== itemJoinedValue;
+    safeArguments = crossesBoundary ? input2.arguments.map(() => "[REDACTED]") : itemValues;
+  }
+  const redactSurface = (field, value) => {
+    const result = redact(field, value);
+    if (result.count > 0)
+      redactions.push({ field, count: result.count });
+    return result.value;
+  };
+  const safeVersions = {
+    cli: versions2.cli === null ? "unknown" : redactSurface("versions.cli", versions2.cli),
+    engine: versions2.engine === null ? "unknown" : redactSurface("versions.engine", versions2.engine),
+    plugin: versions2.plugin === null ? "unknown" : redactSurface("versions.plugin", versions2.plugin)
+  };
+  const hostValue = input2.host === undefined ? versions2.host === null ? "unknown" : redactSurface("host", versions2.host) : safe("host");
+  const platformValue = input2.platform === undefined ? versions2.platform === null ? "unknown" : redactSurface("platform", versions2.platform) : safe("platform");
+  const argumentFenceValues = typeof safeArguments === "string" ? [safeArguments] : safeArguments ?? [];
+  const dataValues = [...sanitized.values(), ...Object.values(safeVersions), hostValue, platformValue, ...argumentFenceValues];
+  const overrideValues = ["cli", "engine", "plugin"].flatMap((field) => {
+    const value = sanitized.get(`versionOverrides.${field}`);
+    return value === undefined ? [] : [[field, value]];
+  });
+  const fence = "`".repeat(Math.max(3, maxBacktickRun(dataValues) + 1));
+  const lines = [
+    "Review this draft before submission. Redaction is not a guarantee that every secret was removed.",
+    `Issue URL: ${issueUrl}`,
+    fence,
+    `Title: ${json2(safe("title"))}`,
+    "Versions:",
+    `- CLI (${versions2.cli === null ? "unknown" : "observed"}): ${json2(safeVersions.cli)}`,
+    `- Engine (${versions2.engine === null ? "unknown" : "observed"}): ${json2(safeVersions.engine)}`,
+    `- Plugin (${versions2.plugin === null ? "unknown" : "observed"}): ${json2(safeVersions.plugin)}`
+  ];
+  if (overrideValues.length > 0) {
+    lines.push("Caller-supplied version overrides:");
+    for (const [field, value] of overrideValues)
+      lines.push(`- ${field}: ${json2(value)}`);
+  }
+  lines.push(`Host (${input2.host === undefined ? versions2.host === null ? "unknown" : "observed" : "caller-supplied"}): ${json2(hostValue)}`, `Platform (${input2.platform === undefined ? versions2.platform === null ? "unknown" : "observed" : "caller-supplied"}): ${json2(platformValue)}`);
+  if (input2.command !== undefined)
+    lines.push(`Command: ${json2(safe("command"))}`);
+  if (safeArguments !== undefined)
+    lines.push(`Arguments: ${typeof safeArguments === "string" ? json2(safeArguments) : JSON.stringify(safeArguments)}`);
+  lines.push(`Expected: ${json2(safe("expected"))}`, `Actual: ${json2(safe("actual"))}`, `Stable code: ${json2(safe("stableCode"))}`, `Exit status: ${input2.exitStatus === undefined ? "absent" : input2.exitStatus}`, `Reproduction: ${json2(safe("reproduction"))}`, "Complete fields marked absent with the user before submission.", fence);
+  return { issueUrl, prompt: lines.join(`
+`), redactions };
+}
+var cliOptions = [
+  "title",
+  "command",
+  "arguments",
+  "expected",
+  "actual",
+  "reproduction",
+  "stableCode",
+  "exitStatus",
+  "host",
+  "platform",
+  "versionOverrides"
+];
+function getReportCommandDefinitions() {
+  return [{
+    id: "report",
+    cli: {
+      path: ["report"],
+      aliases: [],
+      arguments: [],
+      options: cliOptions.map((key) => ({
+        key,
+        flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <${key}>`,
+        required: false
+      }))
+    },
+    input: reportInputSchema,
+    output: commandEnvelopeSchema,
+    decodeCliInput(input2) {
+      const decoded = { ...input2 };
+      if (decoded.arguments !== undefined) {
+        try {
+          decoded.arguments = JSON.parse(String(decoded.arguments));
+        } catch {
+          return null;
+        }
+      }
+      if (decoded.versionOverrides !== undefined) {
+        try {
+          decoded.versionOverrides = JSON.parse(String(decoded.versionOverrides));
+        } catch {
+          return null;
+        }
+      }
+      if (decoded.exitStatus !== undefined) {
+        const value = String(decoded.exitStatus);
+        if (!/^-?\d+$/.test(value))
+          return null;
+        const status = Number(value);
+        if (!Number.isSafeInteger(status))
+          return null;
+        decoded.exitStatus = status;
+      }
+      return decoded;
+    },
+    effects: ["validate"],
+    description: "Create an offline, redacted issue-report draft.",
+    async execute(input2, context) {
+      try {
+        return { version: 1, command: "report", status: "ok", code: "report.ok", exitCode: 0, data: createReport(input2, context.versions) };
+      } catch (error210) {
+        if (typeof error210 === "object" && error210 !== null && "code" in error210 && error210.code === "report.input-too-large") {
+          return error210;
+        }
+        throw error210;
+      }
+    }
+  }];
 }
 function getPayloadSchema(typeName2) {
   if (!Object.hasOwn(ISSUE_PAYLOAD_SCHEMAS, typeName2)) {
@@ -81125,7 +82011,8 @@ var canonicalDefinitions = [
   ...getJudgmentCommandDefinitions(),
   ...getDashboardCommandDefinitions(),
   ...getLocalCommandDefinitions(),
-  ...getSchemaCommandDefinitions()
+  ...getSchemaCommandDefinitions(),
+  ...getReportCommandDefinitions()
 ];
 validateCommandDefinitions(canonicalDefinitions);
 function getCommandDefinitions() {
@@ -81176,7 +82063,7 @@ async function executeCommand(id3, input2, context) {
 }
 
 // src/effects.ts
-import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage6 } from "node:async_hooks";
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash as createHash22, randomUUID as randomUUID11 } from "node:crypto";
 import { closeSync as closeSync5, lstatSync as lstatSync11, mkdirSync as mkdirSync11, openSync as openSync5, readFileSync as readFileSync15, realpathSync as realpathSync12, renameSync as renameSync7, rmSync as rmSync2, writeFileSync as writeFileSync11 } from "node:fs";
@@ -81195,7 +82082,7 @@ var FIXED_LIMITS = {
 };
 var MAX_CAPTURE_LOG_BYTES = FIXED_LIMITS.maxLogBytesPerStream;
 function createMcpEffects(services) {
-  const inputs = new AsyncLocalStorage4;
+  const inputs = new AsyncLocalStorage6;
   return {
     withInput(input2, request, operation) {
       return inputs.run({ value: input2, consumed: false, ...request }, operation);
@@ -81207,14 +82094,14 @@ function createMcpEffects(services) {
       if (state.consumed)
         throw new Error("MCP input payload can only be consumed once");
       state.consumed = true;
-      const record2 = state.value !== null && typeof state.value === "object" ? state.value : {};
-      if (typeof record2.input !== "string") {
+      const record3 = state.value !== null && typeof state.value === "object" ? state.value : {};
+      if (typeof record3.input !== "string") {
         throw Object.assign(new Error("MCP stdin effect requires an explicit input string"), { code: "command.invalid-input" });
       }
-      if (Buffer.byteLength(record2.input) > MAX_STREAM_BYTES) {
+      if (Buffer.byteLength(record3.input) > MAX_STREAM_BYTES) {
         throw Object.assign(new Error(`MCP stdin payload exceeds ${MAX_STREAM_BYTES} bytes`), { code: "command.invalid-input" });
       }
-      return record2.input;
+      return record3.input;
     },
     async spawn(request) {
       const result = await spawnBounded(request);
@@ -81314,7 +82201,7 @@ function readEvidenceRequest(requestPath) {
     throw new SddScriptError(`evidence request exceeds ${MAX_CAPTURE_REQUEST_BYTES} bytes`, 2);
   return JSON.parse(readFileSync15(requestPath, "utf8"));
 }
-function writeRecordAtomic(sddDir, runDir, record2) {
+function writeRecordAtomic(sddDir, runDir, record3) {
   const recordPath = join10(runDir, "record.json");
   const tempPath = join10(runDir, `.record-${randomUUID11()}.tmp`);
   const rel = relative5(sddDir, recordPath);
@@ -81326,7 +82213,7 @@ function writeRecordAtomic(sddDir, runDir, record2) {
   }
   const fd = openSync5(tempPath, "wx", 384);
   try {
-    writeFileSync11(fd, `${JSON.stringify(record2)}
+    writeFileSync11(fd, `${JSON.stringify(record3)}
 `);
   } finally {
     closeSync5(fd);
@@ -81411,8 +82298,8 @@ async function captureEvidence(requestPath, argv, invocation) {
   const request = { ...rawRequest, context };
   const runId = provisional.runId;
   const startedAt = provisional.startedAt;
-  const record2 = captureRecord(request, argv, runId, startedAt);
-  const recordGate = validateSddEvidenceRecord(record2);
+  const record3 = captureRecord(request, argv, runId, startedAt);
+  const recordGate = validateSddEvidenceRecord(record3);
   if (!recordGate.ok)
     throw new SddScriptError(`invalid evidence record request: ${recordGate.violations.map(({ code: code2, message }) => `${code2}: ${message}`).join("; ")}`, 2);
   const sourceGate = checkSddAction(context, { kind: "source", cwd: invocation.cwd });
@@ -81444,7 +82331,7 @@ async function captureEvidence(requestPath, argv, invocation) {
     const stderrPath = join10(runDir, "stderr.log");
     writeExclusiveFile(stdoutPath, Buffer.alloc(0));
     writeExclusiveFile(stderrPath, Buffer.alloc(0));
-    writeRecordAtomic(context.sddDir, runDir, record2);
+    writeRecordAtomic(context.sddDir, runDir, record3);
     recordWritten = true;
     const timeout = new AbortController;
     const timeoutMs = request.timeoutMs ?? FIXED_LIMITS.timeoutMs;
@@ -81472,26 +82359,26 @@ async function captureEvidence(requestPath, argv, invocation) {
     }
     replaceFileAtomically(stdoutPath, result.stdoutBytes);
     replaceFileAtomically(stderrPath, result.stderrBytes);
-    record2.logs.stdout = { path: "stdout.log", bytes: result.stdoutBytes.byteLength, sha256: hash2(result.stdoutBytes), truncated: result.stdoutTruncated };
-    record2.logs.stderr = { path: "stderr.log", bytes: result.stderrBytes.byteLength, sha256: hash2(result.stderrBytes), truncated: result.stderrTruncated };
-    record2.after = captureSnapshot(request, argv);
-    record2.endedAt = new Date().toISOString();
-    record2.state = "finished";
+    record3.logs.stdout = { path: "stdout.log", bytes: result.stdoutBytes.byteLength, sha256: hash2(result.stdoutBytes), truncated: result.stdoutTruncated };
+    record3.logs.stderr = { path: "stderr.log", bytes: result.stderrBytes.byteLength, sha256: hash2(result.stderrBytes), truncated: result.stderrTruncated };
+    record3.after = captureSnapshot(request, argv);
+    record3.endedAt = new Date().toISOString();
+    record3.state = "finished";
     if (timedOut) {
-      record2.outcome = { kind: "timeout" };
+      record3.outcome = { kind: "timeout" };
       result.exitCode = 124;
     } else if (result.spawnError !== null) {
-      record2.outcome = { kind: "spawn-error", code: result.spawnError };
+      record3.outcome = { kind: "spawn-error", code: result.spawnError };
     } else if (result.signal !== null) {
-      record2.outcome = { kind: "signal", signal: result.signal };
+      record3.outcome = { kind: "signal", signal: result.signal };
     } else {
-      record2.outcome = { kind: "exit", code: result.exitCode ?? 1 };
+      record3.outcome = { kind: "exit", code: result.exitCode ?? 1 };
     }
-    const finalized = validateSddEvidenceRecord(record2);
+    const finalized = validateSddEvidenceRecord(record3);
     if (!finalized.ok)
       throw new Error(`MCP capture produced an invalid record: ${finalized.violations.map(({ code: code2, message }) => `${code2}: ${message}`).join("; ")}`);
-    writeRecordAtomic(context.sddDir, runDir, record2);
-    return { exitCode: result.exitCode ?? 1, runDir, record: record2 };
+    writeRecordAtomic(context.sddDir, runDir, record3);
+    return { exitCode: result.exitCode ?? 1, runDir, record: record3 };
   } catch (error63) {
     if (!recordWritten)
       rmSync2(runDir, { recursive: true, force: true });
@@ -81538,7 +82425,7 @@ function readTargetRequest(pathValue) {
 }
 function verifyEvidence(request) {
   const expected = { planId: request.planId, taskId: request.taskId, runId: request.runId };
-  let record2 = null;
+  let record3 = null;
   let facts = [];
   if (isAbsolute20(request.sddDir) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.runId)) {
     try {
@@ -81551,23 +82438,23 @@ function verifyEvidence(request) {
           throw new Error("evidence run path is not a real directory");
         const stat = lstatSync11(recordPath);
         if (stat.isFile() && stat.size <= MAX_CAPTURE_REQUEST_BYTES)
-          record2 = JSON.parse(readFileSync15(recordPath, "utf8"));
+          record3 = JSON.parse(readFileSync15(recordPath, "utf8"));
         facts = [artifactFact(join10(runDir, "stdout.log")), artifactFact(join10(runDir, "stderr.log"))];
       }
     } catch {}
   }
   if (request.targetPath !== undefined) {
     const targetRequest = readTargetRequest(request.targetPath);
-    if (record2 !== null && validateSddEvidenceRecord(record2).ok) {
-      const valid = record2;
+    if (record3 !== null && validateSddEvidenceRecord(record3).ok) {
+      const valid = record3;
       const target = captureSnapshot(valid.request, valid.command.argv);
       target.unknowns.push(`MCP verify cannot collect declared target-input snapshots for ${targetRequest.cwd} at expected head ${targetRequest.expectedHead}`);
       target.digest = evidenceInputDigest(target);
-      return assessSddEvidenceReuse(record2, facts, expected, target);
+      return assessSddEvidenceReuse(record3, facts, expected, target);
     }
   }
-  const integrity = verifySddEvidence(record2, facts, expected);
-  const validRecord = record2 !== null && typeof record2 === "object" ? record2 : null;
+  const integrity = verifySddEvidence(record3, facts, expected);
+  const validRecord = record3 !== null && typeof record3 === "object" ? record3 : null;
   const outcome = !integrity.ok || validRecord === null ? "unknown" : validRecord.state === "running" ? "incomplete" : validRecord.outcome.kind === "exit" && validRecord.outcome.code === 0 ? "passed" : validRecord.outcome.kind === "exit" || validRecord.outcome.kind === "spawn-error" ? "failed" : "incomplete";
   return {
     integrity,
@@ -81703,11 +82590,11 @@ function validateCommandOutcome(definition3, envelope2) {
     }
     return success3.data;
   }
-  const failure8 = commandEnvelopeSchema.safeParse(envelope2);
-  if (!failure8.success || failure8.data.status === "ok") {
-    throw new Error(`Command ${definition3.id} returned an invalid failure envelope: ${failure8.success ? "expected a non-success status" : failure8.error.message}`);
+  const failure9 = commandEnvelopeSchema.safeParse(envelope2);
+  if (!failure9.success || failure9.data.status === "ok") {
+    throw new Error(`Command ${definition3.id} returned an invalid failure envelope: ${failure9.success ? "expected a non-success status" : failure9.error.message}`);
   }
-  return failure8.data;
+  return failure9.data;
 }
 
 // src/register.ts
@@ -81723,9 +82610,9 @@ function inputSchema11(definition3) {
 function handlerInput(definition3, input2) {
   if (input2 === null || typeof input2 !== "object")
     return input2;
-  const record2 = input2;
+  const record3 = input2;
   const contextKeys = definition3.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
-  const normalized = { ...record2 };
+  const normalized = { ...record3 };
   for (const key of contextKeys)
     delete normalized[key];
   if (definition3.id === "judgment.review-advice" && normalized.input !== undefined) {
@@ -81752,10 +82639,10 @@ function registerMcpCommands(server, definitions2, resolveContext, services = []
     }, async (input2, extra) => {
       const invocationInput = handlerInput(definition3, input2);
       const resolved = await resolveContext(definition3, input2, extra.mcpReq.signal, services, connectionEffects);
-      const record2 = input2 !== null && typeof input2 === "object" ? input2 : {};
+      const record3 = input2 !== null && typeof input2 === "object" ? input2 : {};
       const selector = definition3.cli.options.find((option) => option.context === "sessionId");
-      const sessionId = selector === undefined ? resolved.sessionId : record2[selector.key] ?? resolved.sessionId;
-      const host = definition3.id !== "report" && definition3.input instanceof exports_external.ZodObject && Object.hasOwn(definition3.input.shape, "host") && typeof record2.host === "string" ? record2.host : resolved.host;
+      const sessionId = selector === undefined ? resolved.sessionId : record3[selector.key] ?? resolved.sessionId;
+      const host = definition3.id !== "report" && definition3.input instanceof exports_external.ZodObject && Object.hasOwn(definition3.input.shape, "host") && typeof record3.host === "string" ? record3.host : resolved.host;
       const requestContext = Object.freeze({
         ...resolved,
         ...sessionId === undefined ? {} : { sessionId },
