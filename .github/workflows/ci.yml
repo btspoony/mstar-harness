@@ -127,7 +127,7 @@ jobs:
       # Config-only MCP plugin roots are the repository checkout and have no
       # package build step; their committed bundles must stay byte-for-byte fresh.
       - name: MCP plugin bundle freshness
-        run: bun run engine:build && bun run mcp:build && git diff --exit-code -- mcp/bundles/
+        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build && bun run mcp:build && git diff --exit-code -- mcp/bundles/
 
       # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
       # whose static graph reaches src/dashboard/server.ts ->
@@ -218,6 +218,12 @@ jobs:
       # consumers. The CLI's own dist is built by the "Test CLI" package script.
       - name: Build engine (dist for the CLI suite's consumer-manifest guard)
         run: bun run engine:build && bun run judgment:build
+      # Native consumers copy the M4 server from packages/mcp/dist; that
+      # gitignored output must be built in this independent job.
+      - name: Build commands package (dist for MCP server)
+        run: bun run --cwd packages/commands build
+      - name: Build MCP server bundle (for native consumer builds)
+        run: bun run mcp:build
 
       - name: Build OpenCode
         run: bun run opencode:build
@@ -268,6 +274,11 @@ jobs:
       # build the engine first, as the single-job pipeline did.
       - name: Build engine (dist for the opencode build)
         run: bun run engine:build && bun run judgment:build
+      # OpenCode's bundle-assets step copies the M4 server from packages/mcp/dist.
+      - name: Build commands package (dist for MCP server)
+        run: bun run --cwd packages/commands build
+      - name: Build MCP server bundle
+        run: bun run mcp:build
 
       # The execution-session specs spawn the checkout's real CLI entry
       # (`bun run packages/cli/src/index.ts …`); loading it resolves the whole
@@ -319,6 +330,11 @@ jobs:
       # the engine dist it resolves first.
       - name: Build engine (dist for the omp build)
         run: bun run engine:build && bun run judgment:build
+      # omp's bundle-assets step copies the M4 server from packages/mcp/dist.
+      - name: Build commands package (dist for MCP server)
+        run: bun run --cwd packages/commands build
+      - name: Build MCP server bundle
+        run: bun run mcp:build
 
       # The omp package build regenerates the gitignored discovery mirrors
       # (hooks/, tools/, skills/ under packages/omp) its convention-scan smoke
@@ -364,6 +380,11 @@ jobs:
       # `bun install` in a fresh checkout is self-sufficient.
       - name: Build engine (dist for the dsh build)
         run: bun run engine:build && bun run judgment:build
+      # dsh's bundle-assets step copies the M4 server from packages/mcp/dist.
+      - name: Build commands package (dist for MCP server)
+        run: bun run --cwd packages/commands build
+      - name: Build MCP server bundle
+        run: bun run mcp:build
 
       # Runs bundle-assets first, which syncs the harness-skills /
       # harness-commands mirrors this package's tests read from its own package
@@ -485,6 +506,11 @@ jobs:
       # dist — build that first.
       - name: Build engine (dist for the consumer builds)
         run: bun run engine:build && bun run judgment:build
+      # OpenCode's bundle-assets step copies the M4 server from packages/mcp/dist.
+      - name: Build commands package (dist for MCP server)
+        run: bun run --cwd packages/commands build
+      - name: Build MCP server bundle
+        run: bun run mcp:build
 
       - name: Build CLI
         run: bun run cli:build
