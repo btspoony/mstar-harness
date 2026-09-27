@@ -1,89 +1,107 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createMcpBuildInfo, MCP_BUILD_INFO_FILENAME } from "../../mcp/src/build-info.js";
 import { diagnoseMcpTarget, mcpTargetPackageRoot, type McpRuntime } from "../src/host-health.js";
 import type { HostTarget } from "../src/host-health.js";
 
-const configuredTargets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi"];
+const targets: readonly Exclude<HostTarget, "dsh">[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi"];
 const roots: string[] = [];
-const currentRuntime: McpRuntime = { version: "24.18.0" };
+const version = "3.11.2";
+const currentRuntime: McpRuntime = { kind: "node", version: "24.18.0" };
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function configPath(root: string, target: HostTarget): string {
-  const pathFromRoot = target === "opencode" || target === "omp"
-    ? "mcp.json"
-    : `.${target}-plugin/mcp.json`;
-  return path.join(root, pathFromRoot);
-}
-
-function writeConfig(root: string, target: HostTarget, command = "npx", args = ["@mstar-harness/cli", "mcp"]): void {
-  const file = configPath(root, target);
-  mkdirSync(path.dirname(file), { recursive: true });
-  const config = target === "opencode"
-    ? { mcp: { "morning-star": { type: "local", command: [command, ...args] } } }
-    : { mcpServers: { "morning-star": { command, args } } };
-  writeFileSync(file, `// Requires a published CLI release with the mcp subcommand.\n${JSON.stringify(config)}`, "utf8");
-}
-
 function fixtureRoot(target: HostTarget): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-"));
   roots.push(root);
-  writeConfig(root, target);
+  const manifest = target === "cursor" ? ".cursor-plugin/plugin.json"
+    : target === "codex" ? ".codex-plugin/plugin.json"
+    : target === "kimi" ? ".kimi-plugin/plugin.json"
+    : target === "zcode" ? ".zcode-plugin/plugin.json"
+    : "package.json";
+  const metadataDir = target === "omp" || target === "opencode"
+    ? "mcp"
+    : `mcp/bundles/${target}/dist/mcp`;
+  mkdirSync(path.dirname(path.join(root, manifest)), { recursive: true });
+  mkdirSync(path.join(root, metadataDir), { recursive: true });
+  writeFileSync(path.join(root, manifest), JSON.stringify({ version }), "utf8");
+  writeFileSync(path.join(root, metadataDir, "stdio.js"), "// bundled MCP server\n", "utf8");
+  writeFileSync(path.join(root, metadataDir, MCP_BUILD_INFO_FILENAME), JSON.stringify(createMcpBuildInfo({
+    pluginVersion: version,
+    engineVersion: version,
+    mcpVersion: version,
+  }, target)), "utf8");
   return root;
 }
 
-describe("MCP host config health", () => {
-  test("all six JSON host configurations launch the CLI subcommand", () => {
-    for (const target of configuredTargets) {
+describe("MCP package health", () => {
+  test("packaged targets report aligned metadata and files", () => {
+    for (const target of targets) {
       const result = diagnoseMcpTarget(target, fixtureRoot(target), currentRuntime);
       expect(result.status).toBe("aligned");
       expect(result.errors).toEqual([]);
       expect(result.notes.join(" ")).toContain(target);
     }
   });
-
-  test("OpenCode checks the installed package config and DSH reports its YAML follow-up", () => {
+  test("opencode inspects its installed npm package root instead of checkout outputs", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-installed-health-"));
     roots.push(root);
     const opencodePackagesRoot = path.join(root, "opencode-packages");
-    const dshHome = path.join(root, "dsh-home");
-    const opencodePackageRoot = mcpTargetPackageRoot("opencode", "/checkout", { opencodePackagesRoot });
-    const dshPackageRoot = mcpTargetPackageRoot("dsh", "/checkout", { dshHome });
-
-    writeConfig(opencodePackageRoot, "opencode");
-    expect(diagnoseMcpTarget("opencode", opencodePackageRoot, currentRuntime).status).toBe("aligned");
-    expect(dshPackageRoot).toBe(path.join(dshHome, "profiles", "web", "node_modules", "@mstar-harness", "dsh"));
-    const dsh = diagnoseMcpTarget("dsh", dshPackageRoot, currentRuntime);
-    expect(dsh.status).toBe("unavailable");
-    expect(dsh.errors.join(" ")).toContain("Cordis YAML plugin row");
+    const packageRoot = mcpTargetPackageRoot("opencode", "/checkout", { opencodePackagesRoot });
+    mkdirSync(path.join(packageRoot, "mcp"), { recursive: true });
+    writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version }), "utf8");
+    writeFileSync(path.join(packageRoot, "mcp", "stdio.js"), "// installed package\n", "utf8");
+    writeFileSync(path.join(packageRoot, "mcp", MCP_BUILD_INFO_FILENAME), JSON.stringify(createMcpBuildInfo({
+      pluginVersion: version,
+      engineVersion: version,
+      mcpVersion: version,
+    }, "opencode")), "utf8");
+    expect(diagnoseMcpTarget("opencode", packageRoot, currentRuntime).status).toBe("aligned");
+  });
+  test("dsh reports unavailable until a Cordis MCP launch configuration exists", () => {
+    const result = diagnoseMcpTarget("dsh", "/unused", currentRuntime);
+    expect(result.status).toBe("unavailable");
+    expect(result.errors.join(" ")).toContain("no Cordis MCP launch configuration");
   });
 
-  test("incorrect command or arguments report a config mismatch", () => {
-    const root = fixtureRoot("codex");
-    writeConfig(root, "codex", "node", ["obsolete-server.js"]);
+  test("version, target, and metadata divergence report mismatch", () => {
+    const root = fixtureRoot("cursor");
+    const metadataPath = path.join(root, "mcp/bundles/cursor/dist/mcp", MCP_BUILD_INFO_FILENAME);
+    writeFileSync(metadataPath, JSON.stringify(createMcpBuildInfo({
+      pluginVersion: version,
+      engineVersion: "3.11.1",
+      mcpVersion: version,
+    }, "codex")), "utf8");
 
-    const result = diagnoseMcpTarget("codex", root, currentRuntime);
+    const result = diagnoseMcpTarget("cursor", root, currentRuntime);
     expect(result.status).toBe("mismatch");
-    expect(result.errors.join(" ")).toContain("command \"npx\"");
+    expect(result.errors.join(" ")).toContain("engineVersion");
+    expect(result.errors.join(" ")).toContain("hostTarget");
   });
 
-  test("missing host config is unavailable", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-missing-health-"));
-    roots.push(root);
+  test("missing packaged executable is unavailable", () => {
+    const root = fixtureRoot("omp");
+    rmSync(path.join(root, "mcp/stdio.js"));
 
     const result = diagnoseMcpTarget("omp", root, currentRuntime);
     expect(result.status).toBe("unavailable");
-    expect(result.errors.join(" ")).toContain("mcp.json");
+    expect(result.errors.join(" ")).toContain("mcp/stdio.js");
   });
 
-  test("reports when the host's Node runtime is below its floor", () => {
-    const result = diagnoseMcpTarget("omp", fixtureRoot("omp"), { version: "24.17.0" });
-    expect(result.status).toBe("mismatch");
-    expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
-    expect(result.errors.join(" ")).toContain(result.runtimeFloor);
+  test("refuses a native runtime below its floor for every packaged target", () => {
+    for (const target of targets) {
+      const result = diagnoseMcpTarget(target, fixtureRoot(target), { kind: "node", version: "24.17.0" });
+      expect(result.status).toBe("mismatch");
+      expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
+      expect(result.errors.join(" ")).toContain(result.runtimeFloor);
+    }
+    const bunResult = diagnoseMcpTarget("omp", fixtureRoot("omp"), { kind: "bun", version: "1.3.9" });
+    expect(bunResult.status).toBe("mismatch");
+    expect(bunResult.errors.join(" ")).toContain("Bun runtime 1.3.9");
+    expect(bunResult.runtimeFloor).toBe("1.4.0");
   });
 });

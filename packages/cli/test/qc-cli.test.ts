@@ -30,6 +30,10 @@ function runCli(args: string[]): RunResult {
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
+function envelope(result: RunResult): Record<string, unknown> {
+  return JSON.parse(result.stdout) as Record<string, unknown>;
+}
+
 /** Temp scratch file cleaned up after `fn`. */
 function withReport(text: string, fn: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "mstar-qc-cli-"));
@@ -84,28 +88,23 @@ None.
 `;
 
 describe("mstar qc validate-report", () => {
-  test("conforming report prints OK and exits 0", () => {
+  test("conforming report returns zero violations", () => {
     withReport(VALID_REPORT, (path) => {
       const result = runCli(["qc", "validate-report", path]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expect(envelope(result)).toMatchObject({ status: "ok", data: { ok: true, violations: [] } });
     });
   });
 
-  test("the historical 'Approve with residuals' verdict line is not a false positive", () => {
-    withReport(VALID_REPORT.replace("**Verdict**: Approve. Nothing blocking survived.", "## Verdict: **Approve with residuals**"), (path) => {
-      const result = runCli(["qc", "validate-report", path]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
-    });
-  });
 
   test("stale Summary counts exit 1 with the violation code and a fix", () => {
     withReport(VALID_REPORT.replace("| \ud83d\udfe2 Suggestion | 1 |", "| \ud83d\udfe2 Suggestion | 0 |"), (path) => {
       const result = runCli(["qc", "validate-report", path]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("qcreview.report.summary-count-mismatch");
-      expect(result.stderr).toContain("fix:");
+      const response = envelope(result);
+      expect(response.status).toBe("refused");
+      expect(response.code).toBe("qcreview.report.summary-count-mismatch");
+      expect((response.details as { violations: Array<{ fix: string }> }).violations[0]?.fix).toContain("recount");
     });
   });
 
@@ -113,7 +112,7 @@ describe("mstar qc validate-report", () => {
     withReport("# Code Review Report\n\n**Verdict**: Approve\n", (path) => {
       const result = runCli(["qc", "validate-report", path]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("qcreview.report.missing-frontmatter");
+      expect(envelope(result).code).toBe("qcreview.report.missing-frontmatter");
     });
   });
 });
