@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "node",
+      "args": ["${CURSOR_PLUGIN_ROOT}/dist/mcp/stdio.js"]
+    }
+  }
+}

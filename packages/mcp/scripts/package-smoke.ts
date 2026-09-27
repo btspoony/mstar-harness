@@ -46,9 +46,23 @@ async function main(): Promise<void> {
   mkdirSync(unpackedOutput, { recursive: true });
   cpSync(packagedBundle, path.join(unpackedOutput, "stdio.js"));
   cpSync(infoPath, path.join(unpackedOutput, "build-info.json"));
-  const executable = path.join(unpackedOutput, "stdio.js");
+  let command = process.execPath;
+  let args = [path.join(unpackedOutput, "stdio.js")];
+  if (target === "cursor") {
+    const configPath = path.join(root, "mcp/cursor.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+      mcpServers: Record<string, { command: string; args: string[] }>;
+    };
+    const cursorServer = config.mcpServers["morning-star"];
+    assert.ok(cursorServer, "Cursor MCP config must declare morning-star");
+    const unpackedConfigDir = path.join(unpackedRoot, "mcp");
+    mkdirSync(unpackedConfigDir, { recursive: true });
+    cpSync(configPath, path.join(unpackedConfigDir, "cursor.json"));
+    command = cursorServer.command;
+    args = cursorServer.args.map((argument) => argument.replaceAll("${CURSOR_PLUGIN_ROOT}", unpackedRoot));
+  }
   const foreignCwd = mkdtempSync(path.join(os.tmpdir(), "mcp-foreign-cwd-"));
-  const child = spawn(process.execPath, [executable], { cwd: foreignCwd, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd: foreignCwd, stdio: ["pipe", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
   let stderr = "";
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
