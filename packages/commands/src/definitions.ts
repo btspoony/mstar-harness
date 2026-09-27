@@ -20,6 +20,7 @@ import { getProcessCommandDefinitions } from "./families/process.js";
 
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 import { getLocalCommandDefinitions } from "./families/local.js";
+import { getReportCommandDefinitions } from "./families/report.js";
 import { getSchemaCommandDefinitions } from "./families/schema.js";
 
 
@@ -151,6 +152,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getDashboardCommandDefinitions(),
   ...getLocalCommandDefinitions(),
   ...getSchemaCommandDefinitions(),
+  ...getReportCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 

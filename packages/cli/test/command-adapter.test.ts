@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
-import { getCommandDefinitions } from "@mstar-harness/commands";
+import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
 import type { InvocationContext } from "@mstar-harness/commands";
 
@@ -28,7 +28,7 @@ const census = [
   "plan.reconcile", "plan.repair-delivery-source", "session.recover", "session.run", "store.init", "store.migrate",
   "store.upgrade", "store.backup", "store.activate", "store.retire", "store.execution.preview", "store.execution.apply",
   "store.execution.activate", "store.execution.retire", "store.execution.abort", "store.execution.restore-preview",
-  "store.execution.restore", "store.execution.export", "judgment.review-advice", "dashboard",
+  "store.execution.restore", "store.execution.export", "judgment.review-advice", "dashboard", "report",
 ];
 
 function context(): InvocationContext {
@@ -82,11 +82,82 @@ async function run(args: string[], definitions: readonly CommandDefinition[] = g
 }
 
 describe("generated CLI adapter", () => {
-  test("accounts for every census identity and excludes installer init", () => {
+  test("report census accounts for every canonical identity and excludes installer init", () => {
     const ids = getCommandDefinitions().map(({ id }) => id);
     expect(new Set(ids)).toEqual(new Set(census));
+    expect(ids).toHaveLength(123);
     expect(ids).not.toContain("init");
-    expect(ids).not.toContain("report");
+    expect(ids).toContain("report");
+  });
+  test("report accepts empty input and invokes the bounded canonical handler", async () => {
+    const empty = await run(["report"]);
+    expect(empty.status).toBe(0);
+    expect(JSON.parse(empty.stdout)).toMatchObject({
+      command: "report",
+      status: "ok",
+      code: "report.ok",
+      data: { issueUrl: expect.stringContaining("issues/new"), prompt: expect.stringContaining("Title: \"absent\"") },
+    });
+
+    const titled = await run(["report", "--title", "CLI report", "--exit-status", "2", "--version-overrides", "{\"cli\":\"override\"}"]);
+    expect(titled.status).toBe(0);
+    expect(JSON.parse(titled.stdout).data.prompt).toContain("Caller-supplied version overrides:");
+    const oversized = await run(["report", "--title", "x".repeat(8193)]);
+    expect(oversized.status).toBe(1);
+    expect(JSON.parse(oversized.stdout)).toMatchObject({
+      command: "report",
+      status: "refused",
+      code: "report.input-too-large",
+      details: { field: "title", limit: 8192 },
+    });
+    expect(JSON.parse(titled.stdout).data.prompt).toContain("Title: \"CLI report\"");
+  });
+  test("report decodes CLI JSON arguments into the bounded array handler", async () => {
+    const result = await run(["report", "--arguments", '["first","second"]']);
+    expect(result.status).toBe(0);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "report", status: "ok", code: "report.ok" });
+    expect(envelope.data.prompt).toContain('Arguments: ["first","second"]');
+    const mcp = await executeCommand("report", { arguments: ["first", "second"] }, context());
+    expect(envelope.data.prompt).toBe(mcp.data.prompt);
+
+    const tooLarge = await run(["report", "--arguments", JSON.stringify(["x".repeat(8193)])]);
+    expect(JSON.parse(tooLarge.stdout)).toMatchObject({
+      command: "report",
+      status: "refused",
+      code: "report.input-too-large",
+      details: { field: "arguments", limit: 8192 },
+    });
+
+    const invalid = await run(["report", "--arguments", "[not-json"]);
+    expect(invalid.status).toBe(2);
+    expect(JSON.parse(invalid.stdout)).toMatchObject({
+      command: "report",
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+    });
+  });
+
+  test("report rejects non-decimal or empty exit statuses", async () => {
+    for (const value of ["0x10", ""]) {
+      const result = await run(["report", "--exit-status", value]);
+      expect(result.status).toBe(2);
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    }
+  });
+
+
+  test("report rejects unknown and file options as invalid input", async () => {
+    for (const option of ["--unknown", "--file"]) {
+      const result = await run(["report", option]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        command: "report",
+        status: "usage",
+        code: "command.invalid-input",
+        exitCode: 2,
+      });
+    }
   });
 
   test("forwards workflow recovery selectors and multi-value stopped assertions", async () => {

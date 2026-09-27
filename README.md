@@ -162,6 +162,20 @@ mstar schema CaptureInput
 mstar host detect --signals question
 ```
 
+### Offline report draft
+
+`mstar report` creates an offline draft for the GitHub issue form; it does not read credentials or files, submit the issue, or make a network request. Supply only the report fields you choose: `title`, `command`, `arguments`, `expected`, `actual`, `reproduction`, `stableCode`, `exitStatus`, `host`, `platform`, and `versionOverrides`. Narrative fields you omit are marked `absent`; unavailable observed versions are `unknown`. Version overrides remain labeled caller-supplied. Each text field is limited to 8192 UTF-8 bytes and all supplied text together to 32768 bytes; `arguments` accepts at most 128 items.
+
+The report reuses a finite redaction set: private-key blocks, AWS access keys, GitHub tokens and PATs, live Stripe keys, Slack tokens, JWTs, `sk-` API keys, credential-like key/value assignments (`password`, `passwd`, `api-key`, `access-token`, `auth-token`, `secret`, or `token`), and four CI/IaC shapes (plaintext GitHub Actions secret environment values, echoed Actions secrets, credential-named Docker `ENV`/`ARG`, and hardcoded Terraform passwords). Redaction counts are distinct matched line/type findings per field, not every occurrence. This finite set cannot guarantee every secret is removed; inspect the draft yourself.
+
+```bash
+mstar report --title "Synthetic example" --command "mstar status" \
+  --expected "workflow is listed" --actual "workflow is missing" \
+  --stable-code "workflow.not-found" --exit-status 1
+```
+
+The generated prompt asks you to review it before submission. For CLI and MCP details, see [report command usage](INSTALL.md#report-command).
+
 ### MCP runtime peer
 
 `@mstar-harness/mcp` is the stdio peer to the CLI, not a second command implementation: it imports the same canonical definitions and invokes the shared command handlers in-process. The host launches the packaged server; it does not need a global `mstar` executable, and the server does not invoke the CLI. The package provides `dist/stdio.js` for Node.js and `dist/bun/stdio.js` for Bun.

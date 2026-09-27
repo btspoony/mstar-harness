@@ -163,6 +163,20 @@ mstar schema CaptureInput
 mstar host detect --signals question
 ```
 
+### 离线报告草稿
+
+`mstar report` 会为 GitHub issue 表单生成离线草稿；它不会读取凭据或文件、提交 issue，也不会发起网络请求。只提供你选择的报告字段：`title`、`command`、`arguments`、`expected`、`actual`、`reproduction`、`stableCode`、`exitStatus`、`host`、`platform` 和 `versionOverrides`。未提供的叙述字段会标记为 `absent`；无法观测到的版本会标记为 `unknown`。版本覆盖值会明确标为调用方提供。每个文本字段最多 8192 UTF-8 字节，所有提供的文本合计最多 32768 字节；`arguments` 最多 128 项。
+
+报告复用一组有限的脱敏模式：私钥块、AWS access key、GitHub token 和 PAT、Stripe live key、Slack token、JWT、`sk-` API key、凭据类键值赋值（`password`、`passwd`、`api-key`、`access-token`、`auth-token`、`secret` 或 `token`），以及四种 CI/IaC 形态（GitHub Actions 明文 secret 环境变量、回显的 Actions secret、凭据命名的 Docker `ENV`/`ARG`、Terraform 硬编码密码）。脱敏计数按字段统计不同的匹配行/类型发现，不是出现次数。有限模式不能保证移除所有 secret；请自行检查草稿。
+
+```bash
+mstar report --title "Synthetic example" --command "mstar status" \
+  --expected "workflow is listed" --actual "workflow is missing" \
+  --stable-code "workflow.not-found" --exit-status 1
+```
+
+生成的提示会要求你在提交前检查草稿。CLI 与 MCP 用法见[报告命令用法](INSTALL.md#report-command)。
+
 ### MCP 运行时 peer
 
 `@mstar-harness/mcp` 是 CLI 的 stdio peer，而不是第二套命令实现：它导入同一份规范命令定义，并在进程内调用共享命令处理器。宿主启动打包后的 server；运行时不需要全局 `mstar` 可执行文件，server 也不会调用 CLI。包提供 Node.js 入口 `dist/stdio.js` 和 Bun 入口 `dist/bun/stdio.js`。

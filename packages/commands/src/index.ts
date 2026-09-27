@@ -28,4 +28,7 @@ export { getProcessCommandDefinitions } from "./families/process.js";
 export { getLocalCommandDefinitions } from "./families/local.js";
 export { spawnProcess } from "./effects/process.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";
+export { createReport, reportInputSchema } from "./report.js";
+export { getReportCommandDefinitions } from "./families/report.js";
+export type { ReportData, ReportInput } from "./report.js";
 export * from "./host-health.js";

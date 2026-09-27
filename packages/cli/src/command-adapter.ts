@@ -155,7 +155,13 @@ export function registerCliCommands(
       process.once("SIGTERM", onSigterm);
       const services: Array<{ close(): Promise<void> }> = [];
       try {
-        const envelope = await executeCommand(definition.id, collectInput(definition, args), {
+        const collected = collectInput(definition, args);
+        const input = definition.decodeCliInput?.(collected);
+        if (definition.decodeCliInput !== undefined && input === null) {
+          writeEnvelope(usageEnvelope(definition.id, "Invalid command input."));
+          return;
+        }
+        const envelope = await executeCommand(definition.id, input ?? collected, {
           ...baseContext,
           signal: controller.signal,
           effects: cliEffects(services),

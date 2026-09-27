@@ -62,6 +62,7 @@ export interface CommandDefinition<I = unknown, O = unknown> {
   readonly output: ZodType<CommandEnvelope<O>>;
   readonly effects: readonly CommandEffect[];
   readonly description: string;
+  decodeCliInput?(input: Record<string, unknown>): Record<string, unknown> | null;
   execute(input: I, context: InvocationContext): Promise<CommandEnvelope<O>>;
 }
 

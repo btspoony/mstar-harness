@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import cliManifest from "../package.json" with { type: "json" };
+import engineManifest from "../../engine/package.json" with { type: "json" };
 import { select } from "@inquirer/prompts";
 import { getCommandDefinitions } from "@mstar-harness/commands";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
@@ -13,6 +15,13 @@ import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 
 const packageVersion = readHarnessVersion();
+const reportSurfaceVersions = {
+  engine: engineManifest.version,
+  cli: cliManifest.version,
+  plugin: null,
+  host: null,
+  platform: `${process.platform}/${process.arch}`,
+};
 const program = new Command();
 
 function logStep(message: string) {
@@ -113,7 +122,7 @@ program
 registerCliCommands(program, getCommandDefinitions(), {
   cwd: process.cwd(),
   controlRoot: resolveProcessHarnessDir(process.cwd()),
-  versions: { engine: packageVersion, cli: packageVersion, plugin: null, host: null, platform: `${process.platform}/${process.arch}` },
+  versions: reportSurfaceVersions,
   signal: new AbortController().signal,
   effects: {
     async readInput() { return ""; },
