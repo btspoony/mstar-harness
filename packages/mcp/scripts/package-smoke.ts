@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
@@ -31,6 +31,34 @@ function outputDir(target: Target, root: string): string {
     : path.join(root, "mcp", "bundles", target, "dist", "mcp");
 }
 
+function executableAt(file: string): boolean {
+  try {
+    accessSync(file, constants.X_OK);
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function executableOnPath(name: string, pathValue: string): string | undefined {
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    const executable = path.join(directory, name);
+    if (executableAt(executable)) return executable;
+  }
+  return undefined;
+}
+
+function sanitizedRuntimePath(): { pathValue: string; directory: string } {
+  const nodeExecutable = executableOnPath("node", process.env.PATH ?? "");
+  assert.ok(nodeExecutable, "package smoke requires a node executable");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "mcp-runtime-bin-"));
+  symlinkSync(nodeExecutable, path.join(directory, "node"));
+  const pathValue = directory;
+  assert.ok(executableOnPath("node", pathValue), "sanitized plugin PATH must resolve node");
+  assert.equal(executableOnPath("mstar", pathValue), undefined, "sanitized plugin PATH must not resolve an mstar executable");
+  return { pathValue, directory };
+}
+
 function parseTarget(argv: string[]): Target {
   if (argv.length !== 2 || argv[0] !== "--target" || !targets.includes(argv[1] as Target)) {
     throw new Error(`usage: bun packages/mcp/scripts/package-smoke.ts --target <${targets.join("|")}>`);
@@ -56,6 +84,7 @@ async function main(): Promise<void> {
   let command = process.execPath;
   let args = [packagedBundle];
   let cwd = mkdtempSync(path.join(os.tmpdir(), "mcp-foreign-cwd-"));
+  let runtimePathDirectory: string | undefined;
   let childEnv: NodeJS.ProcessEnv = process.env;
   let fixtureRoot: string | undefined;
   let workflowToken = "";
@@ -134,7 +163,12 @@ async function main(): Promise<void> {
       if (previousHarnessDir === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarnessDir;
     }
-    childEnv = { ...process.env, MSTAR_HARNESS_DIR: harnessDir };
+    const runtimePath = sanitizedRuntimePath();
+    runtimePathDirectory = runtimePath.directory;
+    childEnv = {
+      PATH: runtimePath.pathValue,
+      MSTAR_HARNESS_DIR: harnessDir,
+    };
   }
   const child = spawn(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
@@ -220,6 +254,7 @@ async function main(): Promise<void> {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(unpackedRoot, { recursive: true, force: true });
     if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
+    if (runtimePathDirectory) rmSync(runtimePathDirectory, { recursive: true, force: true });
   }
 }
 
