@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { getCommandDefinitions, type CommandDefinition } from "@mstar-harness/commands";
+import { getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "./register.js";
 
 export function createMcpServer(
@@ -13,6 +13,16 @@ export function createMcpServer(
     await Promise.all(running.map(({ close }) => close()));
   };
   server.server.onclose = () => { void closeServices(); };
-  registerMcpCommands(server, definitions, resolveContext, services);
+  const createRequestContext: ResolveContext = async (definition, input, signal, requestServices, effects) => {
+    const context = await resolveContext(definition, input, signal, requestServices, effects);
+    const requestContext: InvocationContext = Object.freeze({
+      ...context,
+      versions: Object.freeze({ ...context.versions }),
+      signal,
+      effects,
+    });
+    return requestContext;
+  };
+  registerMcpCommands(server, definitions, createRequestContext, services);
   return server;
 }
