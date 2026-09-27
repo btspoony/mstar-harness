@@ -76,7 +76,7 @@ Without a global install the harness still works and those checks stay advisory.
 
 ### Verify
 
-`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`.
+`npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` checks the selected target; Codex also accepts `--scope <global|project>`. MCP package health is reported as aligned, mismatch, or unavailable. Doctor reads package metadata/executable and checks runtime floor; it does not open the issue store. See [MCP host install paths](#mcp-host-install-paths).
 
 Codex agent-link repair and named-role verification: [Codex installation](INSTALL.md#codex).
 
@@ -185,6 +185,24 @@ The server registers the canonical non-installer commands as MCP tools; tool nam
 
 Examples are synthetic; this README does not claim an installed-host, browser, or live-service run.
 MCP-captured SDD evidence records are `stable:false`; collector parity with the CLI remains a documented cross-plan residual.
+
+### MCP host install paths
+
+Install the host plugin; each plugin owns its MCP configuration and packaged stdio server. A global CLI is not required to use the installed MCP tools. Runtime floors apply to the executable that launches the server, not to the host UI:
+
+| Host | Native install / MCP entry | Runtime |
+|------|----------------------------|---------|
+| omp | `omp plugin install @mstar-harness/omp`; native tools and stdio peer are plugin-owned; the stdio entry resolves from the installed module URL, not the project cwd. | Bun >=1.4.0 |
+| OpenCode | Install `@mstar-harness/opencode`; its V1 plugin registers generated native tools and ships a package-relative `mcp/stdio.js` peer. Supported `@opencode-ai/plugin` version: **1.4.8**; no V2 migration or global-CLI fallback. | Node >=24.18.0 |
+| dsh | Install `@mstar-harness/dsh` in the `web` profile; the plugin registers generated native tools and bundles its stdio peer at `mcp/stdio.js`. | Bun >=1.4.0 |
+| Cursor | Install the plugin; its MCP config launches `node ${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js`. | Node >=24.18.0 |
+| Codex | Add `morning-star-harness@mstar-repo`; its config launches `node ${PLUGIN_ROOT}/mcp/bundles/codex/dist/mcp/stdio.js`. | Node >=24.18.0 |
+| Kimi | In Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`; the plugin-local `./mcp/kimi-launcher.mjs` resolves the bundled server relative to its own location. | Node >=24.18.0 |
+| ZCode | Install **morning-star-harness** from the `mstar-local` marketplace; its config launches `node ${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js`. | Node >=24.18.0 |
+
+For exact install commands and configuration details, see [INSTALL.md](INSTALL.md#installing-the-mcp-tools). The target-specific artifacts are also described in [`mstar-host` references](skills/mstar-host/SKILL.md).
+
+`doctor --target <host>` interprets MCP health as **aligned**, **mismatch**, or **unavailable** for that host's packaged executable and build metadata; a mismatch or unavailable artifact is a finding, not an installed-host success. Doctor checks the selected process runtime floor and package files; it does **not** open the issue store. MCP context keeps the shared contract: optional `host` selects validated host context, `sessionId` is the main conversation session, and child-agent attribution is neither required nor performed. Development unit/component/integration and package-smoke evidence is distinct from installed-host/live verification, which requires a separately authorized activity and is not claimed here.
 
 ## Harness Workflow
 

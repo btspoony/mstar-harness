@@ -46,6 +46,7 @@ import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
 import { registerExecutionSessionCommand } from './gates/execution-session.ts'
+import { registerDshMcpTools } from './mcp.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -888,10 +889,8 @@ export function apply(ctx: Context, config: Config): void {
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
 
-  // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
+  // v2 seams and canonical command tools share the native tools registry.
   registerSddIterationTools(ctx, resolver)
-
-  // Seam tools — on-demand `mstar_*_validate` equivalents
-  // (design-md / audit / compound / roles).
   registerSeamTools(ctx, resolver)
+  registerDshMcpTools(ctx, resolver)
 }

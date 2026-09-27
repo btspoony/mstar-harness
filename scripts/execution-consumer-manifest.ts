@@ -55,6 +55,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION, serializeExecutionValue } from "../packages/engine/src/index.ts";
+import { MCP_BUILD_INFO_FILENAME } from "../packages/mcp/src/build-info.ts";
 
 export const CONSUMER_MANIFEST_PROTOCOL = "consumer-v1" as const;
 
@@ -284,6 +285,51 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     copies: [],
   },
   {
+    id: "mcp",
+    packageRoot: "packages/mcp",
+    capability: "writer",
+    capabilityNote: null,
+    runtime: { target: "node", declaration: "package-engines" },
+    packageJson: "packages/mcp/package.json",
+    entrypoint: "packages/mcp/dist/stdio.js",
+    sourceTrees: [{ root: "packages/mcp/src" }, { root: "packages/mcp/scripts" }],
+    sourceFiles: [
+      "packages/mcp/package.json",
+      "packages/mcp/tsconfig.json",
+      "scripts/build-mcp-plugins.ts",
+      "mcp/cursor.json",
+      "mcp/codex.json",
+      "mcp/codex-plugin.json",
+      "mcp/kimi.json",
+      "mcp/kimi-launcher.mjs",
+      "mcp/zcode.json",
+    ],
+    generatedTrees: [
+      { root: "packages/mcp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
+      { root: "packages/omp/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
+      { root: "packages/opencode/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
+      { root: "packages/dsh/mcp", exclude: BUILD_OUTPUT_EXCLUSIONS },
+    ],
+    generatedFiles: [
+      "packages/mcp/dist/stdio.js",
+      "mcp/bundles/cursor/dist/mcp/stdio.js",
+      `mcp/bundles/cursor/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "mcp/bundles/codex/dist/mcp/stdio.js",
+      `mcp/bundles/codex/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "mcp/bundles/kimi/dist/mcp/stdio.js",
+      `mcp/bundles/kimi/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "mcp/bundles/zcode/dist/mcp/stdio.js",
+      `mcp/bundles/zcode/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "packages/omp/mcp/stdio.js",
+      `packages/omp/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "packages/opencode/mcp/stdio.js",
+      `packages/opencode/mcp/${MCP_BUILD_INFO_FILENAME}`,
+      "packages/dsh/mcp/stdio.js",
+      `packages/dsh/mcp/${MCP_BUILD_INFO_FILENAME}`,
+    ],
+    copies: [],
+  },
+  {
     id: "dsh",
     packageRoot: "packages/dsh",
     capability: "writer",
@@ -326,23 +372,16 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "packages/omp/tsconfig.json",
     ],
     // `dist` plus the package-root convention mirrors the build produces with
-    // `cp -R` (hooks/tools/extensions) — the plugin loads the mirrors.
+    // `cp -R` (hooks/extensions) — the plugin loads the mirrors.
     generatedTrees: [
       { root: "packages/omp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/extensions", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/hooks", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/tools", exclude: BUILD_OUTPUT_EXCLUSIONS },
     ],
     generatedFiles: [
       "packages/omp/dist/extensions/model-handoff.js",
       "packages/omp/dist/extensions/phase2-orchestration.js",
       "packages/omp/dist/hooks/pre/mstar-gates.js",
-      "packages/omp/dist/tools/mstar_dispatch_validate/index.js",
-      "packages/omp/dist/tools/mstar_iteration_gate/index.js",
-      "packages/omp/dist/tools/mstar_lease_verify/index.js",
-      "packages/omp/dist/tools/mstar_path_resolve/index.js",
-      "packages/omp/dist/tools/mstar_status_validate/index.js",
-      "packages/omp/dist/tools/mstar_worktree_check/index.js",
       // `bundle-assets` copies the omp plugin manifest to the package root.
       "packages/omp/plugin.json",
     ],
@@ -354,9 +393,8 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
   {
     id: "opencode",
     packageRoot: "packages/opencode",
-    capability: "decision-only",
-    capabilityNote:
-      "OpenCode hook is log/decision-only: without native per-call session identity the writer association is refused and this consumer is excluded operationally (contract §6 H4 / S15).",
+    capability: "writer",
+    capabilityNote: null,
     runtime: { target: "node", declaration: "package-engines" },
     packageJson: "packages/opencode/package.json",
     entrypoint: "packages/opencode/dist/mstar.js",

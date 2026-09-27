@@ -16,17 +16,17 @@
     "harness-commands",
     "harness-agents",
     "hooks",
-    "tools",
     "skills",
     "commands",
     "agents",
     "assets",
+    "mcp",
     "plugin.json",
     "README.md"
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bun build src/tools/mstar_status_validate/index.ts --target node --outfile dist/tools/mstar_status_validate/index.js && bun build src/tools/mstar_worktree_check/index.ts --target node --outfile dist/tools/mstar_worktree_check/index.js && bun build src/tools/mstar_dispatch_validate/index.ts --target node --outfile dist/tools/mstar_dispatch_validate/index.js && bun build src/tools/mstar_iteration_gate/index.ts --target node --outfile dist/tools/mstar_iteration_gate/index.js && bun build src/tools/mstar_lease_verify/index.ts --target node --outfile dist/tools/mstar_lease_verify/index.js && bun build src/tools/mstar_path_resolve/index.ts --target node --outfile dist/tools/mstar_path_resolve/index.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions && mkdir -p tools && cp dist/tools/mstar_status_validate/index.js tools/mstar_status_validate.js && cp dist/tools/mstar_worktree_check/index.js tools/mstar_worktree_check.js && cp dist/tools/mstar_dispatch_validate/index.js tools/mstar_dispatch_validate.js && cp dist/tools/mstar_iteration_gate/index.js tools/mstar_iteration_gate.js && cp dist/tools/mstar_lease_verify/index.js tools/mstar_lease_verify.js && cp dist/tools/mstar_path_resolve/index.js tools/mstar_path_resolve.js",
+    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bun build src/extensions/mcp.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/mcp.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
@@ -66,7 +66,8 @@
     },
     "extensions": [
       "./extensions/model-handoff.js",
-      "./extensions/phase2-orchestration.js"
+      "./extensions/phase2-orchestration.js",
+      "./extensions/mcp.js"
     ]
   },
   "publishConfig": {
@@ -81,7 +82,9 @@
     }
   },
   "devDependencies": {
+    "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
+    "@mstar-harness/mcp": "workspace:*",
     "@oh-my-pi/pi-coding-agent": "18.3.0"
   }
 }

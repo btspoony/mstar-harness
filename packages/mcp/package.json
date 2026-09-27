@@ -21,17 +21,21 @@
     }
   },
   "files": ["dist"],
+  "engines": {
+    "node": ">=24.18.0",
+    "bun": ">=1.4.0"
+  },
   "scripts": {
-    "build": "rm -rf dist && bun run scripts/build.ts && bunx tsc"
+    "build": "rm -rf dist && bun run scripts/build.ts && bunx tsc && bun run ../../scripts/build-mcp-plugins.ts --target omp && bun run ../../scripts/build-mcp-plugins.ts --target opencode && bun run ../../scripts/build-mcp-plugins.ts --target dsh && bun run ../../scripts/build-mcp-plugins.ts --target cursor && bun run ../../scripts/build-mcp-plugins.ts --target codex && bun run ../../scripts/build-mcp-plugins.ts --target kimi && bun run ../../scripts/build-mcp-plugins.ts --target zcode"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
-    "@mstar-harness/commands": "workspace:*",
-    "@mstar-harness/engine": "workspace:*",
     "zod": "^4.2.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.1.0",
+    "@mstar-harness/commands": "workspace:*",
+    "@mstar-harness/engine": "workspace:*",
     "@types/node": "^25.6.0",
     "bun-types": "^1.2.17",
     "typescript": "^5.9.3"
