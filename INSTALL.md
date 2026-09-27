@@ -450,6 +450,39 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 3. **Project knowledge** — bootstrap or refresh via the `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
 
+## Report command
+
+`mstar report` generates an offline, redacted issue-report draft. It accepts only explicitly supplied report fields; it does not read credentials, environment variables, files, shell history, or transcripts, and it never submits the issue or makes a network request. Omitted narrative values appear as `absent`; unavailable observed versions appear as `unknown`. Review the generated draft yourself before using it.
+
+CLI example (all values are synthetic):
+
+```bash
+mstar report \
+  --title "Synthetic example" \
+  --command "mstar status" \
+  --arguments '["--workflow","wf-synthetic"]' \
+  --expected "workflow is listed" \
+  --actual "workflow is missing" \
+  --stable-code "workflow.not-found" \
+  --exit-status 1
+```
+
+The CLI prints a version-1 JSON envelope containing `issueUrl`, the review prompt, and `redactions` (field plus count). `--arguments` takes JSON string or string-array input; `--version-overrides` takes a JSON object. MCP exposes the same command as `mstar_report`, with the same field names as an input object, for example:
+
+```json
+{
+  "title": "Synthetic example",
+  "command": "mstar status",
+  "arguments": ["--workflow", "wf-synthetic"],
+  "expected": "workflow is listed",
+  "actual": "workflow is missing",
+  "stableCode": "workflow.not-found",
+  "exitStatus": 1
+}
+```
+
+Redaction uses a finite pattern set; its count is distinct matched line/type findings per field, not every occurrence, and is not a guarantee that every secret was removed. See [README — Offline report draft](README.md#offline-report-draft) for the pattern categories and privacy details. These examples document the command contract, not an installed-host or live-service run.
+
 ## Further reading
 
 - CLI reference: the **`mstar-use-cli`** skill (`skill://mstar-use-cli`)
