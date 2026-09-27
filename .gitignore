@@ -24,3 +24,5 @@ packages/commands/dist/
 # Generated dashboard assets (regenerated before every CLI build)
 packages/cli/src/dashboard/assets.generated.ts
 
+packages/mcp/dist/
+packages/dsh/mcp/
