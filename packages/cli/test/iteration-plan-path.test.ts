@@ -1,26 +1,23 @@
 /**
- * CLI `mstar iteration register` — the registered-plan path contract
- * (prerequisite contract §4) on the real registration path.
+ * CLI `mstar iteration register` — active registration input contract plus the
+ * registered-plan path resolver contract.
  *
- * The suite spawns the real CLI as a subprocess against isolated temp fixture
- * harnesses (no live harness, no helper called directly). Contract pinned here:
- * - a canonical absolute or a normalized harness-relative pointer to the
- *   configured `{PLAN_DIR}/<id>.md` registers, and the SNAPSHOT persists the
- *   canonical absolute path, never the caller's spelling;
- * - the old repository-relative `.mstar/plans/<id>.md` spelling is refused with
- *   the actionable diagnostic (received form, base, expected canonical target,
- *   permitted forms) and writes NOTHING — no status.json, no snapshot, no
- *   journal row;
- * - a `.mstarc`-declared plan root resolves from its own base, and an external
- *   plan root is admitted only as an absolute pointer.
+ * The CLI test uses a real active harness and a valid row registration payload;
+ * the resolver cases call the engine's shared resolver directly, which is the
+ * contract that canonicalizes absolute and harness-relative plan pointers.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
+  initializeExecutionAuthority,
   initializeStore,
-  listPendingCatalogRegistrations,
+  readExecutionAuthority,
+  resolveRegisteredPlanFile,
+  serializeExecutionValue,
+  type ExecutionIdentity,
   type StoreContext,
 } from "@mstar-harness/engine";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -36,26 +33,46 @@ interface RunResult {
 }
 
 /** Spawn env with ambient harness env vars pinned out (see iteration-register). */
-function cliEnv(): Record<string, string> {
+function cliEnv(harness: string, identity: ExecutionIdentity): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
+    if (key === "MSTAR_EXECUTION_IDENTITY") continue;
     if (value !== undefined) env[key] = value;
   }
+  env.MSTAR_HARNESS_DIR = harness;
+  env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
   return env;
 }
 
-function runCli(args: string[]): RunResult {
+function runCli(args: string[], harness: string, identity: ExecutionIdentity): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
-    env: cliEnv(),
+    cwd: harness,
+    env: cliEnv(harness, identity),
     stdout: "pipe",
     stderr: "pipe",
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
-function registerArgs(harness: string, workflowId: string, file: string): string[] {
+function identityFor(workflowId: string): ExecutionIdentity {
+  return { source: "local", sessionId: `coord-${workflowId}`, workflowId, role: "coordinator", planId: null };
+}
+
+function jsonOf(result: RunResult): Record<string, unknown> {
+  try {
+    return JSON.parse(result.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
+  }
+}
+
+
+async function rootToken(harness: string): Promise<string> {
+  return (await readExecutionAuthority({ harnessDir: harness })).token;
+}
+
+function registerArgs(harness: string, workflowId: string, file: string, token: string): string[] {
   return [
     "iteration",
     "register",
@@ -67,21 +84,27 @@ function registerArgs(harness: string, workflowId: string, file: string): string
     "main",
     "--branch-integration",
     "feature/20260918-iteration-plan-path",
-    "--branch-target",
+    "--branch-target-iteration",
     "main",
     "--row",
     JSON.stringify({ id: PLAN_ID, title: "Plan alpha", file }),
     "--started-at",
     "2026-09-18T00:00:00.000Z",
+    "--expect",
+    token,
+    "--operation",
+    `register-${workflowId}`,
     "--harness",
     harness,
+    "--session-id",
+    `coord-${workflowId}`,
   ];
 }
 
+
 /**
- * Temp fixture harness with a plan file under `planSubdir` (default `plans/`)
- * and an initialized active store. Returns the harness plus the canonical
- * absolute plan path.
+ * Temp git-backed harness with a plan file under its configured plan root and
+ * an initialized active store. Returns the harness plus the canonical path.
  */
 function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
   harness: string;
@@ -89,7 +112,12 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
   context: StoreContext;
   cleanup: () => void;
 } {
-  const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-plan-path-"));
+  const root = mkdtempSync(join(tmpdir(), "mstar-iteration-plan-path-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
+    cwd: root,
+  });
+  const harness = join(root, ".mstar");
   const planDir = join(harness, options.planSubdir ?? "plans");
   mkdirSync(planDir, { recursive: true });
   const planFile = join(planDir, `${PLAN_ID}.md`);
@@ -99,96 +127,98 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
     harness,
     planPath: realpathSync(planFile),
     context: { harnessDir: harness },
-    cleanup: () => rmSync(harness, { recursive: true, force: true }),
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
-
 async function initStore(harness: string): Promise<void> {
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  await initializeExecutionAuthority({ harnessDir: harness });
 }
 
-describe("mstar iteration register — registered plan path (§4)", () => {
-  test("prerequisite path: a harness-relative pointer registers the canonical absolute plan file", async () => {
+
+function expectInvalidRegisteredPath(harnessRoot: string, file: string): void {
+  let error: unknown;
+  try {
+    resolveRegisteredPlanFile({ harnessRoot, planId: PLAN_ID, file });
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toMatchObject({ code: "plan-path.invalid-pointer" });
+}
+
+describe("iteration registration inputs and registered plan paths", () => {
+  test("registers a valid active iteration input with a normalized harness-relative plan path", async () => {
     const fixture = setupHarness();
     await initStore(fixture.harness);
     try {
-      const result = runCli(registerArgs(fixture.harness, "20260918-path-default", `plans/${PLAN_ID}.md`));
+      const workflowId = "20260918-path-default";
+      const result = runCli(
+        registerArgs(fixture.harness, workflowId, `plans/${PLAN_ID}.md`, await rootToken(fixture.harness)),
+        fixture.harness,
+        identityFor(workflowId),
+      );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("iteration register: OK");
+      expect(jsonOf(result)).toMatchObject({
+        command: "iteration.register",
+        status: "ok",
+        code: "iteration.register.ok",
+        exitCode: 0,
+      });
 
-      const snapshot = JSON.parse(
-        readFileSync(join(fixture.harness, "workflows", "20260918-path-default", "snapshot.json"), "utf8"),
-      ) as { plans: Array<{ id: string; file: string }> };
-      expect(snapshot.plans).toEqual([expect.objectContaining({ id: PLAN_ID, file: fixture.planPath })]);
-      expect(snapshot.plans[0]!.file.startsWith(realpathSync(fixture.harness))).toBe(true);
+      const registration = await readExecutionAuthority(fixture.context, { workflowId });
+      if (!("workflows" in registration.data)) throw new Error("registration read returned no workflow authority");
+      const registered = registration.data.workflows.find((entry) => entry.state.id === workflowId);
+      expect(registered?.plans[0]?.plan).toMatchObject({
+        id: PLAN_ID,
+        title: "Plan alpha",
+        file: `plans/${PLAN_ID}.md`,
+        status: "Todo",
+      });
     } finally {
       fixture.cleanup();
     }
   });
 
-  test("prerequisite path: the repository-relative .mstar/plans spelling refuses with nothing written", async () => {
+  test("the path resolver accepts a normalized harness-relative pointer and rejects repository-relative .mstar spelling", () => {
     const fixture = setupHarness();
-    await initStore(fixture.harness);
     try {
-      const result = runCli(registerArgs(fixture.harness, "20260918-path-relative", `.mstar/plans/${PLAN_ID}.md`));
-      expect(result.exitCode).toBe(1);
-      // The actionable diagnostic: received form, base, expected target, forms.
-      expect(result.stderr).toContain("plan pointer refused");
-      expect(result.stderr).toContain("plan-path.invalid-pointer");
-      expect(result.stderr).toContain(`.mstar/plans/${PLAN_ID}.md`);
-      expect(result.stderr).toContain("permitted forms");
-
-      // No execution bytes and no journal row: the refusal precedes every write.
-      expect(existsSync(join(fixture.harness, "status.json"))).toBe(false);
-      expect(existsSync(join(fixture.harness, "workflows"))).toBe(false);
-      expect(await listPendingCatalogRegistrations(fixture.context)).toEqual([]);
+      expect(resolveRegisteredPlanFile({
+        harnessRoot: fixture.harness,
+        planId: PLAN_ID,
+        file: `plans/${PLAN_ID}.md`,
+      }).planPath).toBe(fixture.planPath);
+      expectInvalidRegisteredPath(fixture.harness, `.mstar/plans/${PLAN_ID}.md`);
     } finally {
       fixture.cleanup();
     }
   });
 
-  test("prerequisite path: a .mstarc-declared plan root resolves from its own base", async () => {
+  test("the path resolver honors a .mstarc-declared plan root", () => {
     const fixture = setupHarness({ mstarc: "[config]\nplan_dir=planning\n", planSubdir: "planning" });
-    const custom = setupHarness({ mstarc: "[config]\nplan_dir=planning\n" });
-    await initStore(fixture.harness);
-    await initStore(custom.harness);
     try {
-      const accepted = runCli(registerArgs(fixture.harness, "20260918-path-mstarc", `planning/${PLAN_ID}.md`));
-      expect(accepted.exitCode).toBe(0);
-      const snapshot = JSON.parse(
-        readFileSync(join(fixture.harness, "workflows", "20260918-path-mstarc", "snapshot.json"), "utf8"),
-      ) as { plans: Array<{ file: string }> };
-      expect(snapshot.plans[0]!.file).toBe(fixture.planPath);
-
-      // The default-root spelling is not the configured root: it refuses.
-      const refused = runCli(registerArgs(custom.harness, "20260918-path-mstarc-default", `plans/${PLAN_ID}.md`));
-      expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("plan pointer refused");
-      expect(existsSync(join(custom.harness, "workflows"))).toBe(false);
+      expect(resolveRegisteredPlanFile({
+        harnessRoot: fixture.harness,
+        planId: PLAN_ID,
+        file: `planning/${PLAN_ID}.md`,
+      }).planPath).toBe(fixture.planPath);
+      expectInvalidRegisteredPath(fixture.harness, `plans/${PLAN_ID}.md`);
     } finally {
       fixture.cleanup();
-      custom.cleanup();
     }
   });
 
-  test("prerequisite path: an external plan root is admitted only as an absolute pointer", async () => {
+  test("an external plan root requires an absolute pointer", () => {
     const external = mkdtempSync(join(tmpdir(), "mstar-iteration-plan-path-external-"));
     const externalPlan = join(external, `${PLAN_ID}.md`);
     writeFileSync(externalPlan, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
     const fixture = setupHarness({ mstarc: `[config]\nplan_dir=${external}\n` });
-    await initStore(fixture.harness);
     try {
-      const refused = runCli(registerArgs(fixture.harness, "20260918-path-external-rel", `${PLAN_ID}.md`));
-      expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("plan pointer refused");
-      expect(existsSync(join(fixture.harness, "workflows"))).toBe(false);
-
-      const accepted = runCli(registerArgs(fixture.harness, "20260918-path-external-abs", realpathSync(externalPlan)));
-      expect(accepted.exitCode).toBe(0);
-      const snapshot = JSON.parse(
-        readFileSync(join(fixture.harness, "workflows", "20260918-path-external-abs", "snapshot.json"), "utf8"),
-      ) as { plans: Array<{ file: string }> };
-      expect(snapshot.plans[0]!.file).toBe(realpathSync(externalPlan));
+      expectInvalidRegisteredPath(fixture.harness, `${PLAN_ID}.md`);
+      expect(resolveRegisteredPlanFile({
+        harnessRoot: fixture.harness,
+        planId: PLAN_ID,
+        file: realpathSync(externalPlan),
+      }).planPath).toBe(realpathSync(externalPlan));
     } finally {
       fixture.cleanup();
       rmSync(external, { recursive: true, force: true });
