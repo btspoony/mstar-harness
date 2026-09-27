@@ -1,6 +1,9 @@
 // Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
 // These adapter tests load @mstar-harness/commands through its generated package entry.
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
@@ -217,4 +220,24 @@ describe("generated CLI adapter", () => {
     expect(result.status).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema.CaptureInput", JSON.parse(result.stdout).message));
   });
+});
+test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));
+  const source = path.join(root, "roadmap.md");
+  writeFileSync(source, "# Roadmap\n");
+  try {
+    const numeric = await run([
+      "roadmap", "replace", "--project", "project-a", "--file", source,
+      "--expect-project", "5", "--expect-roadmap", "5", "--operation", "replace-a", "--harness", root,
+    ]);
+    const numericResult = JSON.parse(numeric.stdout) as { code?: string; message?: string };
+    expect(numericResult.code).not.toBe("command.invalid-input");
+    expect(numericResult.message ?? "").not.toContain("expected number");
+
+    const boolean = await run(["plan", "bind", "--execution"]);
+    const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
+    expect(booleanResult.message ?? "").not.toContain("argument missing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

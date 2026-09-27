@@ -12,6 +12,7 @@ type ProcessRequest = {
   cwd: string;
   env: Readonly<Record<string, string>>;
   stdin?: string;
+  stdinMode?: "inherit" | "ignore";
   signal: AbortSignal;
 };
 type ProcessResult = {
@@ -67,7 +68,7 @@ export function createMcpEffects(services: Array<{ close(): Promise<void> }>): M
       return record.input;
     },
     async spawn(request: ProcessRequest) {
-      const result = await spawnBounded(request);
+      const result = await spawnBounded({ ...request, stdinMode: "ignore" });
       if (result.stdoutTruncated || result.stderrTruncated) {
         throw Object.assign(new Error(`child output exceeded ${MAX_STREAM_BYTES} bytes`), { code: "command.effect-unavailable" });
       }
@@ -427,8 +428,7 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStrea
       child = nodeSpawn(request.argv[0]!, request.argv.slice(1), {
         cwd: request.cwd,
         env: { ...request.env },
-        shell: false,
-        stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        stdio: [request.stdin !== undefined ? "pipe" : request.stdinMode === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
       });
     } catch (error) {
       reject(error);

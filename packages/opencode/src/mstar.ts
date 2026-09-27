@@ -80,7 +80,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createOpenCodeMcpTools } from "./mcp.js";
+import { closeOpenCodeMcpSession, createOpenCodeMcpTools, type OpenCodeMcpServices } from "./mcp.js";
 type JsonPrimitive = string | number | boolean | null;
 type JsonObject = Record<string, unknown>;
 type FrontmatterAndBody = {
@@ -1200,8 +1200,16 @@ export function validateDispatchAssignment(
 }
 
 export const MorningStarHarnessPlugin: Plugin = async () => {
+  const mcpServices: OpenCodeMcpServices = new Map();
   return {
-    tool: createOpenCodeMcpTools([]),
+    tool: createOpenCodeMcpTools(mcpServices),
+    event: async ({ event }) => {
+      const lifecycle = event as unknown as { type?: unknown; properties?: { info?: { id?: unknown } } };
+      const sessionId = lifecycle.properties?.info?.id;
+      if (lifecycle.type === "session.deleted" && typeof sessionId === "string") {
+        await closeOpenCodeMcpSession(mcpServices, sessionId);
+      }
+    },
     config: async (config: JsonObject) => {
       const runtimeConfig = config as JsonObject & {
         skills?: { paths?: string[] };

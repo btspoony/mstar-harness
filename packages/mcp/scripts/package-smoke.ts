@@ -75,7 +75,12 @@ function parseTarget(argv: string[]): Target {
 
 async function main(): Promise<void> {
   const target = parseTarget(process.argv.slice(2));
-  const build = spawnSync(process.execPath, [path.join(repoRoot, "scripts/build-mcp-plugins.ts"), "--target", target], {
+  const isNativeTarget = target === "omp" || target === "opencode" || target === "dsh";
+  const buildScript = isNativeTarget
+    ? path.join(repoRoot, "packages", target, "scripts/bundle-harness-assets.ts")
+    : path.join(repoRoot, "scripts/build-mcp-plugins.ts");
+  const buildArgs = isNativeTarget ? [buildScript] : [buildScript, "--target", target];
+  const build = spawnSync(process.execPath, buildArgs, {
     cwd: os.tmpdir(),
     encoding: "utf8",
   });

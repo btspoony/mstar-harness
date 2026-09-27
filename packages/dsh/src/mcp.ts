@@ -127,9 +127,13 @@ async function executeNativeCommand(
 }
 
 export function registerDshMcpTools(ctx: Context, resolver: HarnessResolver): void {
+  const services: Array<{ close(): Promise<void> }> = []
+  ctx.effect(() => () => {
+    void Promise.allSettled(services.map((service) => service.close()))
+  }, 'mstar MCP dashboard handles')
   ctx.inject(['tools'], (toolsCtx) => {
     const definitions = getCommandDefinitions()
-    const effects = createMcpEffects([])
+    const effects = createMcpEffects(services)
     const registeredNames = new Set<string>()
     for (const definition of definitions) {
       const canonicalName = mcpToolName(definition.id)

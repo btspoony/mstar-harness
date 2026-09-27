@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { build } from "bun";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createMcpBuildInfo, MCP_BUILD_INFO_FILENAME } from "../packages/mcp/src/build-info.ts";
@@ -15,16 +16,8 @@ function parseTarget(argv: string[]): McpPluginTarget {
   return argv[1] as McpPluginTarget;
 }
 
-function packageRoot(target: McpPluginTarget): string {
-  return target === "omp" || target === "opencode" || target === "dsh"
-    ? path.join(repoRoot, "packages", target)
-    : repoRoot;
-}
-
-function outputDir(target: McpPluginTarget, root: string): string {
-  return target === "omp" || target === "opencode" || target === "dsh"
-    ? path.join(root, "mcp")
-    : path.join(root, "mcp", "bundles", target, "dist", "mcp");
+function outputDir(target: McpPluginTarget): string {
+  return path.join(repoRoot, "mcp", "bundles", target, "dist", "mcp");
 }
 
 const GENERATED_BANNER =
@@ -37,17 +30,21 @@ function readVersion(file: string): string {
 }
 
 export async function buildMcpPlugin(target: McpPluginTarget): Promise<string> {
-  const root = packageRoot(target);
-  const output = outputDir(target, root);
-  const sourceExecutable = path.join(repoRoot, "packages/mcp/dist/stdio.js");
-  if (!existsSync(sourceExecutable)) throw new Error(`missing M4 server bundle: ${sourceExecutable}`);
-
+  const output = outputDir(target);
   mkdirSync(output, { recursive: true });
-  const bundle = readFileSync(sourceExecutable);
-  const isConfigOnlyTarget = target !== "omp" && target !== "opencode" && target !== "dsh";
-  writeFileSync(path.join(output, "stdio.js"), isConfigOnlyTarget
-    ? Buffer.concat([Buffer.from(GENERATED_BANNER), bundle])
-    : bundle);
+  const result = await build({
+    entrypoints: [path.join(repoRoot, "packages/mcp/src/stdio.ts")],
+    outdir: output,
+    target: "node",
+    packages: "bundle",
+  });
+  if (!result.success) {
+    throw new Error(result.logs.map((entry) => entry.message).join("\n") || `failed to bundle ${target}`);
+  }
+
+  const bundlePath = path.join(output, "stdio.js");
+  const bundle = readFileSync(bundlePath);
+  writeFileSync(bundlePath, Buffer.concat([Buffer.from(GENERATED_BANNER), bundle]));
   const buildInfo = createMcpBuildInfo(
     {
       pluginVersion: readVersion("package.json"),
@@ -57,20 +54,8 @@ export async function buildMcpPlugin(target: McpPluginTarget): Promise<string> {
     target,
   );
   await Bun.write(path.join(output, MCP_BUILD_INFO_FILENAME), `${JSON.stringify(buildInfo, null, 2)}\n`);
-
-  if (!isConfigOnlyTarget) {
-    const sourceConfigDir = path.join(repoRoot, "mcp");
-    const configDir = path.join(root, "mcp");
-    mkdirSync(configDir, { recursive: true });
-    for (const filename of readdirSync(sourceConfigDir)) {
-      if (filename.startsWith(`${target}-`) || filename === `${target}.json`) {
-        cpSync(path.join(sourceConfigDir, filename), path.join(configDir, filename));
-      }
-    }
-  }
   console.log(`build-mcp-plugins: ${target} -> ${path.relative(repoRoot, output)}`);
-
-  return root;
+  return output;
 }
 
 async function main(): Promise<void> {

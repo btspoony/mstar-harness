@@ -54,13 +54,15 @@ const UNRELEASED_DIR = `${CHANGES_DIR}/unreleased`;
 const ARCHIVE_DIR = `${CHANGES_DIR}/archive`;
 
 // Valid `packages:` tokens for changelog fragments (.changes/README.md).
-const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "dsh", "omp"];
+const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "commands", "mcp", "dsh", "omp"];
 
 const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
   cli: "Changed",
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
   engine: "Changed",
+  commands: "Changed",
+  mcp: "Changed",
   dsh: "Changed",
   omp: "Changed",
 };
@@ -265,22 +267,25 @@ export async function bumpJsonVersion(
 }
 
 /**
- * Rewrite the root manifest's runtime dependency on `@mstar-harness/engine`
- * to `^<version>`. The root package.json is the manifest git/hosted installs
- * resolve (`omp plugin install github:…`, `bun add github:…`), where the
- * `workspace:` protocol is unresolvable — the spec must be a plain semver
- * range so hosted installs fetch the published engine from npm. Dev checkouts
- * still link the workspace member (bun links when the range is satisfied).
- * Scoped to the `dependencies` block: internal packages keep `workspace:*`
- * devDependencies (bundled at build time). Pure text transform, exported for
- * tests.
+ * Rewrite root runtime dependency specs for workspace packages published with
+ * this release. DevDependencies remain build-time workspace links.
  */
-export function syncRootEngineSpec(text: string, version: string): string {
-  const re = /("dependencies"\s*:\s*\{[^{}]*?"@mstar-harness\/engine"\s*:\s*")[^"]*(")/;
-  if (!re.test(text)) {
-    throw new Error('package.json: could not find dependencies["@mstar-harness/engine"]');
+const ROOT_VERSIONED_DEPENDENCIES = [
+  "@mstar-harness/commands",
+  "@mstar-harness/engine",
+  "@mstar-harness/mcp",
+] as const;
+
+/** Keep shipped root dependencies resolvable outside the workspace. */
+export function syncRootDependencySpecs(text: string, version: string): string {
+  let synced = text;
+  for (const name of ROOT_VERSIONED_DEPENDENCIES) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`("dependencies"\\s*:\\s*\\{[^{}]*?"${escaped}"\\s*:\\s*")[^"]*(")`);
+    if (!re.test(synced)) throw new Error(`package.json: could not find dependencies["${name}"]`);
+    synced = synced.replace(re, `$1^${version}$2`);
   }
-  return text.replace(re, `$1^${version}$2`);
+  return synced;
 }
 
 function archiveFragments(version: string, frags: Fragment[]): void {
@@ -327,15 +332,13 @@ async function main(): Promise<void> {
     console.log(`bump: ${s.path}${s.versionPath ? ` @ "${s.versionPath}"` : ""}`);
   }
 
-  // Internal packages (cli/opencode/dsh) bundle the engine at build time; their
-  // devDependency keeps `workspace:*` and needs no sync. The ROOT manifest is
-  // what git/hosted installs resolve, so its runtime engine dependency must
-  // track the release as a plain semver range (`^<version>`) served by npm.
+  // Hosted installs consume the root manifest, so every package dependency
+  // published in this release must use a registry-resolvable semver range.
   {
     const rootPath = "package.json";
     const text = await Bun.file(rootPath).text();
-    await Bun.write(rootPath, syncRootEngineSpec(text, version));
-    console.log(`sync: ${rootPath} dependencies["@mstar-harness/engine"] -> ^${version}`);
+    await Bun.write(rootPath, syncRootDependencySpecs(text, version));
+    console.log(`sync: ${rootPath} runtime workspace dependencies -> ^${version}`);
   }
 
   archiveFragments(version, frags);

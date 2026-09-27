@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createMcpBuildInfo, MCP_BUILD_INFO_FILENAME } from "../../mcp/src/build-info.js";
-import { diagnoseMcpTarget, type McpRuntime } from "../src/host-health.js";
+import { diagnoseMcpTarget, mcpTargetPackageRoot, type McpRuntime } from "../src/host-health.js";
 import type { HostTarget } from "../src/host-health.js";
 
 const targets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"];
@@ -45,6 +45,29 @@ describe("MCP package health", () => {
       expect(result.status).toBe("aligned");
       expect(result.errors).toEqual([]);
       expect(result.notes.join(" ")).toContain(target);
+    }
+  });
+  test("opencode and dsh inspect installed npm package roots instead of checkout outputs", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-installed-health-"));
+    roots.push(root);
+    const opencodePackagesRoot = path.join(root, "opencode-packages");
+    const dshHome = path.join(root, "dsh-home");
+    const installedRoots = [
+      mcpTargetPackageRoot("opencode", "/checkout", { opencodePackagesRoot }),
+      mcpTargetPackageRoot("dsh", "/checkout", { dshHome }),
+    ];
+
+    for (const [index, target] of ["opencode", "dsh"].entries()) {
+      const packageRoot = installedRoots[index]!;
+      mkdirSync(path.join(packageRoot, "mcp"), { recursive: true });
+      writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version }), "utf8");
+      writeFileSync(path.join(packageRoot, "mcp", "stdio.js"), "// installed package\n", "utf8");
+      writeFileSync(path.join(packageRoot, "mcp", MCP_BUILD_INFO_FILENAME), JSON.stringify(createMcpBuildInfo({
+        pluginVersion: version,
+        engineVersion: version,
+        mcpVersion: version,
+      }, target as "opencode" | "dsh")), "utf8");
+      expect(diagnoseMcpTarget(target as "opencode" | "dsh", packageRoot, currentRuntime).status).toBe("aligned");
     }
   });
 

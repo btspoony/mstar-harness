@@ -39,6 +39,27 @@ function readTolerantVersion(dir: string, manifestRelPaths: readonly string[]): 
   }
   return null;
 }
+export function resolveOpencodePluginPackageRoot(
+  packagesRoot: string = path.join(os.homedir(), ".cache", "opencode", "packages"),
+): string {
+  let specs: fs.Dirent[];
+  try {
+    specs = fs.readdirSync(path.join(packagesRoot, "@mstar-harness"), { withFileTypes: true });
+  } catch {
+    return path.join(packagesRoot, "@mstar-harness", "opencode");
+  }
+  let best: { version: string; root: string } | undefined;
+  for (const spec of specs) {
+    if (!spec.isDirectory()) continue;
+    const root = path.join(packagesRoot, "@mstar-harness", spec.name, "node_modules", "@mstar-harness", "opencode");
+    const version = versionFromJsonFile(path.join(root, "package.json"));
+    if (version !== null && (best === undefined || compareSemver(version, best.version) > 0)) {
+      best = { version, root };
+    }
+  }
+  return best?.root ?? path.join(packagesRoot, "@mstar-harness", "opencode");
+}
+
 
 export function detectOpencodePluginVersion(packagesRoot: string = path.join(os.homedir(), ".cache", "opencode", "packages")): string | null {
   let specs: fs.Dirent[];

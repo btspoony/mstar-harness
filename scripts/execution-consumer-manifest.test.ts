@@ -173,8 +173,11 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/mcp/src/build-info.ts", "export const buildInfo = 1;\n");
   write(root, "packages/mcp/scripts/package-smoke.ts", "export const smoke = 1;\n");
   write(root, "scripts/build-mcp-plugins.ts", "export const builder = 1;\n");
+  write(root, "packages/omp/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
+  write(root, "packages/opencode/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
+  write(root, "packages/dsh/scripts/bundle-harness-assets.ts", "export const bundle = 1;\n");
   write(root, "packages/mcp/dist/stdio.js", "// MCP server bundle\n");
-  for (const target of ["cursor", "codex", "kimi", "zcode"]) {
+  for (const target of ["omp", "opencode", "dsh", "cursor", "codex", "kimi", "zcode"]) {
     write(root, `mcp/bundles/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
     write(root, `mcp/bundles/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
   }

@@ -37,6 +37,40 @@ function optionKey(flags: string): string {
   return name.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
+function optionJsonSchema(definition: CommandDefinition, key: string): Record<string, unknown> {
+  const root = definition.input.toJSONSchema() as Record<string, unknown>;
+  const properties = root.properties;
+  return properties !== null && typeof properties === "object"
+    ? ((properties as Record<string, Record<string, unknown>>)[key] ?? {})
+    : {};
+}
+
+function hasType(schema: Record<string, unknown>, type: string): boolean {
+  if (schema.type === type || (type === "number" && schema.type === "integer")) return true;
+  for (const key of ["anyOf", "oneOf"]) {
+    const alternatives = schema[key];
+    if (Array.isArray(alternatives) && alternatives.some(
+      (part) => part !== null && typeof part === "object" && hasType(part as Record<string, unknown>, type),
+    )) return true;
+  }
+  return false;
+}
+
+function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition["cli"]["options"][number]): string {
+  if (!hasType(optionJsonSchema(definition, option.key), "boolean")) return option.flags;
+  return option.flags.replace(/\s+(?:<[^>]+>|\[[^\]]+\])/g, "");
+}
+
+function decodeCliOptions(definition: CommandDefinition, input: Record<string, unknown>): Record<string, unknown> {
+  const decoded = { ...input };
+  for (const option of definition.cli.options) {
+    const value = decoded[option.key];
+    if (typeof value !== "string" || !hasType(optionJsonSchema(definition, option.key), "number")) continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) decoded[option.key] = number;
+  }
+  return decoded;
+}
 function collectInput(definition: CommandDefinition, args: readonly unknown[]): Record<string, unknown> {
   const input: Record<string, unknown> = {};
   definition.cli.arguments.forEach((argument, index) => {
@@ -79,8 +113,9 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   }
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
-      if (option.required) command.requiredOption(option.flags, option.key);
-      else command.option(option.flags, option.key);
+      const flags = cliOptionFlags(definition, option);
+      if (option.required) command.requiredOption(flags, option.key);
+      else command.option(flags, option.key);
     }
   }
 }
@@ -155,7 +190,7 @@ export function registerCliCommands(
       process.once("SIGTERM", onSigterm);
       const services: Array<{ close(): Promise<void> }> = [];
       try {
-        const collected = collectInput(definition, args);
+        const collected = decodeCliOptions(definition, collectInput(definition, args));
         const input = definition.decodeCliInput?.(collected);
         if (definition.decodeCliInput !== undefined && input === null) {
           writeEnvelope(usageEnvelope(definition.id, "Invalid command input."));
