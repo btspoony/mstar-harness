@@ -23,3 +23,9 @@ packages/commands/dist/
 
 # Generated dashboard assets (regenerated before every CLI build)
 packages/cli/src/dashboard/assets.generated.ts
+
+# MCP generated bundles (build prerequisites; see packages/commands/dist precedent)
+packages/mcp/dist/
+packages/omp/mcp/
+packages/opencode/mcp/
+packages/dsh/mcp/
