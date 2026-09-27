@@ -18,7 +18,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## MCP delivery
 
-- **Native install and loading**: install the Morning Star Cursor plugin. `.cursor-plugin/mcp.json` launches `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`; the file comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
+- **Native install and loading**: install the Morning Star Cursor plugin. `.cursor-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; the file comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
 - **Context boundary**: optional `host` selects validated host context, not a role or authority; `sessionId` is the main conversation session. Per-call child-agent attribution is neither required nor performed. Existing shared-handler workflow ownership, path, state-transition and CAS checks decide admission.
 - **Doctor and evidence**: `mstar-harness doctor --target cursor` (global or project scope) reports aligned / mismatch / unavailable from the MCP launch config, checks the Node floor, and never opens `store.db`. An aligned config is not proof that Cursor loaded or ran the server.
 

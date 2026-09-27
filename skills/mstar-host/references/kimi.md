@@ -25,7 +25,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## MCP delivery
 
-- **Native install and loading**: in Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. `.kimi-plugin/mcp.json` launches `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`; its comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
+- **Native install and loading**: in Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. `.kimi-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; its comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
 - **Context boundary**: optional `host` selects validated host context, not a role or authority. `sessionId` is the main conversation session; no per-call child-agent attribution is required or performed. Shared workflow ownership, path, state-transition and CAS checks remain authoritative.
 - **Doctor and evidence**: `mstar-harness doctor --target kimi` reports aligned / mismatch / unavailable from the MCP launch config, checks Node's floor, and never opens `store.db`. A valid config is not proof of installed-host behavior. Live verification is separate authorized work.
 

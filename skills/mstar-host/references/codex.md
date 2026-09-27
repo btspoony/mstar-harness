@@ -23,7 +23,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 
 ## MCP delivery
 
-- **Native install and loading**: add the repo marketplace (`codex plugin marketplace add btspoony/mstar-harness --ref main`) and install `morning-star-harness@mstar-repo`; `init --target codex` is optional maintainer setup. `.codex-plugin/mcp.json` launches `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`; its comment notes that a CLI release containing `mcp` must be published first. Require **Node >=24.18.0**.
+- **Native install and loading**: add the repo marketplace (`codex plugin marketplace add btspoony/mstar-harness --ref main`) and install `morning-star-harness@mstar-repo`; `init --target codex` is optional maintainer setup. `.codex-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; its comment notes that a CLI release containing `mcp` must be published first. Require **Node >=24.18.0**.
 - **Context boundary**: optional `host` selects validated context, not a role or authority; `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution. Shared workflow ownership, path, transition and CAS checks remain authoritative.
 - **Doctor and evidence**: `mstar-harness doctor --target codex --scope <global|project>` reports aligned / mismatch / unavailable from the MCP launch config, checks the Node runtime floor, and never opens `store.db`. A valid config is not an installed Codex run; that is separate authorized verification.
 
