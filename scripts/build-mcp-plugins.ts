@@ -48,7 +48,10 @@ export async function buildMcpPlugin(target: McpPluginTarget): Promise<string> {
   await Bun.write(path.join(outputDir, "build-info.json"), `${JSON.stringify(buildInfo, null, 2)}\n`);
 
   const sourceConfigDir = path.join(repoRoot, "mcp");
-  if (target !== "omp" && target !== "opencode" && target !== "dsh" && existsSync(sourceConfigDir)) {
+  if (target === "codex") {
+    cpSync(path.join(sourceConfigDir, "codex-plugin.json"), path.join(root, "plugin.json"));
+    cpSync(path.join(sourceConfigDir, "codex.json"), path.join(root, "mcp.json"));
+  } else if (target !== "omp" && target !== "opencode" && target !== "dsh" && existsSync(sourceConfigDir)) {
     const configDir = path.join(root, "mcp");
     mkdirSync(configDir, { recursive: true });
     for (const filename of readdirSync(sourceConfigDir)) {

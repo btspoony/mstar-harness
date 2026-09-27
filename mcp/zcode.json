@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "morning-star": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${ZCODE_PLUGIN_ROOT}/dist/mcp/stdio.js"]
+    }
+  }
+}

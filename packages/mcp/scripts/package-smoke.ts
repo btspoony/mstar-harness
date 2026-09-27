@@ -58,21 +58,41 @@ async function main(): Promise<void> {
   let childEnv: NodeJS.ProcessEnv = process.env;
   let fixtureRoot: string | undefined;
   let workflowToken = "";
-  const workflowId = "cursor-package-smoke";
-  const planId = "cursor-package-smoke-plan";
-  if (target === "cursor") {
-    const configPath = path.join(root, "mcp/cursor.json");
+  const workflowId = `${target}-package-smoke`;
+  const planId = `${target}-package-smoke-plan`;
+  if (target === "cursor" || target === "codex" || target === "kimi" || target === "zcode") {
+    const configPath = target === "cursor"
+      ? path.join(root, "mcp/cursor.json")
+      : target === "codex" ? path.join(root, "mcp.json")
+        : path.join(root, "mcp", `${target}.json`);
     const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-      mcpServers: Record<string, { command: string; args: string[] }>;
+      mcpServers: Record<string, { command: string; args: string[]; cwd?: string }>;
     };
-    const cursorServer = config.mcpServers["morning-star"];
-    assert.ok(cursorServer, "Cursor MCP config must declare morning-star");
+    const serverConfig = config.mcpServers["morning-star"];
+    assert.ok(serverConfig, `${target} MCP config must declare morning-star`);
     const unpackedConfigDir = path.join(unpackedRoot, "mcp");
     mkdirSync(unpackedConfigDir, { recursive: true });
-    cpSync(configPath, path.join(unpackedConfigDir, "cursor.json"));
-    command = cursorServer.command;
-    args = cursorServer.args.map((argument) => argument.replaceAll("${CURSOR_PLUGIN_ROOT}", unpackedRoot));
-    fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "cursor-mcp-fixture-"));
+    if (target === "cursor") {
+      cpSync(configPath, path.join(unpackedConfigDir, "cursor.json"));
+      args = serverConfig.args.map((argument) => argument.replaceAll("${CURSOR_PLUGIN_ROOT}", unpackedRoot));
+      command = serverConfig.command;
+    } else if (target === "codex") {
+      cpSync(path.join(root, "plugin.json"), path.join(unpackedRoot, "plugin.json"));
+      cpSync(configPath, path.join(unpackedRoot, "mcp.json"));
+      args = serverConfig.args.map((argument) => argument.replaceAll("${PLUGIN_ROOT}", unpackedRoot));
+      command = serverConfig.command;
+    } else if (target === "kimi") {
+      assert.equal(serverConfig.cwd, "./", "Kimi must start the server from inside the plugin root");
+      cpSync(configPath, path.join(unpackedConfigDir, "kimi.json"));
+      cpSync(path.join(root, "mcp/kimi-launcher.mjs"), path.join(unpackedConfigDir, "kimi-launcher.mjs"));
+      command = path.resolve(unpackedRoot, serverConfig.command);
+      args = serverConfig.args;
+    } else {
+      cpSync(configPath, path.join(unpackedConfigDir, "zcode.json"));
+      args = serverConfig.args.map((argument) => argument.replaceAll("${ZCODE_PLUGIN_ROOT}", unpackedRoot));
+      command = serverConfig.command;
+    }
+    fixtureRoot = mkdtempSync(path.join(os.tmpdir(), `${target}-mcp-fixture-`));
     const harnessDir = path.join(fixtureRoot, ".mstar");
     const statusPath = path.join(fixtureRoot, "status-fixture.json");
     mkdirSync(harnessDir, { recursive: true });
@@ -85,7 +105,7 @@ async function main(): Promise<void> {
       const initializedAuthority = await initializeExecutionAuthority(storeContext);
       const created = await createExecutionWorkflow(executionContextFor(storeContext, {
         source: "local",
-        sessionId: "cursor-smoke-session",
+        sessionId: `${target}-smoke-session`,
         workflowId,
         role: "coordinator",
         planId: null,
@@ -99,10 +119,10 @@ async function main(): Promise<void> {
           started_at: "2026-09-27T00:00:00Z",
           updated_at: "2026-09-27T00:00:00Z",
           branch: { base: "main" },
-          plans: [{ id: planId, plan_id: planId, title: "Cursor package smoke fixture", file: `.mstar/plans/${planId}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+          plans: [{ id: planId, plan_id: planId, title: `${target} package smoke fixture`, file: `.mstar/plans/${planId}.md`, status: "Todo", metadata: { project_id: "_default" } }],
         } as never,
         expected: initializedAuthority.token,
-        operationId: "create-cursor-package-smoke",
+        operationId: `create-${target}-package-smoke`,
       });
       workflowToken = z.object({
         workflows: z.array(z.object({ workflowToken: z.string() })).min(1),
@@ -152,8 +172,8 @@ async function main(): Promise<void> {
       result: z.object({ tools: z.array(z.object({ name: z.string() })) }),
     }).parse(result).result.tools;
     assert.ok(toolList.some((tool) => tool.name === "mstar_status_validate"), "generated read command must be listed");
-    if (target === "cursor") {
-      assert.ok(fixtureRoot, "Cursor smoke requires its isolated fixture root");
+    if (target === "cursor" || target === "codex" || target === "kimi" || target === "zcode") {
+      assert.ok(fixtureRoot, `${target} smoke requires its isolated fixture root`);
       const pathRead = await callTool(3, "mstar_status_validate", {
         path: path.join(fixtureRoot, "status-fixture.json"),
       });
@@ -164,10 +184,10 @@ async function main(): Promise<void> {
         execution: true,
         coordinator: true,
         workflow: workflowId,
-        harness: path.join(fixtureRoot!, ".mstar"),
+        harness: path.join(fixtureRoot, ".mstar"),
         expect: workflowToken,
         operation: "bind-main-session",
-        sessionId: "cursor-smoke-session",
+        sessionId: `${target}-smoke-session`,
       };
       const mutation = await callTool(4, "mstar_plan_bind", bindArgs);
       assert.equal(mutation.envelope.status, "ok", JSON.stringify(mutation.envelope));
@@ -179,8 +199,18 @@ async function main(): Promise<void> {
       assert.equal(refusal.isError, true, "shared-handler refusal must be reported as an MCP tool error");
     }
     child.stdin.end();
-    console.log(target === "cursor"
-      ? "package-smoke: cursor expanded config launched from foreign cwd; generated status.validate succeeded and plan.bind returned shared-handler refusal"
+    if (target === "zcode") {
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`ZCode MCP process did not stop after transport close; stderr: ${stderr}`)), 10_000);
+        child.once("close", (code) => {
+          clearTimeout(timeout);
+          resolve(code);
+        });
+      });
+      assert.equal(exitCode, 0, `ZCode MCP process should exit cleanly after transport close; stderr: ${stderr}`);
+    }
+    console.log(target === "cursor" || target === "codex" || target === "kimi" || target === "zcode"
+      ? `package-smoke: ${target} package config launched from foreign cwd; generated status.validate and plan.bind success/refusal verified${target === "zcode" ? " and transport-close teardown completed" : ""}`
       : `package-smoke: ${target} isolated bundle launched from foreign cwd; initialize and tools/list succeeded`);
   } finally {
     lines.close();
