@@ -86,6 +86,27 @@ function runCli(
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
+function envelopeOf(result: RunResult): {
+  status: string;
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+} {
+  const value = JSON.parse(result.stdout) as {
+    status: string;
+    code: string;
+    exitCode: number;
+    message?: string;
+    data?: Record<string, unknown>;
+  };
+  expect(value.exitCode).toBe(result.exitCode);
+  return value;
+}
+
+function expectEnvelopeMessage(result: RunResult, message: string): void {
+  expect(envelopeOf(result).message).toContain(message);
+}
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -141,8 +162,8 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
       // never authorizes a write from a plain (non-Git) dir; an explicit
       // standalone root must come via CONTROL_ROOT.
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("cannot verify the main worktree");
-      expect(result.stderr).toContain("MSTAR_CONTROL_ROOT");
+      expectEnvelopeMessage(result, "cannot verify the main worktree");
+      expectEnvelopeMessage(result, "MSTAR_CONTROL_ROOT");
       expect(existsSync(harnessDir)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -159,7 +180,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
       // process-SSOT tree under the feature checkout.
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(root, ".mstar", "sdd", "plan-1"));
-      expect(result.stdout).toContain(`sdd dir: ${expected}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { sddDir: expected } });
       expect(existsSync(join(root, ".mstar", "sdd", "plan-1"))).toBe(true);
       expect(existsSync(join(linked, ".mstar"))).toBe(false);
     } finally {
@@ -177,7 +198,10 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
         env: { MSTAR_HARNESS_DIR: harnessDir },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`sdd dir: ${realpathSync(join(harnessDir, "sdd", "plan-1"))}`);
+      expect(envelopeOf(result)).toMatchObject({
+        status: "ok",
+        data: { sddDir: realpathSync(join(harnessDir, "sdd", "plan-1")) },
+      });
       expect(existsSync(join(harnessDir, "sdd", "plan-1"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -189,8 +213,8 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     try {
       const result = runCli(["sdd", "workspace", "plan-1", join(root, "nope")], { cwd: root });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("CONTROL_ROOT");
-      expect(result.stderr).toContain("not a directory");
+      expectEnvelopeMessage(result, "CONTROL_ROOT");
+      expectEnvelopeMessage(result, "not a directory");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -201,7 +225,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     try {
       const result = runCli(["sdd", "workspace"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: mstar sdd workspace");
+      expectEnvelopeMessage(result, "PLAN_ID is required");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -217,7 +241,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       const outfile = join(root, "task-2-brief.md");
       const result = runCli(["sdd", "task-brief", planFile, "2", outfile]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`task 2 brief: ${outfile}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile } });
       const content = readFileSync(outfile, "utf8");
       expect(content).toContain("### Task 2: second task");
       expect(content).toContain("- [ ] step three");
@@ -237,7 +261,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       const outfile = join(root, "task-9-brief.md");
       const result = runCli(["sdd", "task-brief", planFile, "9", outfile]);
       expect(result.exitCode).toBe(3);
-      expect(result.stderr).toContain("task 9 not found");
+      expectEnvelopeMessage(result, "task 9 not found");
       expect(readFileSync(outfile, "utf8")).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -251,7 +275,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       writeFileSync(planFile, SAMPLE_PLAN);
       const result = runCli(["sdd", "task-brief", planFile, "abc", join(root, "out.md")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: mstar sdd task-brief");
+      expectEnvelopeMessage(result, "usage: mstar sdd task-brief");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -262,7 +286,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     try {
       const result = runCli(["sdd", "task-brief", join(root, "nope.md"), "1", join(root, "out.md")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("no such plan file");
+      expectEnvelopeMessage(result, "no such plan file");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -275,7 +299,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       writeFileSync(planFile, SAMPLE_PLAN);
       const result = runCli(["sdd", "task-brief", planFile, "2"]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("set SDD_DIR or pass OUTFILE");
+      expectEnvelopeMessage(result, "set SDD_DIR or pass OUTFILE");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -289,7 +313,10 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       const sddDir = join(root, "sdd");
       const result = runCli(["sdd", "task-brief", planFile, "3"], { env: { SDD_DIR: sddDir } });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`task 3 brief: ${join(sddDir, "task-3-brief.md")}`);
+      expect(envelopeOf(result)).toMatchObject({
+        status: "ok",
+        data: { outfile: join(sddDir, "task-3-brief.md") },
+      });
       expect(readFileSync(join(sddDir, "task-3-brief.md"), "utf8")).toContain("### Task 3: third task");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -301,7 +328,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     try {
       const result = runCli(["sdd", "task-brief"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: mstar sdd task-brief");
+      expectEnvelopeMessage(result, "PLAN_FILE is required");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -316,7 +343,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
       const outfile = join(root, "review.diff");
       const result = runCli(["sdd", "review-package", base, head, outfile], { cwd: root });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`review package: ${outfile}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile } });
       const content = readFileSync(outfile, "utf8");
       expect(content).toContain(`# Review package: ${base}..${head}`);
       expect(content).toContain("## Commits");
@@ -337,7 +364,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
         cwd: root,
       });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("bad BASE: deadbeef");
+      expectEnvelopeMessage(result, "bad BASE: deadbeef");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -349,7 +376,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
       const { base, head } = gitFixture(root);
       const result = runCli(["sdd", "review-package", base, head], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("set SDD_DIR or pass OUTFILE");
+      expectEnvelopeMessage(result, "set SDD_DIR or pass OUTFILE");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -360,7 +387,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
     try {
       const result = runCli(["sdd", "review-package"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: mstar sdd review-package");
+      expectEnvelopeMessage(result, "BASE is required");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -453,7 +480,11 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
       const f = executionFixture(root);
       const result = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "launch"], { cwd: f.control });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("check-context: OK");
+      expect(envelopeOf(result)).toMatchObject({
+        status: "ok",
+        code: "sdd.check-context.ok",
+        data: { kind: "launch", planId: PLAN_ID },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -468,7 +499,7 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
         { cwd: f.control },
       );
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("sdd.context.source-cwd-outside-feature");
+      expect(envelopeOf(result)).toMatchObject({ status: "refused", exitCode: 1 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -484,7 +515,7 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
         { cwd: f.control },
       );
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("sdd.context.artifact-symlink-escape");
+      expect(envelopeOf(result)).toMatchObject({ status: "refused", exitCode: 1 });
       expect(existsSync(join(f.primary, "x.md"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -497,29 +528,29 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
       const f = executionFixture(root);
       const missingContext = runCli(["sdd", "check-context", "--kind", "launch"], { cwd: root });
       expect(missingContext.exitCode).toBe(2);
-      expect(missingContext.stderr).toContain("usage: mstar sdd check-context");
+      expectEnvelopeMessage(missingContext, "--context is required");
 
       const missingKind = runCli(["sdd", "check-context", "--context", f.ctxFile], { cwd: f.control });
       expect(missingKind.exitCode).toBe(2);
-      expect(missingKind.stderr).toContain("--kind");
+      expectEnvelopeMessage(missingKind, "--kind");
 
       const badKind = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "rename"], { cwd: f.control });
       expect(badKind.exitCode).toBe(2);
-      expect(badKind.stderr).toContain("source|artifact|launch");
+      expectEnvelopeMessage(badKind, 'expected one of "source"|"artifact"|"launch"');
 
       const relativeCtx = runCli(["sdd", "check-context", "--context", "relative/context.json", "--kind", "launch"], { cwd: f.control });
       expect(relativeCtx.exitCode).toBe(2);
-      expect(relativeCtx.stderr).toContain("absolute path");
+      expectEnvelopeMessage(relativeCtx, "--context must be an absolute path");
 
       const noFile = runCli(["sdd", "check-context", "--context", join(root, "no-such.json"), "--kind", "launch"], { cwd: root });
-      expect(noFile.exitCode).toBe(2);
-      expect(noFile.stderr).toContain("no such context file");
+      expect(noFile.exitCode).toBe(1);
+      expectEnvelopeMessage(noFile, "no such file or directory");
 
       const badJson = join(root, "bad.json");
       writeFileSync(badJson, "{ not json");
       const unparseable = runCli(["sdd", "check-context", "--context", badJson, "--kind", "launch"], { cwd: root });
-      expect(unparseable.exitCode).toBe(2);
-      expect(unparseable.stderr).toContain("not valid JSON");
+      expect(unparseable.exitCode).toBe(1);
+      expectEnvelopeMessage(unparseable, "JSON Parse error");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -566,7 +597,7 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
       const probe = join(f.feature, "probe-should-not-exist.json");
       const result = runCli(["sdd", "exec", "--context", f.ctxFile, "--", process.execPath, writer, probe], { cwd: f.control });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.branch-mismatch");
+      expect(envelopeOf(result)).toMatchObject({ status: "error", code: "sdd.exec.refused", exitCode: 1 });
       expect(existsSync(probe)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -621,15 +652,15 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
       const f = executionFixture(root);
       const noContext = runCli(["sdd", "exec"], { cwd: root });
       expect(noContext.exitCode).toBe(2);
-      expect(noContext.stderr).toContain("usage: mstar sdd exec");
+      expect(noContext.stderr).toContain("missing required argument 'argv'");
 
       const noArgv = runCli(["sdd", "exec", "--context", f.ctxFile], { cwd: f.control });
       expect(noArgv.exitCode).toBe(2);
-      expect(noArgv.stderr).toContain("usage: mstar sdd exec");
+      expect(noArgv.stderr).toContain("missing required argument 'argv'");
 
       const relativeCtx = runCli(["sdd", "exec", "--context", "ctx.json", "--", "true"], { cwd: f.control });
       expect(relativeCtx.exitCode).toBe(2);
-      expect(relativeCtx.stderr).toContain("absolute path");
+      expectEnvelopeMessage(relativeCtx, "usage: sdd exec --context");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -641,7 +672,7 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
     const briefHelp = runCli(["sdd", "task-brief", "--help"]);
     expect(briefHelp.exitCode).toBe(0);
     expect(briefHelp.stdout).toContain("--context");
-    expect(briefHelp.stdout).toContain("[plan-file]");
+    expect(briefHelp.stdout).toContain("[planFile]");
     expect(briefHelp.stdout).toContain("[outfile]");
     const rpHelp = runCli(["sdd", "review-package", "--help"]);
     expect(rpHelp.exitCode).toBe(0);
@@ -657,7 +688,7 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
       const result = runCli(["sdd", "task-brief", f.planFile, "1", "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, "task-1-brief.md"));
-      expect(result.stdout).toContain(`task 1 brief: ${expected}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile: expected } });
       expect(readFileSync(expected, "utf8")).toContain("- implement");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -676,7 +707,7 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
       const result = runCli(["sdd", "review-package", base, head, "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, `review-${base.slice(0, 7)}..${head.slice(0, 7)}.diff`));
-      expect(result.stdout).toContain(`review package: ${expected}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile: expected } });
       expect(readFileSync(expected, "utf8")).toContain("feature-file.txt");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -695,7 +726,7 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
       const destination = join(f.control, "elsewhere.diff");
       const result = runCli(["sdd", "review-package", base, head, destination, "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("sdd.context.artifact-outside-plan");
+      expect(envelopeOf(result)).toMatchObject({ status: "refused", exitCode: 1 });
       expect(existsSync(destination)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -720,7 +751,11 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
       const f = executionFixture(root, { nested: true });
       const result = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "launch"], { cwd: f.control });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("check-context: OK");
+      expect(envelopeOf(result)).toMatchObject({
+        status: "ok",
+        code: "sdd.check-context.ok",
+        data: { kind: "launch", planId: PLAN_ID },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -735,7 +770,7 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
         { cwd: f.control },
       );
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("sdd.context.source-cwd-outside-feature");
+      expect(envelopeOf(result)).toMatchObject({ status: "refused", exitCode: 1 });
       expect(existsSync(join(f.feature, "src", "probe.txt"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -749,7 +784,7 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
       const result = runCli(["sdd", "task-brief", f.planFile, "1", "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, "task-1-brief.md"));
-      expect(result.stdout).toContain(`task 1 brief: ${expected}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile: expected } });
       expect(readFileSync(expected, "utf8")).toContain("- implement");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -768,7 +803,7 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
       const result = runCli(["sdd", "review-package", base, head, "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, `review-${base.slice(0, 7)}..${head.slice(0, 7)}.diff`));
-      expect(result.stdout).toContain(`review package: ${expected}`);
+      expect(envelopeOf(result)).toMatchObject({ status: "ok", data: { outfile: expected } });
       expect(readFileSync(expected, "utf8")).toContain("feature-file.txt");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -862,7 +897,7 @@ describe("sdd exec causal replay — same relative source writer, raw vs bound (
         { cwd: f.primary },
       );
       expect(preCheck.exitCode).toBe(1);
-      expect(preCheck.stderr).toContain("sdd.context.source-cwd-outside-feature");
+      expect(envelopeOf(preCheck)).toMatchObject({ status: "refused", exitCode: 1 });
       expect(existsSync(join(f.feature, "src", "probe.txt"))).toBe(false);
 
       // The same writer, bound: launched from the primary checkout (launch
