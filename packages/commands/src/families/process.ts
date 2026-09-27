@@ -230,11 +230,52 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
   }
   return claims;
 }
+
+function degradedCleanupSnapshot(value: unknown, fallbackId: string): WorkflowSnapshot | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (!Array.isArray(raw.plans)) return null;
+  const plans = raw.plans.flatMap((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+    const row = value as Record<string, unknown>;
+    const metadata = row.metadata !== null && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+      ? { ...(row.metadata as Record<string, unknown>) }
+      : {};
+    const handoff = row.coordination !== null && typeof row.coordination === "object" && !Array.isArray(row.coordination)
+      ? (row.coordination as Record<string, unknown>).handoff
+      : undefined;
+    if (handoff !== null && typeof handoff === "object" && !Array.isArray(handoff)) {
+      const sourceBranch = (handoff as Record<string, unknown>).source_branch;
+      const worktreePath = (handoff as Record<string, unknown>).worktree_path;
+      if (typeof sourceBranch === "string" && sourceBranch !== "") metadata.working_branch = sourceBranch;
+      if (typeof worktreePath === "string" && worktreePath !== "") {
+        const existing = Array.isArray(metadata.cleanup_protective_worktree_paths)
+          ? metadata.cleanup_protective_worktree_paths.filter((item): item is string => typeof item === "string")
+          : [];
+        metadata.cleanup_protective_worktree_paths = [...new Set([...existing, worktreePath])];
+      }
+    }
+    return [{ ...row, status: "InProgress", metadata }];
+  });
+  const branch = raw.branch !== null && typeof raw.branch === "object" && !Array.isArray(raw.branch)
+    ? raw.branch as WorkflowSnapshot["branch"]
+    : undefined;
+  return {
+    schema_version: 1,
+    id: typeof raw.id === "string" && raw.id !== "" ? raw.id : fallbackId,
+    type: raw.type === "iteration" ? "iteration" : "plan",
+    status: "running",
+    started_at: typeof raw.started_at === "string" ? raw.started_at : "1970-01-01T00:00:00.000Z",
+    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : "1970-01-01T00:00:00.000Z",
+    plans: plans as unknown as WorkflowSnapshot["plans"],
+    ...(branch ? { branch } : {}),
+  };
+}
 function cleanupOwner(claims: CleanupClaim[]): CleanupClaim | null {
   const owners = new Map(claims.map((claim) => [JSON.stringify(claim), claim]));
   return owners.size === 1 ? [...owners.values()][0]! : null;
 }
-async function cleanupWorktrees(input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>): Promise<CommandEnvelope> {
   if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
   if (input.workflow === "." || input.workflow === ".." || input.workflow.includes("/") || input.workflow.includes("\\")) throw new SddScriptError(`invalid workflow id ${JSON.stringify(input.workflow)}`, 1);
   const main = readMainWorktree(invocation.cwd);
@@ -249,8 +290,17 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
     if (!entry.isDirectory() || entry.name === input.workflow) continue;
     const snapshotPath = path.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
     if (!fs.existsSync(snapshotPath)) continue;
-    try { snapshots.push(readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot); }
-    catch { unreadable = true; }
+    try {
+      snapshots.push(readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot);
+    } catch {
+      try {
+        const degraded = degradedCleanupSnapshot(JSON.parse(fs.readFileSync(snapshotPath, "utf8")), entry.name);
+        if (degraded) snapshots.push(degraded);
+        else if (!input.ignoreUnreadableSnapshots) unreadable = true;
+      } catch {
+        if (!input.ignoreUnreadableSnapshots) unreadable = true;
+      }
+    }
   }
   const records: Array<CleanupFacts["worktrees"][number] & { tip: string }> = [];
   let current: { path: string; branch: string | null; tip: string; locked: boolean } | undefined;
@@ -268,17 +318,32 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
     try { return fs.realpathSync(value); } catch { return path.resolve(value); }
   };
   const assertedPaths = new Set((input.worktree ?? []).map(pathKey));
+  const ownerKey = (owner: { workflowId: string; planId?: string | null }) => JSON.stringify(owner);
+  const assertedOwnerKeys = retainedOwnerKeys ?? new Set(records
+    .filter((wt) => assertedPaths.has(pathKey(wt.path)))
+    .flatMap((wt) => {
+      const owner = cleanupOwner([...claimsFor("path", wt.path), ...(wt.branch ? claimsFor("branch", wt.branch) : [])]);
+      return owner && (input.allWorkflows || owner.workflowId === input.workflow) ? [ownerKey(owner)] : [];
+    }));
   for (const wt of records) {
     if (assertedPaths.size && !assertedPaths.has(pathKey(wt.path))) continue;
-    const claims = [...claimsFor("path", wt.path), ...(wt.branch ? claimsFor("branch", wt.branch) : [])];
-    const inScope = input.allWorkflows || claims.some((claim) => claim.workflowId === input.workflow);
-    if (inScope) targets.push({ kind: "worktree", ref: wt.path, branch: wt.branch ?? "", tip: wt.tip, owner: cleanupOwner(claims) });
+    const explicitlyAsserted = assertedPaths.has(pathKey(wt.path));
+    const pathClaims = claimsFor("path", wt.path);
+    const branchClaims = wt.branch ? claimsFor("branch", wt.branch) : [];
+    const inScope = input.allWorkflows || [...pathClaims, ...branchClaims].some((claim) => claim.workflowId === input.workflow);
+    const ownershipClaims = explicitlyAsserted ? [...pathClaims, ...branchClaims] : pathClaims;
+    if (inScope) targets.push({ kind: "worktree", ref: wt.path, branch: wt.branch ?? "", tip: wt.tip, owner: cleanupOwner(ownershipClaims) });
   }
   const local = (await git(invocation, ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads"], main.root)).split(/\r?\n/).filter(Boolean);
   for (const line of local) {
     const [branch, tip] = line.split("\t");
     const claims = claimsFor("branch", branch!);
-    if ((input.allWorkflows || claims.some((claim) => claim.workflowId === input.workflow)) && (!assertedPaths.size || claims.some((claim) => targets.some((target) => target.kind === "worktree" && target.owner && JSON.stringify(target.owner) === JSON.stringify(claim))))) {
+    const scoped = input.allWorkflows || claims.some((claim) => claim.workflowId === input.workflow);
+    const retainedByAssertion = claims.some((claim) =>
+      (input.allWorkflows || claim.workflowId === input.workflow) &&
+      (assertedOwnerKeys.has(ownerKey(claim)) ||
+        targets.some((target) => target.kind === "worktree" && target.owner && ownerKey(target.owner) === ownerKey(claim))));
+    if (scoped && (!assertedPaths.size || retainedByAssertion)) {
       targets.push({ kind: "local-branch", ref: branch!, branch: branch!, tip: tip ?? "", owner: cleanupOwner(claims) });
     }
   }
@@ -343,37 +408,50 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
       const negativeTip = membership?.negative.get(candidate.branch);
       if (positiveTip === candidate.tip) remoteEvidence.push({ ...candidate, base: candidate.base!, ancestor: true, prMerged: null });
       else if (negativeTip === candidate.tip) remoteEvidence.push({ ...candidate, base: candidate.base!, ancestor: false, prMerged: null });
-    }
+  }
   }
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
   const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence };
-  const plan = planWorktreeCleanup(selected, facts).map((row) => unreadable && row.verdict === "remove" ? { ...row, verdict: "refuse" as const, reason: "cleanup.refuse.unreadable-snapshot" } : row);
+  const plan = planWorktreeCleanup(selected, facts).map((row) => unreadable && row.verdict === "remove"
+    ? {
+        ...row,
+        verdict: "refuse" as const,
+        reason: "cleanup.refuse.unreadable-snapshot",
+      }
+    : row);
   if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });
   const evidenceBaseBranches = new Set(snapshots.flatMap((snapshot) => [snapshot.branch?.integration, snapshot.branch?.target]).filter((value): value is string => Boolean(value)));
   const deferred = new Set(plan.filter((row) => row.kind === "worktree" && row.verdict === "remove" && records.some((wt) => wt.path === row.ref && wt.branch !== null && evidenceBaseBranches.has(wt.branch))).map(({ ref }) => ref));
-  const removed = new Set<string>();
   for (const row of plan) if (row.kind === "worktree" && row.verdict === "remove" && !deferred.has(row.ref) && !records.find((wt) => wt.path === row.ref)?.isMain) {
     await git(invocation, ["worktree", "remove", row.ref], main.root);
-    removed.add(row.ref);
   }
-  const refreshed = await cleanupWorktrees({ ...input, apply: false }, invocation);
+  const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
   if (refreshed.status !== "ok") return refreshed;
   const secondPlan = (refreshed.data as { decisions: ReturnType<typeof planWorktreeCleanup> }).decisions;
   for (const row of secondPlan) if (row.kind === "local-branch" && row.verdict === "remove") {
     const target = targets.find((candidate) => candidate.kind === "local-branch" && candidate.ref === row.ref);
     const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === target?.owner?.workflowId);
     const base = target?.owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
-    const deletionCwd = records.find((wt) => wt.branch === base)?.path ?? main.root;
+    const deletionCwd = records.find((wt) => wt.branch === base && fs.existsSync(wt.path))?.path ?? main.root;
     await git(invocation, ["branch", "-d", row.ref], deletionCwd);
   }
   for (const row of secondPlan) if (row.kind === "worktree" && row.verdict === "remove" && deferred.has(row.ref)) {
     await git(invocation, ["worktree", "remove", row.ref], main.root);
-    removed.add(row.ref);
   }
   for (const row of secondPlan) if (row.kind === "remote-branch" && row.verdict === "remove") {
     const target = targets.find((candidate) => candidate.kind === "remote-branch" && candidate.ref === row.ref);
     if (target) await git(invocation, ["push", `--force-with-lease=refs/heads/${target.branch}:${target.tip}`, "origin", `:refs/heads/${target.branch}`], main.root);
   }
-  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan] });
+  const finalRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+  if (finalRefresh.status !== "ok") return finalRefresh;
+  const finalPlan = (finalRefresh.data as { decisions: ReturnType<typeof planWorktreeCleanup> }).decisions;
+  for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "remove") {
+    const target = targets.find((candidate) => candidate.kind === "local-branch" && candidate.ref === row.ref);
+    const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === target?.owner?.workflowId);
+    const base = target?.owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
+    const deletionCwd = records.find((wt) => wt.branch === base && fs.existsSync(wt.path))?.path ?? main.root;
+    await git(invocation, ["branch", "-d", row.ref], deletionCwd);
+  }
+  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan, ...finalPlan] });
 }

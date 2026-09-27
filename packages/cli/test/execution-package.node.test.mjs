@@ -234,7 +234,10 @@ function cliEnv(fixture, identity) {
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  if (identity !== undefined) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  if (identity !== undefined) {
+    env.MSTAR_HOST_SESSION_ID = identity.sessionId;
+    env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  }
   return env;
 }
 
@@ -418,6 +421,8 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         rootToken,
         "--operation",
         "register-1",
+        "--session-id",
+        COORDINATOR_ID,
         "--harness",
         fixture.harness,
         "--json",
@@ -426,8 +431,8 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
     ),
     "workflow register",
   );
-  assert.equal(registered.route, "execution");
-  assert.equal(registered.operation, "workflow register");
+  assert.equal(registered.command, "workflow.register");
+  assert.equal(registered.status, "ok");
   assert.equal(registered.data.workflowId, WORKFLOW_ID);
 
   // --- bind: the trusted local coordinator bootstrap -----------------------
@@ -454,13 +459,13 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
     ),
     "plan bind --coordinator",
   );
-  assert.equal(claimed.route, "execution");
-  assert.equal(claimed.operation, "bind");
-  assert.equal(claimed.operation_id, "bind-coordinator");
-  assert.equal(claimed.data.role, "coordinator");
-  assert.equal(claimed.data.sessionId, COORDINATOR_ID);
-  assert.equal(claimed.data.workflowId, WORKFLOW_ID);
-  const coordinatorWire = encodeExecutionSessionRef(claimed.data);
+  assert.equal(claimed.command, "plan.bind");
+  assert.equal(claimed.status, "ok");
+  assert.equal(claimed.data.operationId, "bind-coordinator");
+  assert.equal(claimed.data.data.role, "coordinator");
+  assert.equal(claimed.data.data.sessionId, COORDINATOR_ID);
+  assert.equal(claimed.data.data.workflowId, WORKFLOW_ID);
+  const coordinatorWire = encodeExecutionSessionRef(claimed.data.data);
   assert.ok(coordinatorWire.startsWith(WIRE_PREFIX), `unexpected session reference ${coordinatorWire}`);
 
   // --- write: prepare seals the reviewed Assignment ------------------------
@@ -627,6 +632,8 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
         rootToken,
         "--operation",
         "register-1",
+        "--session-id",
+        COORDINATOR_ID,
         "--harness",
         fixture.harness,
         "--json",
