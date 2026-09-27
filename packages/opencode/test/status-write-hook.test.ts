@@ -454,14 +454,10 @@ describe("plugin wiring (tool.execute.before)", () => {
         { args: { filePath: statusPath, content: JSON.stringify(validDoc) } },
       );
       warnings = restore2();
-      // A valid document draws no validation finding. A gated coordination
-      // write additionally consults the shared CLI, and with no ambient
-      // execution scope that consultation states its operational exclusion —
-      // as a NON-stop (`execution-session.test.ts`: "a missing ambient scope is
-      // logged as an explicit exclusion on a gated write").
+      // A valid document produces no validation warning. Native MCP execution
+      // does not consult the legacy global CLI for this hook.
       const harnessLines = warnings.filter((w) => w.includes("[mstar-harness]"));
-      expect(harnessLines.filter((line) => !line.includes("operationally excluded"))).toEqual([]);
-      expect(harnessLines.some((line) => line.includes("NOT stopped"))).toBe(true);
+      expect(harnessLines).toEqual([]);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }

@@ -61,10 +61,20 @@ test("OpenCode MCP exposes canonical commands and admits only the native main se
     const workflowToken = (created.data as { workflows: Array<{ workflowToken: string }> }).workflows[0]!.workflowToken;
 
     const plugin = await MorningStarHarnessPlugin();
-    const tools = plugin.tool as Record<string, { execute(params: unknown, context: unknown): Promise<string> }>;
+    const tools = plugin.tool as Record<string, { args: Record<string, unknown>; execute(params: unknown, context: unknown): Promise<string> }>;
     const definitions = getCommandDefinitions();
     assert.equal(Object.keys(tools).length, definitions.length);
-    for (const definition of definitions) assert.ok(tools[mcpToolName(definition.id)], definition.id);
+    for (const definition of definitions) {
+      const registered = tools[mcpToolName(definition.id)];
+      assert.ok(registered, definition.id);
+      const input = definition.input;
+      if (!("shape" in input) || input.shape === null || typeof input.shape !== "object") {
+        throw new Error(`OpenCode command input must be an object schema: ${definition.id}`);
+      }
+      const expectedArgs = Object.keys(input.shape);
+      if (definition.id === "judgment.review-advice") expectedArgs.push("input");
+      assert.deepEqual(Object.keys(registered.args).sort(), expectedArgs.sort(), definition.id);
+    }
     for (const name of ["mstar_status_validate", "mstar_worktree_check", "mstar_dispatch_validate", "mstar_lease_verify", "mstar_iteration_gate", "mstar_path_resolve"]) {
       assert.ok(tools[name], `canonical replacement missing ${name}`);
     }

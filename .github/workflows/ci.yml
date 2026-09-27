@@ -574,6 +574,9 @@ jobs:
 
       - name: Install dependencies for drift validation
         run: bun install --frozen-lockfile
+      - name: Build engine and MCP workspace dependencies
+        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build && bun run mcp:build
+
 
       - name: Repository drift validation
         run: bun run validation:drift
