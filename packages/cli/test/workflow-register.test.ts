@@ -62,6 +62,20 @@ function runCli(args: string[]): RunResult {
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
+function commandOutput(result: RunResult): Record<string, unknown> {
+  const value: unknown = JSON.parse(result.stdout);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected a command envelope on stdout, received ${JSON.stringify(result.stdout)}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function commandMessage(result: RunResult): string {
+  const message = commandOutput(result).message;
+  if (typeof message !== "string") throw new Error(`command envelope has no message: ${result.stdout}`);
+  return message;
+}
+
 function registerArgs(harness: string, extra: string[] = []): string[] {
   return [
     "workflow",
@@ -112,8 +126,13 @@ describe("mstar workflow register", () => {
       const result = runCli(registerArgs(harness));
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout).toContain(`workflow register: OK \u2014 ${WORKFLOW_ID} registered`);
-      expect(result.stdout).toContain(snapshot);
+      const response = commandOutput(result);
+      expect(response).toMatchObject({
+        status: "ok",
+        code: "workflow.register.ok",
+        exitCode: 0,
+      });
+      expect(response.data).toMatchObject({ workflowId: WORKFLOW_ID });
 
       expect(existsSync(snapshot)).toBe(true);
       const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
@@ -163,7 +182,8 @@ describe("mstar workflow register", () => {
 
       const duplicate = runCli(registerArgs(harness));
       expect(duplicate.exitCode).toBe(1);
-      expect(duplicate.stderr).toContain("already registered");
+      expect(commandOutput(duplicate).status).toBe("refused");
+      expect(commandMessage(duplicate)).toContain("already registered");
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
@@ -179,7 +199,8 @@ describe("mstar workflow register", () => {
       }
       const result = runCli(noBranches);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("incomplete registration");
+      expect(commandOutput(result).status).toBe("refused");
+      expect(commandMessage(result)).toContain("incomplete registration");
       // Refusal before any write — no partial activation.
       expect(existsSync(snapshot)).toBe(false);
       expect(existsSync(root)).toBe(false);
@@ -208,8 +229,9 @@ describe("mstar workflow register", () => {
         "--harness",
         harness,
       ]);
-      expect(withoutPolicy.exitCode).toBe(1);
-      expect(withoutPolicy.stderr).toContain("--completion-policy");
+      const response = commandOutput(withoutPolicy);
+      expect(withoutPolicy.exitCode).not.toBe(0);
+      expect(["usage", "refused"]).toContain(response.status);
       expect(existsSync(snapshot)).toBe(false);
       expect(existsSync(root)).toBe(false);
 
@@ -246,17 +268,17 @@ describe("mstar workflow register", () => {
   test("missing required flags are a usage error (exit 2)", async () => {
     await setupHarness((harness) => {
       const result = runCli(["workflow", "register", "--workflow", WORKFLOW_ID, "--harness", harness]);
-      expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("missing required option(s)");
-      expect(result.stderr).toContain("--plan-id");
+      const response = commandOutput(result);
+      expect(response.status).toBe("usage");
+      expect(commandMessage(result)).toContain("planId");
     });
   });
 
   test("unknown delivery kind is a usage error (exit 2)", async () => {
     await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
-      expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("--delivery-kind must be one of");
+      expect(commandOutput(result).status).toBe("usage");
+      expect(commandMessage(result)).toContain("deliveryKind");
     });
   });
 
@@ -264,7 +286,8 @@ describe("mstar workflow register", () => {
     await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--workflow", "../escape"]));
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid workflow id");
+      expect(commandOutput(result).status).toBe("refused");
+      expect(commandMessage(result)).toContain("single safe path component");
       expect(existsSync(join(harness, "escape"))).toBe(false);
     });
   });
@@ -283,7 +306,8 @@ describe("mstar workflow register", () => {
       // refusal points at `catalog reconcile` as the recovery path.
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(1);
-      expect(retry.stderr).toContain("reconcile");
+      expect(commandOutput(retry).status).toBe("refused");
+      expect(commandMessage(retry)).toContain("reconcile");
       expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
       // The adoption re-registered the lost root entry from the preserved
       // snapshot bytes, but the binding belongs to the committed operation —

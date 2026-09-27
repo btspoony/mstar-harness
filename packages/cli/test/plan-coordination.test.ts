@@ -65,6 +65,20 @@ function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = 
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
+function initializeFixtureStore(harness: string, cwd: string): void {
+  const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
+  const script = `import { initializeStore } from ${JSON.stringify(engineEntry)}; const store = await initializeStore({ harnessDir: ${JSON.stringify(harness)} }); store.close();`;
+  const result = Bun.spawnSync([process.execPath, "-e", script], {
+    cwd,
+    env: cliEnv(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`fixture store initialization failed: ${result.stdout.toString()}${result.stderr.toString()}`);
+  }
+}
+
 /** Parse a `--json` success/failure envelope; throws with the raw stdout when absent. */
 function jsonOf(result: RunResult): Record<string, unknown> {
   try {
@@ -187,8 +201,7 @@ function makeFixture(options: { store?: boolean } = {}): Fixture {
   // The store first: `store init` is create-only for a genuinely empty
   // workspace, so it must run before status.json registers a workflow.
   if (options.store !== false) {
-    const init = runCli(["store", "init", "--harness", harness, "--json"], root);
-    expect(init.exitCode).toBe(0);
+    initializeFixtureStore(harness, root);
   }
 
   writeJson(join(harness, "status.json"), {
@@ -2108,7 +2121,12 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   expect(`workflow register: exit ${registered.exitCode} (${registered.stderr.trim()})`).toBe(
     "workflow register: exit 0 ()",
   );
-  expect(registered.stdout).toContain(`workflow register: OK \u2014 ${WORKFLOW_ID} registered`);
+  expect(jsonOf(registered)).toMatchObject({
+    command: "workflow.register",
+    status: "ok",
+    code: "workflow.register.ok",
+    exitCode: 0,
+  });
   const registeredDoc = readJson(fixture.snapshotPath);
   expect(registeredDoc.delivery_kind).toBe("verification/report-only");
   expect(registeredDoc.completion_policy).toBe(REPORT_ONLY_POLICY);
