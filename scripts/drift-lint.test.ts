@@ -35,7 +35,7 @@
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 50 Engine-check callouts / 51 CLI citations against the
+ *   yields exactly 49 Engine-check callouts / 50 CLI citations against the
  *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
  *   to canonical pointers);
  *   corpus drift goes red.
@@ -279,14 +279,14 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 49 Engine-check callouts / 51 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 49 Engine-check callouts / 50 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
     /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
- * sees in main — the 50/48 counts are a regression pin: adding or
- * removing a backticked CLI citation inside an Engine-check callout
- * (or adding a callout) fails this test loudly. */
+     * sees in main — the 49/50 counts are a regression pin: adding or
+     * removing a backticked CLI citation inside an Engine-check callout
+     * (or adding a callout) fails this test loudly. */
     const realCorpus = () => {
       const files: string[] = [];
       const walk = (dir: string) => {
