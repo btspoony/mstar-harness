@@ -55,6 +55,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION, serializeExecutionValue } from "../packages/engine/src/index.ts";
+import { MCP_BUILD_INFO_FILENAME } from "../packages/mcp/src/build-info.ts";
 
 export const CONSUMER_MANIFEST_PROTOCOL = "consumer-v1" as const;
 
@@ -306,19 +307,19 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     generatedFiles: [
       "packages/mcp/dist/stdio.js",
       "mcp/bundles/cursor/dist/mcp/stdio.js",
-      "mcp/bundles/cursor/dist/mcp/build-info.json",
+      `mcp/bundles/cursor/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "mcp/bundles/codex/dist/mcp/stdio.js",
-      "mcp/bundles/codex/dist/mcp/build-info.json",
+      `mcp/bundles/codex/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "mcp/bundles/kimi/dist/mcp/stdio.js",
-      "mcp/bundles/kimi/dist/mcp/build-info.json",
+      `mcp/bundles/kimi/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "mcp/bundles/zcode/dist/mcp/stdio.js",
-      "mcp/bundles/zcode/dist/mcp/build-info.json",
+      `mcp/bundles/zcode/dist/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "packages/omp/mcp/stdio.js",
-      "packages/omp/mcp/build-info.json",
+      `packages/omp/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "packages/opencode/mcp/stdio.js",
-      "packages/opencode/mcp/build-info.json",
+      `packages/opencode/mcp/${MCP_BUILD_INFO_FILENAME}`,
       "packages/dsh/mcp/stdio.js",
-      "packages/dsh/mcp/build-info.json",
+      `packages/dsh/mcp/${MCP_BUILD_INFO_FILENAME}`,
     ],
     copies: [],
   },

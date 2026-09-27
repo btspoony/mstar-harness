@@ -26,10 +26,12 @@ import {
   diagnoseCursorHost,
   diagnoseDshHost,
   diagnoseKimiHost,
+  diagnoseMcpTarget,
   diagnoseOmpHost,
   diagnoseOpencodeHost,
   diagnoseZcodeHost,
   formatPluginVersionDoctorNote,
+  mcpTargetPackageRoot,
   parseOmpPluginList,
   resolveProjectRoot,
   validateAgentPlugin,
@@ -219,16 +221,21 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
         const result = await diagnose(input.target, input.scope);
+        const mcpHealth = diagnoseMcpTarget(input.target, mcpTargetPackageRoot(input.target, harnessRepoPath));
+        const errors = [...result.errors, ...mcpHealth.errors];
         const data = {
           ...result,
+          errors,
+          notes: [...result.notes, ...mcpHealth.notes],
+          mcpHealth,
           target: input.target,
           scope: input.scope,
           pluginVersionNote: formatPluginVersionDoctorNote(input.target, context.versions.cli ?? "unknown", null),
           ...(input.output === undefined ? {} : { output: input.output }),
         };
-        return result.errors.length === 0
+        return errors.length === 0
           ? ok("doctor", data)
-          : refused("doctor", "doctor.unhealthy", `${result.errors.length} issue(s)`, data);
+          : refused("doctor", "doctor.unhealthy", `${errors.length} issue(s)`, data);
       },
     }),
     command("plugin.validate", {

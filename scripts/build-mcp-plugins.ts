@@ -2,7 +2,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createMcpBuildInfo } from "../packages/mcp/src/build-info.ts";
+import { createMcpBuildInfo, MCP_BUILD_INFO_FILENAME } from "../packages/mcp/src/build-info.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const MCP_PLUGIN_TARGETS = ["omp", "opencode", "dsh", "cursor", "codex", "kimi", "zcode"] as const;
@@ -56,7 +56,7 @@ export async function buildMcpPlugin(target: McpPluginTarget): Promise<string> {
     },
     target,
   );
-  await Bun.write(path.join(output, "build-info.json"), `${JSON.stringify(buildInfo, null, 2)}\n`);
+  await Bun.write(path.join(output, MCP_BUILD_INFO_FILENAME), `${JSON.stringify(buildInfo, null, 2)}\n`);
 
   if (!isConfigOnlyTarget) {
     const sourceConfigDir = path.join(repoRoot, "mcp");

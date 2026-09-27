@@ -1,3 +1,5 @@
+export const MCP_BUILD_INFO_FILENAME = "build-info.json";
+
 export const SUPPORTED_MCP_PROTOCOLS = [
   "2026-07-28",
   "2025-11-25",
