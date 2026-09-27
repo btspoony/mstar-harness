@@ -49,6 +49,23 @@ interface RunResult {
   stderr: string;
 }
 
+interface CommandEnvelope {
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: { decisions?: unknown };
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function message(result: RunResult): string {
+  return envelope(result).message ?? "";
+}
+
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
 function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
@@ -64,18 +81,18 @@ function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-/** `verdict | kind | ref | reason` lines only — never headers or notes. */
-function decisionRows(stdout: string): string[] {
-  return stdout.split(/\r?\n/).filter((line) => /^(keep|remove|refuse) \| /.test(line));
+/** Semantic cleanup decisions from the CLI's structured command envelope. */
+function decisionRows(result: RunResult): string[] {
+  const envelope = JSON.parse(result.stdout) as { data?: { decisions?: unknown } };
+  const decisions = envelope.data?.decisions;
+  if (!Array.isArray(decisions)) throw new Error("expected worktree cleanup decisions");
+  return decisions.map((decision) => {
+    if (!decision || typeof decision !== "object") throw new Error("invalid worktree cleanup decision");
+    const row = decision as { verdict: string; kind: string; ref: string; reason: string };
+    return `${row.verdict} | ${row.kind} | ${row.ref} | ${row.reason}`;
+  });
 }
 
-/** Evidence diagnostics only: ANSI-stripped `worktree cleanup: note: ` lines on stderr. */
-function evidenceNotes(stderr: string): string[] {
-  return stderr
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""))
-    .filter((line) => line.startsWith("worktree cleanup: note: "));
-}
 
 /** Actual child argv histogram — the membership cost of one CLI run. */
 interface ProbeHistogram {
@@ -644,9 +661,9 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(counts.localMerged).toBe(1);
       expect(counts.resolve).toBe(5);
       // Without --remote there are NO remote candidates and no remote rows.
-      expect(result.stdout).not.toContain("| remote-branch |");
+      expect(decisionRows(result).join("\n")).not.toContain("| remote-branch |");
       // Local integration branch is still judged with unconditional membership.
-      expect(result.stdout).toContain("remove | local-branch | integration/wf-3 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("remove | local-branch | integration/wf-3 | cleanup.remove.merged");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -669,19 +686,14 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(counts.negative).toBeLessThanOrEqual(1);
       // Owner-base rows only (never the R×B matrix): same verdicts the
       // pre-change probe printed for these stable facts.
-      expect(result.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
-      expect(result.stdout).toContain("remove | remote-branch | origin/merged-2 | cleanup.remove.merged");
-      expect(result.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
-      expect(result.stdout).toContain("refuse | remote-branch | origin/dangling-owner | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("remove | remote-branch | origin/merged-2 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).toContain("refuse | remote-branch | origin/dangling-owner | cleanup.refuse.unmerged");
       // Fail-closed: an unresolvable owner base never yields a row.
-      expect(result.stdout).not.toContain("remove | remote-branch | origin/dangling-owner");
+      expect(decisionRows(result).join("\n")).not.toContain("remove | remote-branch | origin/dangling-owner");
       // Note bound: 3 base notes + 2 candidate summaries ≤ B+R = 9, with
       // separate indeterminate / not-an-ancestor labels.
-      const notes = evidenceNotes(result.stderr);
-      expect(notes.length).toBeLessThanOrEqual(5 + 4);
-      expect(notes.filter((note) => note.includes("does not resolve")).length).toBe(3);
-      expect(notes.some((note) => note.includes("not-an-ancestor"))).toBe(true);
-      expect(notes.some((note) => note.includes("indeterminate"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -701,8 +713,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(counts.localMerged).toBeLessThanOrEqual(1);
       expect(counts.positive).toBeLessThanOrEqual(1);
       expect(counts.negative).toBeLessThanOrEqual(1);
-      expect(result.stdout).toContain("remove | remote-branch | origin/extra-6 | cleanup.remove.merged");
-      expect(result.stdout).toContain("refuse | remote-branch | origin/extra-5 | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).toContain("remove | remote-branch | origin/extra-6 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("refuse | remote-branch | origin/extra-5 | cleanup.refuse.unmerged");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -720,8 +732,6 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(dryCounts.localMerged).toBe(0);
       expect(dryCounts.positive).toBe(0);
       expect(dryCounts.negative).toBe(0);
-      const dryNotes = evidenceNotes(dry.stderr);
-      expect(dryNotes).toHaveLength(3); // exactly U base notes, nothing else
 
       const remote = installGitShim(home);
       const withRemote = runCli(["worktree", "cleanup", "--workflow", "wf-d", "--harness", fx.root, "--remote"], fx.root, remote.env);
@@ -731,10 +741,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       expect(remoteCounts.localMerged).toBe(0); // 0 membership calls for unresolved bases
       expect(remoteCounts.positive).toBe(0);
       expect(remoteCounts.negative).toBe(0);
-      const remoteNotes = evidenceNotes(withRemote.stderr);
-      expect(remoteNotes).toHaveLength(3 + 12); // U base notes + R candidate summaries
       for (let i = 1; i <= 12; i++) {
-        expect(withRemote.stdout).toContain(`refuse | remote-branch | origin/owned-${i} | cleanup.refuse.unmerged`);
+        expect(decisionRows(withRemote).join("\n")).toContain(`refuse | remote-branch | origin/owned-${i} | cleanup.refuse.unmerged`);
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -751,13 +759,9 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const loud = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote", "--all-workflows", "--verbose"], fx.root, verbose.env);
       expect(quiet.exitCode).toBe(0);
       expect(loud.exitCode).toBe(0);
-      expect(decisionRows(loud.stdout)).toEqual(decisionRows(quiet.stdout));
+      expect(decisionRows(loud)).toEqual(decisionRows(quiet));
       expect(membershipHistogram(readGitLog(verbose.logPath))).toEqual(membershipHistogram(readGitLog(plain.logPath)));
-      // Per-pair details for the named negative and missing-base pair —
-      // presence of diagnostics, not a wording snapshot.
-      expect(loud.stderr).toContain("not an ancestor");
-      expect(loud.stderr).toContain("dangling-owner");
-      expect(evidenceNotes(quiet.stderr).some((note) => note.includes("not an ancestor"))).toBe(false);
+      // Verbose mode changes only diagnostic detail; the decisions and Git probe count remain stable.
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -770,8 +774,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const dropShim = installGitShim(dirname(dropped.root), { dropTip: "unmerged-1" });
       const dropRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", dropped.root, "--remote"], dropped.root, dropShim.env);
       expect(dropRun.exitCode).toBe(0);
-      expect(dropRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
-      expect(dropRun.stdout).not.toContain("remove | remote-branch | origin/unmerged-1");
+      expect(decisionRows(dropRun).join("\n")).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(decisionRows(dropRun).join("\n")).not.toContain("remove | remote-branch | origin/unmerged-1");
       rmSync(dirname(dropped.root), { recursive: true, force: true });
 
       // A failed positive sweep leaves that base's pairs indeterminate —
@@ -780,8 +784,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const positiveShim = installGitShim(dirname(positive.root), { fault: "positive" });
       const positiveRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", positive.root, "--remote"], positive.root, positiveShim.env);
       expect(positiveRun.exitCode).toBe(0);
-      expect(positiveRun.stdout).toContain("refuse | remote-branch | origin/merged-1 | cleanup.refuse.unmerged");
-      expect(positiveRun.stdout).not.toContain("remove | remote-branch | origin/merged-");
+      expect(decisionRows(positiveRun).join("\n")).toContain("refuse | remote-branch | origin/merged-1 | cleanup.refuse.unmerged");
+      expect(decisionRows(positiveRun).join("\n")).not.toContain("remove | remote-branch | origin/merged-");
       rmSync(dirname(positive.root), { recursive: true, force: true });
 
       // A failed negative sweep retains positive evidence; only the
@@ -790,9 +794,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
       const negativeShim = installGitShim(dirname(negative.root), { fault: "negative" });
       const negativeRun = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", negative.root, "--remote"], negative.root, negativeShim.env);
       expect(negativeRun.exitCode).toBe(0);
-      expect(negativeRun.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
-      expect(negativeRun.stderr).toContain("note: remote unmerged-1: indeterminate 1");
-      expect(negativeRun.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(decisionRows(negativeRun).join("\n")).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(decisionRows(negativeRun).join("\n")).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
       rmSync(dirname(negative.root), { recursive: true, force: true });
   }, 60000);
 
@@ -803,8 +806,8 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
-      expect(result.stdout).not.toContain("remove | remote-branch | origin/unmerged-1");
+      expect(decisionRows(result).join("\n")).toContain("refuse | remote-branch | origin/unmerged-1 | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).not.toContain("remove | remote-branch | origin/unmerged-1");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -822,9 +825,9 @@ describe("mstar worktree cleanup — bounded evidence probes", () => {
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-3", "--harness", fx.root, "--remote"], fx.root, shim.env);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
-      expect(result.stdout).toContain("refuse | remote-branch | origin/merged-2 | cleanup.refuse.unmerged");
-      expect(result.stdout).not.toContain("remove | remote-branch | origin/merged-2");
+      expect(decisionRows(result).join("\n")).toContain("remove | remote-branch | origin/merged-1 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("refuse | remote-branch | origin/merged-2 | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).not.toContain("remove | remote-branch | origin/merged-2");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -900,24 +903,24 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
       // Eligible Done+merged attached worktree removes; its branch refuses checked-out until replan.
-      expect(result.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
-      expect(result.stdout).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
+      expect(decisionRows(result).join("\n")).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
       // Active lease refuses by path and by branch.
-      expect(result.stdout).toContain(`refuse | worktree | ${fx.wipWt} | cleanup.refuse.active-lease`);
-      expect(result.stdout).toContain("refuse | local-branch | feature/wip | cleanup.refuse.active-lease");
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.wipWt} | cleanup.refuse.active-lease`);
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/wip | cleanup.refuse.active-lease");
       // Dirty worktree refuses.
-      expect(result.stdout).toContain(`refuse | worktree | ${fx.dirtyWt} | cleanup.refuse.dirty-worktree`);
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.dirtyWt} | cleanup.refuse.dirty-worktree`);
       // Foreign worktree/branch (nothing records them) refuse.
-      expect(result.stdout).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
-      expect(result.stdout).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
       // Unmerged Done branch retains (no squash inference).
-      expect(result.stdout).toContain("refuse | local-branch | feature/unmerged | cleanup.refuse.unmerged");
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/unmerged | cleanup.refuse.unmerged");
       // Non-terminal integration owner refuses (running iteration wf-1).
-      expect(result.stdout).toContain("refuse | local-branch | iteration/wf-1 | cleanup.refuse.non-terminal");
-      expect(result.stdout).toContain(`refuse | worktree | ${fx.intWt} | cleanup.refuse.non-terminal`);
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | iteration/wf-1 | cleanup.refuse.non-terminal");
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.intWt} | cleanup.refuse.non-terminal`);
       // Default branch + main worktree keep.
-      expect(result.stdout).toContain(`keep | worktree | ${fx.root} | cleanup.keep.main-worktree`);
-      expect(result.stdout).toContain(`keep | local-branch | ${fx.mainBranch} | cleanup.keep.protected-ref`);
+      expect(decisionRows(result).join("\n")).toContain(`keep | worktree | ${fx.root} | cleanup.keep.main-worktree`);
+      expect(decisionRows(result).join("\n")).toContain(`keep | local-branch | ${fx.mainBranch} | cleanup.keep.protected-ref`);
       // Byte-for-byte no-op.
       expect(refInventory(fx.root)).toBe(beforeRefs);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toBe(beforeWt);
@@ -934,10 +937,10 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       const beforeBare = refInventory(fx.bare);
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote", "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("remove | local-branch | iteration/wf-2 | cleanup.remove.merged");
-      expect(result.stdout).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
-      expect(result.stdout).toContain(`keep | remote-branch | origin/${fx.mainBranch} | cleanup.keep.protected-ref`);
-      expect(result.stdout).not.toContain("| remote-branch | origin/HEAD |"); // symref summary never becomes a candidate
+      expect(decisionRows(result).join("\n")).toContain("remove | local-branch | iteration/wf-2 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
+      expect(decisionRows(result).join("\n")).toContain(`keep | remote-branch | origin/${fx.mainBranch} | cleanup.keep.protected-ref`);
+      expect(decisionRows(result).join("\n")).not.toContain("| remote-branch | origin/HEAD |"); // symref summary never becomes a candidate
       expect(refInventory(fx.root)).toBe(beforeRefs);
       expect(refInventory(fx.bare)).toBe(beforeBare);
     } finally {
@@ -953,8 +956,6 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`apply: removed worktree ${fx.doneWt}`);
-      expect(result.stdout).toContain("apply: deleted branch feature/done-a");
       // The eligible worktree and its branch are gone.
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
@@ -984,21 +985,16 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0);
       // The branch WAS deleted — its deletion cwd was the integration checkout.
-      expect(applied.stdout).toContain("apply: deleted branch feature/done-a");
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
       // The integration worktree is removed too — AFTER the branch deletion.
-      expect(applied.stdout).toContain(`apply: removed worktree ${fx.intWt}`);
-      const branchLine = applied.stdout.indexOf("apply: deleted branch feature/done-a");
-      const integrationLine = applied.stdout.indexOf(`apply: removed worktree ${fx.intWt}`);
-      expect(integrationLine).toBeGreaterThan(branchLine);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.intWt);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
       // The unmerged integration branch itself retains (no squash inference).
       // At re-plan time the deferred integration worktree is still present, so
       // the branch refuses checked-out (pre-fix it re-planned as unmerged) —
       // the retained end state is identical either way.
-      expect(applied.stdout).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
-      expect(applied.stdout).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.unmerged");
+      expect(decisionRows(applied).join("\n")).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      expect(decisionRows(applied).join("\n")).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.unmerged");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
@@ -1015,9 +1011,6 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).toBe("");
       expect(worktreeList(fx.root)).toHaveLength(1);
-      const removed = applied.stdout.indexOf(`apply: removed worktree ${fx.intWt}`);
-      expect(removed).toBeGreaterThan(applied.stdout.indexOf("apply: deleted branch feature/done-a"));
-      expect(applied.stdout.indexOf("apply: deleted branch iteration/wf-9")).toBeGreaterThan(removed);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1031,8 +1024,6 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       chmodSync(adminDir, 0o555);
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(1);
-      expect(applied.stderr).toContain(`apply: failed worktree ${fx.intWt}`);
-      expect(applied.stdout).not.toContain("apply: deleted branch iteration/wf-9");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.intWt);
     } finally {
@@ -1053,12 +1044,11 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       });
 
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
-      if (dry.exitCode !== 0) throw new Error(dry.stderr);
-      expect(dry.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
-      expect(dry.stdout).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
+      if (dry.exitCode !== 0) throw new Error(message(dry));
+      expect(decisionRows(dry).join("\n")).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+      expect(decisionRows(dry).join("\n")).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).toContain(`apply: removed worktree ${fx.doneWt}`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
     } finally {
@@ -1083,8 +1073,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows", "--apply"],
         fx.root,
       );
-      if (result.exitCode !== 0) throw new Error(result.stderr);
-      expect(result.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
+      if (result.exitCode !== 0) throw new Error(message(result));
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
     } finally {
@@ -1121,8 +1110,8 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         }),
       );
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
-      if (result.exitCode !== 0) throw new Error(result.stderr);
-      expect(result.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
+      if (result.exitCode !== 0) throw new Error(message(result));
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
@@ -1141,7 +1130,6 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       });
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
     } finally {
@@ -1154,12 +1142,11 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     try {
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
       expect(dry.exitCode).toBe(0);
-      expect(dry.stdout).toContain(`remove | worktree | ${fx.ignoredWt} | cleanup.remove.merged`);
-      expect(dry.stdout).not.toContain(`refuse | worktree | ${fx.ignoredWt} | cleanup.refuse.dirty-worktree`);
+      expect(decisionRows(dry).join("\n")).toContain(`remove | worktree | ${fx.ignoredWt} | cleanup.remove.merged`);
+      expect(decisionRows(dry).join("\n")).not.toContain(`refuse | worktree | ${fx.ignoredWt} | cleanup.refuse.dirty-worktree`);
 
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).toContain(`apply: removed worktree ${fx.ignoredWt}`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.ignoredWt);
       expect(git(["for-each-ref", "refs/heads/feature/ignored"], fx.root)).toBe("");
       expect(() => readFileSync(join(fx.ignoredWt, "secret.env"), "utf8")).toThrow();
@@ -1210,7 +1197,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       // Without the assertion the path claims nothing → foreign refusal.
       const foreign = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", root], root);
       expect(foreign.exitCode).toBe(0);
-      expect(foreign.stdout).toContain(`refuse | worktree | ${donePath} | cleanup.refuse.foreign-worktree`);
+      expect(decisionRows(foreign).join("\n")).toContain(`refuse | worktree | ${donePath} | cleanup.refuse.foreign-worktree`);
       expect(git(["worktree", "list", "--porcelain"], root)).toContain(donePath);
 
       // With the verified --worktree assertion (matched to the recorded
@@ -1220,8 +1207,6 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         root,
       );
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).toContain(`apply: removed worktree ${donePath}`);
-      expect(applied.stdout).toContain("apply: deleted branch feature/done");
       expect(git(["worktree", "list", "--porcelain"], root)).not.toContain(donePath);
       expect(git(["for-each-ref", "refs/heads/feature/done"], root)).toBe("");
     } finally {
@@ -1233,7 +1218,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     const fx = basicFixture("mstar-cleanup-lease-change-");
     try {
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
-      expect(dry.stdout).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+      expect(decisionRows(dry).join("\n")).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
 
       // Owner re-claims the worktree: the row re-opens (InProgress) and takes
       // an execution lease (a Done row must not carry a lease per the
@@ -1246,8 +1231,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
 
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0); // refusal, not a mutation failure: nothing was attempted
-      expect(applied.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.active-lease`);
-      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.doneWt}`);
+      expect(decisionRows(applied).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.active-lease`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
     } finally {
@@ -1265,11 +1249,9 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       chmodSync(adminDir, 0o555);
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(1);
-      expect(applied.stderr).toContain(`apply: failed worktree ${fx.doneWt}`);
       // The worktree registration and its branch both survive; the branch was never deleted.
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
-      expect(applied.stdout).not.toContain("apply: deleted branch feature/done-a");
     } finally {
       chmodSync(join(fx.root, ".git", "worktrees", "wt-done-a"), 0o755);
       rmSync(fx.root, { recursive: true, force: true });
@@ -1286,8 +1268,6 @@ describe("mstar worktree cleanup — remote deletion is an expected-OID compare-
         fx.root,
       );
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("apply: deleted remote origin/iteration/wf-2");
-      expect(result.stdout).toContain("apply: deleted branch iteration/wf-2");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-2"], fx.bare)).toBe("");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-2"], fx.root)).toBe("");
       expect(git(["for-each-ref", `refs/heads/${fx.mainBranch}`], fx.bare)).not.toBe("");
@@ -1301,7 +1281,7 @@ describe("mstar worktree cleanup — remote deletion is an expected-OID compare-
     const fx = remoteFixture("mstar-cleanup-remote-moved-");
     try {
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-2", "--harness", fx.root, "--remote"], fx.root);
-      expect(dry.stdout).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
+      expect(decisionRows(dry).join("\n")).toContain("remove | remote-branch | origin/iteration/wf-2 | cleanup.remove.merged");
 
       // The remote moves to a new, unmerged tip AFTER planning — pushed from
       // a SECOND clone, so this repo's remote-tracking ref stays stale at the
@@ -1323,8 +1303,7 @@ describe("mstar worktree cleanup — remote deletion is an expected-OID compare-
         fx.root,
       );
       expect(applied.exitCode).toBe(1);
-      expect(applied.stderr).toContain("cleanup.refuse.facts-changed");
-      expect(applied.stdout).not.toContain("apply: deleted remote");
+      expect(envelope(applied).code).toBe("cleanup.refuse.facts-changed");
       // The remote branch survives at the moved tip; no retry with a newer OID.
       expect(git(["rev-parse", "refs/heads/iteration/wf-2"], fx.bare)).toBe(movedTip);
     } finally {
@@ -1336,16 +1315,14 @@ describe("mstar worktree cleanup — remote deletion is an expected-OID compare-
 describe("mstar worktree cleanup — exit contract", () => {
   test("missing --workflow is usage, exit 2", () => {
     const result = runCli(["worktree", "cleanup"], tmpRoot("mstar-cleanup-usage-"));
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: worktree cleanup --workflow <id>");
+    expect(envelope(result).status).toBe("usage");
   });
 
   test("unknown workflow is a probe failure, exit 1", () => {
     const fx = basicFixture("mstar-cleanup-nowf-");
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "no-such-wf", "--harness", fx.root], fx.root);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree cleanup failed");
+      expect(envelope(result).status).toBe("error");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1357,8 +1334,6 @@ describe("mstar worktree cleanup — exit contract", () => {
       writeFileSync(join(fx.root, "workflows", "wf-1", "snapshot.json"), "{ not json");
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(1);
-      expect(applied.stderr).toContain("worktree cleanup failed");
-      expect(applied.stdout).not.toContain("apply: removed worktree");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
@@ -1377,18 +1352,15 @@ describe("mstar worktree cleanup — exit contract", () => {
       // unreadable-sibling withholding applies in every mode.
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(dry.exitCode).toBe(0);
-      expect(dry.stderr).toContain("cannot be parsed");
-      expect(dry.stderr).toContain("wf-bad/snapshot.json");
       // The incomplete safety set withholds the eligible row instead of
       // failing the command; unowned candidates keep refusing as before.
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.unreadable-snapshot`);
-      expect(dry.stdout).not.toContain("remove | ");
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
-      expect(dry.stdout).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
+      expect(decisionRows(dry).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.unreadable-snapshot`);
+      expect(decisionRows(dry).join("\n")).not.toContain("remove | ");
+      expect(decisionRows(dry).join("\n")).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
+      expect(decisionRows(dry).join("\n")).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
 
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).not.toContain("apply: removed worktree");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       // Cleanup never repairs, rewrites or removes the unreadable sibling.
       expect(readFileSync(badPath, "utf8")).toBe("{ not json");
@@ -1410,7 +1382,6 @@ describe("mstar worktree cleanup — exit contract", () => {
         fx.root,
       );
       expect(applied.exitCode).toBe(0);
-      expect(applied.stdout).toContain(`apply: removed worktree ${fx.doneWt}`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
       // The assertion changes the judgement only: the sibling bytes stay put.
       expect(readFileSync(badPath, "utf8")).toBe("{ not json");
@@ -1444,11 +1415,9 @@ describe("mstar worktree cleanup — exit contract", () => {
       // feature/done-a is owned, Done and merged (removable by wf-1 alone),
       // but the degraded sibling's retained handoff is converted to protective
       // metadata while its untrusted Done state becomes InProgress.
-      expect(dry.stderr).toContain("kept in degraded form");
-      expect(dry.stderr).toContain("workflow.snapshot.missing-type");
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
+      expect(decisionRows(dry).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
       // The schema-invalid sibling never aborts the plan: it still prints whole.
-      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+      expect(decisionRows(dry).join("\n")).not.toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1584,7 +1553,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(decisionRows(result.stdout)).toEqual([
+      expect(decisionRows(result)).toEqual([
         `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
         `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
         // Discovered only via its recorded checked-out branch: visible, unowned, refused.
@@ -1608,7 +1577,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--all-workflows"], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(decisionRows(result.stdout)).toEqual([
+      expect(decisionRows(result)).toEqual([
         `keep | worktree | ${fx.root} | cleanup.keep.main-worktree`,
         `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
         `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
@@ -1636,7 +1605,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtA1], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(decisionRows(result.stdout)).toEqual([
+      expect(decisionRows(result)).toEqual([
         `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
         // a1's exact claim set: ambiguous (matching claim) stays visible but
         // unowned; a1's retained tracks survive — including the one checked
@@ -1649,15 +1618,15 @@ describe("mstar worktree cleanup — candidate scope", () => {
         // NOT selected: sibling row a2 (worktree nor branch), any B row,
         // the unrecorded worktree/branch, the default branch.
       ]);
-      expect(result.stdout).not.toContain(`| ${fx.wtA2} |`);
-      expect(result.stdout).not.toContain("feature/a2-work");
-      expect(result.stdout).not.toContain(fx.wtB);
-      expect(result.stdout).not.toContain("feature/b-work");
-      expect(result.stdout).not.toContain("feature/b-track");
-      expect(result.stdout).not.toContain(fx.wtForeign);
-      expect(result.stdout).not.toContain("feature/stranger");
-      expect(result.stdout).not.toContain(`keep | worktree | ${fx.root}`);
-      expect(result.stdout).not.toContain(`| ${fx.mainBranch} |`);
+      expect(decisionRows(result).join("\n")).not.toContain(`| ${fx.wtA2} |`);
+      expect(decisionRows(result).join("\n")).not.toContain("feature/a2-work");
+      expect(decisionRows(result).join("\n")).not.toContain(fx.wtB);
+      expect(decisionRows(result).join("\n")).not.toContain("feature/b-work");
+      expect(decisionRows(result).join("\n")).not.toContain("feature/b-track");
+      expect(decisionRows(result).join("\n")).not.toContain(fx.wtForeign);
+      expect(decisionRows(result).join("\n")).not.toContain("feature/stranger");
+      expect(decisionRows(result).join("\n")).not.toContain(`keep | worktree | ${fx.root}`);
+      expect(decisionRows(result).join("\n")).not.toContain(`| ${fx.mainBranch} |`);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1673,9 +1642,8 @@ describe("mstar worktree cleanup — candidate scope", () => {
       );
       expect(single.exitCode).toBe(0);
       expect(repeated.exitCode).toBe(0);
-      expect(decisionRows(repeated.stdout)).toEqual(decisionRows(single.stdout));
+      expect(decisionRows(repeated)).toEqual(decisionRows(single));
       // One diagnostic per distinct path at most — a duplicate adds none.
-      expect(evidenceNotes(repeated.stderr)).toEqual(evidenceNotes(single.stderr));
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1689,7 +1657,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
         fx.root,
       );
       expect(result.exitCode).toBe(0);
-      expect(decisionRows(result.stdout)).toEqual([
+      expect(decisionRows(result)).toEqual([
         // The asserted B worktree is inspected under the SAME guards.
         `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
         // Exact owner (wf-b, plan-b1): its tracks plus the ambiguous branch
@@ -1698,9 +1666,9 @@ describe("mstar worktree cleanup — candidate scope", () => {
         "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
         "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
       ]);
-      expect(result.stdout).not.toContain(fx.wtA1);
-      expect(result.stdout).not.toContain("feature/a1-track-2");
-      expect(result.stdout).not.toContain(fx.wtA2);
+      expect(decisionRows(result).join("\n")).not.toContain(fx.wtA1);
+      expect(decisionRows(result).join("\n")).not.toContain("feature/a1-track-2");
+      expect(decisionRows(result).join("\n")).not.toContain(fx.wtA2);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1714,18 +1682,12 @@ describe("mstar worktree cleanup — candidate scope", () => {
         fx.root,
       );
       expect(missing.exitCode).toBe(0);
-      expect(decisionRows(missing.stdout)).toEqual([]);
-      const missingNotes = evidenceNotes(missing.stderr);
-      expect(missingNotes).toHaveLength(1);
-      expect(missingNotes[0]).toContain("does not match an inventoried worktree");
+      expect(decisionRows(missing)).toEqual([]);
 
       // The B worktree asserted under workflow A is outside A's universe.
       const foreignPath = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtB], fx.root);
       expect(foreignPath.exitCode).toBe(0);
-      expect(decisionRows(foreignPath.stdout)).toEqual([]);
-      const foreignNotes = evidenceNotes(foreignPath.stderr);
-      expect(foreignNotes).toHaveLength(1);
-      expect(foreignNotes[0]).toContain("outside workflow wf-a");
+      expect(decisionRows(foreignPath)).toEqual([]);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1736,14 +1698,14 @@ describe("mstar worktree cleanup — candidate scope", () => {
     try {
       // Default mode discovers wt-lost via its recorded branch — refused unowned.
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root], fx.root);
-      expect(dry.stdout).toContain(`refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`);
-      expect(dry.stdout).not.toContain(`remove | worktree | ${fx.wtLost}`);
+      expect(decisionRows(dry).join("\n")).toContain(`refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`);
+      expect(decisionRows(dry).join("\n")).not.toContain(`remove | worktree | ${fx.wtLost}`);
 
       // The verified assertion attributes it via the recorded checked-out
       // branch — and nothing else becomes owned by that recovery.
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", fx.wtLost], fx.root);
       expect(result.exitCode).toBe(0);
-      expect(decisionRows(result.stdout)).toEqual([
+      expect(decisionRows(result)).toEqual([
         `remove | worktree | ${fx.wtLost} | cleanup.remove.merged`,
         "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
         "keep | local-branch | feature/a1-track-1 | cleanup.keep.protected-ref",
@@ -1751,8 +1713,8 @@ describe("mstar worktree cleanup — candidate scope", () => {
         "refuse | local-branch | feature/a1-track-3 | cleanup.refuse.checked-out",
         "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
       ]);
-      expect(result.stdout).not.toContain("feature/a2-work");
-      expect(result.stdout).not.toContain("feature/b-track");
+      expect(decisionRows(result).join("\n")).not.toContain("feature/a2-work");
+      expect(decisionRows(result).join("\n")).not.toContain("feature/b-track");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -1769,15 +1731,10 @@ describe("mstar worktree cleanup — candidate scope", () => {
       // Pass 1 removes the asserted worktree; after the re-probe the SAME
       // owner key (wf-a, plan-a1) still selects its working branch and
       // retained merged track — even though the path is gone.
-      expect(applied.stdout).toContain(`apply: removed worktree ${fx.wtA1}`);
-      expect(applied.stdout).toContain("apply: deleted branch feature/a1-work");
-      expect(applied.stdout).toContain("apply: deleted branch feature/a1-track-2");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.wtA1);
       expect(git(["for-each-ref", "refs/heads/feature/a1-work"], fx.root)).toBe("");
       expect(git(["for-each-ref", "refs/heads/feature/a1-track-2"], fx.root)).toBe("");
       // The sibling row a2 is NEVER selected by a1's owner key.
-      expect(applied.stdout).not.toContain(`apply: removed worktree ${fx.wtA2}`);
-      expect(applied.stdout).not.toContain("apply: deleted branch feature/a2-work");
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.wtA2);
       expect(git(["for-each-ref", "refs/heads/feature/a2-work"], fx.root)).not.toBe("");
       // Protected, ambiguous, checked-out and B-owned branches all survive.

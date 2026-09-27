@@ -239,7 +239,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
   if (input.workflow === "." || input.workflow === ".." || input.workflow.includes("/") || input.workflow.includes("\\")) throw new SddScriptError(`invalid workflow id ${JSON.stringify(input.workflow)}`, 1);
   const main = readMainWorktree(invocation.cwd);
   if (!main) throw new Error("cannot resolve the main worktree of the current repository — run inside the repo");
-  const harness = resolveProcessHarnessDir(input.harness);
+  const harness = resolveProcessHarnessDir(invocation.cwd, input.harness);
   if (!harness) throw new Error("harness directory not found");
   const root = resolveWorkflowDir(harness, { harnessDir: harness });
   const selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
@@ -283,6 +283,14 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
     }
   }
   const remoteEvidence: CleanupFacts["remoteEvidence"][number][] = [];
+  const remoteCandidates: { branch: string; tip: string; base: string | undefined }[] = [];
+  const bases = new Set(snapshots.flatMap((snapshot) => [
+    snapshot.branch?.base,
+    snapshot.branch?.integration,
+    snapshot.branch?.target,
+  ].filter((base): base is string => typeof base === "string" && base !== "")));
+  const baseOids = new Map<string, string>();
+  for (const base of bases) baseOids.set(base, await gitProbe(invocation, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`], main.root));
   if (input.remote) {
     const remoteRows = (await git(invocation, ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/remotes/origin"], main.root)).split(/\r?\n/).filter((line) => line && !line.startsWith("origin/HEAD"));
     for (const line of remoteRows) {
@@ -290,26 +298,55 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext): Pr
       const branch = fullName!.replace(/^origin\//, "");
       const claims = claimsFor("branch", branch);
       if (!(input.allWorkflows || claims.some((claim) => claim.workflowId === input.workflow))) continue;
-      targets.push({ kind: "remote-branch", ref: fullName!, branch, tip: tip ?? "", owner: cleanupOwner(claims) });
       const owner = cleanupOwner(claims);
       const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === owner?.workflowId);
       const base = owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
-      if (base) {
-        const probe = await processReply(invocation, ["git", "merge-base", "--is-ancestor", tip ?? "", base], main.root);
-        remoteEvidence.push({ branch, tip: tip ?? "", base, ancestor: probe.exitCode === 0, prMerged: null });
-      }
+      targets.push({ kind: "remote-branch", ref: fullName!, branch, tip: tip ?? "", owner });
+      remoteCandidates.push({ branch, tip: tip ?? "", base });
+    }
+  }
+  const mergedLocalBranches: Record<string, string[]> = {};
+  const localMergedByOid = new Map<string, string[]>();
+  const remoteMembership = new Map<string, { positive: Map<string, string>; negative: Map<string, string> }>();
+  for (const [base, oid] of baseOids) {
+    if (!oid) continue;
+    let localMerged = localMergedByOid.get(oid);
+    if (!localMerged) {
+      localMerged = (await gitProbe(invocation, ["branch", "--merged", oid, "--format=%(refname:short)"], main.root)).split(/\r?\n/).filter(Boolean);
+      localMergedByOid.set(oid, localMerged);
+    }
+    mergedLocalBranches[base] = localMerged;
+  }
+  if (input.remote) {
+    const remoteOids = new Set(remoteCandidates.flatMap(({ base }) => {
+      const oid = base === undefined ? "" : baseOids.get(base) ?? "";
+      return oid ? [oid] : [];
+    }));
+    for (const oid of remoteOids) {
+      const [positive, negative] = await Promise.all([
+        processReply(invocation, ["git", "for-each-ref", "--merged", oid, "--format=%(refname:short)%09%(objectname)", "refs/remotes/origin"], main.root),
+        processReply(invocation, ["git", "for-each-ref", "--no-merged", oid, "--format=%(refname:short)%09%(objectname)", "refs/remotes/origin"], main.root),
+      ]);
+      const membership = (reply: ProcessReply) => new Map(reply.exitCode === 0
+        ? reply.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => {
+          const [ref, tip] = line.split("\t");
+          return [ref!.replace(/^origin\//, ""), tip ?? ""] as const;
+        })
+        : []);
+      remoteMembership.set(oid, { positive: membership(positive), negative: membership(negative) });
+    }
+    for (const candidate of remoteCandidates) {
+      const oid = candidate.base === undefined ? "" : baseOids.get(candidate.base) ?? "";
+      if (!oid) continue;
+      const membership = remoteMembership.get(oid);
+      const positiveTip = membership?.positive.get(candidate.branch);
+      const negativeTip = membership?.negative.get(candidate.branch);
+      if (positiveTip === candidate.tip) remoteEvidence.push({ ...candidate, base: candidate.base!, ancestor: true, prMerged: null });
+      else if (negativeTip === candidate.tip) remoteEvidence.push({ ...candidate, base: candidate.base!, ancestor: false, prMerged: null });
     }
   }
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
-  const mergedLocalBranches: Record<string, string[]> = {};
-  for (const snapshot of snapshots) {
-    const base = snapshot.type === "iteration" ? snapshot.branch?.integration : snapshot.branch?.target;
-    if (base) {
-      const oid = await gitProbe(invocation, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`], main.root);
-      if (oid) mergedLocalBranches[base] = (await gitProbe(invocation, ["branch", "--merged", oid, "--format=%(refname:short)"], main.root)).split(/\r?\n/).filter(Boolean);
-    }
-  }
   const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence };
   const plan = planWorktreeCleanup(selected, facts).map((row) => unreadable && row.verdict === "remove" ? { ...row, verdict: "refuse" as const, reason: "cleanup.refuse.unreadable-snapshot" } : row);
   if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });

@@ -157,7 +157,7 @@ describe("roadmap CLI", () => {
     expect(bomRead.contentMarkdown).toBe(bomMarkdown);
     expect(bomRead.contentHash).toBe(createHash("sha256").update(Buffer.from(bomMarkdown, "utf8")).digest("hex"));
     const bomExport = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(bomExport.stdout).toBe(bomMarkdown);
+    expect(envelope(bomExport).data).toBe(bomMarkdown);
 
     const stale = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", source,
     "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "stale", ], dir);
