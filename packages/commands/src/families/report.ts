@@ -22,6 +22,31 @@ export function getReportCommandDefinitions(): readonly CommandDefinition<Report
     },
     input: reportInputSchema,
     output: commandEnvelopeSchema as CommandDefinition<ReportInput, ReportData>["output"],
+    decodeCliInput(input) {
+      const decoded = { ...input };
+      if (decoded.arguments !== undefined) {
+        try {
+          decoded.arguments = JSON.parse(String(decoded.arguments));
+        } catch {
+          return null;
+        }
+      }
+      if (decoded.versionOverrides !== undefined) {
+        try {
+          decoded.versionOverrides = JSON.parse(String(decoded.versionOverrides));
+        } catch {
+          return null;
+        }
+      }
+      if (decoded.exitStatus !== undefined) {
+        const value = String(decoded.exitStatus);
+        if (!/^-?\d+$/.test(value)) return null;
+        const status = Number(value);
+        if (!Number.isSafeInteger(status)) return null;
+        decoded.exitStatus = status;
+      }
+      return decoded;
+    },
     effects: ["validate"],
     description: "Create an offline, redacted issue-report draft.",
     async execute(input, context) {

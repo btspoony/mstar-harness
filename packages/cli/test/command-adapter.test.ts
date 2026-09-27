@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
-import { getCommandDefinitions } from "@mstar-harness/commands";
+import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
 import type { InvocationContext } from "@mstar-harness/commands";
 
@@ -112,6 +112,41 @@ describe("generated CLI adapter", () => {
     });
     expect(JSON.parse(titled.stdout).data.prompt).toContain("Title: \"CLI report\"");
   });
+  test("report decodes CLI JSON arguments into the bounded array handler", async () => {
+    const result = await run(["report", "--arguments", '["first","second"]']);
+    expect(result.status).toBe(0);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "report", status: "ok", code: "report.ok" });
+    expect(envelope.data.prompt).toContain('Arguments: ["first","second"]');
+    const mcp = await executeCommand("report", { arguments: ["first", "second"] }, context());
+    expect(envelope.data.prompt).toBe(mcp.data.prompt);
+
+    const tooLarge = await run(["report", "--arguments", JSON.stringify(["x".repeat(8193)])]);
+    expect(JSON.parse(tooLarge.stdout)).toMatchObject({
+      command: "report",
+      status: "refused",
+      code: "report.input-too-large",
+      details: { field: "arguments", limit: 8192 },
+    });
+
+    const invalid = await run(["report", "--arguments", "[not-json"]);
+    expect(invalid.status).toBe(2);
+    expect(JSON.parse(invalid.stdout)).toMatchObject({
+      command: "report",
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+    });
+  });
+
+  test("report rejects non-decimal or empty exit statuses", async () => {
+    for (const value of ["0x10", ""]) {
+      const result = await run(["report", "--exit-status", value]);
+      expect(result.status).toBe(2);
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    }
+  });
+
 
   test("report rejects unknown and file options as invalid input", async () => {
     for (const option of ["--unknown", "--file"]) {

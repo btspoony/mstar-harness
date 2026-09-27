@@ -110,6 +110,35 @@ describe("report command", () => {
     ]);
   });
 
+  test("redacts a PEM split across argument items without leaking or miscounting", () => {
+    const report = createReport({
+      arguments: [
+        "first item",
+        "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+        "-----END " + "PRIVATE KEY-----",
+        "```",
+        "last item",
+      ],
+    }, versions);
+    expect(report.prompt).not.toContain("BEGIN PRIVATE KEY");
+    expect(report.prompt).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
+    expect(report.redactions).toEqual([{ field: "arguments", count: 1 }]);
+    const lines = report.prompt.split("\n");
+    const opening = lines.findIndex((line) => /^`+$/.test(line));
+    expect(opening).toBeGreaterThanOrEqual(0);
+    expect(lines.at(-1)).toBe(lines[opening]);
+    expect(report.prompt).toContain("first item");
+    expect(report.prompt).toContain("last item");
+    expect(report.prompt).toContain("Arguments: ");
+    expect(report.prompt).toContain("````");
+  });
+
+  test("preserves argument arrays when no match crosses an item boundary", () => {
+    const report = createReport({ arguments: ["one", "two", "three"] }, versions);
+    expect(report.prompt).toContain('Arguments: ["one","two","three"]');
+    expect(report.redactions).toEqual([]);
+  });
+
   test("redactor counts distinct line/type findings once, including overlapping matches", () => {
     const report = createReport({ title: "sk-123456789012345678901234 sk-abcdefghijklmnopqrstuvwx" }, versions);
     expect(report.redactions).toEqual([{ field: "title", count: 1 }]);

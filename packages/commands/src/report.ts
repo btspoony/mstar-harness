@@ -112,10 +112,24 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
   const sanitized = new Map<string, string>();
   for (const [field, value] of fields) {
     const result = redact(field, value);
-    sanitized.set(field, result.value);
+    if (!(field === "arguments" && Array.isArray(input.arguments))) sanitized.set(field, result.value);
     if (result.count > 0) redactions.push({ field, count: result.count });
   }
   const safe = (field: string, fallback = "absent") => sanitized.get(field) ?? fallback;
+
+  let safeArguments: string | string[] | undefined;
+  if (typeof input.arguments === "string") {
+    safeArguments = safe("arguments");
+  } else if (input.arguments !== undefined) {
+    const itemResults = input.arguments.map((value) => redactSecrets(value));
+    const itemValues = itemResults.map((result) => result.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"));
+    const joined = input.arguments.join("\n");
+    const joinedResult = redactSecrets(joined);
+    const joinedValue = joinedResult.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]");
+    const itemJoinedValue = itemValues.join("\n");
+    const crossesBoundary = joinedValue !== itemJoinedValue;
+    safeArguments = crossesBoundary ? joinedValue : itemValues;
+  }
   const redactSurface = (field: string, value: string): string => {
     const result = redact(field, value);
     if (result.count > 0) redactions.push({ field, count: result.count });
@@ -132,16 +146,12 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
   const platformValue = input.platform === undefined
     ? versions.platform === null ? "unknown" : redactSurface("platform", versions.platform)
     : safe("platform");
-  const safeArguments = typeof input.arguments === "string"
-    ? safe("arguments")
-    : input.arguments === undefined
-      ? undefined
-      : input.arguments.map((value) => redactSecrets(value).text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"));
+  const argumentFenceValues = typeof safeArguments === "string" ? [safeArguments] : safeArguments ?? [];
+  const dataValues = [...sanitized.values(), ...Object.values(safeVersions), hostValue, platformValue, ...argumentFenceValues];
   const overrideValues = ["cli", "engine", "plugin"].flatMap((field) => {
     const value = sanitized.get(`versionOverrides.${field}`);
     return value === undefined ? [] : [[field, value] as const];
   });
-  const dataValues = [...sanitized.values(), ...Object.values(safeVersions), hostValue, platformValue];
   const fence = "`".repeat(Math.max(3, maxBacktickRun(dataValues) + 1));
   const lines = [
     "Review this draft before submission. Redaction is not a guarantee that every secret was removed.",

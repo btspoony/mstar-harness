@@ -48,16 +48,7 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
     for (const [key, value] of Object.entries(options)) {
       const option = definition.cli.options.find((entry) => optionKey(entry.flags) === key);
       if (option !== undefined && value !== undefined) {
-        let decoded = option.variadic && !Array.isArray(value) ? [value] : value;
-        if (definition.id === "report" && option.key === "exitStatus") decoded = Number(decoded);
-        if (definition.id === "report" && option.key === "versionOverrides") {
-          try {
-            decoded = JSON.parse(String(decoded));
-          } catch {
-            decoded = null;
-          }
-        }
-        input[option.key] = decoded;
+        input[option.key] = option.variadic && !Array.isArray(value) ? [value] : value;
       }
     }
   }
@@ -164,7 +155,13 @@ export function registerCliCommands(
       process.once("SIGTERM", onSigterm);
       const services: Array<{ close(): Promise<void> }> = [];
       try {
-        const envelope = await executeCommand(definition.id, collectInput(definition, args), {
+        const collected = collectInput(definition, args);
+        const input = definition.decodeCliInput?.(collected);
+        if (definition.decodeCliInput !== undefined && input === null) {
+          writeEnvelope(usageEnvelope(definition.id, "Invalid command input."));
+          return;
+        }
+        const envelope = await executeCommand(definition.id, input ?? collected, {
           ...baseContext,
           signal: controller.signal,
           effects: cliEffects(services),
