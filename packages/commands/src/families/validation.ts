@@ -43,6 +43,7 @@ import {
   resolveProcessHarnessDir,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -89,7 +90,7 @@ function rejected(id: string, result: GateResult, fallback: string): CommandEnve
   return refusal(id, first?.code ?? fallback, first?.message ?? fallback, { violations: result.violations });
 }
 function gateData(result: GateResult) { return { ok: result.ok, violations: result.violations }; }
-function absolute(cwd: string, input: string): string { return path.isAbsolute(input) ? input : path.resolve(cwd, input); }
+function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
@@ -155,7 +156,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
   try {
     switch (id) {
       case "dispatch.validate": {
-        const file = required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]");
+        const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
         const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
