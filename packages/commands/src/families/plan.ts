@@ -60,6 +60,7 @@ const transitions = [
 ] as const;
 
 export const PLAN_COORDINATOR_TRANSITIONS = transitions;
+class PlanInputError extends Error {}
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -71,31 +72,40 @@ function usage(id: string, message: string): CommandEnvelope<never> {
   return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
 function failure(id: string, error: unknown): CommandEnvelope<never> {
+  if (error instanceof PlanInputError) return usage(id, error.message);
   const message = error instanceof Error ? error.message : String(error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
-  return refused(id, code, message);
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return { ...refused(id, code, message), ...(details !== undefined ? { details } : {}) };
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;
 }
 function absolutePath(value: string | undefined, key: string): string {
-  if (value === undefined || !path.isAbsolute(value)) throw new Error(`${key} must be an absolute path`);
+  if (value === undefined || !path.isAbsolute(value)) throw new PlanInputError(`${key} must be an absolute path`);
   return value;
 }
 function expectedRevision(value: PlanInput["expect"]): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("expect must be a nonnegative integer revision");
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new PlanInputError("expect must be a nonnegative integer revision");
   return parsed;
 }
 function jsonObject(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${field} must be an object`);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new PlanInputError(`${field} must be an object`);
   return value as Record<string, unknown>;
 }
 function payloadFromFile(file: string | undefined, field: string): unknown {
   const absolute = absolutePath(file, field);
-  return JSON.parse(readFileSync(absolute, "utf8"));
+  try {
+    return JSON.parse(readFileSync(absolute, "utf8"));
+  } catch (error) {
+    throw new PlanInputError(error instanceof SyntaxError ? `${field} is not valid JSON` : `${field} payload file not found`);
+  }
 }
 function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation {
   switch (id) {
@@ -103,13 +113,14 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
       return { kind: "prepare", assignmentPath: absolutePath(input.assignment, "assignment") };
     case "plan.progress":
       return { kind: "progress", progress: jsonObject(input.progress ?? payloadFromFile(input.file, "file"), "progress") as never };
-    case "plan.issue-add":
+    case "plan.issue-add": {
       const entries = input.entries ?? payloadFromFile(input.file, "file");
-      if (!Array.isArray(entries)) throw new Error("entries must be a JSON array");
+      if (!Array.isArray(entries)) throw new PlanInputError("entries must be a JSON array");
       return { kind: "residual-add", entries: entries as never[] };
+    }
     case "plan.issue-close":
       if (input.issue === undefined || input.disposition === undefined || input.expectIssue === undefined) {
-        throw new Error("issue, disposition and expectIssue are required");
+        throw new PlanInputError("issue, disposition and expectIssue are required");
       }
       return {
         kind: "residual-close",
@@ -127,14 +138,14 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
     case "plan.complete":
     case "plan.repair-delivery-source":
     case "plan.reconcile":
-      if (input.handoff === undefined) throw new Error("handoff is required");
+      if (input.handoff === undefined) throw new PlanInputError("handoff is required");
       if (id === "plan.return") {
-        if (input.reason === undefined) throw new Error("reason is required for return");
+        if (input.reason === undefined) throw new PlanInputError("reason is required for return");
         return { kind: "return", handoffId: input.handoff, reason: input.reason };
       }
       return { kind: id.slice("plan.".length) as PlanCoordinationOperation["kind"], handoffId: input.handoff } as PlanCoordinationOperation;
     default:
-      throw new Error(`unsupported plan operation ${id}`);
+      throw new PlanInputError(`unsupported plan operation ${id}`);
   }
 }
 function pinSessionStore(sessionPath: string): void {
@@ -144,7 +155,15 @@ function pinSessionStore(sessionPath: string): void {
 async function execute(id: string, input: PlanInput, context: InvocationContext): Promise<CommandEnvelope<unknown>> {
   try {
     if (id === "plan.residual-add" || id === "plan.residual-close") {
-      return refused(id, "plan.verb-retired", `${id.replace(".", " ")}: retired; use the corresponding plan issue verb`);
+      const replacement = id.endsWith("residual-add") ? "issue-add" : "issue-close";
+      return refused(
+        id,
+        "plan.verb-retired",
+        `\`mstar plan ${replacement}\` is the replacement for \`${id.replace("plan.", "mstar plan ")}\``,
+      );
+    }
+    if (input.session !== undefined && input.sessionRef !== undefined) {
+      return usage(id, "pre-activation and active transports are disjoint");
     }
     if (id === "plan.bind") {
       const cwd = context.cwd;
@@ -193,6 +212,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       }
       let bindInput: BindPlanSessionInput;
       if (input.resume !== undefined) {
+        if (context.sessionId !== undefined || input.harness !== undefined) {
+          return usage(id, "--resume accepts no --session-id or --harness");
+        }
         const resumePath = absolutePath(input.resume, "resume");
         pinSessionStore(resumePath);
         bindInput = { resumePath, cwd };
