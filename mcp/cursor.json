@@ -2,7 +2,7 @@
   "mcpServers": {
     "morning-star": {
       "command": "node",
-      "args": ["${CURSOR_PLUGIN_ROOT}/dist/mcp/stdio.js"]
+      "args": ["${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js"]
     }
   }
 }

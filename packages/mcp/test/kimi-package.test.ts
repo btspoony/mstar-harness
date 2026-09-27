@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const pluginRoot = path.join(repoRoot, "packages/mcp/dist/plugins/kimi");
+const pluginRoot = repoRoot;
 
 // Supported loader pin: kimi-code 0.41.0, MoonshotAI/kimi-code docs/en/customization/plugins.md
 // at @moonshot-ai/kimi-code@0.41.0, "MCP Servers in Plugins". MCP accepts plugin-root ./ paths
@@ -32,8 +32,8 @@ test("Kimi package emits a plugin-local launcher and server config", () => {
 
   assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, "mcp/kimi.json"), "utf8")), config);
   assert.ok(existsSync(path.join(pluginRoot, "mcp/kimi-launcher.mjs")), "Kimi package must include its module-relative launcher");
-  assert.ok(existsSync(path.join(pluginRoot, "dist/mcp/stdio.js")), "Kimi package must contain its stdio bundle");
-  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
+  assert.ok(existsSync(path.join(pluginRoot, "mcp/bundles/kimi/dist/mcp/stdio.js")), "Kimi package must contain its stdio bundle");
+  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "mcp/bundles/kimi/dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
   assert.equal(buildInfo.hostTarget, "kimi");
 
   const runtime = JSON.parse(readFileSync(path.join(repoRoot, "packages/mcp/package.json"), "utf8")) as { engines: { node: string } };

@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const serverPath = path.join(pluginRoot, "dist/mcp/stdio.js");
+const serverPath = path.join(pluginRoot, "mcp/bundles/kimi/dist/mcp/stdio.js");
 const server = spawn(process.execPath, [serverPath], { cwd: pluginRoot, stdio: "inherit" });
 server.once("error", (error) => {
   console.error(`kimi mcp launcher: ${error.message}`);

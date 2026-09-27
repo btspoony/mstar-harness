@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const pluginRoot = path.join(repoRoot, "packages/mcp/dist/plugins/zcode");
+const pluginRoot = repoRoot;
 
 // Supported loader pin: ZCode 3.10.2, official https://zcode.net.cn/en/docs/plugin
 // and https://zcode.net.cn/en/docs/mcp-services (docs sitemap last-modified 2026-09-03).
@@ -17,7 +17,7 @@ test("ZCode package emits the plugin-root MCP config used by its plugin manifest
   assert.deepEqual(config.mcpServers["morning-star"], {
     type: "stdio",
     command: "node",
-    args: ["${ZCODE_PLUGIN_ROOT}/dist/mcp/stdio.js"],
+    args: ["${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js"],
   });
 
   const manifest = JSON.parse(readFileSync(path.join(repoRoot, ".zcode-plugin/plugin.json"), "utf8"));
@@ -30,8 +30,8 @@ test("ZCode package emits the plugin-root MCP config used by its plugin manifest
   assert.equal(build.status, 0, `ZCode package build failed: ${build.stderr}`);
 
   assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, "mcp/zcode.json"), "utf8")), config);
-  assert.ok(existsSync(path.join(pluginRoot, "dist/mcp/stdio.js")), "ZCode package must contain its stdio bundle");
-  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
+  assert.ok(existsSync(path.join(pluginRoot, "mcp/bundles/zcode/dist/mcp/stdio.js")), "ZCode package must contain its stdio bundle");
+  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "mcp/bundles/zcode/dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
   assert.equal(buildInfo.hostTarget, "zcode");
 
   const runtime = JSON.parse(readFileSync(path.join(repoRoot, "packages/mcp/package.json"), "utf8")) as { engines: { node: string } };

@@ -124,6 +124,11 @@ jobs:
       - name: ZCode hooks bundle freshness
         run: bun run engine:build && bun run hooks:build && git diff --exit-code -- hooks/
 
+      # Config-only MCP plugin roots are the repository checkout and have no
+      # package build step; their committed bundles must stay byte-for-byte fresh.
+      - name: MCP plugin bundle freshness
+        run: bun run engine:build && bun run mcp:build && git diff --exit-code -- mcp/bundles/
+
       # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
       # whose static graph reaches src/dashboard/server.ts ->
       # src/dashboard/assets.generated.ts. That module is gitignored and emitted

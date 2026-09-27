@@ -3,7 +3,7 @@
     "morning-star": {
       "type": "stdio",
       "command": "node",
-      "args": ["${ZCODE_PLUGIN_ROOT}/dist/mcp/stdio.js"]
+      "args": ["${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js"]
     }
   }
 }

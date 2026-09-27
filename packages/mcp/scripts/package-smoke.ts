@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
@@ -22,7 +22,13 @@ type Target = (typeof targets)[number];
 function packageRoot(target: Target): string {
   return target === "omp" || target === "opencode" || target === "dsh"
     ? path.join(repoRoot, "packages", target)
-    : path.join(repoRoot, "packages", "mcp", "dist", "plugins", target);
+    : repoRoot;
+}
+
+function outputDir(target: Target, root: string): string {
+  return target === "omp" || target === "opencode" || target === "dsh"
+    ? path.join(root, "mcp")
+    : path.join(root, "mcp", "bundles", target, "dist", "mcp");
 }
 
 function parseTarget(argv: string[]): Target {
@@ -38,59 +44,56 @@ async function main(): Promise<void> {
     cwd: os.tmpdir(),
     encoding: "utf8",
   });
-  assert.equal(build.status, 0, `package build failed: ${build.stderr}`);
+  assert.equal(build.status, 0, `package build failed: ${build.stderr || build.stdout}`);
   const root = packageRoot(target);
-  const outputDir = target === "omp" || target === "opencode" || target === "dsh"
-    ? path.join(root, "mcp")
-    : path.join(root, "dist/mcp");
-  const packagedBundle = path.join(outputDir, "stdio.js");
-  const infoPath = path.join(outputDir, "build-info.json");
+  const output = outputDir(target, root);
+  const packagedBundle = path.join(output, "stdio.js");
+  const infoPath = path.join(output, "build-info.json");
   const info = JSON.parse(readFileSync(infoPath, "utf8")) as { hostTarget?: string };
   assert.equal(info.hostTarget, target, "build metadata must identify its target");
 
   const unpackedRoot = mkdtempSync(path.join(os.tmpdir(), "mcp-unpacked-package-"));
-  const unpackedOutput = path.join(unpackedRoot, "dist/mcp");
-  mkdirSync(unpackedOutput, { recursive: true });
-  cpSync(packagedBundle, path.join(unpackedOutput, "stdio.js"));
-  cpSync(infoPath, path.join(unpackedOutput, "build-info.json"));
   let command = process.execPath;
-  let args = [path.join(unpackedOutput, "stdio.js")];
+  let args = [packagedBundle];
+  let cwd = mkdtempSync(path.join(os.tmpdir(), "mcp-foreign-cwd-"));
   let childEnv: NodeJS.ProcessEnv = process.env;
   let fixtureRoot: string | undefined;
   let workflowToken = "";
   const workflowId = `${target}-package-smoke`;
   const planId = `${target}-package-smoke-plan`;
   if (target === "cursor" || target === "codex" || target === "kimi" || target === "zcode") {
-    const configPath = target === "cursor"
-      ? path.join(root, "mcp/cursor.json")
-      : target === "codex" ? path.join(root, "mcp.json")
-        : path.join(root, "mcp", `${target}.json`);
+    const configPath = path.join(root, "mcp", `${target}.json`);
+    const configRelativePath = path.join("mcp", `${target}.json`);
     const config = JSON.parse(readFileSync(configPath, "utf8")) as {
       mcpServers: Record<string, { command: string; args: string[]; cwd?: string }>;
     };
     const serverConfig = config.mcpServers["morning-star"];
     assert.ok(serverConfig, `${target} MCP config must declare morning-star`);
-    const unpackedConfigDir = path.join(unpackedRoot, "mcp");
-    mkdirSync(unpackedConfigDir, { recursive: true });
-    if (target === "cursor") {
-      cpSync(configPath, path.join(unpackedConfigDir, "cursor.json"));
-      args = serverConfig.args.map((argument) => argument.replaceAll("${CURSOR_PLUGIN_ROOT}", unpackedRoot));
-      command = serverConfig.command;
-    } else if (target === "codex") {
-      cpSync(path.join(root, "plugin.json"), path.join(unpackedRoot, "plugin.json"));
-      cpSync(configPath, path.join(unpackedRoot, "mcp.json"));
-      args = serverConfig.args.map((argument) => argument.replaceAll("${PLUGIN_ROOT}", unpackedRoot));
-      command = serverConfig.command;
-    } else if (target === "kimi") {
+    const unpackedConfigPath = path.join(unpackedRoot, configRelativePath);
+    mkdirSync(path.dirname(unpackedConfigPath), { recursive: true });
+    cpSync(configPath, unpackedConfigPath);
+
+    const unpackedOutput = path.join(unpackedRoot, "mcp", "bundles", target, "dist", "mcp");
+    mkdirSync(unpackedOutput, { recursive: true });
+    cpSync(packagedBundle, path.join(unpackedOutput, "stdio.js"));
+    cpSync(infoPath, path.join(unpackedOutput, "build-info.json"));
+    const resolvedExecutable = path.join(unpackedOutput, "stdio.js");
+    assert.ok(existsSync(resolvedExecutable), `${target} manifest-resolved executable must exist before spawn`);
+
+    if (target === "kimi") {
       assert.equal(serverConfig.cwd, "./", "Kimi must start the server from inside the plugin root");
-      cpSync(configPath, path.join(unpackedConfigDir, "kimi.json"));
-      cpSync(path.join(root, "mcp/kimi-launcher.mjs"), path.join(unpackedConfigDir, "kimi-launcher.mjs"));
+      const launcher = path.join(root, "mcp/kimi-launcher.mjs");
+      const unpackedLauncher = path.join(unpackedRoot, "mcp/kimi-launcher.mjs");
+      cpSync(launcher, unpackedLauncher);
       command = path.resolve(unpackedRoot, serverConfig.command);
       args = serverConfig.args;
+      cwd = unpackedRoot;
     } else {
-      cpSync(configPath, path.join(unpackedConfigDir, "zcode.json"));
-      args = serverConfig.args.map((argument) => argument.replaceAll("${ZCODE_PLUGIN_ROOT}", unpackedRoot));
+      const rootVariable = target === "cursor" ? "${CURSOR_PLUGIN_ROOT}"
+        : target === "codex" ? "${PLUGIN_ROOT}" : "${ZCODE_PLUGIN_ROOT}";
+      assert.deepEqual(serverConfig.args, [`${rootVariable}/mcp/bundles/${target}/dist/mcp/stdio.js`]);
       command = serverConfig.command;
+      args = [resolvedExecutable];
     }
     fixtureRoot = mkdtempSync(path.join(os.tmpdir(), `${target}-mcp-fixture-`));
     const harnessDir = path.join(fixtureRoot, ".mstar");
@@ -133,8 +136,7 @@ async function main(): Promise<void> {
     }
     childEnv = { ...process.env, MSTAR_HARNESS_DIR: harnessDir };
   }
-  const foreignCwd = mkdtempSync(path.join(os.tmpdir(), "mcp-foreign-cwd-"));
-  const child = spawn(command, args, { cwd: foreignCwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
   let stderr = "";
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
@@ -215,7 +217,7 @@ async function main(): Promise<void> {
   } finally {
     lines.close();
     child.kill();
-    rmSync(foreignCwd, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
     rmSync(unpackedRoot, { recursive: true, force: true });
     if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
   }

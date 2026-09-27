@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const pluginRoot = path.join(repoRoot, "packages/mcp/dist/plugins/codex");
+const pluginRoot = repoRoot;
 
 test("Codex package emits portable root manifests and the bundled Node server", () => {
   const pluginConfig = JSON.parse(readFileSync(path.join(repoRoot, "mcp/codex-plugin.json"), "utf8"));
@@ -19,11 +19,11 @@ test("Codex package emits portable root manifests and the bundled Node server", 
   assert.deepEqual(mcpConfig.mcpServers["morning-star"], {
     type: "stdio",
     command: "node",
-    args: ["${PLUGIN_ROOT}/dist/mcp/stdio.js"],
+    args: ["${PLUGIN_ROOT}/mcp/bundles/codex/dist/mcp/stdio.js"],
   });
-
   const compatibilityManifest = JSON.parse(readFileSync(path.join(repoRoot, ".codex-plugin/plugin.json"), "utf8"));
   assert.equal(compatibilityManifest.mcpServers, "./mcp/codex.json");
+
 
   const build = spawnSync(process.execPath, [path.join(repoRoot, "scripts/build-mcp-plugins.ts"), "--target", "codex"], {
     cwd: os.tmpdir(),
@@ -31,10 +31,9 @@ test("Codex package emits portable root manifests and the bundled Node server", 
   });
   assert.equal(build.status, 0, `Codex package build failed: ${build.stderr}`);
 
-  assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, "plugin.json"), "utf8")), pluginConfig);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, "mcp.json"), "utf8")), mcpConfig);
-  assert.ok(existsSync(path.join(pluginRoot, "dist/mcp/stdio.js")), "Codex package must contain its stdio bundle");
-  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
+  assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, "mcp/codex.json"), "utf8")), mcpConfig);
+  assert.ok(existsSync(path.join(pluginRoot, "mcp/bundles/codex/dist/mcp/stdio.js")), "Codex package must contain its stdio bundle");
+  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "mcp/bundles/codex/dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
   assert.equal(buildInfo.hostTarget, "codex");
 
   const runtime = JSON.parse(readFileSync(path.join(repoRoot, "packages/mcp/package.json"), "utf8")) as { engines: { node: string } };

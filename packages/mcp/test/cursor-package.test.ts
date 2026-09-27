@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const pluginRoot = path.join(repoRoot, "packages/mcp/dist/plugins/cursor");
+const pluginRoot = repoRoot;
 
 test("Cursor plugin points to its packaged MCP config and bundled Node server", () => {
   const manifest = JSON.parse(readFileSync(path.join(repoRoot, ".cursor-plugin/plugin.json"), "utf8")) as {
@@ -20,7 +20,7 @@ test("Cursor plugin points to its packaged MCP config and bundled Node server", 
   };
   assert.deepEqual(sourceConfig.mcpServers["morning-star"], {
     command: "node",
-    args: ["${CURSOR_PLUGIN_ROOT}/dist/mcp/stdio.js"],
+    args: ["${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js"],
   });
 
   const build = spawnSync(process.execPath, [path.join(repoRoot, "scripts/build-mcp-plugins.ts"), "--target", "cursor"], {
@@ -30,9 +30,9 @@ test("Cursor plugin points to its packaged MCP config and bundled Node server", 
   assert.equal(build.status, 0, `Cursor package build failed: ${build.stderr}`);
 
   const packagedConfig = JSON.parse(readFileSync(path.join(pluginRoot, "mcp/cursor.json"), "utf8"));
-  assert.deepEqual(packagedConfig, sourceConfig, "Cursor build must include the plugin-owned MCP config");
-  assert.ok(existsSync(path.join(pluginRoot, "dist/mcp/stdio.js")), "Cursor package must include its stdio bundle");
-  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
+  assert.deepEqual(packagedConfig, sourceConfig, "Cursor plugin config must match its committed manifest path");
+  assert.ok(existsSync(path.join(pluginRoot, "mcp/bundles/cursor/dist/mcp/stdio.js")), "Cursor package must contain its stdio bundle");
+  const buildInfo = JSON.parse(readFileSync(path.join(pluginRoot, "mcp/bundles/cursor/dist/mcp/build-info.json"), "utf8")) as { hostTarget?: string };
   assert.equal(buildInfo.hostTarget, "cursor");
 
   const runtimeFloor = JSON.parse(readFileSync(path.join(repoRoot, "packages/mcp/package.json"), "utf8")) as {
