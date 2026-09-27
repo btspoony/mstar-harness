@@ -12,7 +12,7 @@ const ROOT = mkdtempSync(join(tmpdir(), "mstar-roadmap-cli-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 type Result = { status: number | null; stdout: string; stderr: string };
-type CliEnvelope = { ok: boolean; code?: string; data?: unknown };
+type CliEnvelope = { command: string; status: "ok" | "refused" | "usage"; code: string; exitCode: number; message?: string; data?: unknown };
 
 function run(args: string[], cwd: string): Result {
   const env = { ...process.env };
@@ -29,12 +29,10 @@ function object(value: unknown): Record<string, unknown> {
 
 function envelope(result: Result): CliEnvelope {
   const value = object(JSON.parse(result.stdout));
-  if (typeof value.ok !== "boolean") throw new Error("expected a CLI envelope with boolean ok");
-  return {
-    ok: value.ok,
-    ...(typeof value.code === "string" ? { code: value.code } : {}),
-    ...(Object.hasOwn(value, "data") ? { data: value.data } : {}),
-  };
+  if (typeof value.command !== "string" || typeof value.status !== "string" || typeof value.code !== "string" || typeof value.exitCode !== "number") {
+    throw new Error("expected a command response envelope");
+  }
+  return value as unknown as CliEnvelope;
 }
 
 function data(result: Result): Record<string, unknown> {
@@ -70,17 +68,17 @@ describe("roadmap CLI", () => {
     expect(help.stdout).toContain("replace");
     expect(help.stdout).toContain("export");
 
-    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source, "--json"], dir);
+    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
     expect(preview.status).toBe(0);
     const reviewed = data(preview);
     expect(reviewed.expectedRoadmapRevision).toBe("absent");
     expect(await readRoadmapAuthority(context, "proj-roadmap")).toEqual(revisionBefore);
     writeFileSync(reviewFile, `${preview.stdout}\n`);
 
-    const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-proof", "--json"], dir);
+    const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-proof"], dir);
     expect(applied.status).toBe(0);
     const receipt = data(applied);
-    const shown = data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir));
+    const shown = data(run(["roadmap", "show", "--project", "proj-roadmap"], dir));
     const shownRoadmap = object(shown.roadmap);
     const derived = object(shown.content);
     expect(shownRoadmap.contentMarkdown).toBe(MARKDOWN);
@@ -97,8 +95,8 @@ describe("roadmap CLI", () => {
     });
 
     const markdown = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(markdown.stdout).toBe(MARKDOWN);
-    const transport = data(run(["roadmap", "export", "--project", "proj-roadmap", "--format", "json", "--json"], dir));
+    expect(envelope(markdown).data).toBe(MARKDOWN);
+    const transport = data(run(["roadmap", "export", "--project", "proj-roadmap", "--format", "json"], dir));
     expect(transport).toEqual({
       version: 1,
       projectId: "proj-roadmap",
@@ -116,21 +114,21 @@ describe("roadmap CLI", () => {
     const sourceBytes = Buffer.from(bomMarkdown, "utf8");
     writeFileSync(source, sourceBytes);
 
-    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source, "--json"], dir);
+    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
     expect(preview.status).toBe(0);
     const reviewed = data(preview);
     expect(reviewed.sourceHash).toBe(createHash("sha256").update(sourceBytes).digest("hex"));
     writeFileSync(reviewFile, `${JSON.stringify(reviewed)}\n`);
 
-    const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-bom", "--json"], dir);
+    const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-bom"], dir);
     expect(applied.status).toBe(0);
     const receipt = data(applied);
-    const shown = object(data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir)).roadmap);
+    const shown = object(data(run(["roadmap", "show", "--project", "proj-roadmap"], dir)).roadmap);
     expect(shown.contentMarkdown).toBe(bomMarkdown);
     expect(shown.contentHash).toBe(reviewed.sourceHash);
     expect(shown.contentHash).toBe(receipt.contentHash);
     const exported = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(Buffer.from(exported.stdout, "utf8")).toEqual(sourceBytes);
+    expect(Buffer.from(envelope(exported).data as string, "utf8")).toEqual(sourceBytes);
   });
 
   test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
@@ -138,50 +136,44 @@ describe("roadmap CLI", () => {
     const source = join(dir, "roadmap.md");
     const reviewFile = join(dir, "review.json");
     writeFileSync(source, MARKDOWN);
-    const review = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source, "--json"], dir);
+    const review = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
     writeFileSync(reviewFile, `${JSON.stringify(data(review))}\n`);
     writeFileSync(source, `${MARKDOWN}\nchanged after review\n`);
-    const drift = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "drift", "--json"], dir);
+    const drift = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "drift"], dir);
     expect(drift.status).toBe(1);
     expect(envelope(drift).code).toBe("roadmap.source-drift");
 
     writeFileSync(source, MARKDOWN);
-    const created = run([
-      "roadmap", "replace", "--project", "proj-roadmap", "--file", source,
-      "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "create", "--json",
-    ], dir);
+    const created = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", source,
+    "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "create", ], dir);
     expect(created.status).toBe(0);
     const bomMarkdown = `\uFEFF${MARKDOWN}`;
     const bomFile = join(dir, "bom-roadmap.md");
     writeFileSync(bomFile, bomMarkdown);
-    const replaced = run([
-      "roadmap", "replace", "--project", "proj-roadmap", "--file", bomFile,
-      "--expect-project", "1", "--expect-roadmap", "1", "--operation", "replace-bom", "--json",
-    ], dir);
+    const replaced = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", bomFile,
+    "--expect-project", "1", "--expect-roadmap", "1", "--operation", "replace-bom", ], dir);
     expect(replaced).toMatchObject({ status: 0 });
-    const bomRead = object(data(run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir)).roadmap);
+    const bomRead = object(data(run(["roadmap", "show", "--project", "proj-roadmap"], dir)).roadmap);
     expect(bomRead.contentMarkdown).toBe(bomMarkdown);
     expect(bomRead.contentHash).toBe(createHash("sha256").update(Buffer.from(bomMarkdown, "utf8")).digest("hex"));
     const bomExport = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     expect(bomExport.stdout).toBe(bomMarkdown);
 
-    const stale = run([
-      "roadmap", "replace", "--project", "proj-roadmap", "--file", source,
-      "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "stale", "--json",
-    ], dir);
+    const stale = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", source,
+    "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "stale", ], dir);
     expect(stale.status).toBe(1);
     expect(envelope(stale).code).toBe("roadmap.revision-conflict");
   });
 
   test("known project absence and store refusal are distinct", async () => {
     const { dir } = await fixture("absent-");
-    const absent = run(["roadmap", "show", "--project", "proj-roadmap", "--json"], dir);
+    const absent = run(["roadmap", "show", "--project", "proj-roadmap"], dir);
     expect(absent.status).toBe(0);
     expect(data(absent).roadmap).toBeNull();
     const missingRoot = join(ROOT, "missing-store");
     mkdirSync(missingRoot, { recursive: true });
-    const refused = run(["roadmap", "show", "--project", "proj-roadmap", "--harness", join(missingRoot, ".mstar"), "--json"], dir);
+    const refused = run(["roadmap", "show", "--project", "proj-roadmap", "--harness", join(missingRoot, ".mstar")], dir);
     expect(refused.status).toBe(1);
-    expect(envelope(refused).ok).toBe(false);
+    expect(envelope(refused)).toMatchObject({ command: "roadmap.show", status: "refused" });
   });
 });

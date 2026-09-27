@@ -87,13 +87,15 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
             continue;
           }
         } catch {
+          // Keep malformed JSON-looking input intact so the command decoder rejects it.
           continue;
         }
       }
       decoded[option.key] = value.split(",").map((entry) => entry.trim()).filter(Boolean);
       continue;
     }
-    if (typeof value !== "string" || !hasType(schema, "number") || value.trim() === "") continue;
+    if (typeof value !== "string" || !hasType(schema, "number")) continue;
+    if (!/^-?(?:\d+|\d*\.\d+)$/.test(value)) continue;
     const number = Number(value);
     if (Number.isFinite(number)) decoded[option.key] = number;
   }
@@ -142,8 +144,11 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
       const flags = cliOptionFlags(definition, option);
-      if (option.required) command.requiredOption(flags, option.key);
-      else command.option(flags, option.key);
+      const appendValue = option.variadic
+        ? (value: string, previous: string[] = []) => [...previous, value]
+        : undefined;
+      if (option.required) command.requiredOption(flags, option.key, appendValue);
+      else command.option(flags, option.key, appendValue);
     }
   }
 }

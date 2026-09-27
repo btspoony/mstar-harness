@@ -94,7 +94,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     command({
       id: "persist.write",
       cli: {
-        path: ["persist"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }],
+        path: ["persist", "write"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }],
         options: [
           { key: "key", flags: "--key <key>", required: true },
           { key: "input", flags: "--input <json>", required: false },
