@@ -55,14 +55,6 @@ import { serializeExecutionValue } from "../packages/engine/src/index.ts";
 
 const SCRIPT = join(import.meta.dir, "execution-consumer-manifest.ts");
 const INSTRUCTION_ROOTS = ["skills", "commands", "agents"] as const;
-const OMP_MIRROR_TOOLS = [
-  "mstar_dispatch_validate",
-  "mstar_iteration_gate",
-  "mstar_lease_verify",
-  "mstar_path_resolve",
-  "mstar_status_validate",
-  "mstar_worktree_check",
-] as const;
 
 interface FixtureOptions {
   /** Add a self-contained in-repo instruction symlink to the `skills` corpus. */
@@ -214,11 +206,6 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/omp/dist/hooks/pre/mstar-gates.js", "// omp pre hook\n");
   write(root, "packages/omp/dist/extensions/model-handoff.js", "// omp handoff\n");
   write(root, "packages/omp/dist/extensions/phase2-orchestration.js", "// omp phase2\n");
-  for (const tool of OMP_MIRROR_TOOLS) {
-    write(root, `packages/omp/dist/tools/${tool}/index.js`, `// omp tool ${tool}\n`);
-    // Build script mirrors dist/tools/<name>/index.js to tools/<name>.js.
-    mirrorFile(root, `packages/omp/dist/tools/${tool}/index.js`, `packages/omp/tools/${tool}.js`);
-  }
   mirrorFile(
     root,
     "packages/omp/dist/hooks/pre/mstar-gates.js",
@@ -353,7 +340,6 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/omp/dist",
       "packages/omp/extensions",
       "packages/omp/hooks",
-      "packages/omp/tools",
     ]);
 
     // The public entry surface includes DSh's `./client` build output — which is
@@ -434,8 +420,8 @@ describe("execution-consumer-manifest — canonical collection", () => {
     expectRefusal(() => collectExecutionConsumerManifest(emptyArtifact), "consumer.generated-empty");
 
     const emptyTree = buildFixture();
-    rmSync(join(emptyTree, "packages/omp/tools"), { recursive: true, force: true });
-    mkdirSync(join(emptyTree, "packages/omp/tools"), { recursive: true });
+    rmSync(join(emptyTree, "packages/omp/extensions"), { recursive: true, force: true });
+    mkdirSync(join(emptyTree, "packages/omp/extensions"), { recursive: true });
     expectRefusal(() => collectExecutionConsumerManifest(emptyTree), "consumer.generated-empty");
 
     // The DSh client bundle is deliberately OUTSIDE the manifest's byte-pinned

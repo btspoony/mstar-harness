@@ -365,23 +365,16 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "packages/omp/tsconfig.json",
     ],
     // `dist` plus the package-root convention mirrors the build produces with
-    // `cp -R` (hooks/tools/extensions) — the plugin loads the mirrors.
+    // `cp -R` (hooks/extensions) — the plugin loads the mirrors.
     generatedTrees: [
       { root: "packages/omp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/extensions", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/hooks", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/tools", exclude: BUILD_OUTPUT_EXCLUSIONS },
     ],
     generatedFiles: [
       "packages/omp/dist/extensions/model-handoff.js",
       "packages/omp/dist/extensions/phase2-orchestration.js",
       "packages/omp/dist/hooks/pre/mstar-gates.js",
-      "packages/omp/dist/tools/mstar_dispatch_validate/index.js",
-      "packages/omp/dist/tools/mstar_iteration_gate/index.js",
-      "packages/omp/dist/tools/mstar_lease_verify/index.js",
-      "packages/omp/dist/tools/mstar_path_resolve/index.js",
-      "packages/omp/dist/tools/mstar_status_validate/index.js",
-      "packages/omp/dist/tools/mstar_worktree_check/index.js",
       // `bundle-assets` copies the omp plugin manifest to the package root.
       "packages/omp/plugin.json",
     ],
