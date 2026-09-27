@@ -84,7 +84,7 @@ describe("mstar dispatch validate — built bundle (bun runtime) with non-ASCII 
     withAssignment(EM_DASH_ASSIGNMENT, (file) => {
       const result = runBundle(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
+      expect(result.stdout).toBe('{"version":1,"command":"dispatch.validate","status":"ok","code":"dispatch.validate.ok","exitCode":0,"data":{"ok":true,"violations":[]}}\n');
       expect(result.stderr).not.toContain("branch-policy-missing-reason");
       expect(result.stderr).not.toContain("dispatch.default-branch.protected");
     });
@@ -95,7 +95,7 @@ describe("mstar dispatch validate — built bundle (bun runtime) with non-ASCII 
     withAssignment(ascii, (file) => {
       const result = runBundle(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
+      expect(result.stdout).toBe('{"version":1,"command":"dispatch.validate","status":"ok","code":"dispatch.validate.ok","exitCode":0,"data":{"ok":true,"violations":[]}}\n');
     });
   });
 
@@ -104,7 +104,7 @@ describe("mstar dispatch validate — built bundle (bun runtime) with non-ASCII 
     withAssignment(enDash, (file) => {
       const result = runBundle(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
+      expect(result.stdout).toBe('{"version":1,"command":"dispatch.validate","status":"ok","code":"dispatch.validate.ok","exitCode":0,"data":{"ok":true,"violations":[]}}\n');
     });
   });
 });
@@ -115,14 +115,14 @@ describe("mstar dispatch validate — fix-hint UTF-8 rendering in the built bund
   // path guarded by the dist escaper — the regex-parsing path above is fixed
   // by source-level \uXXXX escapes alone, so this assertion is the one that
   // goes red if `escape-dist-literals.ts` is removed from the CLI build.
-  test("missing-reason violation prints the literal em-dash fix hint to stderr", () => {
+  test("missing-reason violation keeps the em-dash fix hint in the JSON response", () => {
     const missingReason = EM_DASH_ASSIGNMENT.replace("**Branch policy**: direct on main — hotfix: fix now", "**Branch policy**: direct on main");
     withAssignment(missingReason, (file) => {
       const result = runBundle(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-policy-missing-reason");
-      expect(result.stderr).toContain('append "— <reason>" after the branch name');
-      expect(result.stderr).not.toContain("â");
+      expect(result.stdout).toContain('"assignment.field.branch-policy-missing-reason"');
+      expect(result.stdout).toContain('append \\"— <reason>\\" after the branch name');
+      expect(result.stdout).not.toContain("â");
     });
   });
 });
