@@ -208,7 +208,9 @@
       "name": "@mstar-harness/omp",
       "version": "3.11.2",
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/mcp": "workspace:*",
         "@oh-my-pi/pi-coding-agent": "18.3.0",
       },
       "peerDependencies": {
