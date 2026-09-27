@@ -105,11 +105,10 @@ jobs:
             exit 1
           fi
 
-      # Root typecheck resolves @mstar-harness/engine via packages/engine/dist
-      # (types: ./dist/index.d.ts), which is gitignored — build it first.
-      # The engine build is idempotent (rm -rf dist && bun build && bunx tsc).
-      - name: Build engine (declarations for typecheck)
-        run: bun run engine:build && bun run judgment:build
+      # Root typecheck resolves engine, commands, and MCP workspace exports
+      # through gitignored dist declarations; build the full dependency chain.
+      - name: Build engine and workspace declarations for typecheck
+        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build && bun run mcp:build
 
       - name: Typecheck
         run: bun run typecheck
