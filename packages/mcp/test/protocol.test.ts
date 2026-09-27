@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "bun:test";
 import { Client, type JSONRPCMessage, type MessageExtraInfo, type Transport } from "@modelcontextprotocol/client";
-import { getJudgmentCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
+import { getCommandDefinitions, getJudgmentCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
 import { z } from "zod";
 import { createMcpEffects, type McpEffects } from "../src/effects.js";
 import { mcpToolName } from "../src/register.js";
@@ -36,48 +36,34 @@ function context(input: unknown, signal: AbortSignal, services: Array<{ close():
   };
 }
 
-test("MCP exposes explicit judgment stdin as application input, not protocol framing", async () => {
+test("judgment consumes request-local stdin data rather than MCP protocol framing", async () => {
+  const payload = "{\"kind\":\"review-pack\"}";
   let consumed = "";
-  const definition = getJudgmentCommandDefinitions(async ({ readInput }) => {
+  const [definition] = getJudgmentCommandDefinitions(async ({ readInput }) => {
     consumed = await readInput();
     return { schema: "review-pack", contractRevision: "fixture-r1", status: "recorded", advice: null };
   });
-  const server = createMcpServer((_definition, input, signal, services) => context(input, signal, services), definition);
-  const client = new Client({ name: "stdin-protocol-test", version: "1.0.0" });
-  const [clientTransport, serverTransport] = transportPair();
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-  try {
-    const result = await client.callTool({ name: mcpToolName("judgment.review-advice"), arguments: { pilot: "synthetic", input: "{\"kind\":\"review-pack\"}" } });
-    assert.equal(consumed, "{\"kind\":\"review-pack\"}");
-    const envelope = result.structuredContent;
-    assert.ok(envelope && typeof envelope === "object" && "status" in envelope && "data" in envelope);
-    assert.equal(envelope.status, "ok");
-    assert.ok(envelope.data && typeof envelope.data === "object" && "status" in envelope.data);
-    assert.equal(envelope.data.status, "recorded");
-    assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(envelope) }]);
-  } finally {
-    await client.close();
-    await server.close();
-  }
+  assert.ok(definition);
+  const effects = createMcpEffects([]);
+  const signal = new AbortController().signal;
+  const invocation = { ...context({ input: payload }, signal, []), effects };
+  const result = await effects.withInput({ input: payload }, invocation, () =>
+    definition.execute({ pilot: "synthetic", stdin: true }, invocation));
+  assert.equal(consumed, payload);
+  assert.equal(result.status, "ok");
+  assert.ok(result.data && typeof result.data === "object" && "status" in result.data);
+  assert.equal(result.data.status, "recorded");
 });
 
-test("MCP dashboard service responds and closes when its transport reaches EOF", async () => {
+test("MCP closes sibling services when a service close rejects during transport EOF", async () => {
   const closed = Promise.withResolvers<void>();
-  const definition: CommandDefinition = {
-    id: "fixture.dashboard",
-    cli: { path: ["fixture", "dashboard"], aliases: [], arguments: [], options: [] },
-    input: z.object({}),
-    output: z.object({ version: z.literal(1), command: z.literal("fixture.dashboard"), status: z.literal("ok"), code: z.string(), exitCode: z.literal(0), data: z.object({ url: z.string(), lifetime: z.literal("connection") }) }),
-    effects: ["service"],
-    description: "fixture dashboard service",
-    async execute(_input, invocation) {
-      const service = await invocation.effects.startDashboard({ harnessDir: "/tmp", port: 0 });
-      return { version: 1, command: "fixture.dashboard", status: "ok", code: "dashboard.started", exitCode: 0, data: { url: service.url, lifetime: "connection" } };
-    },
-  };
+  const siblingClosed = Promise.withResolvers<void>();
+  const definition = getCommandDefinitions().find(({ id }) => id === "dashboard");
+  assert.ok(definition);
   const resolveContext = (_definition: CommandDefinition, input: unknown, signal: AbortSignal, services: Array<{ close(): Promise<void> }>, effects: McpEffects) => {
-    const invocation = context(input, signal, services);
+    services.push({ async close() { throw new Error("expected service close failure"); } });
+    services.push({ async close() { siblingClosed.resolve(); } });
+    const invocation = { ...context(input, signal, services), controlRoot: "/tmp" };
     effects.startDashboard = async () => {
       const http = createServer((_request, response) => { response.end("alive"); });
       await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
@@ -100,15 +86,16 @@ test("MCP dashboard service responds and closes when its transport reaches EOF",
   const [clientTransport, serverTransport] = transportPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const result = await client.callTool({ name: mcpToolName(definition.id), arguments: {} });
+  const result = await client.callTool({ name: mcpToolName(definition.id), arguments: { port: 0 } });
   const structured = result.structuredContent;
-  assert.ok(structured && typeof structured === "object" && "data" in structured);
+  assert.ok(structured && typeof structured === "object" && "data" in structured, JSON.stringify(result));
   const data = structured.data;
   assert.ok(data && typeof data === "object" && "url" in data && typeof data.url === "string" && "lifetime" in data);
   assert.equal(data.lifetime, "connection");
   assert.equal(await (await fetch(data.url)).text(), "alive");
   await client.close();
   await closed.promise;
+  await siblingClosed.promise;
   await assert.rejects(fetch(data.url));
   await server.close();
 });

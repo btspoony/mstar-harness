@@ -44,6 +44,7 @@ const FIXED_LIMITS: EvidenceLimits = {
   maxInputMs: 30000,
   maxSnapshotBytes: 2 * 1024 * 1024,
 };
+const MAX_CAPTURE_LOG_BYTES = FIXED_LIMITS.maxLogBytesPerStream;
 
 export function createMcpEffects(services: Array<{ close(): Promise<void> }>): McpEffects {
   const inputs = new AsyncLocalStorage<InputState>();
@@ -303,7 +304,7 @@ async function captureEvidence(requestPath: string, argv: readonly string[], inv
         cwd: context.featureCwd,
         env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
         signal: timeout.signal,
-      }, true);
+      }, true, MAX_CAPTURE_LOG_BYTES);
     } finally {
       clearTimeout(timer);
       invocation.signal.removeEventListener("abort", abortFromRequest);
@@ -340,7 +341,7 @@ function artifactFact(path: string): EvidenceArtifactFact {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) return { path: basename(path) as EvidenceArtifactFact["path"], state: "symlink", bytes: null, sha256: null };
     if (!stat.isFile()) return { path: basename(path) as EvidenceArtifactFact["path"], state: "other", bytes: null, sha256: null };
-    if (stat.size > MAX_STREAM_BYTES) return { path: basename(path) as EvidenceArtifactFact["path"], state: "regular", bytes: stat.size, sha256: null };
+    if (stat.size > MAX_CAPTURE_LOG_BYTES) return { path: basename(path) as EvidenceArtifactFact["path"], state: "regular", bytes: stat.size, sha256: null };
     const bytes = readFileSync(path);
     return { path: basename(path) as EvidenceArtifactFact["path"], state: "regular", bytes: bytes.byteLength, sha256: hash(bytes) };
   } catch (error) {
@@ -414,7 +415,7 @@ function verifyEvidence(request: VerifyRequest): EvidenceAssessment {
     reasons: integrity.ok ? ["target.absent"] : ["evidence.integrity"],
   };
 }
-function spawnBounded(request: ProcessRequest, allowTruncation = false): Promise<ProcessResult> {
+function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStreamBytes = MAX_STREAM_BYTES): Promise<ProcessResult> {
   if (request.signal.aborted) return Promise.reject(Object.assign(new Error("process admission cancelled"), { code: "command.cancelled" }));
   if (request.argv.length === 0) return Promise.reject(new TypeError("process argv must include an executable"));
   if (request.stdin !== undefined && Buffer.byteLength(request.stdin) > MAX_STREAM_BYTES) {
@@ -459,9 +460,9 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false): Promise
       const next = (which === "stdout" ? stdoutTotal : stderrTotal) + chunk.byteLength;
       if (which === "stdout") stdoutTotal = next;
       else stderrTotal = next;
-      const accepted = Math.min(chunk.byteLength, Math.max(0, MAX_STREAM_BYTES - (next - chunk.byteLength)));
+      const accepted = Math.min(chunk.byteLength, Math.max(0, maxStreamBytes - (next - chunk.byteLength)));
       if (accepted > 0) target.push(chunk.subarray(0, accepted));
-      if (next > MAX_STREAM_BYTES && !overflow) {
+      if (next > maxStreamBytes && !overflow) {
         overflow = true;
         terminate();
       }
@@ -492,7 +493,7 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false): Promise
       settled = true;
       cleanup();
       if (overflow && !allowTruncation) {
-        reject(Object.assign(new Error(`child ${stdoutTotal > MAX_STREAM_BYTES ? "stdout" : "stderr"} exceeded ${MAX_STREAM_BYTES} bytes`), { code: "command.effect-unavailable" }));
+        reject(Object.assign(new Error(`child ${stdoutTotal > maxStreamBytes ? "stdout" : "stderr"} exceeded ${maxStreamBytes} bytes`), { code: "command.effect-unavailable" }));
         return;
       }
       const stdoutBytes = Buffer.concat(stdout);

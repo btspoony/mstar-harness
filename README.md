@@ -184,6 +184,7 @@ The server registers the canonical non-installer commands as MCP tools; tool nam
 `sessionId` selects the main conversation session, not a spawned child-agent session. An optional `host` selects a supported host context; it is not a role or authority grant. Existing shared-handler workflow ownership, path, state-transition, and CAS checks still decide whether a request is allowed. A refusal keeps its stable command envelope and code (and is returned as an MCP tool error); callers should explain or resolve that refusal, not retry through a different identity or path. This documents the package contract, not an installed-host run.
 
 Examples are synthetic; this README does not claim an installed-host, browser, or live-service run.
+MCP-captured SDD evidence records are `stable:false`; collector parity with the CLI remains a documented cross-plan residual.
 
 ## Harness Workflow
 

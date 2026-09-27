@@ -140,7 +140,7 @@ test("MCP evidence capture gates the bound context, writes bounded logs and veri
       request: fixture.requestPath,
       argv: [process.execPath, "-e", "process.stdout.write('captured'); process.stderr.write('warning')"],
     });
-    assert.equal(captureEnvelope.status, "ok");
+    assert.equal(captureEnvelope.status, "ok", JSON.stringify(captureEnvelope));
     const captured = captureEnvelope.data as { exitCode: number; runDir: string; record: SddEvidenceRecord };
     assert.equal(captured.exitCode, 0);
     assert.equal(captured.record.state, "finished");
@@ -187,13 +187,23 @@ test("MCP evidence capture gates the bound context, writes bounded logs and veri
     const failedVerifyData = failedVerify.data as { integrity: { ok: boolean }; outcome: string };
     assert.equal(failedVerifyData.integrity.ok, true);
     assert.equal(failedVerifyData.outcome, "failed");
+    const boundedEnvelope = await execute(captureDefinition, {
+      request: fixture.requestPath,
+      argv: [process.execPath, "-e", "process.stdout.write(Buffer.alloc(8 * 1024 * 1024 + 1, 97))"],
+    });
+    assert.equal(boundedEnvelope.status, "error");
+    const bounded = boundedEnvelope.details as { runDir: string; record: SddEvidenceRecord };
+    assert.equal(bounded.record.logs.stdout.bytes, 8 * 1024 * 1024);
+    assert.equal(bounded.record.logs.stdout.truncated, true);
+    assert.equal(readFileSync(path.join(bounded.runDir, "stdout.log")).byteLength, 8 * 1024 * 1024);
+
 
     const blocked = await execute(captureDefinition, {
       request: fixture.requestPath, argv: [process.execPath, "-e", "process.stdout.write('must not launch')"],
     }, root);
     assert.equal(blocked.status, "refused");
     assert.match(blocked.message, /refused/);
-    assert.equal(existsSync(path.join(fixture.sddDir, "evidence")) && readdirSync(path.join(fixture.sddDir, "evidence")).length, 2);
+    assert.equal(existsSync(path.join(fixture.sddDir, "evidence")) && readdirSync(path.join(fixture.sddDir, "evidence")).length, 3);
   } finally {
     process.chdir(featureCwdBefore);
     rmSync(root, { recursive: true, force: true });

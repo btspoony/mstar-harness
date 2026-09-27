@@ -10,7 +10,12 @@ export function createMcpServer(
   const services: Array<{ close(): Promise<void> }> = [];
   const closeServices = async () => {
     const running = services.splice(0);
-    await Promise.all(running.map(({ close }) => close()));
+    const results = await Promise.allSettled(running.map(({ close }) => Promise.resolve().then(close)));
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error(`MCP service ${index + 1} close failed`, result.reason);
+      }
+    });
   };
   server.server.onclose = () => { void closeServices(); };
   const createRequestContext: ResolveContext = async (definition, input, signal, requestServices, effects) => {
