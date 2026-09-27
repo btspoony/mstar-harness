@@ -238,6 +238,26 @@ cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only
 
 Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
+## Installing the MCP tools
+
+Install the Morning Star plugin through the host's native plugin mechanism. Each plugin owns its MCP wiring and launches a bundled stdio server; after installation, MCP use does not require a global `mstar` CLI, `npx` at server launch, or a network fetch. Runtime floors below apply to the running host/plugin process.
+
+| Host | Native install | Plugin-owned MCP path and root resolution | Runtime |
+|------|----------------|------------------------------------------|---------|
+| omp | `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp --scope global`) | Native generated tools plus bundled `mcp/stdio.js`; the package resolves from its installed module URL, never consumer cwd. | Bun >=1.4.0 |
+| OpenCode | Install `@mstar-harness/opencode` using the OpenCode plugin entry in `opencode.json` (see [OpenCode manual install](#opencode)). | V1 plugin registers generated native tools and ships a package-relative MCP stdio peer. The supported `@opencode-ai/plugin` pin is **1.4.8**; the global-CLI route and `OPENCODE_EXECUTION_CLI` fallback are removed. | Node >=24.18.0; V1 only, no V2 migration. |
+| dsh | `dsh plugin --profile web add @mstar-harness/dsh` (or `npx @mstar-harness/cli init --target dsh`). The optional `dsh-llm-fallbacks` plugin is a separate install. | Native generated tools and bundled `mcp/stdio.js`; resolves from the installed package module URL. | Bun >=1.4.0 |
+| Cursor | Install the Morning Star plugin (see [Cursor](#cursor)). | `mcp/cursor.json` launches `node ${CURSOR_PLUGIN_ROOT}/mcp/bundles/cursor/dist/mcp/stdio.js`; this is a committed config-only bundle. | Node >=24.18.0 |
+| Codex | `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo` (or use `init --target codex`). | `mcp/codex.json` launches `node ${PLUGIN_ROOT}/mcp/bundles/codex/dist/mcp/stdio.js`; Codex's plugin-root variable addresses the committed bundle. | Node >=24.18.0 |
+| Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. | Plugin manifest loads `mcp/kimi.json`, which runs `./mcp/kimi-launcher.mjs` with `cwd: ./`; the launcher resolves the committed `mcp/bundles/kimi/dist/mcp/stdio.js` from its own module location. | Node >=24.18.0 |
+| ZCode | Install **morning-star-harness** from the `mstar-local` marketplace (see [ZCode](#zcode)). | `mcp/zcode.json` launches `node ${ZCODE_PLUGIN_ROOT}/mcp/bundles/zcode/dist/mcp/stdio.js`; ZCode's plugin-root variable addresses the committed bundle. | Node >=24.18.0 |
+
+The MCP context contract is host-neutral: optional `host` selects context validated against existing supported-host definitions; it is not a role or authority grant. `sessionId` denotes the main conversation session. The interface neither requires nor provides per-call child-agent attribution; existing shared-handler workflow ownership, path, state-transition, and CAS checks remain authoritative.
+
+Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the target package and its metadata agree across the recorded plugin, engine, and host versions and target/protocol shape; **mismatch** means those version or target/protocol facts diverge; **unavailable** means the packaged executable or metadata cannot be read. Doctor checks the selected runtime floor and package files. It does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it. For the MCP server, Bun entries require Bun >=1.4.0 and Node entries require Node >=24.18.0; `npx` is a package runner, not a runtime.
+
+Development evidence is the targeted unit/component/integration and package-smoke evidence for the bundled artifacts. Installed-host, browser, device, and live-service verification is a separate authorized activity, not a development acceptance gate; these instructions do not claim such a run.
+
 ## Manual install
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.

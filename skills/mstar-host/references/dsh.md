@@ -132,6 +132,12 @@ or a custom profile).
 - **Upgrade / reload**: `dsh plugin --profile web add <spec>` against the published version, or re-run `npx @mstar-harness/cli init --target dsh`; then reload the profile so the composed rows pick up the new build. The bundled `harness-skills/` mirror is a build-time sync — a checkout that has not run `bundle-assets` mounts no skills. The plugin-owned **`/mstar-execution`** command comes from the plugin's own build (it is not part of the `harness-commands/` mirror), so an installed copy only offers it after that build is refreshed and the profile reloaded — a source checkout that has not been built has it neither.
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
+## MCP delivery
+
+- **Native install and loading**: install `@mstar-harness/dsh` in the `web` profile (`dsh plugin --profile web add @mstar-harness/dsh`; `dsh-llm-fallbacks` remains a separate optional plugin). The established `ctx.inject(['tools'])` registration exposes generated native tools; the plugin package also carries the stdio peer at `mcp/stdio.js`, resolved from its installed module URL rather than consumer cwd. The host runtime floor is **Bun >=1.4.0** with native `node:sqlite`.
+- **Context boundary**: optional `host` is validated context selection, not a role or authority grant. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared handler workflow ownership, path, state-transition and CAS checks remain authoritative.
+- **Doctor and evidence**: `mstar-harness doctor --target dsh` classifies the packaged executable and build metadata as aligned / mismatch / unavailable, checks Bun's runtime floor, and never opens `store.db`. H4 exercised the established native callback and the package smoke; neither claims installed-host behavior. A live installed-host check is separate authorized work.
+
 ## Skill loading
 
 1. On entry: invoke **`pm`** (skill name via the mstar provider) → **Read
