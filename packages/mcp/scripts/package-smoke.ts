@@ -49,12 +49,19 @@ function executableOnPath(name: string, pathValue: string): string | undefined {
 }
 
 function sanitizedRuntimePath(): { pathValue: string; directory: string } {
-  const nodeExecutable = executableOnPath("node", process.env.PATH ?? "");
+  const originalPath = process.env.PATH ?? "";
+  const nodeExecutable = executableOnPath("node", originalPath);
+  const bunExecutable = path.basename(process.execPath) === "bun"
+    ? process.execPath
+    : executableOnPath("bun", originalPath);
   assert.ok(nodeExecutable, "package smoke requires a node executable");
+  assert.ok(bunExecutable, "package smoke requires a bun executable");
   const directory = mkdtempSync(path.join(os.tmpdir(), "mcp-runtime-bin-"));
   symlinkSync(nodeExecutable, path.join(directory, "node"));
+  symlinkSync(bunExecutable, path.join(directory, "bun"));
   const pathValue = directory;
   assert.ok(executableOnPath("node", pathValue), "sanitized plugin PATH must resolve node");
+  assert.ok(executableOnPath("bun", pathValue), "sanitized plugin PATH must resolve bun");
   assert.equal(executableOnPath("mstar", pathValue), undefined, "sanitized plugin PATH must not resolve an mstar executable");
   return { pathValue, directory };
 }
@@ -84,8 +91,9 @@ async function main(): Promise<void> {
   let command = process.execPath;
   let args = [packagedBundle];
   let cwd = mkdtempSync(path.join(os.tmpdir(), "mcp-foreign-cwd-"));
-  let runtimePathDirectory: string | undefined;
-  let childEnv: NodeJS.ProcessEnv = process.env;
+  const runtimePath = sanitizedRuntimePath();
+  const runtimePathDirectory = runtimePath.directory;
+  let childEnv: NodeJS.ProcessEnv = { PATH: runtimePath.pathValue };
   let fixtureRoot: string | undefined;
   let workflowToken = "";
   const workflowId = `${target}-package-smoke`;
@@ -163,8 +171,6 @@ async function main(): Promise<void> {
       if (previousHarnessDir === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarnessDir;
     }
-    const runtimePath = sanitizedRuntimePath();
-    runtimePathDirectory = runtimePath.directory;
     childEnv = {
       PATH: runtimePath.pathValue,
       MSTAR_HARNESS_DIR: harnessDir,
@@ -246,8 +252,8 @@ async function main(): Promise<void> {
       assert.equal(exitCode, 0, `ZCode MCP process should exit cleanly after transport close; stderr: ${stderr}`);
     }
     console.log(target === "cursor" || target === "codex" || target === "kimi" || target === "zcode"
-      ? `package-smoke: ${target} package config launched from foreign cwd; generated status.validate and plan.bind success/refusal verified${target === "zcode" ? " and transport-close teardown completed" : ""}`
-      : `package-smoke: ${target} isolated bundle launched from foreign cwd; initialize and tools/list succeeded`);
+      ? `package-smoke: ${target} package config launched from foreign cwd; generated status.validate and plan.bind success/refusal verified; sanitized PATH resolves node/bun and excludes mstar${target === "zcode" ? "; transport-close teardown completed" : ""}`
+      : `package-smoke: ${target} isolated bundle launched from foreign cwd; initialize and tools/list succeeded; sanitized PATH resolves node/bun and excludes mstar`);
   } finally {
     lines.close();
     child.kill();
