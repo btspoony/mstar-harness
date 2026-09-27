@@ -218,7 +218,7 @@ describe("generated CLI adapter", () => {
   test("unknown options map to a usage envelope and exit 2", async () => {
     const result = await run(["schema", "CaptureInput", "--nope"]);
     expect(result.status).toBe(2);
-    expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema.CaptureInput", JSON.parse(result.stdout).message));
+    expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
   });
 });
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {

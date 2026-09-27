@@ -3,9 +3,9 @@ category: Harness
 packages: root
 ---
 
-- Documented native MCP install and package-root paths, runtime prerequisites, doctor health meanings, the host/session boundary, and the separate installed-host verification boundary for all seven supported hosts.
-- Recorded the OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin and removal of the global CLI fallback.
+- Documented the standalone `mstar mcp` CLI transport: six hosts use JSON configuration and OpenCode uses dynamic plugin configuration; native MCP bridges and per-host packaged transports were removed.
+- Recorded the OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin and the standalone transport model.
 
 <!-- CN -->
-- 补充七个宿主的原生 MCP 安装与包根路径、运行时前置条件、doctor 健康状态解释、host/session 边界，以及独立的已安装宿主验证边界。
-- 记录 OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin，并说明已移除全局 CLI 回退。
+- 补充独立 `mstar mcp` CLI 传输说明：六个宿主使用 JSON 配置，OpenCode 使用动态插件配置；已移除原生 MCP 桥接与按宿主打包的传输。
+- 记录 OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin 及独立传输方式。

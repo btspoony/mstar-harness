@@ -120,10 +120,10 @@ describe("mstar catalog discover", () => {
     const { workspace, harness } = await populatedFixture("discover-");
     const planPath = join(workspace, "plan.json");
 
-    const result = runCli(["catalog", "discover", "--json", "--out", planPath], workspace);
+    const result = runCli(["catalog", "discover", "--out", planPath], workspace);
     expect(result.exitCode).toBe(0);
     const envelope = jsonOf(result);
-    expect(envelope.ok).toBe(true);
+    expect(envelope).toMatchObject({ command: "catalog.discover", status: "ok", code: "catalog.discover.ok" });
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       version: number;
       entities: { relativePath: string; idAssigned: boolean }[];
@@ -148,7 +148,7 @@ describe("mstar catalog discover", () => {
     expect(iterationSection.endLine).toBe(7);
     expect(iterationSection.preservedLines).toBe(4);
     // `discover` is read-only: nothing was registered.
-    const stored = jsonOf(runCli(["catalog", "list", "--json"], workspace));
+    const stored = jsonOf(runCli(["catalog", "list"], workspace));
     expect((stored.data as { total: number }).total).toBe(0);
   });
 
@@ -158,9 +158,9 @@ describe("mstar catalog discover", () => {
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain("--out");
 
-    const usage = runCli(["catalog", "discover", "--nope", "--json"], workspace);
+    const usage = runCli(["catalog", "discover", "--nope"], workspace);
     expect(usage.exitCode).toBe(2);
-    expect(jsonOf(usage)).toMatchObject({ ok: false, code: "usage", details: { operation: "discover" } });
+    expect(jsonOf(usage)).toMatchObject({ command: "catalog.discover", status: "usage", code: "command.invalid-input" });
 
     const nodeUsage = runCli(["catalog", "discover", "--nope"], workspace, "node");
     expect(nodeUsage.exitCode).toBe(2);
@@ -173,15 +173,15 @@ describe("mstar catalog import", () => {
     const planPath = join(workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", planPath], workspace).exitCode).toBe(0);
 
-    const imported = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--json"], workspace);
+    const imported = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION], workspace);
     expect(imported.exitCode).toBe(0);
     const receipt = jsonOf(imported).data as { operationId: string; entities: { id: string }[]; links: { relation: string }[] };
     expect(receipt.operationId).toBe("imp-cli-1");
     expect(receipt.entities.length).toBeGreaterThan(0);
 
-    const listed = jsonOf(runCli(["catalog", "list", "--json"], workspace)).data as { total: number; items: { id: string }[] };
+    const listed = jsonOf(runCli(["catalog", "list"], workspace)).data as { total: number; items: { id: string }[] };
     expect(listed.total).toBe(receipt.entities.length);
-    const shown = jsonOf(runCli(["catalog", "show", "document", listed.items.find((item) => item.id.startsWith("doc-"))!.id, "--json"], workspace)).data as {
+    const shown = jsonOf(runCli(["catalog", "show", "document", listed.items.find((item) => item.id.startsWith("doc-"))!.id], workspace)).data as {
       entity: { present: boolean; documentKind: string };
     };
     expect(shown.entity.present).toBe(true);
@@ -189,7 +189,7 @@ describe("mstar catalog import", () => {
 
     // Export is versioned transport carrying ids, relations and revisions.
     const exportPath = join(workspace, "catalog-export.json");
-    const exported = runCli(["catalog", "export", "--out", exportPath, "--json"], workspace);
+    const exported = runCli(["catalog", "export", "--out", exportPath], workspace);
     expect(exported.exitCode).toBe(0);
     const payload = JSON.parse(readFileSync(exportPath, "utf8")) as {
       version: number;
@@ -207,11 +207,11 @@ describe("mstar catalog import", () => {
     const clone = await populatedFixture("import-clone-");
     const clonePlan = join(clone.workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", clonePlan], clone.workspace).exitCode).toBe(0);
-    const dryRun = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION, "--dry-run", "--json"], clone.workspace);
+    const dryRun = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION, "--dry-run"], clone.workspace);
     expect(dryRun.exitCode).toBe(0);
     expect((jsonOf(dryRun).data as { importable: boolean }).importable).toBe(true);
 
-    const cloneImport = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION, "--json"], clone.workspace);
+    const cloneImport = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION], clone.workspace);
     expect(cloneImport.exitCode).toBe(0);
     const cloneReceipt = jsonOf(cloneImport).data as { entities: { id: string; revision: number }[]; links: { fromId: string; relation: string; toId: string }[] };
     expect(cloneReceipt.entities.map((entity) => entity.id).sort()).toEqual(payload.entities.map((entity) => entity.id).sort());
@@ -236,10 +236,10 @@ describe("mstar catalog import", () => {
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as { conflicts: { field: string }[] };
     expect(plan.conflicts.map((conflict) => conflict.field)).toContain("path");
 
-    const refused = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--json"], workspace);
+    const refused = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION], workspace);
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused)).toMatchObject({ ok: false, code: "catalog.import-conflict" });
-    expect((jsonOf(runCli(["catalog", "list", "--json"], workspace)).data as { total: number }).total).toBe(0);
+    expect(jsonOf(refused)).toMatchObject({ command: "catalog.import", status: "refused", code: "catalog.import-conflict" });
+    expect((jsonOf(runCli(["catalog", "list"], workspace)).data as { total: number }).total).toBe(0);
   });
 
   test("source drift since review is refused and writes nothing", async () => {
@@ -249,18 +249,19 @@ describe("mstar catalog import", () => {
 
     write(harness, "knowledge/patterns/guard.md", ["# Guard pattern notes", "", "Edited after the review."].join("\n"));
 
-    const dryRun = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--dry-run", "--json"], workspace);
-    expect(dryRun.exitCode).toBe(1);
+    const dryRun = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--dry-run"], workspace);
+    expect(dryRun.exitCode).toBe(0);
+    expect(jsonOf(dryRun)).toMatchObject({ command: "catalog.import", status: "ok" });
     const verification = jsonOf(dryRun).data as { importable: boolean; drift: { sourceKey: string; state: string }[] };
     expect(verification.importable).toBe(false);
     expect(verification.drift).toEqual([
       expect.objectContaining({ sourceKey: "knowledge:patterns/guard.md", state: "changed" }),
     ]);
 
-    const refused = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--json"], workspace);
+    const refused = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION], workspace);
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused)).toMatchObject({ ok: false, code: "catalog.import-source-drift" });
-    expect((jsonOf(runCli(["catalog", "list", "--json"], workspace)).data as { total: number }).total).toBe(0);
+    expect(jsonOf(refused)).toMatchObject({ command: "catalog.import", status: "refused", code: "catalog.import-source-drift" });
+    expect((jsonOf(runCli(["catalog", "list"], workspace)).data as { total: number }).total).toBe(0);
   });
 });
 
@@ -269,60 +270,42 @@ describe("mstar catalog domain verbs", () => {
     const { workspace, harness } = await harnessFixture("verbs-");
     write(harness, "specs/contract.md", "# Contract");
 
-    const registered = runCli(
-      [
-        "catalog",
-        "register",
-        "--kind", "document",
-        "--id", "doc-contract",
-        "--title", "Contract",
-        "--root-kind", "specs",
-        "--path", "contract.md",
-        "--document-kind", "spec",
-        "--actor", "project-manager",
-        "--operation-id", "reg-1",
-        "--json",
-      ],
-      workspace,
-    );
+    const registered = runCli(["catalog",
+    "register",
+    "--kind", "document",
+    "--id", "doc-contract",
+    "--title", "Contract",
+    "--root-kind", "specs",
+    "--path", "contract.md",
+    "--document-kind", "spec",
+    "--actor", "project-manager",
+    "--operation-id", "reg-1", ], workspace,);
     expect(registered.exitCode).toBe(0);
     expect(jsonOf(registered).data).toEqual({ kind: "document", id: "doc-contract", revision: 1, storeRevision: 1 });
 
-    const project = runCli(
-      [
-        "catalog",
-        "register",
-        "--kind", "project",
-        "--id", "proj-a",
-        "--title", "Project Alpha",
-        "--root-kind", "projects",
-        "--path", "proj-a",
-        "--actor", "project-manager",
-        "--operation-id", "reg-2",
-        "--json",
-      ],
-      workspace,
-    );
+    const project = runCli(["catalog",
+    "register",
+    "--kind", "project",
+    "--id", "proj-a",
+    "--title", "Project Alpha",
+    "--root-kind", "projects",
+    "--path", "proj-a",
+    "--actor", "project-manager",
+    "--operation-id", "reg-2", ], workspace,);
     expect(project.exitCode).toBe(0);
 
-    const linked = runCli(
-      [
-        "catalog",
-        "link",
-        "--from-kind", "document",
-        "--from-id", "doc-contract",
-        "--relation", "belongs-to",
-        "--to-kind", "project",
-        "--to-id", "proj-a",
-        "--actor", "project-manager",
-        "--operation-id", "lnk-1",
-        "--json",
-      ],
-      workspace,
-    );
+    const linked = runCli(["catalog",
+    "link",
+    "--from-kind", "document",
+    "--from-id", "doc-contract",
+    "--relation", "belongs-to",
+    "--to-kind", "project",
+    "--to-id", "proj-a",
+    "--actor", "project-manager",
+    "--operation-id", "lnk-1", ], workspace,);
     expect(linked.exitCode).toBe(0);
 
-    const shown = jsonOf(runCli(["catalog", "show", "document", "doc-contract", "--json"], workspace)).data as {
+    const shown = jsonOf(runCli(["catalog", "show", "document", "doc-contract"], workspace)).data as {
       entity: { revision: number; lifecycle: string; title: string };
       links: { relation: string; toId: string }[];
     };
@@ -330,46 +313,34 @@ describe("mstar catalog domain verbs", () => {
     expect(shown.links).toEqual([{ fromKind: "document", fromId: "doc-contract", relation: "belongs-to", toKind: "project", toId: "proj-a", ordinal: null }]);
 
     // A stale revision is a domain refusal, not a usage error.
-    const stale = runCli(
-      [
-        "catalog",
-        "update",
-        "document",
-        "doc-contract",
-        "--expect", "1",
-        "--title", "Renamed",
-        "--actor", "project-manager",
-        "--operation-id", "upd-1",
-        "--json",
-      ],
-      workspace,
-    );
+    const stale = runCli(["catalog",
+    "update",
+    "document",
+    "doc-contract",
+    "--expect", "1",
+    "--title", "Renamed",
+    "--actor", "project-manager",
+    "--operation-id", "upd-1", ], workspace,);
     expect(stale.exitCode).toBe(1);
-    expect(jsonOf(stale)).toMatchObject({ ok: false, code: "catalog.revision-conflict" });
+    expect(jsonOf(stale)).toMatchObject({ command: "catalog.update", status: "refused", code: "catalog.revision-conflict" });
 
-    const renamed = runCli(
-      [
-        "catalog",
-        "update",
-        "document",
-        "doc-contract",
-        "--expect", "2",
-        "--title", "Renamed",
-        "--actor", "project-manager",
-        "--operation-id", "upd-2",
-        "--json",
-      ],
-      workspace,
-    );
+    const renamed = runCli(["catalog",
+    "update",
+    "document",
+    "doc-contract",
+    "--expect", "2",
+    "--title", "Renamed",
+    "--actor", "project-manager",
+    "--operation-id", "upd-2", ], workspace,);
     expect(renamed.exitCode).toBe(0);
     expect((jsonOf(renamed).data as { revision: number }).revision).toBe(3);
 
-    const filtered = jsonOf(runCli(["catalog", "list", "--kind", "project", "--json"], workspace)).data as { total: number; items: { id: string }[] };
+    const filtered = jsonOf(runCli(["catalog", "list", "--kind", "project"], workspace)).data as { total: number; items: { id: string }[] };
     expect(filtered.total).toBe(1);
     expect(filtered.items[0]!.id).toBe("proj-a");
 
-    const missing = runCli(["catalog", "show", "plan", "no-such-plan", "--json"], workspace);
+    const missing = runCli(["catalog", "show", "plan", "no-such-plan"], workspace);
     expect(missing.exitCode).toBe(1);
-    expect(jsonOf(missing)).toMatchObject({ ok: false, code: "catalog.not-found" });
+    expect(jsonOf(missing)).toMatchObject({ command: "catalog.show", status: "refused", code: "catalog.not-found" });
   });
 });

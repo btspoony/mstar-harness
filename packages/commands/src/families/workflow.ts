@@ -91,7 +91,8 @@ function makeDefinition(
       aliases: [],
       arguments: [],
       options: optionNames.map((key) => {
-        const variadic = key === "stopped";
+        const field = input.shape[key as keyof typeof input.shape];
+        const variadic = key === "stopped" || field instanceof z.ZodArray || (field instanceof z.ZodOptional && field.unwrap() instanceof z.ZodArray);
         return {
           key,
           flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value${variadic ? "..." : ""}>`,
@@ -207,10 +208,19 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   }
   defs.push(makeDefinition("iteration.register", "Register a create-only iteration workflow with its branch anchors and Todo rows.", "write", ["workflow", "compassRef", "branchBase", "branchIntegration", "branchTargetIteration", "row", "project", "startedAt", "harness", "expect", "operation"], async (input, context) => {
     try {
-      if (input.workflow === undefined || input.compassRef === undefined || input.branchBase === undefined || input.branchIntegration === undefined || input.branchTargetIteration === undefined || input.row === undefined) return usage("iteration.register", "workflow, compassRef, all branch anchors and rows are required");
+      if (input.workflow === undefined || input.workflow.trim() === "" || input.compassRef === undefined || input.compassRef.trim() === "" || input.branchBase === undefined || input.branchBase.trim() === "" || input.branchIntegration === undefined || input.branchIntegration.trim() === "" || input.branchTargetIteration === undefined || input.branchTargetIteration.trim() === "" || input.row === undefined || input.row.length === 0) {
+        return usage("iteration.register", "workflow, compassRef, all branch anchors and rows are required");
+      }
+      const rows = input.row.map((value) => {
+        if (typeof value !== "string") return value;
+        try { return JSON.parse(value); } catch { return undefined; }
+      });
+      if (rows.some((row) => row === null || typeof row !== "object" || Array.isArray(row))) {
+        return usage("iteration.register", "each row must be a JSON object");
+      }
       const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
       if (harnessDir === null) return usage("iteration.register", "harness dir not found; supply harness");
-      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: input.row as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       setArtifactStore(createFsStore(harnessDir));
       if (input.expect !== undefined || input.operation !== undefined) {
         if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("iteration.register", "active registration requires main session identity, expect and operation");

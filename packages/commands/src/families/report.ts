@@ -25,10 +25,14 @@ export function getReportCommandDefinitions(): readonly CommandDefinition<Report
     decodeCliInput(input) {
       const decoded = { ...input };
       if (decoded.arguments !== undefined) {
-        try {
-          decoded.arguments = JSON.parse(String(decoded.arguments));
-        } catch {
-          return null;
+        if (Array.isArray(decoded.arguments)) {
+          if (!decoded.arguments.every((argument) => typeof argument === "string")) return null;
+        } else {
+          try {
+            decoded.arguments = JSON.parse(String(decoded.arguments));
+          } catch {
+            return null;
+          }
         }
       }
       if (decoded.versionOverrides !== undefined) {
