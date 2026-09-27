@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/omp",
   "version": "3.11.2",
-  "description": "Morning Star harness omp (Oh My Pi) plugin \u2014 engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
+  "description": "Morning Star harness omp (Oh My Pi) plugin — engine-backed runtime gates (status/dispatch/lease) + mstar-* skills, commands, and agents for omp.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,13 +20,12 @@
     "commands",
     "agents",
     "assets",
-    "mcp",
     "plugin.json",
     "README.md"
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bun build src/extensions/mcp.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/mcp.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions",
+    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
@@ -66,8 +65,7 @@
     },
     "extensions": [
       "./extensions/model-handoff.js",
-      "./extensions/phase2-orchestration.js",
-      "./extensions/mcp.js"
+      "./extensions/phase2-orchestration.js"
     ]
   },
   "publishConfig": {
@@ -84,7 +82,6 @@
   "devDependencies": {
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
-    "@mstar-harness/mcp": "workspace:*",
     "@oh-my-pi/pi-coding-agent": "18.3.0"
   }
 }

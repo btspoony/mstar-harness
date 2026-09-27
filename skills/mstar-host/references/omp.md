@@ -28,7 +28,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## MCP delivery
 
-- **Native install and loading**: `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp`). OMP's generated native tools call the shared command handlers in-process; the plugin package also contains the stdio peer at `mcp/stdio.js`, resolved from the installed module URL rather than consumer cwd. The MCP process requires the host's **Bun >=1.4.0** runtime with native `node:sqlite`.
+- **Native install and loading**: `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp`). Canonical commands are served over MCP by the standalone CLI server (`npx @mstar-harness/cli mcp`), not registered by an OMP-native MCP extension. The MCP process requires the host's **Bun >=1.4.0** runtime with native `node:sqlite`.
 - **Context boundary**: optional `host` selects context validated against existing host definitions, not a role or authority. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared workflow ownership, path, transition and CAS checks still decide admission.
 - **Doctor and evidence**: `mstar-harness doctor --target omp` reports MCP package health as aligned / mismatch / unavailable, checks Bun's floor and package metadata/executable, and never opens `store.db`. H2's component callback and `package-smoke.ts --target omp` are development evidence, not an installed-host run. Live installed-host verification is separate and requires authorization.
 

@@ -168,8 +168,9 @@ test("MCP evidence capture gates the bound context, writes bounded logs and veri
     const targetEnvelope = await execute(verifyDefinition, {
       sddDir: fixture.sddDir, plan: "plan", task: "task-1", run: captured.record.runId, target: fixture.targetPath,
     });
-    assert.equal(targetEnvelope.status, "ok");
-    assert.equal((targetEnvelope.data as { applicability: string }).applicability, "uncertain");
+    assert.equal(targetEnvelope.status, "refused");
+    assert.equal(targetEnvelope.code, "sdd.evidence.assessment-failed");
+    assert.equal((targetEnvelope.details as { applicability: string }).applicability, "uncertain");
 
     const failedEnvelope = await execute(captureDefinition, {
       request: fixture.requestPath, argv: [process.execPath, "-e", "process.exit(3)"],
