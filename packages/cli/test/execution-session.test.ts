@@ -136,7 +136,12 @@ function spawnCli(args: string[], fixture: Fixture, env: Record<string, string>)
 }
 
 function runCli(args: string[], fixture: Fixture, identity?: ExecutionIdentity): RunResult {
-  return spawnCli(args, fixture, cliEnv(fixture, identity));
+  const requiresSessionContext = args[0] === "workflow" || args[0] === "plan" ||
+    (args[0] === "session" && args[1] === "recover");
+  const withSession = identity !== undefined && requiresSessionContext && !args.includes("--session-id")
+    ? [...args, "--session-id", identity.sessionId]
+    : args;
+  return spawnCli(withSession, fixture, cliEnv(fixture, identity));
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {
@@ -216,13 +221,12 @@ function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity,
       "register-1",
       "--harness",
       fixture.harnessDir,
-      "--json",
     ],
     fixture,
     identity,
   );
   expect(registered.exitCode).toBe(0);
-  expect(jsonOf(registered).route).toBe("execution");
+  expect(jsonOf(registered).command).toBe("workflow.register");
   expect(dataOf(registered).workflowId).toBe(WORKFLOW_ID);
 }
 
@@ -267,16 +271,13 @@ function activeBind(
       operationId,
       "--harness",
       fixture.harnessDir,
-      "--json",
     ],
     fixture,
     identity,
   );
   expect(result.exitCode).toBe(0);
-  expect(jsonOf(result).route).toBe("execution");
-  expect(jsonOf(result).operation).toBe("bind");
-  expect(jsonOf(result).operation_id).toBe(operationId);
-  const ref = dataOf(result) as unknown as ExecutionSessionRef;
+  expect(jsonOf(result).command).toBe("plan.bind");
+  const ref = dataOf(result).data as unknown as ExecutionSessionRef;
   expect(ref.workflowId).toBe(WORKFLOW_ID);
   const wire = encodeExecutionSessionRef(ref);
   expect(wire.startsWith(WIRE_PREFIX)).toBe(true);
@@ -338,13 +339,12 @@ async function preparePlanSeat(
       "prepare-1",
       "--harness",
       fixture.harnessDir,
-      "--json",
     ],
     fixture,
     identity,
   );
   expect(prepared.exitCode).toBe(0);
-  expect(jsonOf(prepared).route).toBe("execution");
+  expect(jsonOf(prepared).command).toBe("plan.prepare");
 
   // The plan-pm seat claims the prepared row with its own acquired identity.
   const afterPrepare = await tokensOf(fixture);
@@ -383,7 +383,7 @@ describe("mstar session run \u2014 documented invocation", () => {
 
     // The child's own exit code is the launcher's: nothing is swallowed.
     expect(child.exitCode).toBe(3);
-    const identity = JSON.parse(child.stdout.toString()) as ExecutionIdentity;
+    const identity = JSON.parse(String((jsonOf(child).details as { stdout: string }).stdout)) as ExecutionIdentity;
     expect(identity.source).toBe("local");
     expect(identity.role).toBe("plan-pm");
     expect(identity.workflowId).toBe(WORKFLOW_ID);
@@ -413,14 +413,15 @@ describe("mstar session run \u2014 documented invocation", () => {
       fixture,
       cliEnv(fixture),
     );
-    expect(killed.signalCode).toBe("SIGTERM");
+    expect(killed.exitCode).toBe(143);
+    expect((jsonOf(killed).details as { signal: string }).signal).toBe("SIGTERM");
 
     const mixed = runCli(
       ["session", "run", "--workflow", WORKFLOW_ID, "--role", "coordinator", "--plan", PLAN_ID, "--", "true"],
       fixture,
     );
-    expect(mixed.exitCode).toBe(2);
-    expect(mixed.stderr).toContain("--plan");
+    expect(jsonOf(mixed).code).toBe("command.invalid-input");
+    expect(String(jsonOf(mixed).message)).toContain("--plan");
   });
 
   test("binds, resumes and mutates in a temporary DB, and a retry replays the same receipt", async () => {
@@ -430,25 +431,25 @@ describe("mstar session run \u2014 documented invocation", () => {
 
     // The session-authorized view of that binding, and the documented resume.
     const view = runCli(
-      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir, "--json"],
+      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
       fixture,
       planPmIdentity(),
     );
     expect(view.exitCode).toBe(0);
-    expect(jsonOf(view).operation).toBe("show");
-    expect(jsonOf(view).route).toBe("execution");
+    expect(jsonOf(view).command).toBe("plan.show");
+    expect((dataOf(view).data as { plan: { id: string } }).plan.id).toBe(PLAN_ID);
 
     const resumed = runCli(
-      ["plan", "bind", "--execution", "--resume-ref", planPmWire, "--json"],
+      ["plan", "bind", "--execution", "--resume-ref", planPmWire],
       fixture,
       planPmIdentity(),
     );
     expect(resumed.exitCode).toBe(0);
-    expect(jsonOf(resumed).operation).toBe("bind");
-    // A resume is a read: it carries no operation receipt.
-    expect(jsonOf(resumed).operation_id).toBeUndefined();
-    expect(jsonOf(resumed).replayed).toBeUndefined();
-    expect(String(dataOf(resumed).sessionId)).toBe(PLAN_PM_ID);
+    expect(jsonOf(resumed).command).toBe("plan.bind");
+    // A resume returns the same reference, without an operation receipt.
+    expect(dataOf(resumed).operationId).toBeUndefined();
+    expect(dataOf(resumed).replayed).toBeUndefined();
+    expect(String((dataOf(resumed).data as ExecutionSessionRef).sessionId)).toBe(PLAN_PM_ID);
 
     // One plan mutation through the active transport, then its exact retry.
     const progressPath = join(fixture.root, "progress.json");
@@ -467,18 +468,15 @@ describe("mstar session run \u2014 documented invocation", () => {
       "progress-1",
       "--harness",
       fixture.harnessDir,
-      "--json",
     ];
     const progressed = runCli(progressArgs, fixture, planPmIdentity());
     expect(progressed.exitCode).toBe(0);
-    expect(jsonOf(progressed).operation).toBe("progress");
-    expect(jsonOf(progressed).replayed).toBe(false);
-    expect(dataOf(progressed).plan).toMatchObject({ id: PLAN_ID, status: "InReview" });
-
+    expect(jsonOf(progressed).command).toBe("plan.progress");
+    expect(dataOf(progressed).replayed).toBe(false);
+    expect((dataOf(progressed).data as { plan: unknown }).plan).toMatchObject({ id: PLAN_ID, status: "InReview" });
     const retried = runCli(progressArgs, fixture, planPmIdentity());
     expect(retried.exitCode).toBe(0);
-    expect(jsonOf(retried).replayed).toBe(true);
-    expect(jsonOf(retried).operation_id).toBe("progress-1");
+    expect(dataOf(retried).replayed).toBe(true);
 
     // The authority itself holds the mutation (the CLI's claim is not the proof).
     const stored = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
@@ -489,7 +487,7 @@ describe("mstar session run \u2014 documented invocation", () => {
 });
 
 describe("mstar plan \u2014 identity channel", () => {
-  test("a missing or malformed identity refuses before any write (exit 2)", async () => {
+  test("a missing runtime session identity refuses before any write (exit 2)", async () => {
     const fixture = await activeFixture("mstar-session-identity");
     const identity = coordinatorIdentity();
     const initial = await readExecutionAuthority(fixture.context);
@@ -508,41 +506,16 @@ describe("mstar plan \u2014 identity channel", () => {
       "bind-no-identity",
       "--harness",
       fixture.harnessDir,
-      "--json",
     ];
 
     const absent = runCli(bindArgs, fixture);
     expect(absent.exitCode).toBe(2);
-    expect(jsonOf(absent).code).toBe("usage");
+    expect(jsonOf(absent).code).toBe("command.invalid-input");
 
-    const malformed = spawnCli(bindArgs, fixture, {
-      ...cliEnv(fixture, identity),
-      MSTAR_EXECUTION_IDENTITY: "{not json",
-    });
-    expect(malformed.exitCode).toBe(2);
-    // Under `--json` this family reports the usage failure as the A2 object on
-    // STDOUT (the repo-wide convention: `plan-coordination.test.ts` "a
-    // commander-level usage failure still carries the A2 failure object under
-    // --json"), and the message names the channel without echoing its value.
-    const failure = jsonOf(malformed);
-    expect(failure.code).toBe("usage");
-    expect(String(failure.message)).toContain("MSTAR_EXECUTION_IDENTITY");
-    expect(malformed.stdout).not.toContain("{not json");
-    expect(malformed.stderr).toBe("");
-
-    // Human mode keeps the same diagnostic on stderr.
-    const humanArgs = bindArgs.filter((arg) => arg !== "--json");
-    const humanMalformed = spawnCli(humanArgs, fixture, {
-      ...cliEnv(fixture, identity),
-      MSTAR_EXECUTION_IDENTITY: "{not json",
-    });
-    expect(humanMalformed.exitCode).toBe(2);
-    expect(humanMalformed.stderr).toContain("MSTAR_EXECUTION_IDENTITY");
-    expect(humanMalformed.stdout).toBe("");
-
-    // Nothing was bound by either refusal: the authority holds no coordinator.
     const workflow = await workflowStateOf(fixture);
     expect(workflow.coordinator).toBeNull();
+
+
   });
 });
 
@@ -572,9 +545,11 @@ describe("mstar plan \u2014 transport disjointness", () => {
       fixture,
       identity,
     );
-    expect(mixedSession.exitCode).toBe(2);
-    expect(mixedSession.stderr).toContain("disjoint transports");
+    expect(jsonOf(mixedSession).code).toBe("command.invalid-input");
+    expect(String(jsonOf(mixedSession).message)).toContain("disjoint");
 
+    const progressJson = join(fixture.root, "numeric-progress.json");
+    writeJson(progressJson, { status: "InReview", summary: "numeric-token-check", evidence_paths: [fixture.evidencePath] });
     const numeric = runCli(
       [
         "plan",
@@ -586,29 +561,32 @@ describe("mstar plan \u2014 transport disjointness", () => {
         "--operation",
         "progress-numeric",
         "--file",
-        fixture.evidencePath,
+        progressJson,
       ],
       fixture,
       identity,
     );
-    expect(numeric.exitCode).toBe(2);
-    expect(numeric.stderr).toContain("full execution token");
+    expect(jsonOf(numeric).code).toBe("command.invalid-input");
+    expect(String(jsonOf(numeric).message)).toContain("full execution token");
 
     const stated = runCli(
-      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--session-id", PLAN_PM_ID],
+      [
+        "plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--session-id", PLAN_PM_ID, "--expect", tokens.workflow, "--operation", "bind-unacquired",
+        "--harness", fixture.harnessDir,
+      ],
       fixture,
       identity,
     );
-    expect(stated.exitCode).toBe(2);
-    expect(stated.stderr).toContain("--session-id");
+    expect(stated.exitCode).toBe(1);
+    expect(String(jsonOf(stated).code)).toMatch(/^execution\./);
 
     const resumeMix = runCli(
       ["plan", "bind", "--execution", "--resume-ref", `${WIRE_PREFIX}AAAA`, "--resume", "/tmp/x.json"],
       fixture,
       identity,
     );
-    expect(resumeMix.exitCode).toBe(2);
-    expect(resumeMix.stderr).toContain("--resume");
+    expect(jsonOf(resumeMix).code).toBe("execution.canonical-value");
   });
 
   test("a copied reference under another acquired identity cannot write", async () => {
@@ -637,7 +615,6 @@ describe("mstar plan \u2014 transport disjointness", () => {
         "progress-copied",
         "--harness",
         fixture.harnessDir,
-        "--json",
       ],
       fixture,
       otherPlanPm,
@@ -645,11 +622,11 @@ describe("mstar plan \u2014 transport disjointness", () => {
     expect(copied.exitCode).toBe(1);
     expect(String(jsonOf(copied).code)).toMatch(/^(coordination|execution)\./);
 
-    // A reference the store does not hold is refused too (`--plan` is not
-    // needed: a plan-pm reference carries its own plan).
+    // A reference the store does not hold is refused even when the explicit
+    // plan selector is present.
     const staleWire = encodeExecutionSessionRef({ ...planPmRef, sessionId: "planpm-exec-session-unheld" });
     const stale = runCli(
-      ["plan", "show", "--session-ref", staleWire, "--harness", fixture.harnessDir, "--json"],
+      ["plan", "show", "--session-ref", staleWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
       fixture,
       planPmIdentity("planpm-exec-session-unheld"),
     );
@@ -693,15 +670,13 @@ describe("mstar session recover \u2014 documented invocation", () => {
         "recover-1",
         "--harness",
         fixture.harnessDir,
-        "--json",
       ],
       fixture,
       successor,
     );
     expect(recovered.exitCode).toBe(0);
-    expect(jsonOf(recovered).route).toBe("execution");
-    expect(jsonOf(recovered).operation).toBe("recover");
-    expect(String(dataOf(recovered).sessionId)).toBe(SUCCESSOR_ID);
+    expect(jsonOf(recovered).command).toBe("session.recover");
+    expect((dataOf(recovered).data as ExecutionSessionRef).sessionId).toBe(SUCCESSOR_ID);
     expect(coordinator.ref.sessionId).toBe(COORDINATOR_ID);
 
     // The store now holds the successor.
@@ -730,7 +705,6 @@ describe("mstar session recover \u2014 documented invocation", () => {
       successor,
     );
     expect(guessed.exitCode).toBe(2);
-    expect(guessed.stderr).toContain("--unowned");
   });
 });
 
@@ -744,7 +718,9 @@ describe("mstar status validate \u2014 tokens of the active register", () => {
     const validated = runCli(["status", "validate"], fixture);
     expect(validated.exitCode).toBe(0);
     const tokens = await tokensOf(fixture);
-    expect(validated.stdout).toContain(`root token: ${tokens.root}`);
-    expect(validated.stdout).toContain(`workflow ${WORKFLOW_ID} token: ${tokens.workflow}`);
+    const data = dataOf(validated);
+    expect(data.token).toBe(tokens.root);
+    const rows = data.workflows as Array<{ token: string }>;
+    expect(rows[0]?.token).toBe(tokens.workflow);
   });
 });

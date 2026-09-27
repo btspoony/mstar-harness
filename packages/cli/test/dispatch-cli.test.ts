@@ -60,6 +60,22 @@ function runCli(args: string[], opts: { env?: Record<string, string> } = {}): Ru
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
+function expectEnvelope(result: RunResult, status: string, code?: string): Record<string, unknown> {
+  const envelope = JSON.parse(result.stdout) as Record<string, unknown>;
+  expect(envelope.status).toBe(status);
+  expect(envelope.exitCode).toBe(result.exitCode);
+  if (code !== undefined) expect(envelope.code).toBe(code);
+  if (status === "ok") expect(envelope.data).toEqual({ ok: true, violations: [] });
+  return envelope;
+}
+
+function violationCodes(result: RunResult): string[] {
+  const envelope = JSON.parse(result.stdout) as Record<string, unknown>;
+  expect(envelope.status).toBe(result.exitCode === 0 ? "ok" : "refused");
+  const resultData = (envelope.details ?? envelope.data) as { violations?: { code: string }[] } | undefined;
+  return resultData?.violations?.map(({ code }) => code) ?? [];
+}
+
 
 /** Write an assignment fixture and return its path. */
 function withAssignment(assignmentText: string, fn: (file: string) => void): void {
@@ -108,7 +124,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
       expect(result.stderr).toBe("");
     });
   });
@@ -121,8 +137,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(withoutTaskBudget, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.task-budget-missing");
-      expect(result.stdout).not.toContain("OK");
+      expect(violationCodes(result)).toContain("assignment.field.task-budget-missing");
     });
   });
 
@@ -130,8 +145,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Execute as": "" }).replace("**Execute as**: ", ""), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.missing-execute-as");
-      expect(result.stdout).not.toContain("OK");
+      expect(violationCodes(result)).toContain("assignment.field.missing-execute-as");
     });
   });
 
@@ -139,7 +153,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
+      expect(violationCodes(result)).toContain("assignment.field.branch-missing");
     });
   });
 
@@ -147,7 +161,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "create feature/new" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing-base");
+      expect(violationCodes(result)).toContain("assignment.field.branch-missing-base");
     });
   });
 
@@ -155,7 +169,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "create feature/x from" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing-base");
+      expect(violationCodes(result)).toContain("assignment.field.branch-missing-base");
     });
   });
 
@@ -166,7 +180,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).toContain("dispatch.default-branch.protected");
     });
   });
 
@@ -174,8 +188,8 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "create feature/x from main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
-      expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
+      expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
     });
   });
 
@@ -183,7 +197,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "create feature/x from main" }), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
     });
   });
 
@@ -191,8 +205,8 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
-      expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
+      expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
     });
   });
 
@@ -200,7 +214,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file], { env: { MSTAR_WORKING_BRANCH: "main" } });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
     });
   });
 
@@ -210,7 +224,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       (file) => {
         const result = runCli(["dispatch", "validate", file]);
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("dispatch validate: OK");
+        expectEnvelope(result, "ok", "dispatch.validate.ok");
       },
     );
   });
@@ -221,8 +235,8 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       (file) => {
         const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("dispatch validate: OK");
-        expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+        expectEnvelope(result, "ok", "dispatch.validate.ok");
+        expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
       },
     );
   });
@@ -231,8 +245,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "", "Branch policy": "direct on main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-policy-missing-reason");
-      expect(result.stderr).toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-policy-missing-reason", "dispatch.default-branch.protected"]));
     });
   });
 
@@ -242,7 +255,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       (file) => {
         const result = runCli(["dispatch", "validate", file]);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("dispatch.default-branch.protected");
+        expect(violationCodes(result)).toContain("dispatch.default-branch.protected");
       },
     );
   });
@@ -251,8 +264,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
-      expect(result.stderr).toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-missing", "dispatch.default-branch.protected"]));
     });
   });
 
@@ -260,8 +272,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
       const result = runCli(["dispatch", "validate", file], { env: { MSTAR_WORKING_BRANCH: "main" } });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
-      expect(result.stderr).toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-missing", "dispatch.default-branch.protected"]));
     });
   });
 
@@ -269,8 +280,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "feature/x"]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
-      expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+      expect(violationCodes(result)).toEqual(["assignment.field.branch-missing"]);
     });
   });
 
@@ -288,7 +298,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("dispatch validate: OK");
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
       expect(result.stderr).toBe("");
     });
   });
@@ -335,7 +345,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(bodyOnly, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
+      expect(violationCodes(result)).toContain("assignment.field.branch-missing");
     });
   });
 
@@ -353,19 +363,19 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     withAssignment(text, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("assignment.field.branch-missing");
+      expect(violationCodes(result)).toContain("assignment.field.branch-missing");
     });
   });
 
   test("missing <assignment-file> arg → usage, exit 2", () => {
     const result = runCli(["dispatch", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: dispatch validate");
+    expect(result.stderr).toContain("error: missing required argument 'assignmentFile'");
   });
 
   test("nonexistent assignment file → exit 1 with file error", () => {
     const result = runCli(["dispatch", "validate", "/no/such/assignment.md"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("assignment file not found");
+    expectEnvelope(result, "refused", "dispatch.validate.refused");
   });
 });

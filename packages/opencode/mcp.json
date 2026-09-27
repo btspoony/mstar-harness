@@ -1,0 +1,10 @@
+// Requires a published @mstar-harness/cli version that includes the mcp subcommand.
+{
+  "mcp": {
+    "morning-star": {
+      "type": "local",
+      "command": ["npx", "@mstar-harness/cli", "mcp"],
+      "enabled": true
+    }
+  }
+}

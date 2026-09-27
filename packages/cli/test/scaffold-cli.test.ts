@@ -32,6 +32,23 @@ interface RunResult {
   stderr: string;
 }
 
+interface ScaffoldData {
+  harnessDir: string;
+  projectDir: string;
+  created: string[];
+  skipped: string[];
+}
+
+function envelope(result: RunResult): { status: string; code: string; message?: string; data?: ScaffoldData } {
+  return JSON.parse(result.stdout);
+}
+
+function scaffoldData(result: RunResult): ScaffoldData {
+  const data = envelope(result).data;
+  if (!data) throw new Error("expected scaffold result data");
+  return data;
+}
+
 /**
  * Spawn env with ambient MSTAR_HARNESS_DIR pinned out: the CLI
  * resolves harness dirs from that env var ahead of probing, so an ambient
@@ -94,10 +111,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     withRoot((root) => {
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, ".mstar")}`);
-      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
-      expect(result.stdout).toContain("created: .mstar/AGENTS.md");
+      expect(scaffoldData(result).harnessDir).toBe(join(root, ".mstar"));
+      expect(scaffoldData(result).created).toEqual([".gitignore (canonical harness snippet)", ".mstar/AGENTS.md"]);
 
       const harnessDir = join(root, ".mstar");
       for (const dir of ["plans", "iterations", "knowledge", "specs", "sdd", "projects"]) {
@@ -128,8 +143,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const second = runScaffold([root]);
       expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain("skipped: .mstar/AGENTS.md (already present)");
-      expect(second.stdout).not.toContain("created:");
+      expect(scaffoldData(second).skipped).toContain(".mstar/AGENTS.md (already present)");
+      expect(scaffoldData(second).created).toEqual([]);
       // Nothing changed on re-run.
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignoreAfterFirst);
       expect(readFileSync(join(root, ".mstar", "AGENTS.md"), "utf8")).toBe(agentsAfterFirst);
@@ -145,7 +160,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skipped: .mstar/AGENTS.md (already present)");
+      expect(scaffoldData(result).skipped).toContain(".mstar/AGENTS.md (already present)");
       // Existing content preserved; snippet appended after it.
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
       expect(gitignore.startsWith("node_modules/\n")).toBe(true);
@@ -164,8 +179,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skipped: .gitignore");
-      expect(result.stdout).not.toContain("created: .gitignore");
+      expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
+      expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
 
       // Observable git semantics: the authored policy still ignores the root.
@@ -186,7 +201,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).not.toContain("created: .gitignore");
+      expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
     });
   });
@@ -198,7 +213,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).not.toContain("created: .gitignore");
+      expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
     });
   });
@@ -210,7 +225,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      expect(scaffoldData(result).created).toContain(".gitignore (canonical harness snippet)");
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
       // Authored lines stay in place; the canonical entries follow them.
       expect(gitignore.startsWith(authored)).toBe(true);
@@ -225,11 +240,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, ".custom")}`);
-      expect(result.stdout).toContain(`  harness dir: ${join(root, ".custom")}`);
-      expect(result.stdout).toContain(
-        "skipped: .gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules",
-      );
+      const resultData = scaffoldData(result);
+      expect(resultData.harnessDir).toBe(join(root, ".custom"));
+      expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
       // Files land under the declared dir, not .mstar/.
       expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
       expect(existsSync(join(root, ".custom", "projects", "_default"))).toBe(true);
@@ -247,10 +260,10 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`  harness dir: ${join(root, ".mstar")}`);
-      expect(result.stdout).toContain(`  project dir: ${join(root, "process", "projects")}`);
-      // Harness layout stays .mstar/ (canonical snippet still appended).
-      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      const resultData = scaffoldData(result);
+      expect(resultData.harnessDir).toBe(join(root, ".mstar"));
+      expect(resultData.projectDir).toBe(join(root, "process", "projects"));
+      expect(resultData.created).toContain(".gitignore (canonical harness snippet)");
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
       // _default lands under the resolved project dir, NOT {HARNESS_DIR}/projects.
       expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
@@ -269,10 +282,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
         stderr: "pipe",
       });
       expect(proc.exitCode).toBe(0);
-      // The subprocess cwd resolves symlinks (macOS /var → /private/var), so
-      // assert the harness line + the created files rather than an exact path.
-      expect(proc.stdout.toString()).toContain("scaffold: harness initialized at");
-      expect(proc.stdout.toString()).toContain(".mstar");
+      const procResult = { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+      expect(scaffoldData(procResult).harnessDir.endsWith(join(".mstar"))).toBe(true);
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
     });
   });
@@ -289,11 +300,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, "config", ".mstar")}`);
-      expect(result.stdout).toContain(`  harness dir: ${join(root, "config", ".mstar")}`);
-      expect(result.stdout).toContain(
-        "skipped: .gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules",
-      );
+      const resultData = scaffoldData(result);
+      expect(resultData.harnessDir).toBe(join(root, "config", ".mstar"));
+      expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
       // Files land under the declared custom dir.
       expect(existsSync(join(root, "config", ".mstar", "status.json"))).toBe(true);
       expect(existsSync(join(root, "config", ".mstar", "projects", "_default"))).toBe(true);
@@ -319,8 +328,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const result = runScaffold([join(root, "packages", "foo")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, ".mstar")}`);
-      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      const resultData = scaffoldData(result);
+      expect(resultData.harnessDir).toBe(join(root, ".mstar"));
+      expect(resultData.created).toContain(".gitignore (canonical harness snippet)");
 
       // Fence lands in the REPO-ROOT .gitignore, not the subdir's.
       expect(existsSync(join(root, ".gitignore"))).toBe(true);
@@ -350,11 +360,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       writeFileSync(join(root, ".mstar", "status.json"), "{}\n", "utf8");
 
       const second = runScaffold([root]);
-      expect(second.exitCode).toBe(1);
-      expect(second.stderr).toContain("scaffold never replaces existing state");
+      expect(envelope(second).status).toBe("error");
       expect(readFileSync(join(root, ".mstar", "status.json"), "utf8")).toBe("{}\n");
-      // The refusal happens before the manifest is reported as created.
-      expect(second.stdout).not.toContain("created:");
+      // Refusal leaves the existing state bytes unchanged.
     });
   });
 });

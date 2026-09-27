@@ -1,22 +1,14 @@
 /**
  * @mstar-harness/omp bundle smoke test — asserts the built `dist/` bundles
- * AND the packed installable artifact (npm pack) carry every surface omp
- * convention-scans from the installed package root: hooks/pre/, tools/*.js,
- * extensions/, skills/, commands/, agents/, assets/, plugin.json. The packed
- * check runs `npm pack --json` (respecting `files` in package.json) into a
- * temp dir so a release cannot ship a tarball that omits
- * convention-discovered metadata.
+ * AND the packed installable artifact carry every convention-discovered omp
+ * surface: hooks/pre/, extensions/, skills/, commands/, agents/, assets/, and plugin.json.
+ * The packed check runs `npm pack --json` (respecting `files` in package.json) into a
+ * temp dir so a release cannot ship a tarball that omits convention-discovered metadata.
  *
- * The runtime case loads the PACKED artifact through the host's own discovery
- * and loaders inside a disposable host root (child `bun` process, `HOME`
- * redirected): plugin enumeration from the native plugin root, manifest
- * `omp.extensions` resolution, extension factory loading, custom-tool
- * discovery, and real tool/hook execution. It replaces the former source-text
- * assertions (`validateStatus` symbol present, no bare
- * `@mstar-harness/engine` import) with the behaviour those regexes stood for:
- * the emitted bundles run with no resolvable `@mstar-harness/engine` package,
- * and the extension's one runtime host import resolves to the running host
- * that the optional peer pins.
+ * The runtime case loads the packed artifact through native host discovery in
+ * a disposable host root. It verifies the extension and hook execute from the
+ * published bundle without resolving the engine package from the consumer.
+ * Host imports resolve to the running optional peer.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -28,19 +20,11 @@ const ROOT = join(import.meta.dir, "..");
 const DIST = join(ROOT, "dist");
 const HOOK_BUNDLE = join(DIST, "hooks", "pre", "mstar-gates.js");
 const EXTENSION_BUNDLE = join(DIST, "extensions", "model-handoff.js");
-/** Package-root path the manifest `omp.extensions` entry must resolve to. */
+/** Package-root paths the manifest `omp.extensions` entries must resolve to. */
 const EXTENSION_MIRROR = join(ROOT, "extensions", "model-handoff.js");
 /** Suffix the discovered entry is matched by inside the child process. */
 const EXTENSION_SUFFIX = "/extensions/model-handoff.js";
 const SOURCE_ENTRY = join(ROOT, "src", "extensions", "model-handoff.ts");
-const TOOLS = [
-  "mstar_status_validate",
-  "mstar_dispatch_validate",
-  "mstar_iteration_gate",
-  "mstar_lease_verify",
-  "mstar_path_resolve",
-  "mstar_worktree_check",
-];
 
 const HOST_PACKAGE = "@oh-my-pi/pi-coding-agent";
 const PLUGIN_NAME = "@mstar-harness/omp";
@@ -625,21 +609,14 @@ describe("@mstar-harness/omp bundle smoke", () => {
     expect(existsSync(PHASE2_EXTENSION_BUNDLE)).toBe(true);
   });
 
-  test("all six tool bundles exist under dist/tools/", () => {
-    for (const tool of TOOLS) {
-      expect(existsSync(join(DIST, "tools", tool, "index.js"))).toBe(true);
-    }
+
+  test("standalone validator tool bundles are not emitted", () => {
+    expect(existsSync(join(DIST, "tools"))).toBe(false);
   });
 
-  test("omp discovery mirrors exist at the package root (hooks/pre/ + tools/*.js + extensions/)", () => {
-    // omp discovers plugin surfaces by convention from the installed package
-    // root: `hooks/pre/` (any file), `tools/` (direct *.js files — the
-    // sub-directory scan only accepts `tools/<name>/index.ts`) and the
-    // manifest-declared `extensions/` entry.
+  test("omp discovery mirrors exist at the package root (hooks/pre/ + extensions/)", () => {
     expect(existsSync(join(ROOT, "hooks", "pre", "mstar-gates.js"))).toBe(true);
-    for (const tool of TOOLS) {
-      expect(existsSync(join(ROOT, "tools", `${tool}.js`))).toBe(true);
-    }
+    expect(existsSync(join(ROOT, "tools"))).toBe(false);
     expect(existsSync(EXTENSION_MIRROR)).toBe(true);
     expect(existsSync(PHASE2_EXTENSION_MIRROR)).toBe(true);
   });
@@ -655,17 +632,15 @@ describe("@mstar-harness/omp packed artifact", () => {
         // enumerate the plugin.
         expect(existsSync(join(pkgRoot, "plugin.json"))).toBe(true);
         expect(readdirSync(join(pkgRoot, "assets")).length).toBeGreaterThan(0);
-        // Hook + extension + tools at BOTH layouts (dist/ canonical, root discovery).
+        // Hook and extension bundles at both layouts (dist/ canonical, root discovery).
         expect(existsSync(join(pkgRoot, "dist", "hooks", "pre", "mstar-gates.js"))).toBe(true);
         expect(existsSync(join(pkgRoot, "hooks", "pre", "mstar-gates.js"))).toBe(true);
-        expect(existsSync(join(pkgRoot, "dist", "extensions", "model-handoff.js"))).toBe(true);
-        expect(existsSync(join(pkgRoot, "extensions", "model-handoff.js"))).toBe(true);
-        expect(existsSync(join(pkgRoot, "dist", "extensions", "phase2-orchestration.js"))).toBe(true);
-        expect(existsSync(join(pkgRoot, "extensions", "phase2-orchestration.js"))).toBe(true);
-        for (const tool of TOOLS) {
-          expect(existsSync(join(pkgRoot, "dist", "tools", tool, "index.js"))).toBe(true);
-          expect(existsSync(join(pkgRoot, "tools", `${tool}.js`))).toBe(true);
+        for (const extension of ["model-handoff.js", "phase2-orchestration.js"]) {
+          expect(existsSync(join(pkgRoot, "dist", "extensions", extension))).toBe(true);
+          expect(existsSync(join(pkgRoot, "extensions", extension))).toBe(true);
         }
+        expect(existsSync(join(pkgRoot, "tools"))).toBe(false);
+        // MCP transport is served by the standalone `mstar mcp` CLI, not this plugin package.
         // Skills/commands/agents (both layout names) with the PM entry set.
         for (const dir of ["skills", "harness-skills"]) {
           expect(existsSync(join(pkgRoot, dir, "mstar-harness-core", "SKILL.md"))).toBe(true);
@@ -754,15 +729,15 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.source.tools).toEqual(report.packed.tools);
       expect(report.source.handlers).toEqual(report.packed.handlers);
 
-      // Hook + tool bundles are self-contained: they load and execute against
-      // the inlined engine in the same engine-free disposable root.
+      // Legacy custom-tool discovery remains empty; canonical commands are
+      // registered by the generated native extension instead.
       expect(report.hook.errors).toEqual([]);
       expect(report.hook.handlers).toEqual(["tool_call"]);
       expect(report.hook.toolCallHandlers).toBe(1);
       expect(report.hook.benignResult).toBeNull();
       expect(report.tools.errors).toEqual([]);
-      expect([...report.tools.loaded].sort()).toEqual([...TOOLS].sort());
-      expect(report.tools.pathResolve).toContain(`harness: ${join(project, ".mstar")}`);
+      expect(report.tools.loaded).toEqual([]);
+      expect(report.tools.pathResolve).toBe("");
     },
     240_000,
   );

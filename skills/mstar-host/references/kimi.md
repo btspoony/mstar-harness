@@ -23,6 +23,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - **Upgrade / reload**: `/plugins install` the new package version, then `/plugins reload` (or `/new`); the managed copy under `$KIMI_CODE_HOME/plugins/managed/` is refreshed by that install, not by editing this checkout.
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
+## MCP delivery
+
+- **Native install and loading**: in Kimi TUI run `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. `.kimi-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; its comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
+- **Context boundary**: optional `host` selects validated host context, not a role or authority. `sessionId` is the main conversation session; no per-call child-agent attribution is required or performed. Shared workflow ownership, path, state-transition and CAS checks remain authoritative.
+- **Doctor and evidence**: `mstar-harness doctor --target kimi` reports aligned / mismatch / unavailable from the MCP launch config, checks Node's floor, and never opens `store.db`. A valid config is not proof of installed-host behavior. Live verification is separate authorized work.
+
 ## Coordination transport (no host-native seat)
 
 This host ships no native execution transport: skills, commands and agents mount as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the active route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`), or the pre-activation file route while the control root's execution authority is not active (`--session <absolute-json>` + a row revision). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).

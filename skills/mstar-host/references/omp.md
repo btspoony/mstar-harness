@@ -26,6 +26,12 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - **Upgrade / reload**: reinstall or relink the package, then a new session — or `/reload-plugins` on omp ≥17.2.11 (see § Gotchas).
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
+## MCP delivery
+
+- **Native install and loading**: `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp`). The MCP server is launched via the CLI subcommand: `npx @mstar-harness/cli mcp`. Runtime: **Node >=24.18.0**; OMP itself remains Bun-hosted.
+- **Context boundary**: optional `host` selects context validated against existing host definitions, not a role or authority. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared workflow ownership, path, transition and CAS checks still decide admission.
+- **Doctor and evidence**: `mstar-harness doctor --target omp` reports aligned / mismatch / unavailable from the MCP launch config, checks the Node floor, and never opens `store.db`. H2's native bridge and package server are removed; an aligned config is not an installed-host run.
+
 ## Skill loading
 
 1. On entry: invoke **`pm`** via `/skill:pm` → **Read next** loads `mstar-harness-core`, then `mstar-roles` → `project-manager.md` when PM is active.

@@ -18,7 +18,8 @@
     "AGENTS.md",
     "INSTALL.md",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "mcp.json"
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
@@ -31,6 +32,7 @@
     "node": ">=24.18.0"
   },
   "dependencies": {
+    "@mstar-harness/commands": "workspace:*",
     "@opencode-ai/plugin": "1.4.8"
   },
   "publishConfig": {

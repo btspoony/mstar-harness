@@ -72,6 +72,51 @@ interface RunResult {
   stderr: string;
 }
 
+interface CommandEnvelope {
+  version: number;
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function message(result: RunResult): string {
+  return envelope(result).message ?? "";
+}
+
+function data(result: RunResult): Record<string, unknown> {
+  return envelope(result).data ?? {};
+}
+
+type GateViolation = { code: string; message?: string };
+
+function violations(result: RunResult): GateViolation[] {
+  const response = envelope(result);
+  const sources = [response.data?.entry, response.data?.exit, response.data?.gate, response.details?.gate, response.details];
+  return sources.flatMap((source) => {
+    if (!source || typeof source !== "object" || !Array.isArray((source as { violations?: unknown }).violations)) return [];
+    return (source as { violations: unknown[] }).violations.flatMap((violation) =>
+      violation && typeof violation === "object" && typeof (violation as { code?: unknown }).code === "string"
+        ? [violation as GateViolation]
+        : []);
+  });
+}
+
+function violationCodes(result: RunResult): string[] {
+  return violations(result).map(({ code }) => code);
+}
+
+function violationMessages(result: RunResult): string[] {
+  return violations(result).flatMap(({ message: text }) => typeof text === "string" ? [text] : []);
+}
+
 /**
  * Spawn env with ambient harness env vars pinned out: the CLI
  * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
@@ -132,7 +177,7 @@ describe("Phase-5 F1 — custom `.mstarc` workflow_dir (Bugbot b1f402ec)", () =>
 
       const result = runCli(gateArgs(dir, compassPath));
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // The hardcoded default-layout dir is NEVER consulted.
       expect(existsSync(join(dir, "workflows"))).toBe(false);
     } finally {
@@ -146,10 +191,10 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
     withFixtures((dir, statusPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // Entry checklist reports the still-executing plans (expected mid-run);
       // only the gate verdict (result.ok) drives the exit code.
-      expect(result.stderr).toContain("PLAN_NOT_DONE");
+      expect(violationCodes(result)).toContain("PLAN_NOT_DONE");
     });
   });
 
@@ -158,9 +203,9 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
       writeFileSync(statusPath, snapshotFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("transition: phase-3-close");
-      expect(result.stderr).toContain("EXIT_STATUS_NOT_COMPLETED");
-      expect(result.stderr).toContain("EXIT_END_DATE_REQUIRED");
+      expect((envelope(result).details?.gate as { transition?: string }).transition).toBe("phase-3-close");
+      expect(violationCodes(result)).toContain("EXIT_STATUS_NOT_COMPLETED");
+      expect(violationCodes(result)).toContain("EXIT_END_DATE_REQUIRED");
     });
   });
 
@@ -178,10 +223,10 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
         "--target", "main",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-4-pr-delivery");
-      expect(result.stdout).toContain("entry (close §3.1): OK");
-      expect(result.stdout).toContain("exit (close §3.5): OK");
-      expect(result.stderr).toBe("");
+      const resultData = data(result);
+      expect(resultData.transition).toBe("phase-4-pr-delivery");
+      expect((resultData.entry as { ok?: boolean }).ok).toBe(true);
+      expect((resultData.exit as { ok?: boolean }).ok).toBe(true);
     });
   });
 
@@ -190,9 +235,9 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
       writeFileSync(statusPath, snapshotFixture([["plan-a", "Todo"]]));
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
-      expect(result.stderr).toContain("PLAN_NOT_IN_STATUS");
-      expect(result.stderr).toContain("plan-b");
+      expect(data(result).transition).toBe("phase-2-execute");
+      expect(violationCodes(result)).toContain("PLAN_NOT_IN_STATUS");
+      expect(violationMessages(result).join("\n")).toContain("plan-b");
     });
   });
 
@@ -212,13 +257,13 @@ plans: []
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // Parsed as an empty array: the frontmatter schema accepts it, and the
       // only report is the accurate COMPASS_NO_PLANS — no string-misparse
       // COMPASS_INVALID_FIELD and no per-plan PLAN_NOT_IN_STATUS noise.
-      expect(result.stderr).toContain("COMPASS_NO_PLANS");
-      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(violationCodes(result)).toContain("COMPASS_NO_PLANS");
+      expect(violationCodes(result)).not.toContain("COMPASS_INVALID_FIELD");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
 
@@ -238,16 +283,16 @@ plans: [plan-a, plan-b]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // Parsed as ["plan-a", "plan-b"]: both ids are looked up in status.json
       // and reported as still-executing (PLAN_NOT_DONE) — not lost to a
       // scalar misparse (COMPASS_NO_PLANS / COMPASS_INVALID_FIELD).
-      expect(result.stderr).toContain("PLAN_NOT_DONE");
-      expect(result.stderr).toContain("plan-a");
-      expect(result.stderr).toContain("plan-b");
-      expect(result.stderr).not.toContain("COMPASS_NO_PLANS");
-      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(violationCodes(result)).toContain("PLAN_NOT_DONE");
+      expect(violationMessages(result).join("\n")).toContain("plan-a");
+      expect(violationMessages(result).join("\n")).toContain("plan-b");
+      expect(violationCodes(result)).not.toContain("COMPASS_NO_PLANS");
+      expect(violationCodes(result)).not.toContain("COMPASS_INVALID_FIELD");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
 
@@ -267,12 +312,12 @@ plans: ["hello, world"]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("ambiguous flow-style array");
-      expect(result.stderr).toContain("quoted item containing comma");
+      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(message(result)).toContain("quoted item containing comma");
       // The quote-aware guard must fire before the naive split — the gate
       // never runs, so no plan lookups for a misparsed ["hello","world"].
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
-      expect(result.stderr).not.toContain("PLAN_NOT_DONE");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_DONE");
     });
   });
 
@@ -292,9 +337,9 @@ plans: ["a, b", "c"]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("ambiguous flow-style array");
-      expect(result.stderr).toContain("quoted item containing comma");
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(message(result)).toContain("quoted item containing comma");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
 
@@ -314,12 +359,12 @@ plans: ['a, b']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("ambiguous flow-style array");
-      expect(result.stderr).toContain("quoted item containing comma");
+      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(message(result)).toContain("quoted item containing comma");
       // The quote-aware guard must fire before the naive split — the gate
       // never runs, so no plan lookups for a misparsed ["a", "b"].
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
-      expect(result.stderr).not.toContain("PLAN_NOT_DONE");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_DONE");
     });
   });
 
@@ -339,8 +384,8 @@ plans: ['a, b', 'c']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("ambiguous flow-style array");
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
 
@@ -360,8 +405,8 @@ plans: ['a", b']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("ambiguous flow-style array");
-      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
 
@@ -381,13 +426,13 @@ plans: ['ok']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // Parsed as ["ok"]: the plan id is looked up in status.json and
       // reported as missing (PLAN_NOT_IN_STATUS) — not a scalar misparse.
-      expect(result.stderr).toContain("PLAN_NOT_IN_STATUS");
-      expect(result.stderr).toContain("ok");
-      expect(result.stderr).not.toContain("COMPASS_NO_PLANS");
-      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
+      expect(violationCodes(result)).toContain("PLAN_NOT_IN_STATUS");
+      expect(violationMessages(result).join("\n")).toContain("'ok'");
+      expect(violationCodes(result)).not.toContain("COMPASS_NO_PLANS");
+      expect(violationCodes(result)).not.toContain("COMPASS_INVALID_FIELD");
     });
   });
 
@@ -407,7 +452,7 @@ plans: ['unterminated]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("unterminated ' quote in flow-style array");
+      expect(message(result)).toContain("unterminated ' quote in flow-style array");
     });
   });
 
@@ -427,7 +472,7 @@ plans: [[a]]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("nested flow-style array");
+      expect(message(result)).toContain("nested flow-style array");
     });
   });
 
@@ -447,13 +492,13 @@ plans: ["ok"]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("transition: phase-2-execute");
+      expect(data(result).transition).toBe("phase-2-execute");
       // Parsed as ["ok"]: the plan id is looked up in status.json and
       // reported as missing (PLAN_NOT_IN_STATUS) — not a scalar misparse.
-      expect(result.stderr).toContain("PLAN_NOT_IN_STATUS");
-      expect(result.stderr).toContain("ok");
-      expect(result.stderr).not.toContain("COMPASS_NO_PLANS");
-      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
+      expect(violationCodes(result)).toContain("PLAN_NOT_IN_STATUS");
+      expect(violationMessages(result).join("\n")).toContain("'ok'");
+      expect(violationCodes(result)).not.toContain("COMPASS_NO_PLANS");
+      expect(violationCodes(result)).not.toContain("COMPASS_INVALID_FIELD");
     });
   });
 
@@ -461,7 +506,7 @@ plans: ["ok"]
     withFixtures((dir, _statusPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", "no-such-wf", "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("workflow snapshot not found");
+      expect(message(result)).toContain("workflow snapshot not found");
     });
   });
 
@@ -470,7 +515,7 @@ plans: ["ok"]
       writeFileSync(compassPath, "# no frontmatter here\n");
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("no YAML frontmatter fence");
+      expect(message(result)).toContain("no YAML frontmatter fence");
     });
   });
 
@@ -479,8 +524,8 @@ plans: ["ok"]
       for (const bad of ["../../etc", "a/b", "..", "."]) {
         const result = runCli(["iteration", "gate", "--workflow", bad, "--harness", dir, "--compass", compassPath]);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("invalid workflow id");
-        expect(result.stderr).not.toContain("workflow snapshot not found");
+        expect(message(result)).toContain("invalid workflow id");
+        expect(message(result)).not.toContain("workflow snapshot not found");
       }
     });
   });
@@ -490,28 +535,27 @@ describe("mstar iteration push-cadence — §5.1a push gate", () => {
   test("no flags (CI idle, no review wave) → push allowed, exit 0", () => {
     const result = runCli(["iteration", "push-cadence"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("push allowed");
-    expect(result.stderr).toBe("");
+    expect(data(result).allowed).toBe(true);
   });
 
   test("--ci-running → push blocked (PUSH_BLOCKED_CI), exit 1", () => {
     const result = runCli(["iteration", "push-cadence", "--ci-running"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("PUSH_BLOCKED_CI");
-    expect(result.stderr).not.toContain("PUSH_BLOCKED_REVIEW_WAVE");
+    expect(violationCodes(result)).toContain("PUSH_BLOCKED_CI");
+    expect(violationCodes(result)).not.toContain("PUSH_BLOCKED_REVIEW_WAVE");
   });
 
   test("--review-wave → push blocked (PUSH_BLOCKED_REVIEW_WAVE), exit 1", () => {
     const result = runCli(["iteration", "push-cadence", "--review-wave"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("PUSH_BLOCKED_REVIEW_WAVE");
-    expect(result.stderr).not.toContain("PUSH_BLOCKED_CI");
+    expect(violationCodes(result)).toContain("PUSH_BLOCKED_REVIEW_WAVE");
+    expect(violationCodes(result)).not.toContain("PUSH_BLOCKED_CI");
   });
 
   test("both flags → blocked with both violations, exit 1", () => {
     const result = runCli(["iteration", "push-cadence", "--ci-running", "--review-wave"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("PUSH_BLOCKED_CI");
-    expect(result.stderr).toContain("PUSH_BLOCKED_REVIEW_WAVE");
+    expect(violationCodes(result)).toContain("PUSH_BLOCKED_CI");
+    expect(violationCodes(result)).toContain("PUSH_BLOCKED_REVIEW_WAVE");
   });
 });

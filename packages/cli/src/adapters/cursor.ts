@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { diagnoseCursorHost, globalInstallPath, projectInstallPath } from "@mstar-harness/commands";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import {
@@ -8,50 +8,12 @@ import {
   ensureLocalHarnessRepo,
   ensureGitCheckout,
   validateLocalHarnessRepo,
-  validateGitCheckout,
   appendGitignore,
   appendHarnessProjectGitignore,
   missingHarnessProcessGitignoreEntries,
 } from "./shared-install";
 
-const CURSOR_PLUGIN_NAME = "morning-star-harness";
-const CURSOR_PLUGIN_MARKER = ".cursor-plugin/plugin.json";
 const CURSOR_PLUGIN_LINK = ".cursor/plugins/morning-star-harness";
-const CURSOR_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
-
-/** Install roots — exported for `../plugin-version-alignment` (the doctor
- * alignment note discovers the installed plugin version at these paths;
- * single home for the cursor install layout). */
-export function globalInstallPath() {
-  return path.join(os.homedir(), ".cursor", "plugins", "local", CURSOR_PLUGIN_NAME);
-}
-
-export function projectInstallPath() {
-  return path.join(resolveProjectRoot(), CURSOR_PLUGIN_LINK);
-}
-
-function validatePluginAgents(pluginRoot: string) {
-  const errors: string[] = [];
-  const agentsDir = path.join(pluginRoot, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    errors.push(`Missing plugin agents directory: ${agentsDir}`);
-    return errors;
-  }
-  for (const agentName of CURSOR_AGENT_SMOKE_NAMES) {
-    const agentPath = path.join(agentsDir, `${agentName}.md`);
-    if (!fs.existsSync(agentPath)) {
-      errors.push(`Missing plugin agent file: ${agentPath}`);
-      continue;
-    }
-    const content = fs.readFileSync(agentPath, "utf8");
-    if (!/^---\nname:\s/m.test(content)) {
-      errors.push(
-        `Plugin agent ${agentName}.md must use Cursor-first frontmatter (name, description, model before OpenCode fields).`,
-      );
-    }
-  }
-  return errors;
-}
 
 function ensureCursorPluginCheckout(location: string, dryRun: boolean) {
   return ensureGitCheckout(REPO_URL, location, dryRun);
@@ -75,18 +37,14 @@ function projectInit(dryRun: boolean) {
 }
 
 function globalDoctor() {
-  const location = globalInstallPath();
-  const errors = validateLocalHarnessRepo();
-  errors.push(...validateGitCheckout(location, CURSOR_PLUGIN_MARKER));
-  errors.push(...validatePluginAgents(location));
-  return { location, errors };
+  const diagnostic = diagnoseCursorHost("global");
+  return { ...diagnostic, errors: [...validateLocalHarnessRepo(), ...diagnostic.errors] };
 }
 
 function projectDoctor() {
   const projectRoot = resolveProjectRoot();
-  const location = projectInstallPath();
-  const errors = validateLocalHarnessRepo();
-  errors.push(...validateGitCheckout(location, CURSOR_PLUGIN_MARKER));
+  const diagnostic = diagnoseCursorHost("project");
+  const errors = [...validateLocalHarnessRepo(), ...diagnostic.errors];
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   if (!gitignore.split(/\r?\n/).includes(CURSOR_PLUGIN_LINK)) {
@@ -95,9 +53,9 @@ function projectDoctor() {
   for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
     errors.push(`Missing .gitignore entry: ${entry}`);
   }
-  errors.push(...validatePluginAgents(location));
-  return { location, errors };
+  return { location: diagnostic.location, errors };
 }
+
 
 export const cursorAdapter: AgentAdapter = {
   target: "cursor",
@@ -106,8 +64,5 @@ export const cursorAdapter: AgentAdapter = {
     if (scope === "global") return globalInit(dryRun);
     return projectInit(dryRun);
   },
-  runInstallDoctor: (scope) => {
-    if (scope === "global") return globalDoctor();
-    return projectDoctor();
-  },
+  runInstallDoctor: (scope) => scope === "global" ? globalDoctor() : projectDoctor(),
 };

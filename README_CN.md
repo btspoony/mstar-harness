@@ -76,7 +76,7 @@ npm i -g @mstar-harness/cli
 
 ### 校验
 
-`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`。
+`npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` 检查所选宿主；Codex 还支持 `--scope <global|project>`。MCP 包健康状态为 aligned、mismatch 或 unavailable。Doctor 读取包 metadata/可执行文件并检查运行时下限，不会打开 issue store。见 [MCP 宿主安装路径](#mcp-宿主安装路径)。
 
 Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#codex)。
 
@@ -153,6 +153,70 @@ coordinator 一侧——`prepare`，随后 `accept`，再按路线走：迭代�
 mstar dashboard            # 服务开始监听后打印解析得到的 URL
 mstar dashboard --help     # --port / --open / --project
 ```
+
+### 命令契约
+
+除安装器以外的命令都由 `@mstar-harness/commands` 的同一份规范定义生成。`mstar init` 仍是安装器，不是生成命令。成功、拒绝和用法各自打印 version-1 JSON 信封；普通退出码是 0、1、2。缺失的 SDD task 仍退出 3，子进程仍原样传播 124、127 和 128+n。下面的例子是合成示例。本文不声称已在已安装宿主、浏览器或在线服务上运行过。
+
+```text
+mstar schema CaptureInput
+mstar host detect --signals question
+```
+
+### 离线报告草稿
+
+`mstar report` 会为 GitHub issue 表单生成离线草稿；它不会读取凭据或文件、提交 issue，也不会发起网络请求。只提供你选择的报告字段：`title`、`command`、`arguments`、`expected`、`actual`、`reproduction`、`stableCode`、`exitStatus`、`host`、`platform` 和 `versionOverrides`。未提供的叙述字段会标记为 `absent`；无法观测到的版本会标记为 `unknown`。版本覆盖值会明确标为调用方提供。每个文本字段最多 8192 UTF-8 字节，所有提供的文本合计最多 32768 字节；`arguments` 最多 128 项。
+
+报告复用一组有限的脱敏模式：私钥块、AWS access key、GitHub token 和 PAT、Stripe live key、Slack token、JWT、`sk-` API key、凭据类键值赋值（`password`、`passwd`、`api-key`、`access-token`、`auth-token`、`secret` 或 `token`），以及四种 CI/IaC 形态（GitHub Actions 明文 secret 环境变量、回显的 Actions secret、凭据命名的 Docker `ENV`/`ARG`、Terraform 硬编码密码）。脱敏计数按字段统计不同的匹配行/类型发现，不是出现次数。有限模式不能保证移除所有 secret；请自行检查草稿。
+
+```bash
+mstar report --title "Synthetic example" --command "mstar status" \
+  --expected "workflow is listed" --actual "workflow is missing" \
+  --stable-code "workflow.not-found" --exit-status 1
+```
+
+生成的提示会要求你在提交前检查草稿。CLI 与 MCP 用法见[报告命令用法](INSTALL.md#report-command)。
+
+### MCP 运行时
+
+`mstar mcp` 由 `@mstar-harness/cli` 直接运行 stdio MCP server，与 CLI 共用同一个包。它将规范定义中的非安装器命令注册为 MCP tools（工具名以 `mstar_` 开头，并将命令 ID 中的点和连字符替换为下划线）。不再提供独立的 `@mstar-harness/mcp` 包、宿主专属 bundle 或原生桥接。
+
+六个宿主配置通过 `npx @mstar-harness/cli mcp` 启动 CLI；DSH 的 Cordis YAML 启动项仍待后续接入。这要求 CLI 中包含 `mcp` 命令的版本已发布；在该版本发布前，`npx` 可能解析到尚不识别该命令的旧版 CLI。CLI 与引擎要求 Node.js >=24.18.0。
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  }
+}
+```
+
+`sessionId` 选择主对话会话，不是派生子代理的会话。可选的 `host` 用于选择受支持的宿主上下文；它不是角色，也不授予权限。请求是否允许，仍由现有共享处理器中的 workflow ownership、路径、状态转换和 CAS 检查决定。拒绝结果保留稳定的命令信封与 code（并作为 MCP tool error 返回）；调用方应解释或解决拒绝原因，而不是换一种身份或路径重试绕过检查。这里说明的是软件包契约，不代表已在已安装宿主中运行。
+
+示例均为合成示例；本文不声称已在已安装宿主、浏览器或在线服务上运行。
+MCP 捕获的 SDD 证据记录为 `stable:false`；与 CLI 的采集器一致性仍是已记录的跨计划 residual。
+
+### MCP 宿主安装路径
+
+六个 JSON 宿主配置和 OpenCode 插件的 `config` hook 都通过 `npx @mstar-harness/cli mcp` 启动 CLI；DSH 的 Cordis YAML 启动行留待后续接入。`npx` 启动时可能下载 CLI 包，因此必须先发布包含 `mcp` 的 CLI 版本：
+
+| 宿主 | MCP 配置 | 运行时 |
+|------|----------|--------|
+| omp | 插件 `mcp.json` | Node.js >=24.18.0 |
+| OpenCode | `packages/opencode/mcp.json` 模板；插件加载时动态注入 OpenCode 的 `mcp` 配置 | Node.js >=24.18.0 |
+| dsh | Cordis profile YAML MCP 启动行 — 后续跟进（此包不提供 JSON 配置） | 未配置 |
+| Cursor | `.cursor-plugin/mcp.json` | Node.js >=24.18.0 |
+| Codex | `.codex-plugin/mcp.json` | Node.js >=24.18.0 |
+| Kimi | `.kimi-plugin/mcp.json` | Node.js >=24.18.0 |
+| ZCode | `.zcode-plugin/mcp.json` | Node.js >=24.18.0 |
+
+精确安装命令与配置细节见 [INSTALL.md](INSTALL.md#installing-the-mcp-tools)。宿主对应的实际产物也见 [`mstar-host` references](skills/mstar-host/SKILL.md)。
+
+`doctor --target <host>` 将 MCP 配置状态报告为 **aligned**、**mismatch** 或 **unavailable**；配置 aligned 不代表已验证宿主实际运行。Doctor 检查配置的 CLI 启动参数和 Node.js 下限，**不会**启动 server 或打开 issue store。MCP 上下文遵循共享契约：可选 `host` 选择经校验的宿主上下文，`sessionId` 是主对话会话；不要求也不执行子代理归因。开发阶段的单测/组件/集成证据，不等于已安装宿主或在线验证；后者属于需单独授权的活动，本文不声称已完成。
+OpenCode 插件通过动态 config hook 注册 MCP server；包内 `mcp.json` 是参考模板，不要求静态修改用户的 `opencode.json`。DSH 使用 Cordis YAML 插件行；其 npx 启动行是单独跟踪的宿主接入后续工作，目前 `doctor --target dsh` 会报告 unavailable。
 
 ## Harness Workflow（统一流程）
 

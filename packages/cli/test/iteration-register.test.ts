@@ -29,11 +29,30 @@ const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
+/** Invalid-input coverage spawns many CLI processes; avoid the 5s default under CI load. */
+const MULTI_CLI_TEST_TIMEOUT_MS = 120_000;
 
 interface RunResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+}
+
+interface CommandEnvelope {
+  command: string;
+  status: "ok" | "refused" | "usage";
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: unknown;
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function message(result: RunResult): string {
+  return envelope(result).message ?? "";
 }
 
 /**
@@ -77,7 +96,7 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
     "main",
     "--branch-integration",
     "feature/20260918-iteration-register-cli-integrate",
-    "--branch-target",
+    "--branch-target-iteration",
     "main",
     "--row",
     row("20260918-plan-alpha"),
@@ -120,8 +139,7 @@ describe("mstar iteration register", () => {
     await setupHarness((harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`iteration register: OK \u2014 ${WORKFLOW_ID} registered`);
-      expect(result.stdout).toContain(snapshot);
+      expect(envelope(result)).toMatchObject({ command: "iteration.register", status: "ok", code: "iteration.register.ok" });
 
       expect(existsSync(snapshot)).toBe(true);
       const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
@@ -177,12 +195,11 @@ describe("mstar iteration register", () => {
   test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
     await setupHarness((harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator", "--json"]);
+      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator"]);
       expect(bind.exitCode).toBe(0);
-      const payload = JSON.parse(bind.stdout) as Record<string, unknown>;
-      expect(payload.ok).toBe(true);
-      expect(payload.role).toBe("coordinator");
-      expect(payload.workflow_id).toBe(WORKFLOW_ID);
+      const payload = envelope(bind).data as { session: Record<string, unknown> };
+      expect(payload.session.role).toBe("coordinator");
+      expect(payload.session.workflow_id).toBe(WORKFLOW_ID);
     });
   });
 
@@ -207,7 +224,7 @@ describe("mstar iteration register", () => {
         ["--compass-ref", COMPASS_REF],
         ["--branch-base", "main"],
         ["--branch-integration", "feature/integrate"],
-        ["--branch-target", "main"],
+        ["--branch-target-iteration", "main"],
         ["--row", row("p1")],
       ] as const) {
         // Omitted required flag.
@@ -240,7 +257,7 @@ describe("mstar iteration register", () => {
 
       for (const args of variants) {
         const result = runCli(args);
-        expect(result.exitCode).toBe(2);
+        if (result.exitCode !== 2) throw new Error(`expected usage for ${args.join(" ")}, got: ${result.stdout}`);
       }
       expect(existsSync(root)).toBe(false);
       expect(existsSync(snapshot)).toBe(false);
@@ -248,10 +265,10 @@ describe("mstar iteration register", () => {
       const help = runCli(["iteration", "register", "--help"]);
       expect(help.exitCode).toBe(0);
       expect(help.stdout).toContain("--compass-ref");
-      expect(help.stdout).toContain("--branch-integration");
+      expect(help.stdout).toContain("--branch-target-iteration");
       expect(help.stdout).toContain("--row");
     });
-  });
+  }, MULTI_CLI_TEST_TIMEOUT_MS);
 
   test("engine refusals exit 1 with authoritative bytes unchanged; orphan retry recovers (exit 0)", async () => {
     await setupHarness((harness, { root, snapshot }) => {
@@ -292,7 +309,7 @@ describe("mstar iteration register", () => {
       writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(1);
-      expect(retry.stderr).toContain("reconcile");
+      expect(message(retry)).toContain("reconcile");
       expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootDoc.workflows).toEqual([]);

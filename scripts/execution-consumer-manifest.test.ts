@@ -55,14 +55,6 @@ import { serializeExecutionValue } from "../packages/engine/src/index.ts";
 
 const SCRIPT = join(import.meta.dir, "execution-consumer-manifest.ts");
 const INSTRUCTION_ROOTS = ["skills", "commands", "agents"] as const;
-const OMP_MIRROR_TOOLS = [
-  "mstar_dispatch_validate",
-  "mstar_iteration_gate",
-  "mstar_lease_verify",
-  "mstar_path_resolve",
-  "mstar_status_validate",
-  "mstar_worktree_check",
-] as const;
 
 interface FixtureOptions {
   /** Add a self-contained in-repo instruction symlink to the `skills` corpus. */
@@ -175,6 +167,22 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/cli/scripts/build-web.ts", "export const web = 1;\n");
   write(root, "packages/cli/dist/mstar-harness.js", "// cli bundle\n");
 
+  for (const config of [
+    ".codex-plugin/mcp.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/mcp.json",
+    ".cursor-plugin/plugin.json",
+    ".kimi-plugin/mcp.json",
+    ".kimi-plugin/plugin.json",
+    ".omp-plugin/mcp.json",
+    ".zcode-plugin/mcp.json",
+    ".zcode-plugin/plugin.json",
+    "packages/opencode/mcp.json",
+  ]) {
+    write(root, config, `// ${config}\n`);
+  }
+  write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
+
   packageJson(root, "packages/dsh", { bun: ">=1.4.0" });
   write(root, "packages/dsh/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/dsh/src/index.ts", "export const dsh = 1;\n");
@@ -198,11 +206,6 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/omp/dist/hooks/pre/mstar-gates.js", "// omp pre hook\n");
   write(root, "packages/omp/dist/extensions/model-handoff.js", "// omp handoff\n");
   write(root, "packages/omp/dist/extensions/phase2-orchestration.js", "// omp phase2\n");
-  for (const tool of OMP_MIRROR_TOOLS) {
-    write(root, `packages/omp/dist/tools/${tool}/index.js`, `// omp tool ${tool}\n`);
-    // Build script mirrors dist/tools/<name>/index.js to tools/<name>.js.
-    mirrorFile(root, `packages/omp/dist/tools/${tool}/index.js`, `packages/omp/tools/${tool}.js`);
-  }
   mirrorFile(
     root,
     "packages/omp/dist/hooks/pre/mstar-gates.js",
@@ -226,6 +229,7 @@ function buildFixture(options: FixtureOptions = {}): string {
   bundleCopy(root, "assets", "packages/omp/assets");
   write(root, ".omp-plugin/plugin.json", '{ "name": "morning-star-harness" }\n');
   mirrorFile(root, ".omp-plugin/plugin.json", "packages/omp/plugin.json");
+  mirrorFile(root, ".omp-plugin/mcp.json", "packages/omp/mcp.json");
 
   packageJson(root, "packages/opencode", { bun: ">=1.4.0", node: ">=24.18.0" });
   write(root, "packages/opencode/src/mstar.ts", "export const mstar = 1;\n");
@@ -324,19 +328,18 @@ describe("execution-consumer-manifest — canonical collection", () => {
     const omp = manifest.consumers.find((consumer) => consumer.id === "omp");
     expect(omp?.runtime.target).toBe("bun");
     expect(omp?.runtime.floor).toBe(">=1.4.0");
-    // The plugin manifest source is a real copy input, not only its root mirror.
+    // The plugin manifest source and MCP launch config are real copy inputs.
     expect(omp?.sources.files.map((file) => file.path)).toEqual([
+      ".omp-plugin/mcp.json",
       ".omp-plugin/plugin.json",
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ]);
-    // The plugin loads the package-root convention mirrors, so they are part of
-    // the generated closure, not only `dist`.
+    // The plugin loads package-root convention mirrors, so they are part of the generated closure, not only `dist`.
     expect(omp?.generated.trees.map((tree) => tree.root)).toEqual([
       "packages/omp/dist",
       "packages/omp/extensions",
       "packages/omp/hooks",
-      "packages/omp/tools",
     ]);
 
     // The public entry surface includes DSh's `./client` build output — which is
@@ -360,10 +363,10 @@ describe("execution-consumer-manifest — canonical collection", () => {
       ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
     expect(engineDist?.files).toBe(4);
 
-    // decision-only is explicit, never an absent or writer capability.
+    // OpenCode dynamically injects the CLI MCP server, whose handlers mutate; it remains a writer.
     const opencode = manifest.consumers.find((consumer) => consumer.id === "opencode");
-    expect(opencode?.capability).toBe("decision-only");
-    expect(opencode?.capabilityNote).toContain("decision-only");
+    expect(opencode?.capability).toBe("writer");
+    expect(opencode?.capabilityNote).toBeNull();
 
     // ZCode has no package metadata; its floor is declared as the canonical
     // one and the inlined engine source is part of its input closure.
@@ -417,8 +420,8 @@ describe("execution-consumer-manifest — canonical collection", () => {
     expectRefusal(() => collectExecutionConsumerManifest(emptyArtifact), "consumer.generated-empty");
 
     const emptyTree = buildFixture();
-    rmSync(join(emptyTree, "packages/omp/tools"), { recursive: true, force: true });
-    mkdirSync(join(emptyTree, "packages/omp/tools"), { recursive: true });
+    rmSync(join(emptyTree, "packages/omp/extensions"), { recursive: true, force: true });
+    mkdirSync(join(emptyTree, "packages/omp/extensions"), { recursive: true });
     expectRefusal(() => collectExecutionConsumerManifest(emptyTree), "consumer.generated-empty");
 
     // The DSh client bundle is deliberately OUTSIDE the manifest's byte-pinned
@@ -447,6 +450,10 @@ describe("execution-consumer-manifest — verification refusals", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
     verifyExecutionConsumerManifest(manifest);
+    const loaderDrift = buildFixture();
+    const loaderManifest = collectExecutionConsumerManifest(loaderDrift);
+    writeFileSync(join(loaderDrift, ".codex-plugin/mcp.json"), "// stale Codex loader config\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(loaderManifest), "consumer.digest-mismatch");
 
     writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
     expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
@@ -588,7 +595,7 @@ describe("execution-consumer-manifest — verification refusals", () => {
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(runtimeTamper)), "consumer.runtime-mismatch");
 
     const capabilityTamper = cloneManifest(manifest);
-    consumerIn(capabilityTamper, "opencode").capability = "writer";
+    consumerIn(capabilityTamper, "opencode").capability = "decision-only";
     expectRefusal(
       () => verifyExecutionConsumerManifest(asManifest(capabilityTamper)),
       "consumer.capability-mismatch",

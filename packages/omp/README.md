@@ -20,7 +20,7 @@ Or use the installer CLI:
 npx @mstar-harness/cli init --target omp
 ```
 
-Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/omp` — the linked package tree needs a local build first (`bun install && bun run engine:build && bun run --cwd packages/omp build`; the linked tree resolves the engine via the workspace member, whose `dist/` is gitignored). Linking the repo root no longer provides the runtime gates — hooks/tools moved into this package.
+Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/omp` — the linked package tree needs a local build first (`bun install && bun run engine:build && bun run --cwd packages/omp build`; the linked tree resolves the engine via the workspace member, whose `dist/` is gitignored). Linking the repo root no longer provides the runtime gates; those are built into this package. The stdio MCP server now launches through the CLI `mcp` subcommand, not an OMP-native bridge.
 
 ## What you get
 
@@ -29,12 +29,12 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 | `hooks/pre/mstar-gates.js` | `tool_call` pre-hook — blocking enforcement gate for harness coordination-document writes and task dispatches. Its issue-authority refusals are **unconditional** in every enforcement mode: a direct write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm` included), a write to a retired project register while the store is the active authority, and an unreadable authority (below-floor runtime, missing `node:sqlite`, corrupt or busy store — fails closed) |
 | `extensions/model-handoff.js` | Coordinator model-handoff extension (native opt-in settings `modelHandoff` / `handoffTarget`, tool `mstar_model_handoff`) — off by default; see below |
 | `extensions/phase2-orchestration.js` | Phase-2 orchestration extension (native launch opt-in `phase2PlanInstances` / `maxPlanInstances`, tool `mstar_phase2`) — extras off by default; see below |
-| `tools/mstar_*.js` | Six model-callable validator tools (`mstar_status_validate`, `mstar_dispatch_validate`, `mstar_lease_verify`, `mstar_path_resolve`, `mstar_iteration_gate`, `mstar_worktree_check`) |
+| `mcp.json` | Launch configuration for `npx @mstar-harness/cli mcp` (requires a published CLI release containing `mcp`) |
 | `skills/` | `mstar-harness-core`, `mstar-iteration`, `mstar-sdd`, roles, phase/dispatch gates, … |
 | `commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review` |
 | `agents/` | Subagent role shells (`fullstack-dev`, `qc-specialist`, …) — no PM shell; the `mode: primary` project-manager seat is OpenCode-only |
 
-The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The host package is the reverse: `extensions/model-handoff.js` keeps its one `@oh-my-pi/pi-coding-agent` import external and resolves it against the running host (the host provides that module for extensions), declared as an **optional peer** `^18.3.0` (any 18.x host) and developed against the host version pinned in `devDependencies`.
+The engine and command runtime are bundled inline into the hook and extension bundles at build time. MCP is launched separately through the packaged `mcp.json` config with `npx @mstar-harness/cli mcp`, so the published CLI containing `mcp` and Node.js >=24.18.0 are required. The host package itself keeps its `@oh-my-pi/pi-coding-agent` imports external and resolves them against the running host, declared as an **optional peer** `^18.3.0` (any 18.x host) and developed against the host version pinned in `devDependencies`.
 
 ## Model handoff (opt-in)
 
@@ -48,8 +48,8 @@ Coordinator sessions can run Prepare for every new Morning Star iteration on `@s
 
 **Scope limitation (host behaviour, not configurable here):** the native `/settings` → Plugins panel lists **user-scope** plugin installs. A `--scope project` install is used by omp but has no row in that panel; use the user-scope install above. The extension reads the saved preference through the host's exported settings helper, so a project-scoped runtime still honours the preference you saved there.
 
-Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and **Bun `>=1.4.0`** for this plugin. The peer is optional so the package installs on any host: the hooks, tools, skills and commands carry no runtime host import and are unaffected by this entry's host resolution. This is a Bun-hosted plugin; do not add a Node floor here just because the CLI also has an explicit `node` invocation.
-The engine is **bundled inline** into every hook/tool/extension bundle at build time — the installed package has no runtime `@mstar-harness/engine` resolution, so module link can never fail on a missing package. The Phase-2 extension follows the same host pattern as the model entry: its one runtime host dependency, `getPluginSettings` from `@oh-my-pi/pi-coding-agent/extensibility/plugins`, stays external and is resolved by the running host, declared as an **optional peer** and developed against the pinned host version.
+Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and **Bun `>=1.4.0`** for this plugin. The peer is optional so the package installs on any host: the hooks, MCP bridge, skills and commands are self-contained and unaffected by host resolution. This is a Bun-hosted plugin; do not add a Node floor here just because the CLI also has an explicit `node` invocation.
+The engine and command/MCP runtime are bundled inline into the hook and extension bundles at build time. The model-handoff and Phase-2 extensions retain their host APIs as external imports resolved by omp.
 
 ## Phase-2 plan instances (opt-in)
 

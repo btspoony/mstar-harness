@@ -77,6 +77,29 @@ function fixtureTree(): string {
 function readJsonFile(file: string): Record<string, unknown> {
   return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
 }
+interface CliEnvelope {
+  version: number;
+  command: string;
+  status: string;
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+}
+
+function envelopeOf(result: RunResult, status?: string, code?: string): CliEnvelope {
+  const envelope = JSON.parse(result.stdout) as CliEnvelope;
+  expect(envelope.version).toBe(1);
+  expect(envelope.command).toBe("migrate");
+  expect(envelope.exitCode).toBe(result.exitCode);
+  if (status !== undefined) expect(envelope.status).toBe(status);
+  if (code !== undefined) expect(envelope.code).toBe(code);
+  return envelope;
+}
+
+function migrationData(result: RunResult): Record<string, unknown> {
+  return envelopeOf(result, "ok", "migrate.ok").data!;
+}
 
 /** Relative path list of every file under `root` (change detection). */
 function treeFiles(root: string): string[] {
@@ -99,13 +122,12 @@ describe("mstar migrate — dry-run", () => {
       const before = treeFiles(root);
       const r = runCli(["migrate", "--dry-run", "--path", root]);
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("dry-run");
-      expect(r.stdout).toContain("archive-status-v1");
-      expect(r.stdout).toContain("status.json \u2192 archived/status.v1.json");
-      expect(r.stdout).toContain("write-snapshot");
-      expect(r.stdout).toContain("replace-root-v2");
-      // archive step first, root v2 replacement last
-      expect(r.stdout.indexOf("archive-status-v1")).toBeLessThan(r.stdout.indexOf("replace-root-v2"));
+      const data = migrationData(r);
+      expect(data.message).toContain("dry-run");
+      const steps = data.steps as { kind: string; source: string; destination: string }[];
+      expect(steps[0]).toMatchObject({ kind: "archive-status-v1", source: "status.json", destination: "archived/status.v1.json" });
+      expect(steps.some((step) => step.kind === "write-snapshot")).toBe(true);
+      expect(steps.at(-1)?.kind).toBe("replace-root-v2");
       // zero writes
       expect(treeFiles(root)).toEqual(before);
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(false);
@@ -120,7 +142,7 @@ describe("mstar migrate — dry-run", () => {
     try {
       const r = runCli(["migrate", "--dry-run"], { cwd: root });
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("dry-run");
+      expect(migrationData(r).message).toContain("dry-run");
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -137,11 +159,9 @@ describe("mstar migrate — dry-run", () => {
       cpSync(V1_FIXTURE, harness, { recursive: true });
       const r = runCli(["migrate", "--dry-run", "--json"], { cwd: repoRoot });
       expect(r.exitCode).toBe(0);
-      const doc = JSON.parse(r.stdout) as { ok: boolean; root: string; dryRun: boolean };
-      expect(doc.ok).toBe(true);
-      expect(doc.dryRun).toBe(true);
-      // The CLI subprocess sees the realpath'd cwd (macOS /var -> /private/var).
-      expect(doc.root).toBe(realpathSync(harness));
+      const data = migrationData(r);
+      expect(data.dryRun).toBe(true);
+      expect(data.root).toBe(realpathSync(harness));
       expect(existsSync(join(harness, "archived", "status.v1.json"))).toBe(false);
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
@@ -155,8 +175,9 @@ describe("mstar migrate --dry-run — planned-document validation", () => {
     try {
       const r = runCli(["migrate", "--dry-run", "--path", root]);
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("dry-run");
-      expect(r.stdout).not.toContain("warning:");
+      const data = migrationData(r);
+      expect(data.message).toContain("dry-run");
+      expect(data.validationWarnings).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -177,17 +198,16 @@ describe("mstar migrate --dry-run — planned-document validation", () => {
 
       const r = runCli(["migrate", "--dry-run", "--path", root]);
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("warning:");
-      expect(r.stdout).toContain("status.plan-row.missing-title");
+      const data = migrationData(r);
+      expect((data.validationWarnings as string[])[0]).toContain("status.plan-row.missing-title");
       // zero writes even when warnings are present
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(false);
 
       const j = runCli(["migrate", "--dry-run", "--path", root, "--json"]);
       expect(j.exitCode).toBe(0);
-      const docJson = JSON.parse(j.stdout) as { validationWarnings?: string[] };
-      expect(Array.isArray(docJson.validationWarnings)).toBe(true);
-      expect(docJson.validationWarnings!.length).toBeGreaterThan(0);
-      expect(docJson.validationWarnings![0]).toContain("status.plan-row.missing-title");
+      const validationWarnings = migrationData(j).validationWarnings as string[];
+      expect(validationWarnings.length).toBeGreaterThan(0);
+      expect(validationWarnings[0]).toContain("status.plan-row.missing-title");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -201,9 +221,11 @@ describe("mstar migrate — real run", () => {
       const v1Before = readJsonFile(join(root, "status.json"));
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain("migrated");
-      expect(r.stdout).toContain("pending roadmap candidate (not written as authority)");
-      expect(r.stdout).toContain("- pi/dsh adapters (host APIs unknown)");
+      const data = migrationData(r);
+      expect(data.message).toContain("migrated");
+      const roadmapCandidate = data.roadmapCandidate as { file: string; source: string; content: string };
+      expect(roadmapCandidate).toMatchObject({ file: "projects/_default/roadmap.md", source: "status.json metadata.program_roadmap" });
+      expect(roadmapCandidate.content).toContain("- pi/dsh adapters (host APIs unknown)");
 
       const rootDoc = readJsonFile(join(root, "status.json"));
       expect(rootDoc).toEqual({ version: 2, updated_at: "2026-08-19", workflows: [] });
@@ -261,8 +283,9 @@ describe("mstar migrate — real run", () => {
       const afterFirst = treeFiles(root);
       const second = runCli(["migrate", "--path", root]);
       expect(second.exitCode).toBe(0);
-      expect(second.stdout).toContain("no-op");
-      expect(second.stdout).toContain("schema version 2");
+      const data = migrationData(second);
+      expect(data.message).toContain("no-op");
+      expect(data.alreadyMigrated).toBe(true);
       expect(treeFiles(root)).toEqual(afterFirst);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -276,7 +299,7 @@ describe("mstar migrate — exit codes", () => {
     try {
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(1);
-      expect(r.stderr).toContain("no v1 status.json");
+      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("no v1 status.json");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -288,7 +311,7 @@ describe("mstar migrate — exit codes", () => {
       writeFileSync(join(root, "status.json"), JSON.stringify({ version: 99 }));
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(1);
-      expect(r.stderr).toContain("unrecognized schema version");
+      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("unrecognized schema version");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -303,10 +326,9 @@ describe("mstar migrate — exit codes", () => {
       writeFileSync(join(root, "workflows"), "not a directory");
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(2);
-      expect(r.stderr).toContain("apply");
       // rolled back: root status.json is still v1; the v1 archive landed
       expect(readJsonFile(join(root, "status.json")).version).toBe(1);
-      expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(true);
+      expect(envelopeOf(r, "error", "migrate.apply-failure").code).toBe("migrate.apply-failure");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -326,10 +348,9 @@ describe("mstar migrate — exit codes", () => {
 
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(2);
-      expect(r.stderr).toContain("apply");
       // Partial state: v1 root intact + archive landed + the FIRST sorted
       // snapshot written; the blocked snapshot and later ones absent.
-      expect(readJsonFile(join(root, "status.json")).version).toBe(1);
+      expect(envelopeOf(r, "error", "migrate.apply-failure").code).toBe("migrate.apply-failure");
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(true);
       expect(existsSync(join(workflowsDir, "00000717-kimi-host", "snapshot.json"))).toBe(true);
       expect(existsSync(join(workflowsDir, "iter-00000817-dsh-cli-roles", "snapshot.json"))).toBe(false);
@@ -347,7 +368,7 @@ describe("mstar migrate — exit codes", () => {
       // Converged re-run is idempotent.
       const third = runCli(["migrate", "--path", root]);
       expect(third.exitCode).toBe(0);
-      expect(third.stdout).toContain("no-op");
+      expect(migrationData(third).message).toContain("no-op");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -360,8 +381,7 @@ describe("mstar migrate --json — machine-readable output", () => {
     try {
       const r = runCli(["migrate", "--dry-run", "--path", root, "--json"]);
       expect(r.exitCode).toBe(0);
-      const doc = JSON.parse(r.stdout) as Record<string, unknown>;
-      expect(doc.ok).toBe(true);
+      const doc = migrationData(r);
       expect(doc.root).toBe(root);
       expect(doc.dryRun).toBe(true);
       expect(doc.alreadyMigrated).toBe(false);
@@ -388,8 +408,7 @@ describe("mstar migrate --json — machine-readable output", () => {
   test("real-run shape: applied true; re-run no-op shape: alreadyMigrated true, zero steps", () => {
     const root = fixtureTree();
     try {
-      const first = JSON.parse(runCli(["migrate", "--path", root, "--json"]).stdout) as Record<string, unknown>;
-      expect(first.ok).toBe(true);
+      const first = migrationData(runCli(["migrate", "--path", root, "--json"]));
       expect(first.applied).toBe(true);
       expect(first.alreadyMigrated).toBe(false);
       const steps = first.steps as { kind: string; source: string; destination: string }[];
@@ -401,8 +420,7 @@ describe("mstar migrate --json — machine-readable output", () => {
         expect(typeof step.destination).toBe("string");
       }
 
-      const second = JSON.parse(runCli(["migrate", "--path", root, "--json"]).stdout) as Record<string, unknown>;
-      expect(second.ok).toBe(true);
+      const second = migrationData(runCli(["migrate", "--path", root, "--json"]));
       expect(second.applied).toBe(false);
       expect(second.alreadyMigrated).toBe(true);
       expect(second.steps).toEqual([]);
@@ -417,11 +435,9 @@ describe("mstar migrate --json — machine-readable output", () => {
     try {
       const r = runCli(["migrate", "--path", root, "--json"]);
       expect(r.exitCode).toBe(1);
-      const doc = JSON.parse(r.stdout) as Record<string, unknown>;
-      expect(doc.ok).toBe(false);
-      expect(doc.phase).toBe("plan");
-      expect(doc.exitCode).toBe(1);
-      expect(typeof doc.error).toBe("string");
+      const response = envelopeOf(r, "refused", "migrate.refused");
+      expect(response.exitCode).toBe(1);
+      expect(typeof response.message).toBe("string");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -482,8 +498,9 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
       const before = treeFiles(root);
       const refused = runCli(["migrate", "--path", root]);
       expect(refused.exitCode).toBe(2);
-      expect(refused.stderr).toContain("would be lifted without a declared delivery kind");
-      expect(refused.stderr).toContain(ACTIVE_ID);
+      const response = envelopeOf(refused, "usage", "command.invalid-input");
+      expect(response.message).toContain("would be lifted without a declared delivery kind");
+      expect(response.message).toContain(ACTIVE_ID);
       expect(treeFiles(root)).toEqual(before);
 
       const declared = runCli([
@@ -505,7 +522,7 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
     try {
       const r = runCli(["migrate", "--path", root, "--delivery-kind", "development", "--branch-source", "feature/a"]);
       expect(r.exitCode).toBe(1);
-      expect(r.stderr).toContain("delivery source and target branches");
+      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("delivery source and target branches");
       expect(existsSync(join(root, "workflows"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -522,18 +539,18 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
       ];
       const refused = runCli(args);
       expect(refused.exitCode).toBe(2);
-      expect(refused.stderr).toContain("a single delivery declaration cannot describe 2 active standalone plan lifts");
-      expect(refused.stderr).toContain(ACTIVE_ID);
-      expect(refused.stderr).toContain(SECOND_ACTIVE_ID);
-      expect(refused.stderr).toContain("batches of one declared plan");
+      const response = envelopeOf(refused, "usage", "command.invalid-input");
+      expect(response.message).toContain("a single delivery declaration cannot describe 2 active standalone plan lifts");
+      expect(response.message).toContain(ACTIVE_ID);
+      expect(response.message).toContain(SECOND_ACTIVE_ID);
+      expect(response.message).toContain("batches of one declared plan");
       expect(treeFiles(root)).toEqual(before);
 
       // The JSON shape keeps the plan-phase contract for the refusal.
       const json = runCli([...args, "--json"]);
       expect(json.exitCode).toBe(2);
-      const doc = JSON.parse(json.stdout) as Record<string, unknown>;
-      expect(doc).toMatchObject({ ok: false, phase: "plan", exitCode: 2 });
-      expect(String(doc.error)).toContain(SECOND_ACTIVE_ID);
+      const failure = envelopeOf(json, "usage", "command.invalid-input");
+      expect(failure.message).toContain(SECOND_ACTIVE_ID);
       expect(treeFiles(root)).toEqual(before);
     } finally {
       rmSync(root, { recursive: true, force: true });

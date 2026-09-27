@@ -266,7 +266,7 @@ const R1_CONSUMER_CAPABILITY: Readonly<Record<string, "writer" | "read-only" | "
   cli: "writer",
   dsh: "writer",
   omp: "writer",
-  opencode: "decision-only",
+  opencode: "writer",
   zcode: "writer",
 };
 

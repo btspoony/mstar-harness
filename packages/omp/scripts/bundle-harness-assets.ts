@@ -26,6 +26,7 @@ const sourceCommands = path.join(repoRoot, "commands");
 const sourceAgents = path.join(repoRoot, "agents");
 const sourceAssets = path.join(repoRoot, "assets");
 const sourcePluginManifest = path.join(repoRoot, ".omp-plugin", "plugin.json");
+const sourceMcpConfig = path.join(repoRoot, ".omp-plugin", "mcp.json");
 
 function copyTree(label: string, from: string, to: string) {
   if (!fs.existsSync(from)) {
@@ -53,7 +54,12 @@ if (!fs.existsSync(sourcePluginManifest)) {
   process.exit(1);
 }
 fs.copyFileSync(sourcePluginManifest, path.join(packageRoot, "plugin.json"));
+if (!fs.existsSync(sourceMcpConfig)) {
+  console.error(`bundle-harness-assets: missing omp MCP config: ${sourceMcpConfig}`);
+  process.exit(1);
+}
+fs.copyFileSync(sourceMcpConfig, path.join(packageRoot, "mcp.json"));
 
 console.log(
-  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json`,
+  `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json, mcp.json`,
 );

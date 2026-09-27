@@ -24,6 +24,12 @@
   ],
   "skills": "./skills/",
   "commands": "./commands/",
+  "mcpServers": {
+    "morning-star": {
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  },
   "sessionStart": {
     "skill": "pm"
   },

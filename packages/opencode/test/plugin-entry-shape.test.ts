@@ -44,4 +44,19 @@ describe("OpenCode plugin module entry", () => {
     expect(typeof hooks.config).toBe("function");
     expect(typeof hooks["tool.execute.before"]).toBe("function");
   });
+  test("config hook injects the CLI MCP server without dropping user servers", async () => {
+    const hooks = await pluginModule.server();
+    const config: Parameters<NonNullable<typeof hooks.config>>[0] = {
+      mcp: { existing: { type: "local", command: ["node", "other"] } },
+    };
+
+    await hooks.config?.(config);
+
+    expect(config.mcp?.existing).toEqual({ type: "local", command: ["node", "other"] });
+    expect(config.mcp?.["morning-star"]).toEqual({
+      type: "local",
+      command: ["npx", "@mstar-harness/cli", "mcp"],
+      enabled: true,
+    });
+  });
 });

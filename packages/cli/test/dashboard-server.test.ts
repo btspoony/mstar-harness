@@ -15,8 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { importRoadmapAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type StoreContext, type StoreDb } from "@mstar-harness/engine";
-import { startDashboard, type RunningDashboard } from "../src/dashboard/server";
-import { dashboardCss, dashboardHtml, dashboardJs } from "../src/dashboard/assets.generated";
+import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
+import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-server-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
@@ -502,19 +502,35 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
         stdio: ["ignore", "pipe", "pipe"],
       });
       const url = await new Promise<string>((resolve, reject) => {
-        let out = "";
-        const timer = setTimeout(() => reject(new Error(`dashboard did not announce a URL; output:\n${out}`)), 30_000);
+        let buffer = "";
+        let output = "";
         child.stdout.on("data", (chunk: Buffer) => {
-          out += chunk.toString("utf8");
-          const match = out.match(/dashboard at (http:\/\/127\.0\.0\.1:\d+\/)/);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1] as string);
+          const text = chunk.toString("utf8");
+          buffer += text;
+          output += text;
+          let newline = buffer.indexOf("\n");
+          while (newline >= 0) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            newline = buffer.indexOf("\n");
+            try {
+              const envelope = JSON.parse(line) as { command?: string; status?: string; message?: string; data?: { url?: string } };
+              if (envelope.command !== "dashboard") continue;
+              if (envelope.status !== "ok") {
+                reject(new Error(`dashboard failed: ${envelope.message ?? "unknown command failure"}`));
+                return;
+              }
+              if (typeof envelope.data?.url === "string") {
+                resolve(envelope.data.url);
+                return;
+              }
+            } catch {
+              // Ignore non-envelope output; early exit below reports the captured stream.
+            }
           }
         });
         child.once("exit", (code) => {
-          clearTimeout(timer);
-          reject(new Error(`dashboard exited early (${code})`));
+          reject(new Error(`dashboard exited early (${code}); output:\n${output}`));
         });
       });
 

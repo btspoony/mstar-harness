@@ -2,9 +2,8 @@ name: Release
 
 # PR-driven release. Merging a `release vX.Y.Z` PR runs the whole release inline
 # on the pull_request event: validate -> build -> npm publish (provenance) of
-# @mstar-harness/engine + @mstar-harness/cli + @mstar-harness/opencode (engine
-# first — cli/opencode depend on it) -> create+push the `vX.Y.Z` tag -> GitHub
-# Release.
+# @mstar-harness/engine + @mstar-harness/commands +
+# @mstar-harness/cli + @mstar-harness/opencode (dependency order).
 #
 # Prereleases: a `release vX.Y.Z-alpha.N` PR publishes under the npm dist-tag
 # `alpha` (never `latest`) and creates a GitHub Release flagged prerelease.
@@ -88,17 +87,17 @@ jobs:
 
       - name: Build packages
         run: |
+          bun run --cwd packages/commands build
           bun run cli:build
           bun run opencode:build
           bun run dsh:build
           bun run omp:build
-
-      # Engine is published standalone for direct consumers; cli/opencode/dsh/
-      # omp BUNDLE it at build time (devDependency), so their published
-      # artifacts are self-contained — no registry ordering constraint. Keep
-      # engine first for tidy publication history.
       - name: Publish @mstar-harness/engine
         run: npm publish --workspace @mstar-harness/engine --access public --tag ${{ steps.disttag.outputs.tag }}
+
+      - name: Publish @mstar-harness/commands
+        run: npm publish --workspace @mstar-harness/commands --access public --tag ${{ steps.disttag.outputs.tag }}
+
 
       - name: Publish @mstar-harness/cli
         run: npm publish --workspace @mstar-harness/cli --access public --tag ${{ steps.disttag.outputs.tag }}

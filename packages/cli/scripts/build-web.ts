@@ -3,7 +3,7 @@
  *
  * Bundles `web/app.ts` (Preact + htm, browser target) and reads
  * `web/shell.html` / `web/style.css`, then emits the ignored generated module
- * `src/dashboard/assets.generated.ts` exporting `dashboardHtml`, `dashboardJs`
+ * `packages/commands/src/dashboard/assets.generated.ts` exporting `dashboardHtml`, `dashboardJs`
  * and `dashboardCss` as escaped strings. The CLI build runs this before
  * bundling, so the published single artifact inlines the dashboard with no
  * disk asset directory, CDN, fonts or telemetry.
@@ -18,8 +18,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const commandsRoot = path.resolve(cliRoot, "../commands");
 const webDir = path.join(cliRoot, "web");
-const outPath = path.join(cliRoot, "src", "dashboard", "assets.generated.ts");
+const outPath = path.join(commandsRoot, "src", "dashboard", "assets.generated.ts");
 
 const shellHtml = readFileSync(path.join(webDir, "shell.html"), "utf8");
 const styleCss = readFileSync(path.join(webDir, "style.css"), "utf8");

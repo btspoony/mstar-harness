@@ -76,7 +76,7 @@ Without a global install the harness still works and those checks stay advisory.
 
 ### Verify
 
-`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`.
+`npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` checks the selected target; Codex also accepts `--scope <global|project>`. MCP package health is reported as aligned, mismatch, or unavailable. Doctor reads package metadata/executable and checks runtime floor; it does not open the issue store. See [MCP host install paths](#mcp-host-install-paths).
 
 Codex agent-link repair and named-role verification: [Codex installation](INSTALL.md#codex).
 
@@ -152,6 +152,70 @@ The audit and review commands are read-only and advisory; findings can become pl
 mstar dashboard            # prints the resolved URL after the server is listening
 mstar dashboard --help     # --port / --open / --project
 ```
+
+### Command contract
+
+Non-installer commands are generated from one canonical definition in `@mstar-harness/commands`. `mstar init` remains the installer and is not a generated command. Success, refusal, and usage each print a version-1 JSON envelope; ordinary exits are 0, 1, and 2. A missing SDD task still exits 3, and child processes still propagate 124, 127, and 128+n. Examples below are synthetic. This README does not claim an installed-host, browser, or live-service run.
+
+```text
+mstar schema CaptureInput
+mstar host detect --signals question
+```
+
+### Offline report draft
+
+`mstar report` creates an offline draft for the GitHub issue form; it does not read credentials or files, submit the issue, or make a network request. Supply only the report fields you choose: `title`, `command`, `arguments`, `expected`, `actual`, `reproduction`, `stableCode`, `exitStatus`, `host`, `platform`, and `versionOverrides`. Narrative fields you omit are marked `absent`; unavailable observed versions are `unknown`. Version overrides remain labeled caller-supplied. Each text field is limited to 8192 UTF-8 bytes and all supplied text together to 32768 bytes; `arguments` accepts at most 128 items.
+
+The report reuses a finite redaction set: private-key blocks, AWS access keys, GitHub tokens and PATs, live Stripe keys, Slack tokens, JWTs, `sk-` API keys, credential-like key/value assignments (`password`, `passwd`, `api-key`, `access-token`, `auth-token`, `secret`, or `token`), and four CI/IaC shapes (plaintext GitHub Actions secret environment values, echoed Actions secrets, credential-named Docker `ENV`/`ARG`, and hardcoded Terraform passwords). Redaction counts are distinct matched line/type findings per field, not every occurrence. This finite set cannot guarantee every secret is removed; inspect the draft yourself.
+
+```bash
+mstar report --title "Synthetic example" --command "mstar status" \
+  --expected "workflow is listed" --actual "workflow is missing" \
+  --stable-code "workflow.not-found" --exit-status 1
+```
+
+The generated prompt asks you to review it before submission. For CLI and MCP details, see [report command usage](INSTALL.md#report-command).
+
+### MCP runtime
+
+`mstar mcp` runs the stdio MCP server from the same `@mstar-harness/cli` package as the command-line interface. It registers the canonical non-installer commands as MCP tools (names use the `mstar_` prefix and replace command dots and hyphens with underscores). There is no standalone `@mstar-harness/mcp` package, per-host bundle, or native bridge.
+
+Six host configurations launch the CLI with `npx @mstar-harness/cli mcp`; DSH’s Cordis YAML launch row remains follow-up work. This requires a published CLI version that contains the `mcp` command; until that release is published, `npx` may resolve an older CLI that does not recognize it. Node.js >=24.18.0 is required by the CLI and engine.
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  }
+}
+```
+
+`sessionId` selects the main conversation session, not a spawned child-agent session. An optional `host` selects a supported host context; it is not a role or authority grant. Existing shared-handler workflow ownership, path, state-transition, and CAS checks still decide whether a request is allowed. A refusal keeps its stable command envelope and code (and is returned as an MCP tool error); callers should explain or resolve that refusal, not retry through a different identity or path. This documents the package contract, not an installed-host run.
+
+Examples are synthetic; this README does not claim an installed-host, browser, or live-service run.
+MCP-captured SDD evidence records are `stable:false`; collector parity with the CLI remains a documented cross-plan residual.
+
+### MCP host install paths
+
+The six JSON-backed host configs and OpenCode's plugin `config` hook launch the CLI with `npx @mstar-harness/cli mcp`; DSH's Cordis YAML launch row is a follow-up. `npx` may download the CLI package at launch, so the CLI version containing `mcp` must be published first:
+
+| Host | MCP config | Runtime |
+|------|------------|---------|
+| omp | Plugin `mcp.json` | Node.js >=24.18.0 |
+| OpenCode | `packages/opencode/mcp.json` template; the plugin injects `mcp` into OpenCode config at load | Node.js >=24.18.0 |
+| dsh | Cordis profile YAML MCP launch row — follow-up (no JSON config in this package) | Not configured |
+| Cursor | `.cursor-plugin/mcp.json` | Node.js >=24.18.0 |
+| Codex | `.codex-plugin/mcp.json` | Node.js >=24.18.0 |
+| Kimi | `.kimi-plugin/mcp.json` | Node.js >=24.18.0 |
+| ZCode | `.zcode-plugin/mcp.json` | Node.js >=24.18.0 |
+
+For exact install commands and configuration details, see [INSTALL.md](INSTALL.md#installing-the-mcp-tools). The target-specific artifacts are also described in [`mstar-host` references](skills/mstar-host/SKILL.md).
+
+`doctor --target <host>` reports MCP config status as **aligned**, **mismatch**, or **unavailable**; an aligned config is not an installed-host success claim. Doctor checks the configured CLI launch and Node.js floor; it does **not** start the server or open the issue store. MCP context keeps the shared contract: optional `host` selects validated host context, `sessionId` is the main conversation session, and child-agent attribution is neither required nor performed. Development unit/component/integration evidence is distinct from installed-host/live verification, which requires a separately authorized activity and is not claimed here.
+OpenCode's plugin adds the MCP server through its dynamic config hook; its packaged `mcp.json` is a reference template, not a static user `opencode.json` requirement. DSH uses a Cordis YAML plugin row; its npx launch row is a separately tracked host-wiring follow-up and `doctor --target dsh` currently reports unavailable.
 
 ## Harness Workflow
 

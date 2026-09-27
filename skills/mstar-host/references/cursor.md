@@ -16,6 +16,12 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 - **Upgrade / reload**: refresh the plugin's installed copy / rules and start a new Cursor session so the mounted skills and commands come from the new build; editing this checkout changes nothing for an installed plugin until that refresh.
 - **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
 
+## MCP delivery
+
+- **Native install and loading**: install the Morning Star Cursor plugin. `.cursor-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; the file comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
+- **Context boundary**: optional `host` selects validated host context, not a role or authority; `sessionId` is the main conversation session. Per-call child-agent attribution is neither required nor performed. Existing shared-handler workflow ownership, path, state-transition and CAS checks decide admission.
+- **Doctor and evidence**: `mstar-harness doctor --target cursor` (global or project scope) reports aligned / mismatch / unavailable from the MCP launch config, checks the Node floor, and never opens `store.db`. An aligned config is not proof that Cursor loaded or ran the server.
+
 ## Coordination transport (no host-native seat)
 
 This host ships no native execution transport: it mounts skills, commands and rules as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the active route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`), or the pre-activation file route while the control root's execution authority is not active (`--session <absolute-json>` + a row revision). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).

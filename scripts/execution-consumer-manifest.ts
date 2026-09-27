@@ -321,29 +321,22 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     entrypoint: "packages/omp/dist/hooks/pre/mstar-gates.js",
     sourceTrees: [{ root: "packages/omp/src" }, { root: "packages/omp/scripts" }],
     sourceFiles: [
+      ".omp-plugin/mcp.json",
       ".omp-plugin/plugin.json",
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ],
-    // `dist` plus the package-root convention mirrors the build produces with
-    // `cp -R` (hooks/tools/extensions) — the plugin loads the mirrors.
+    // `cp -R` (hooks/extensions) — the plugin loads the mirrors.
     generatedTrees: [
       { root: "packages/omp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/extensions", exclude: BUILD_OUTPUT_EXCLUSIONS },
       { root: "packages/omp/hooks", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/tools", exclude: BUILD_OUTPUT_EXCLUSIONS },
     ],
     generatedFiles: [
       "packages/omp/dist/extensions/model-handoff.js",
       "packages/omp/dist/extensions/phase2-orchestration.js",
       "packages/omp/dist/hooks/pre/mstar-gates.js",
-      "packages/omp/dist/tools/mstar_dispatch_validate/index.js",
-      "packages/omp/dist/tools/mstar_iteration_gate/index.js",
-      "packages/omp/dist/tools/mstar_lease_verify/index.js",
-      "packages/omp/dist/tools/mstar_path_resolve/index.js",
-      "packages/omp/dist/tools/mstar_status_validate/index.js",
-      "packages/omp/dist/tools/mstar_worktree_check/index.js",
-      // `bundle-assets` copies the omp plugin manifest to the package root.
+      "packages/omp/mcp.json",
       "packages/omp/plugin.json",
     ],
     copies: [
@@ -354,14 +347,13 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
   {
     id: "opencode",
     packageRoot: "packages/opencode",
-    capability: "decision-only",
-    capabilityNote:
-      "OpenCode hook is log/decision-only: without native per-call session identity the writer association is refused and this consumer is excluded operationally (contract §6 H4 / S15).",
+    capability: "writer",
+    capabilityNote: null,
     runtime: { target: "node", declaration: "package-engines" },
     packageJson: "packages/opencode/package.json",
     entrypoint: "packages/opencode/dist/mstar.js",
     sourceTrees: [{ root: "packages/opencode/src" }, { root: "packages/opencode/scripts" }],
-    sourceFiles: ["packages/opencode/package.json"],
+    sourceFiles: ["packages/opencode/mcp.json", "packages/opencode/package.json"],
     generatedTrees: [{ root: "packages/opencode/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
     generatedFiles: ["packages/opencode/dist/mstar.js"],
     copies: [
@@ -387,7 +379,19 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     // The hook bundle inlines the engine, so the engine source is part of this
     // consumer's input closure, not only the hook's own source.
     sourceTrees: [{ root: "hooks/src" }, { root: "packages/engine/src" }],
-    sourceFiles: ["scripts/build-zcode-hooks.ts"],
+    sourceFiles: [
+      ".codex-plugin/mcp.json",
+      ".codex-plugin/plugin.json",
+      ".cursor-plugin/mcp.json",
+      ".cursor-plugin/plugin.json",
+      ".kimi-plugin/mcp.json",
+      ".kimi-plugin/plugin.json",
+      ".omp-plugin/mcp.json",
+      ".omp-plugin/plugin.json",
+      ".zcode-plugin/mcp.json",
+      ".zcode-plugin/plugin.json",
+      "scripts/build-zcode-hooks.ts",
+    ],
     generatedTrees: [],
     generatedFiles: ["hooks/mstar-write-gate.mjs"],
     copies: [],

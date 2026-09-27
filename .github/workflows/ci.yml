@@ -105,11 +105,10 @@ jobs:
             exit 1
           fi
 
-      # Root typecheck resolves @mstar-harness/engine via packages/engine/dist
-      # (types: ./dist/index.d.ts), which is gitignored — build it first.
-      # The engine build is idempotent (rm -rf dist && bun build && bunx tsc).
-      - name: Build engine (declarations for typecheck)
-        run: bun run engine:build && bun run judgment:build
+      # Root typecheck resolves the workspace engine and command exports
+      # through gitignored dist declarations; build those dependencies first.
+      - name: Build engine and workspace declarations for typecheck
+        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build
 
       - name: Typecheck
         run: bun run typecheck
@@ -123,6 +122,7 @@ jobs:
       # in the single-job pipeline — they never fed this check.
       - name: ZCode hooks bundle freshness
         run: bun run engine:build && bun run hooks:build && git diff --exit-code -- hooks/
+
 
       # `bun run --cwd packages/cli check` loads packages/cli/src/index.ts,
       # whose static graph reaches src/dashboard/server.ts ->
@@ -213,6 +213,9 @@ jobs:
       # consumers. The CLI's own dist is built by the "Test CLI" package script.
       - name: Build engine (dist for the CLI suite's consumer-manifest guard)
         run: bun run engine:build && bun run judgment:build
+      # The CLI suite's execution-consumer guard verifies built consumer artifacts.
+      - name: Build commands package (for the CLI build)
+        run: bun run --cwd packages/commands build
 
       - name: Build OpenCode
         run: bun run opencode:build
@@ -263,6 +266,9 @@ jobs:
       # build the engine first, as the single-job pipeline did.
       - name: Build engine (dist for the opencode build)
         run: bun run engine:build && bun run judgment:build
+      # The CLI-entry specs use the workspace command registry; build it before the CLI.
+      - name: Build commands package (for the CLI build)
+        run: bun run --cwd packages/commands build
 
       # The execution-session specs spawn the checkout's real CLI entry
       # (`bun run packages/cli/src/index.ts …`); loading it resolves the whole
@@ -314,6 +320,8 @@ jobs:
       # the engine dist it resolves first.
       - name: Build engine (dist for the omp build)
         run: bun run engine:build && bun run judgment:build
+      - name: Build commands package
+        run: bun run --cwd packages/commands build
 
       # The omp package build regenerates the gitignored discovery mirrors
       # (hooks/, tools/, skills/ under packages/omp) its convention-scan smoke
@@ -359,6 +367,8 @@ jobs:
       # `bun install` in a fresh checkout is self-sufficient.
       - name: Build engine (dist for the dsh build)
         run: bun run engine:build && bun run judgment:build
+      - name: Build commands package
+        run: bun run --cwd packages/commands build
 
       # Runs bundle-assets first, which syncs the harness-skills /
       # harness-commands mirrors this package's tests read from its own package
@@ -480,6 +490,8 @@ jobs:
       # dist — build that first.
       - name: Build engine (dist for the consumer builds)
         run: bun run engine:build && bun run judgment:build
+      - name: Build commands package
+        run: bun run --cwd packages/commands build
 
       - name: Build CLI
         run: bun run cli:build
@@ -543,6 +555,9 @@ jobs:
 
       - name: Install dependencies for drift validation
         run: bun install --frozen-lockfile
+      - name: Build engine and command workspace dependencies
+        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build
+
 
       - name: Repository drift validation
         run: bun run validation:drift

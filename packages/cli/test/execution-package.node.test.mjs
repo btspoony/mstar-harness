@@ -234,7 +234,10 @@ function cliEnv(fixture, identity) {
     env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = fixture.harness;
-  if (identity !== undefined) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  if (identity !== undefined) {
+    env.MSTAR_HOST_SESSION_ID = identity.sessionId;
+    env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  }
   return env;
 }
 
@@ -418,16 +421,17 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         rootToken,
         "--operation",
         "register-1",
+        "--session-id",
+        COORDINATOR_ID,
         "--harness",
         fixture.harness,
-        "--json",
       ],
       coordinatorIdentity(),
     ),
     "workflow register",
   );
-  assert.equal(registered.route, "execution");
-  assert.equal(registered.operation, "workflow register");
+  assert.equal(registered.command, "workflow.register");
+  assert.equal(registered.status, "ok");
   assert.equal(registered.data.workflowId, WORKFLOW_ID);
 
   // --- bind: the trusted local coordinator bootstrap -----------------------
@@ -448,19 +452,20 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         "bind-coordinator",
         "--harness",
         fixture.harness,
-        "--json",
+        "--session-id",
+        COORDINATOR_ID,
       ],
       coordinatorIdentity(),
     ),
     "plan bind --coordinator",
   );
-  assert.equal(claimed.route, "execution");
-  assert.equal(claimed.operation, "bind");
-  assert.equal(claimed.operation_id, "bind-coordinator");
-  assert.equal(claimed.data.role, "coordinator");
-  assert.equal(claimed.data.sessionId, COORDINATOR_ID);
-  assert.equal(claimed.data.workflowId, WORKFLOW_ID);
-  const coordinatorWire = encodeExecutionSessionRef(claimed.data);
+  assert.equal(claimed.command, "plan.bind");
+  assert.equal(claimed.status, "ok");
+  assert.equal(claimed.data.operationId, "bind-coordinator");
+  assert.equal(claimed.data.data.role, "coordinator");
+  assert.equal(claimed.data.data.sessionId, COORDINATOR_ID);
+  assert.equal(claimed.data.data.workflowId, WORKFLOW_ID);
+  const coordinatorWire = encodeExecutionSessionRef(claimed.data.data);
   assert.ok(coordinatorWire.startsWith(WIRE_PREFIX), `unexpected session reference ${coordinatorWire}`);
 
   // --- write: prepare seals the reviewed Assignment ------------------------
@@ -483,15 +488,17 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         "prepare-1",
         "--harness",
         fixture.harness,
-        "--json",
+        "--session-id",
+        COORDINATOR_ID,
       ],
       coordinatorIdentity(),
     ),
     "plan prepare",
   );
-  assert.equal(prepared.route, "execution");
-  assert.equal(prepared.data.plan.id, PLAN_ID);
-  assert.equal(prepared.data.coordination.prepared.assignment_path, assignmentPath);
+  assert.equal(prepared.command, "plan.prepare");
+  assert.equal(prepared.status, "ok");
+  assert.equal(prepared.data.data.plan.id, PLAN_ID);
+  assert.equal(prepared.data.data.coordination.prepared.assignment_path, assignmentPath);
 
   // --- bind: the plan seat claims the row's execution lease ----------------
   const postPrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
@@ -512,45 +519,48 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         "bind-plan-pm",
         "--harness",
         fixture.harness,
-        "--json",
+        "--session-id",
+        PLAN_PM_ID,
       ],
       planPmIdentity(),
     ),
     "plan bind --plan",
   );
-  assert.equal(planBound.operation, "bind");
-  assert.equal(planBound.data.role, "plan-pm");
-  assert.equal(planBound.data.planId, PLAN_ID);
-  assert.equal(planBound.data.sessionId, PLAN_PM_ID);
-  const planPmWire = encodeExecutionSessionRef(planBound.data);
+  assert.equal(planBound.command, "plan.bind");
+  assert.equal(planBound.status, "ok");
+  assert.equal(planBound.data.operationId, "bind-plan-pm");
+  assert.equal(planBound.data.data.role, "plan-pm");
+  assert.equal(planBound.data.data.planId, PLAN_ID);
+  assert.equal(planBound.data.data.sessionId, PLAN_PM_ID);
+  const planPmWire = encodeExecutionSessionRef(planBound.data.data);
   assert.ok(planPmWire.startsWith(WIRE_PREFIX));
 
   // --- read: the session-authorized view of the prepared row ---------------
   const viewed = ok(
     runCli(
       fixture,
-      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harness, "--json"],
+      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harness, "--session-id", PLAN_PM_ID],
       planPmIdentity(),
     ),
     "plan show",
   );
-  assert.equal(viewed.route, "execution");
-  assert.equal(viewed.operation, "show");
-  assert.equal(viewed.data.plan.id, PLAN_ID);
-  assert.equal(viewed.data.session.sessionId, PLAN_PM_ID);
-  assert.equal(viewed.data.coordination.prepared.assignment_path, assignmentPath);
+  assert.equal(viewed.command, "plan.show");
+  assert.equal(viewed.status, "ok");
+  assert.equal(viewed.data.data.plan.id, PLAN_ID);
+  assert.equal(viewed.data.data.session.sessionId, PLAN_PM_ID);
+  assert.equal(viewed.data.data.coordination.prepared.assignment_path, assignmentPath);
 
   // --- read-only resume: an existing reference resumes under this identity --
   const resumed = ok(
-    runCli(fixture, ["plan", "bind", "--execution", "--resume-ref", planPmWire, "--json"], planPmIdentity()),
+    runCli(fixture, ["plan", "bind", "--execution", "--resume-ref", planPmWire, "--session-id", PLAN_PM_ID], planPmIdentity()),
     "plan bind --resume-ref",
   );
-  assert.equal(resumed.route, "execution");
-  assert.equal(resumed.operation, "bind");
-  assert.equal(resumed.data.sessionId, PLAN_PM_ID);
-  // A resume is a read: it carries neither an operation receipt nor a replay flag.
-  assert.equal(resumed.operation_id, undefined);
-  assert.equal(resumed.replayed, undefined);
+  assert.equal(resumed.command, "plan.bind");
+  assert.equal(resumed.status, "ok");
+  assert.equal(resumed.data.data.sessionId, PLAN_PM_ID);
+  // A resume is a read: it returns a session reference, not an operation receipt.
+  assert.equal(resumed.data.operationId, undefined);
+  assert.equal(resumed.data.replayed, undefined);
 
   // --- write: the plan-owned progress mutation, then its exact retry -------
   const progressArgs = [
@@ -566,19 +576,21 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
     "progress-1",
     "--harness",
     fixture.harness,
-    "--json",
+    "--session-id",
+    PLAN_PM_ID,
   ];
   const progressed = ok(runCli(fixture, progressArgs, planPmIdentity()), "plan progress");
-  assert.equal(progressed.route, "execution");
-  assert.equal(progressed.operation, "progress");
-  assert.equal(progressed.replayed, false);
-  assert.equal(progressed.data.plan.status, "InReview");
-  assert.equal(progressed.data.coordination.progress.status, "InReview");
+  assert.equal(progressed.command, "plan.progress");
+  assert.equal(progressed.status, "ok");
+  assert.equal(progressed.data.operationId, "progress-1");
+  assert.equal(progressed.data.replayed, false);
+  assert.equal(progressed.data.data.plan.status, "InReview");
+  assert.equal(progressed.data.data.coordination.progress.status, "InReview");
 
   const retried = ok(runCli(fixture, progressArgs, planPmIdentity()), "plan progress (retry)");
-  assert.equal(retried.replayed, true, "an identical retry must replay the recorded receipt, not re-commit");
-  assert.equal(retried.operation_id, "progress-1");
-  assert.equal(retried.data.plan.status, "InReview");
+  assert.equal(retried.data.replayed, true, "an identical retry must replay the recorded receipt, not re-commit");
+  assert.equal(retried.data.operationId, "progress-1");
+  assert.equal(retried.data.data.plan.status, "InReview");
 
   // --- the AUTHORITY's own truth, not the CLI's claim ---------------------
   const authority = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
@@ -588,8 +600,8 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(authority.data.session.sessionId, PLAN_PM_ID);
   assert.equal(authority.data.coordination.progress.summary, "r3 assembled-package regression");
   assert.equal(authority.data.coordination.prepared.prepared_by, COORDINATOR_ID);
-  assert.equal(progressed.store_id, authority.storeId, "the CLI's reported store disagrees with the authority read");
-  assert.equal(progressed.epoch, authority.epoch, "the CLI's reported epoch disagrees with the authority read");
+  assert.equal(progressed.data.storeId, authority.storeId, "the CLI's reported store disagrees with the authority read");
+  assert.equal(progressed.data.epoch, authority.epoch, "the CLI's reported epoch disagrees with the authority read");
 
   // --- current generation: the database is the ONLY persistence route -----
   assert.ok(!existsSync(join(fixture.harness, "status.json")), "the active route must not write a root status.json");
@@ -627,9 +639,10 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
         rootToken,
         "--operation",
         "register-1",
+        "--session-id",
+        COORDINATOR_ID,
         "--harness",
         fixture.harness,
-        "--json",
       ],
       coordinatorIdentity(),
     ),
@@ -652,7 +665,8 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
         "bind-coordinator",
         "--harness",
         fixture.harness,
-        "--json",
+        "--session-id",
+        COORDINATOR_ID,
       ],
       coordinatorIdentity(),
     ),

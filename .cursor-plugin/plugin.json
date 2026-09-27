@@ -27,5 +27,6 @@
     "skills",
     "workflow",
     "quality-gates"
-  ]
+  ],
+  "mcpServers": "./.cursor-plugin/mcp.json"
 }

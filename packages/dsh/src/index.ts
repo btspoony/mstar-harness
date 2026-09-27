@@ -888,10 +888,7 @@ export function apply(ctx: Context, config: Config): void {
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
 
-  // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
+  // v2 seams and canonical command tools share the native tools registry.
   registerSddIterationTools(ctx, resolver)
-
-  // Seam tools — on-demand `mstar_*_validate` equivalents
-  // (design-md / audit / compound / roles).
   registerSeamTools(ctx, resolver)
 }

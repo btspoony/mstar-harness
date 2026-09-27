@@ -5,6 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
+        "@mstar-harness/commands": "^3.11.2",
         "@mstar-harness/engine": "^3.11.2",
       },
       "devDependencies": {
@@ -30,14 +31,31 @@
       },
       "dependencies": {
         "@inquirer/prompts": "^8.4.2",
+        "@modelcontextprotocol/server": "2.1.0",
         "commander": "^14.0.3",
         "picocolors": "^1.1.1",
+        "zod": "^4.2.0",
       },
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
         "htm": "^3.1.1",
         "preact": "^10.29.8",
+      },
+    },
+    "packages/commands": {
+      "name": "@mstar-harness/commands",
+      "version": "3.11.2",
+      "dependencies": {
+        "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/judgment": "workspace:*",
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@types/node": "^25.6.0",
+        "bun-types": "^1.2.17",
+        "typescript": "^5.9.3",
       },
     },
     "packages/dsh": {
@@ -45,9 +63,9 @@
       "version": "3.11.2",
       "devDependencies": {
         "@deepseek-ai/dsh-util-code-language": "0.1.7-rc.2",
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@shikijs/langs": "^4.3.1",
-        "@types/mdast": "^4.0.4",
         "@types/node": "^25.6.0",
         "@types/react": "~18.3.1",
         "anser": "^2.3.5",
@@ -175,6 +193,7 @@
       "name": "@mstar-harness/omp",
       "version": "3.11.2",
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@oh-my-pi/pi-coding-agent": "18.3.0",
       },
@@ -189,6 +208,7 @@
       "name": "@mstar-harness/opencode",
       "version": "3.11.2",
       "dependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@opencode-ai/plugin": "1.4.8",
       },
       "devDependencies": {
@@ -477,6 +497,10 @@
 
     "@kurkle/color": ["@kurkle/color@0.3.4", "", {}, "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="],
 
+    "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.1.0", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-YdFj5gMRHr0gYNAhTbQDgjLHiEJdIAUYxomhKseUNye7ZGlISQmUoLh2sveFFCiQ7j2YMffT1kgSND0FSfIFjQ=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.1.0", "", { "dependencies": { "@modelcontextprotocol/core": "2.1.0", "zod": "^4.2.0" } }, "sha512-FdvwZU5N03O77Suh35JqjAqq5R1ZTEPFtwu6N4BgBq28qrQtrCnpbLL5U2pwYCuE194jAw0xnlOVmIqhfoYuUQ=="],
+
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 
     "@msgpackr-extract/msgpackr-extract-darwin-x64": ["@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.4", "", { "os": "darwin", "cpu": "x64" }, "sha512-zExlW9zUJKZH/tOtVMttwjKa4Xm/3KcNjnE3dPN92uCktwavMxpgCA3MoJK/DOnTWsQgo224OaST27/mPNAf+w=="],
@@ -490,6 +514,8 @@
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.4", "", { "os": "win32", "cpu": "x64" }, "sha512-CmCXPQrkbwExx3j946/PtHWHbYJiCRBRDl4BlkRQcJB/YOwQxJRTpoo7aTsortjgoJ1x7opzTSxn7C+ASSLVjQ=="],
 
     "@mstar-harness/cli": ["@mstar-harness/cli@workspace:packages/cli"],
+
+    "@mstar-harness/commands": ["@mstar-harness/commands@workspace:packages/commands"],
 
     "@mstar-harness/dsh": ["@mstar-harness/dsh@workspace:packages/dsh"],
 

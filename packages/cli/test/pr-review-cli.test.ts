@@ -4,8 +4,8 @@
  * `validatePrReviewReport`, pr-review.md § Tally / § Local report archive /
  * § Output shape).
  *
- * Exit codes: 0 = success, 1 = violations / bad input, 2 = usage (missing
- * required option, bad --target / --stage / --slug pairing).
+ * Exit codes: 0 = success, 1 = execution failures / report violations,
+ * 2 = invalid input or usage.
  *
  * Each case runs the real CLI as a subprocess against temp fixtures and
  * asserts the exit code + printed output.
@@ -37,6 +37,36 @@ interface RunResult {
   stderr: string;
 }
 
+interface CommandEnvelope {
+  version: number;
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function data(result: RunResult): Record<string, unknown> {
+  return envelope(result).data ?? {};
+}
+
+function message(result: RunResult): string {
+  return envelope(result).message ?? "";
+}
+
+function violationCodes(result: RunResult): string[] {
+  const violations = envelope(result).details?.violations;
+  return Array.isArray(violations)
+    ? violations.flatMap((value) => value && typeof value === "object" && typeof (value as { code?: unknown }).code === "string" ? [(value as { code: string }).code] : [])
+    : [];
+}
+
 /** Run the real CLI entry as a subprocess. */
 function runCli(args: string[]): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
@@ -66,10 +96,10 @@ describe("mstar pr-review tally", () => {
       const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", "1"]);
       expect(result.exitCode).toBe(0);
       // § Display contract verbatim two-liner: 100 - 15 - 6 - 10 = 69.
-      expect(result.stdout).toContain("needs fixes · 69%");
-      expect(result.stdout).toContain("must-fix=0 should-fix=1 nit=2 unverified=1");
-      expect(result.stdout).toContain('"verdict": "needs fixes"');
-      expect(result.stdout).toContain('"scorePct": 69');
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("needs fixes");
+      expect(resultData.scorePct).toBe(69);
+      expect(resultData.chatHeader).toBe("needs fixes · 69%\nmust-fix=0 should-fix=1 nit=2 unverified=1");
     });
   });
 
@@ -89,8 +119,10 @@ describe("mstar pr-review tally", () => {
       ]);
       expect(result.exitCode).toBe(0);
       // blocked · 60% (unsafe AC → must_fix), safe ACs × 15 → score floor at 0+... 100-40-30 = 30
-      expect(result.stdout).toContain("blocked · 30%");
-      expect(result.stdout).toContain("must-fix=1 should-fix=2 nit=0 unverified=0");
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("blocked");
+      expect(resultData.scorePct).toBe(30);
+      expect((resultData.tally as { mustFix: number; shouldFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, nit: 0, unverified: 0 });
     });
   });
 
@@ -99,9 +131,8 @@ describe("mstar pr-review tally", () => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass":"blocker"}]');
       const result = runCli(["pr-review", "tally", "--findings", findings]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('findings[0].mergeClass "blocker"');
-      expect(result.stderr).toContain("must-fix | should-fix | nit");
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     });
   });
 
@@ -109,7 +140,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("not found");
+      expect(message(result)).toContain("not found");
     });
   });
 
@@ -119,7 +150,7 @@ describe("mstar pr-review tally", () => {
       writeFileSync(findings, "{");
       const result = runCli(["pr-review", "tally", "--findings", findings]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("--findings is not valid JSON");
+      expect(envelope(result)).toMatchObject({ status: "error", code: "pr-review.tally.failed" });
     });
   });
 
@@ -128,8 +159,8 @@ describe("mstar pr-review tally", () => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '{"mergeClass":"must-fix"}');
       const result = runCli(["pr-review", "tally", "--findings", findings]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("must be a JSON array");
+      expect(result.exitCode).toBe(2);
+      expect(message(result)).toContain("must be a JSON array");
     });
   });
 
@@ -138,8 +169,8 @@ describe("mstar pr-review tally", () => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
       const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", raw]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("--unverified must be a non-negative integer");
+      expect(result.exitCode).toBe(2);
+      expect(message(result)).toContain("--unverified must be a non-negative integer");
     });
   });
 
@@ -148,8 +179,8 @@ describe("mstar pr-review tally", () => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
       const result = runCli(["pr-review", "tally", "--findings", findings, "--unmet-ac-unsafe", "51"]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("too many --unmet-ac-unsafe values (cap 50)");
+      expect(result.exitCode).toBe(2);
+      expect(message(result)).toContain("must be a non-negative integer no greater than 50");
     });
   });
 });
@@ -162,7 +193,7 @@ describe("mstar pr-review report-path", () => {
       writeFileSync(join(reportsDir, "2026-08-24-pr134.md"), "prior report — never overwritten");
       const first = runCli(["pr-review", "report-path", "--reports-dir", reportsDir, "--target", "pr:134", "--date", "2026-08-24"]);
       expect(first.exitCode).toBe(0);
-      expect(first.stdout.trim()).toBe(join(reportsDir, "2026-08-24-pr134-r2.md"));
+      expect(data(first).path).toBe(join(reportsDir, "2026-08-24-pr134-r2.md"));
     });
   });
 
@@ -171,7 +202,7 @@ describe("mstar pr-review report-path", () => {
       const reportsDir = join(dir, "empty");
       const result = runCli(["pr-review", "report-path", "--reports-dir", reportsDir, "--target", "pr:9", "--date", "2026-08-24"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.trim()).toBe(join(reportsDir, "2026-08-24-pr9.md"));
+      expect(data(result).path).toBe(join(reportsDir, "2026-08-24-pr9.md"));
     });
   });
 
@@ -188,7 +219,7 @@ describe("mstar pr-review report-path", () => {
         mkdirSync(fresh);
         const result = runCli(["pr-review", "report-path", "--reports-dir", fresh, "--target", target, "--date", "2026-08-24"]);
         expect(result.exitCode).toBe(0);
-        expect(result.stdout.trim()).toBe(join(fresh, expected));
+        expect(data(result).path).toBe(join(fresh, expected));
       }
     });
   });
@@ -206,7 +237,7 @@ describe("mstar pr-review report-path", () => {
         "1",
       ]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("--stage and --slug go together");
+      expect(message(result)).toContain("--stage and --slug go together");
     });
   });
 
@@ -228,7 +259,7 @@ describe("mstar pr-review report-path", () => {
         "backend-qc1",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.trim()).toBe(join(reportsDir, "2026-08-24-pr7-stage2-backend-qc1.md"));
+      expect(data(result).path).toBe(join(reportsDir, "2026-08-24-pr7-stage2-backend-qc1.md"));
     });
   });
 
@@ -236,7 +267,7 @@ describe("mstar pr-review report-path", () => {
     withTempDir((dir) => {
       const result = runCli(["pr-review", "report-path", "--reports-dir", join(dir, "r"), "--target", "sha:deadbeef"]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("pr:<n> | branch:<slug> | diff:<sha> | diff");
+      expect(message(result)).toContain("pr:<n> | branch:<slug> | diff:<sha> | diff");
     });
   });
 });
@@ -264,7 +295,7 @@ describe("mstar pr-review validate-report", () => {
       writeFileSync(file, report(""));
       const result = runCli(["pr-review", "validate-report", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expect(data(result).ok).toBe(true);
     });
   });
 
@@ -273,9 +304,8 @@ describe("mstar pr-review validate-report", () => {
       const file = join(dir, "report.md");
       writeFileSync(file, report("").replace("score_pct: 79", "score_pct: 90"));
       const result = runCli(["pr-review", "validate-report", file]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("FAIL");
-      expect(result.stderr).toContain("prreview.report.score-mismatch");
+      expect(envelope(result).status).toBe("refused");
+      expect(violationCodes(result)).toContain("prreview.report.score-mismatch");
     });
   });
 
@@ -293,7 +323,7 @@ describe("mstar pr-review validate-report", () => {
       );
       const result = runCli(["pr-review", "validate-report", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("prreview.report.failed-comments-collapsed");
+      expect(violationCodes(result)).toContain("prreview.report.failed-comments-collapsed");
     });
   });
 
@@ -303,7 +333,7 @@ describe("mstar pr-review validate-report", () => {
       writeFileSync(file, "# just prose\n");
       const result = runCli(["pr-review", "validate-report", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("prreview.report.missing-frontmatter");
+      expect(violationCodes(result)).toContain("prreview.report.missing-frontmatter");
     });
   });
 });
@@ -313,13 +343,6 @@ describe("mstar pr-review budget", () => {
     const result = runCli(["pr-review", "budget"]);
     expect(result.exitCode).toBe(0);
     // Numbers come from the engine export — a cap change must not break the test shape.
-    const expected = Object.entries(PR_REVIEW_TIER_BUDGETS).map(([tier, budget]) =>
-      `${tier}: <=${budget.wallClockMinutes}min wall-clock, max ${budget.maxSeats} review seats (kept-wave collect seats extra), ` +
-      `<=${budget.perSeatFindingsCap} findings/seat, ~${budget.evidenceTokensCap} tokens evidence/seat, ` +
-      `<=${budget.fileOpenCap} file opens/seat (baseline 100 tok/s)`,
-    );
-    expect(result.stdout.trim().split("\n")).toEqual(expected);
-    // Global constraint: the drift-check output is ASCII-only (no Unicode <= / ~).
-    expect(/^[\x20-\x7E\n]*$/.test(result.stdout)).toBe(true);
+    expect(data(result).budgets).toEqual(PR_REVIEW_TIER_BUDGETS);
   });
 });

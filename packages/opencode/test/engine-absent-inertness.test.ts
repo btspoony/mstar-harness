@@ -15,9 +15,10 @@
  * `node_modules/@mstar-harness/engine` is a STUB whose validation entry
  * points throw `engine unavailable`; loads the ACTUAL plugin source, drives
  * `tool.execute.before` on both the dispatch (`task`) and status-write
- * (`write`) paths, and asserts the hook completes without throwing and the
- * documented abort logs were emitted. It never depends on the real
- * mstar-harness install.
+ * (`write`) paths, and asserts the hook completes without throwing while
+ * validation aborts are logged. The MCP stdio server runs in the CLI process
+ * and is not part of this plugin-hook validation-failure test. It never depends
+ * on the real `mstar-harness` install.
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -110,6 +111,11 @@ describe("engine-absent inertness (subprocess fixture)", () => {
       // engine (not the repo install) is resolved.
       mkdirSync(join(project, "src"));
       copyFileSync(join(import.meta.dir, "../src/mstar.ts"), join(project, "src", "mstar.ts"));
+      writeFileSync(
+        join(project, "src", "mcp.js"),
+        "export const createOpenCodeMcpTools = () => ({});\nexport const closeOpenCodeMcpSession = async () => {};\n",
+        "utf8",
+      );
 
       const probePath = join(project, "probe.ts");
       writeFileSync(probePath, PROBE, "utf8");

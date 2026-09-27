@@ -364,7 +364,7 @@ function rootRow(surface: ExecutionSurface): Row {
   if (surface === "cli-writer") return consumerRow(surface, "cli", "writer", false);
   if (surface === "engine-cli-package") return consumerRow(surface, "engine", "writer", false);
   if (surface === "omp-package") return consumerRow(surface, "omp", "writer", false);
-  if (surface === "opencode-plugin") return consumerRow(surface, "opencode", "decision-only", false);
+  if (surface === "opencode-plugin") return consumerRow(surface, "opencode", "writer", false);
   if (surface === "zcode-hook") return consumerRow(surface, "zcode", "writer", false);
   if (surface === "copied-instructions") return consumerRow(surface, "dsh", "writer", true);
   if (surface === "backup-recovery") {

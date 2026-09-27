@@ -33,6 +33,14 @@ function cliEnv(): Record<string, string> {
   return env;
 }
 
+function jsonOf(result: RunResult): Record<string, unknown> {
+  try {
+    return JSON.parse(result.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
+  }
+}
+
 interface RunResult {
   exitCode: number | null;
   stdout: string;
@@ -79,7 +87,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("sdd"), (file) => {
       const result = runCli(["review", "seats", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 3");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(3);
       expect(result.stderr).toBe("");
     });
   });
@@ -88,7 +96,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("inline"), (file) => {
       const result = runCli(["review", "seats", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 1");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(1);
     });
   });
 
@@ -96,7 +104,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("inline"), (file) => {
       const result = runCli(["review", "seats", file, "--mode", "sdd"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 3");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(3);
     });
   });
 
@@ -104,7 +112,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("targeted"), (file) => {
       const result = runCli(["review", "seats", file, "--reviewers", "qc-specialist, qc-specialist-2"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 2");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(2);
     });
   });
 
@@ -118,7 +126,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
         "qc-specialist,qc-specialist,qc-specialist-3",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 2");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(2);
     });
   });
 
@@ -132,7 +140,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
         "qc-specialist,qc-specialist,qc-specialist-2,qc-specialist-2,qc-specialist-3",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 3");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(3);
     });
   });
 
@@ -140,7 +148,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("targeted"), (file) => {
       const result = runCli(["review", "seats", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("dispatch.execution-mode.missing-seats");
+      expect(jsonOf(result).code).toBe("dispatch.execution-mode.missing-seats");
     });
   });
 
@@ -148,7 +156,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("parallel"), (file) => {
       const result = runCli(["review", "seats", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("dispatch.execution-mode.unknown");
+      expect(jsonOf(result).code).toBe("dispatch.execution-mode.unknown");
     });
   });
 
@@ -156,7 +164,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("targeted"), (file) => {
       const result = runCli(["review", "seats", file, "--reviewers", "a,b,c,d"]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("dispatch.execution-mode.too-many-seats");
+      expect(jsonOf(result).code).toBe("dispatch.execution-mode.too-many-seats");
     });
   });
 
@@ -172,7 +180,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
       (file) => {
         const result = runCli(["review", "seats", file]);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("dispatch.execution-mode.missing");
+        expect(jsonOf(result).code).toBe("dispatch.execution-mode.missing");
       },
     );
   });
@@ -181,7 +189,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("sdd"), (file) => {
       const result = runCli(["review", "seats", file, "--reviewers", "qc-specialist, qc-specialist-2"]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("dispatch.tri-identity.invalid");
+      expect(jsonOf(result).code).toBe("dispatch.tri-identity.invalid");
     });
   });
 
@@ -189,19 +197,19 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     withAssignment(assignmentWithMode("sdd"), (file) => {
       const result = runCli(["review", "seats", file, "--reviewers", "qc-specialist, qc-specialist-2, qc-specialist-3"]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("seats: 3");
+      expect((jsonOf(result).data as Record<string, unknown>).n).toBe(3);
     });
   });
 
   test("missing <assignment-file> arg → usage, exit 2", () => {
     const result = runCli(["review", "seats"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: review seats");
+    expect(result.stderr).toBe("error: missing required argument 'assignmentFile'\n");
   });
 
   test("nonexistent assignment file → exit 1 with file error", () => {
     const result = runCli(["review", "seats", "/no/such/assignment.md"]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("assignment file not found");
+    expect(jsonOf(result).message).toBe("assignment file not found: /no/such/assignment.md");
   });
 });

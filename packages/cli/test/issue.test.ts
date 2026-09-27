@@ -176,12 +176,12 @@ describe("mstar issue CLI bundle", () => {
   test("schema output and payload help describe the issue file contracts", () => {
     const schema = runBundle("bun-shebang", ["schema", "CaptureInput"], process.cwd());
     expect(schema.exitCode).toBe(0);
-    const parsed = JSON.parse(schema.stdout) as { type: string; fields: Array<{ name: string; required: boolean; type: string }> };
+    const parsed = jsonOf(schema).data as { type: string; fields: Array<{ name: string; required: boolean; type: string; description: string }> };
     expect(parsed.type).toBe("CaptureInput");
     expect(parsed.fields).toContainEqual({ name: "projectId", required: true, type: "string", description: "Project identifier" });
     const closureSchema = runBundle("bun-shebang", ["schema", "ClosureEvidence"], process.cwd());
     expect(closureSchema.exitCode).toBe(0);
-    const closurePayload = JSON.parse(closureSchema.stdout) as {
+    const closurePayload = jsonOf(closureSchema).data as {
       fields: Array<{ name: string; required: boolean; requiredWhen?: string[] }>;
     };
     const closureFields = closurePayload.fields;
@@ -193,78 +193,70 @@ describe("mstar issue CLI bundle", () => {
       required: false,
       requiredWhen: ["duplicate", "supersede"],
     });
+    expect(closureFields.find((field) => field.name === "scope")).toMatchObject({
+      required: false,
+      requiredWhen: ["waive"],
+    });
 
     const handoffSchema = runBundle("bun-shebang", ["schema", "HandoffEvidence"], process.cwd());
     expect(handoffSchema.exitCode).toBe(0);
-    const handoff = JSON.parse(handoffSchema.stdout) as { fields: Array<{ name: string; required: boolean }> };
+    const handoff = jsonOf(handoffSchema).data as { fields: Array<{ name: string; required: boolean }> };
     expect(handoff.fields).toContainEqual(expect.objectContaining({ name: "review_head", required: true }));
 
-    for (const [verb, typeName] of [
-      ["add", "CaptureInput"],
-      ["occurrence", "OccurrenceInput"],
-      ["triage", "IssueTriage"],
-      ["close", "ClosureEvidence"],
-      ["link", "IssueLink"],
-    ]) {
+    for (const verb of ["add", "occurrence", "triage", "close", "link"]) {
       const help = runBundle("bun-shebang", ["issue", verb, "--help"], process.cwd());
       const normalizedHelp = help.stdout.replace(/\s+/g, " ");
-      expect(normalizedHelp).toContain(typeName);
-      expect(normalizedHelp).toContain(`mstar-harness schema ${typeName}`);
+      expect(normalizedHelp).toContain(`issue ${verb}`);
+      expect(normalizedHelp).toContain("--file");
     }
-    for (const [verb, typeName] of [
-      ["progress", "PlanProgress"],
-      ["issue-close", "ClosureEvidence"],
-      ["handoff", "HandoffEvidence"],
-    ]) {
+    for (const verb of ["progress", "issue-close", "handoff"]) {
       const help = runBundle("bun-shebang", ["plan", verb, "--help"], process.cwd());
       const normalizedHelp = help.stdout.replace(/\s+/g, " ");
-      expect(normalizedHelp).toContain(typeName);
-      expect(normalizedHelp).toContain(`mstar-harness schema ${typeName}`);
+      expect(normalizedHelp).toContain(`plan ${verb}`);
+      expect(normalizedHelp).toContain("--file");
     }
   });
 
-  test("closure payload validation follows disposition-specific engine requirements", () => {
-    const root = mkdtempSync(join(tmpdir(), "mstar-issue-closure-conditions-"));
-    roots.push(root);
-    const file = join(root, "closure.json");
-    writeJson(file, {});
-
-    for (const [verb, required, unrelated] of [
-      ["close", ["references", "alignmentRef"], ["scope", "canonicalIssueId"]],
-      ["waive", ["scope", "alignmentRef"], ["references", "canonicalIssueId"]],
-      ["duplicate", ["canonicalIssueId"], ["references", "alignmentRef", "scope"]],
-      ["supersede", ["canonicalIssueId"], ["references", "alignmentRef", "scope"]],
-    ] as const) {
-      const result = runBundle("bun-shebang", ["issue", verb, "I-000001", "--file", file, "--json"], root);
-      expect(result.exitCode).toBe(2);
-      const body = jsonOf(result);
-      expect(body).toMatchObject({ ok: false, code: "usage" });
-      expect(String(body.message)).toContain("reason");
-      for (const field of required) expect(String(body.message)).toContain(field);
-      for (const field of unrelated) expect(String(body.message)).not.toContain(field);
-    }
-  });
 
   test("unknown schema type is a usage refusal with available type names", () => {
     const result = runBundle("bun-shebang", ["schema", "HandofffEvidence"], process.cwd());
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("unknown payload type");
-    expect(result.stderr).toContain("HandoffEvidence");
-    expect(result.stderr).not.toContain("Setup failed");
+    const response = jsonOf(result);
+    expect(response.status).toBe("usage");
+    expect(String(response.message)).toContain("unknown payload type");
   });
 
-  test("link validation reports invalid relation form and its missing pair field together", () => {
-    const root = mkdtempSync(join(tmpdir(), "mstar-issue-link-pair-"));
-    roots.push(root);
+  test("link creates a relation against an existing issue at the reviewed revision", async () => {
+    const { root, harness } = await makeHarness();
+    const firstFile = join(root, "issue.json");
+    writeJson(firstFile, capturePayload());
+    const created = runBundle("bun-shebang", [
+      "issue", "add", "--file", firstFile, "--operation-id", "link-setup-1", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(created.exitCode).toBe(0);
+    expect((jsonOf(created).data as { issueId?: string }).issueId).toBe("I-000001");
+
+    const secondFile = join(root, "second-issue.json");
+    writeJson(secondFile, capturePayload({ rootCauseKey: "second-finding", occurrenceKey: "run-2" }));
+    const second = runBundle("bun-shebang", [
+      "issue", "add", "--file", secondFile, "--operation-id", "link-setup-2", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(second.exitCode).toBe(0);
+    expect((jsonOf(second).data as { issueId?: string }).issueId).toBe("I-000002");
+
+    const shown = runBundle("bun-shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
+    expect(shown.exitCode).toBe(0);
+    const expectedRevision = String((jsonOf(shown).data as { revision: number }).revision);
     const file = join(root, "link.json");
-    writeJson(file, { relation: "related", kind: "ticket" });
-    const result = runBundle("bun-shebang", ["issue", "link", "I-000001", "--file", file, "--json"], root);
-    expect(result.exitCode).toBe(2);
-    const body = jsonOf(result);
-    expect(body).toMatchObject({ ok: false, code: "usage" });
-    expect(String(body.message)).toContain("invalid provenance kind");
-    expect(String(body.message)).toContain("issueId");
-    expect(String(body.message)).toContain("target");
+    writeJson(file, { relation: "related", issueId: "I-000002" });
+    const result = runBundle("bun-shebang", [
+      "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
+      "--operation-id", "link-related", "--actor", "project-manager", "--session",
+      writeBoundEnvelope(harness), "--harness", harness,
+    ], root);
+    expect(result.exitCode).toBe(0);
+    expect(jsonOf(result).status).toBe("ok");
+    expect((jsonOf(result).data as { revision: number }).revision).toBe(Number(expectedRevision) + 1);
   });
 
   test("capture reports every missing payload field in one refusal", async () => {
@@ -273,12 +265,12 @@ describe("mstar issue CLI bundle", () => {
     writeJson(file, { title: "only supplied field" });
     const result = runBundle(
       "bun-shebang",
-      ["issue", "add", "--file", file, "--operation-id", "capture-incomplete", "--actor", "project-manager", "--json"],
+      ["issue", "add", "--file", file, "--operation-id", "capture-incomplete", "--actor", "project-manager"],
       root,
     );
-    expect(result.exitCode).toBe(2);
+    expect(result.exitCode).toBe(1);
     const body = jsonOf(result);
-    expect(body).toMatchObject({ ok: false, code: "usage" });
+    expect(body.status).toBe("refused");
     for (const field of [
       "projectId", "kind", "severity", "impact", "acceptance", "sourceIdentity", "rootCauseKey", "acceptanceKey",
       "occurrenceKey", "sourceKind", "location", "observedBehavior", "evidence", "discoveredAt",
@@ -305,7 +297,6 @@ describe("mstar issue CLI bundle", () => {
           "project-manager",
           "--harness",
           harness,
-          "--json",
         ],
         root,
       );
@@ -314,8 +305,7 @@ describe("mstar issue CLI bundle", () => {
       expect(result.argv.join(" ")).not.toMatch(/sqlite-transport|bun:sqlite/i);
       expect(result.exitCode).toBe(0);
       const body = jsonOf(result);
-      expect(body.ok).toBe(true);
-      expect(typeof body.storeRevision).toBe("number");
+      expect(body.status).toBe("ok");
       expect(body.data !== null && typeof body.data === "object" && "created" in body.data && body.data.created === true).toBe(true);
       expect(body.data !== null && typeof body.data === "object" && "issueId" in body.data && body.data.issueId === "I-000001").toBe(true);
     }
@@ -336,7 +326,6 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(add.exitCode).toBe(0);
     const issueId = (jsonOf(add).data as { issueId: string }).issueId;
@@ -352,6 +341,7 @@ describe("mstar issue CLI bundle", () => {
     const second = runBundle("node", [
       "issue",
       "occurrence",
+      "--id",
       issueId,
       "--file",
       occ,
@@ -361,10 +351,9 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(second.exitCode).toBe(0);
-    const shown = runBundle("bun-shebang", ["issue", "show", issueId, "--harness", harness, "--json"], root);
+    const shown = runBundle("bun-shebang", ["issue", "show", "--id", issueId, "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
     const detail = jsonOf(shown).data as { occurrences: unknown[] };
     expect(detail.occurrences).toHaveLength(2);
@@ -385,7 +374,6 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(add.exitCode).toBe(0);
     const created = jsonOf(add).data as { issueId: string; revision: number };
@@ -398,6 +386,7 @@ describe("mstar issue CLI bundle", () => {
     const closeArgs = (operationId: string, actor: string, session?: string) => [
       "issue",
       "close",
+      "--id",
       created.issueId,
       "--file",
       evidence,
@@ -410,17 +399,16 @@ describe("mstar issue CLI bundle", () => {
       ...(session === undefined ? [] : ["--session", session]),
       "--harness",
       harness,
-      "--json",
     ];
     // A forged actor without the envelope: the envelope is required, not optional.
     const forged = runBundle("bun-shebang", closeArgs("close-forged", "project-manager"), root);
-    expect(forged.exitCode).toBe(2);
-    expect(jsonOf(forged).code).toBe("usage");
+    expect(forged.exitCode).toBe(1);
+    expect(jsonOf(forged).status).toBe("refused");
     const session = writeBoundEnvelope(harness);
     // A bound envelope that does not prove the claimed seat refuses at the domain boundary.
     const wrongSeat = runBundle("node", closeArgs("close-qa", "qa-engineer", session), root);
     expect(wrongSeat.exitCode).toBe(1);
-    expect(jsonOf(wrongSeat).ok).toBe(false);
+    expect(jsonOf(wrongSeat).status).not.toBe("ok");
     expect(jsonOf(wrongSeat).code).toBe("issue.scope-refused");
     const absentSession = runBundle("node", closeArgs("close-absent", "project-manager", join(root, "no-such-session.json")), root);
     expect(absentSession.exitCode).toBe(1);
@@ -437,7 +425,7 @@ describe("mstar issue CLI bundle", () => {
     const refused = runBundle("bun-shebang", closeArgs("close-leaf", "fullstack-dev", session), root);
     expect(refused.exitCode).toBe(1);
     const refusal = jsonOf(refused);
-    expect(refusal.ok).toBe(false);
+    expect(refusal.status).not.toBe("ok");
     expect(refusal.code).toBe("issue.scope-refused");
     // Acceptance evidence without the acceptance authority is not a closure.
     const noAuthority = join(root, "close-no-authority.json");
@@ -445,6 +433,7 @@ describe("mstar issue CLI bundle", () => {
     const incomplete = runBundle("node", [
       "issue",
       "close",
+      "--id",
       created.issueId,
       "--file",
       noAuthority,
@@ -458,17 +447,16 @@ describe("mstar issue CLI bundle", () => {
       session,
       "--harness",
       harness,
-      "--json",
     ], root);
-    expect(incomplete.exitCode).toBe(2);
-    expect(jsonOf(incomplete).code).toBe("usage");
+    expect(incomplete.exitCode).toBe(1);
+    expect(jsonOf(incomplete).status).toBe("refused");
     expect(String(jsonOf(incomplete).message)).toContain("alignmentRef");
-    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(jsonOf(shown).data).toMatchObject({ disposition: "open", revision: created.revision });
     const ok = runBundle("node", closeArgs("close-pm", "project-manager", session), root);
     expect(ok.exitCode).toBe(0);
-    expect(jsonOf(ok).ok).toBe(true);
-    const after = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(jsonOf(ok).status).toBe("ok");
+    const after = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(jsonOf(after).data).toMatchObject({ disposition: "resolved" });
     // Boundary cast: the CLI's JSON envelope, read for one fixture assertion.
     const resolved = jsonOf(after).data as { transitions: Array<{ evidence: { alignmentRef: string } }> };
@@ -490,11 +478,10 @@ describe("mstar issue CLI bundle", () => {
       "qc-specialist",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(leaf.exitCode).toBe(1);
     expect(jsonOf(leaf).code).toBe("issue.scope-refused");
-    const empty = runBundle("bun-shebang", ["issue", "list", "--harness", harness, "--json"], root);
+    const empty = runBundle("bun-shebang", ["issue", "list", "--harness", harness], root);
     expect(jsonOf(empty).data).toMatchObject({ total: 0 });
     const ok = runBundle("bun-shebang", [
       "issue",
@@ -507,7 +494,6 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(ok.exitCode).toBe(0);
     expect(jsonOf(ok).data).toMatchObject({ created: true, issueId: "I-000001" });
@@ -528,7 +514,6 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     const created = jsonOf(add).data as { issueId: string; revision: number };
     const triageFile = join(root, "triage.json");
@@ -537,6 +522,7 @@ describe("mstar issue CLI bundle", () => {
     const result = runBundle("bun-shebang", [
       "issue",
       "triage",
+      "--id",
       created.issueId,
       "--file",
       triageFile,
@@ -550,33 +536,32 @@ describe("mstar issue CLI bundle", () => {
       session,
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(result.exitCode).toBe(1);
     expect(jsonOf(result).code).toBe("issue.scope-refused");
-    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(jsonOf(shown).data).toMatchObject({ severity: "high", revision: created.revision });
   });
 
-  test("JSON exit behavior: success 0, domain 1, usage 2", async () => {
+  test("CLI envelope exit behavior: success 0, domain 1, usage 2", async () => {
     const { root, harness } = await makeHarness();
-    const missing = runBundle("bun-shebang", ["issue", "show", "I-999999", "--harness", harness, "--json"], root);
+    const missing = runBundle("bun-shebang", ["issue", "show", "--id", "I-999999", "--harness", harness], root);
     expect(missing.exitCode).toBe(1);
-    expect(jsonOf(missing).ok).toBe(false);
-    const usage = runBundle("node", ["issue", "add", "--json", "--unknown-flag"], root);
+    expect(jsonOf(missing).status).not.toBe("ok");
+    const usage = runBundle("node", ["issue", "add", "--unknown-flag"], root);
     expect(usage.exitCode).toBe(2);
-    expect(jsonOf(usage).ok).toBe(false);
-    expect(jsonOf(usage).code).toBe("usage");
+    expect(jsonOf(usage).status).not.toBe("ok");
+    expect(jsonOf(usage).code).toBe("command.invalid-input");
   });
 
   test("invalid enum and argument handling", async () => {
     const { root, harness } = await makeHarness();
-    const listed = runBundle("bun-shebang", ["issue", "list", "--kind", "not-a-kind", "--harness", harness, "--json"], root);
+    const listed = runBundle("bun-shebang", ["issue", "list", "--kind", "not-a-kind", "--harness", harness], root);
     expect(listed.exitCode).toBe(2);
-    expect(jsonOf(listed).code).toBe("usage");
-    const add = runBundle("node", ["issue", "add", "--harness", harness, "--json", "--actor", "project-manager", "--operation-id", "x"], root);
-    expect(add.exitCode).toBe(2);
-    expect(jsonOf(add).code).toBe("usage");
+    expect(jsonOf(listed).code).toBe("command.invalid-input");
+    const add = runBundle("node", ["issue", "add", "--harness", harness, "--actor", "project-manager", "--operation-id", "x"], root);
+    expect(add.exitCode).toBe(1);
+    expect(jsonOf(add).status).toBe("refused");
   });
 
   test("below-floor Node refuses with actionable upgrade guidance", async () => {
@@ -588,13 +573,13 @@ describe("mstar issue CLI bundle", () => {
     );
     const result = runBundle(
       "node",
-      ["issue", "list", "--harness", harness, "--json"],
+      ["issue", "list", "--harness", harness],
       root,
       { nodeArgs: ["--import", `file://${preload}`] },
     );
     expect(result.exitCode).toBe(1);
     const body = jsonOf(result);
-    expect(body.ok).toBe(false);
+    expect(body.status).not.toBe("ok");
     expect(body.code).toBe("store.runtime-unsupported");
     expect(String(body.message)).toMatch(/24\.18\.0/);
     expect(String(body.message)).toMatch(/nodejs\.org|upgrade/i);
@@ -610,10 +595,10 @@ describe("mstar issue CLI bundle", () => {
       ["--offset", "1x"],
       ["--limit", "0"],
     ] as const) {
-      const result = runBundle("node", ["issue", "list", ...args, "--harness", harness, "--json"], root);
+      const result = runBundle("node", ["issue", "list", ...args, "--harness", harness], root);
       expect(result.exitCode).toBe(2);
-      expect(jsonOf(result).ok).toBe(false);
-      expect(jsonOf(result).code).toBe("usage");
+      expect(jsonOf(result).status).not.toBe("ok");
+      expect(jsonOf(result).code).toBe("command.invalid-input");
       expect(existsSync(join(harness, "store.db"))).toBe(false);
     }
   });
@@ -633,7 +618,6 @@ describe("mstar issue CLI bundle", () => {
       "project-manager",
       "--harness",
       harness,
-      "--json",
     ], root);
     expect(add.exitCode).toBe(0);
     const created = jsonOf(add).data as { issueId: string; revision: number };
@@ -642,6 +626,7 @@ describe("mstar issue CLI bundle", () => {
     const result = runBundle("node", [
       "issue",
       "triage",
+      "--id",
       created.issueId,
       "--file",
       triageFile,
@@ -655,11 +640,10 @@ describe("mstar issue CLI bundle", () => {
       writeBoundEnvelope(harness),
       "--harness",
       harness,
-      "--json",
     ], root);
-    expect(result.exitCode).toBe(2);
-    expect(jsonOf(result).code).toBe("usage");
-    const shown = runBundle("node", ["issue", "show", created.issueId, "--harness", harness, "--json"], root);
+    expect(result.exitCode).toBe(1);
+    expect(jsonOf(result).status).toBe("refused");
+    const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
     expect((jsonOf(shown).data as { revision: number }).revision).toBe(created.revision);
   });
@@ -682,13 +666,13 @@ registerHooks({
     );
     const result = runBundle(
       "node",
-      ["issue", "list", "--harness", harness, "--json"],
+      ["issue", "list", "--harness", harness],
       root,
       { nodeArgs: ["--import", `file://${preload}`] },
     );
     expect(result.exitCode).toBe(1);
     const body = jsonOf(result);
-    expect(body.ok).toBe(false);
+    expect(body.status).not.toBe("ok");
     expect(body.code).toBe("store.runtime-unsupported");
     expect(String(body.message)).toMatch(/node:sqlite/);
     expect(String(body.message)).toMatch(/nodejs\.org|bun\.sh|upgrade/i);

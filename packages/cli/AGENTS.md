@@ -4,9 +4,9 @@ This `packages/cli` directory hosts the standalone `@mstar-harness/cli` package 
 
 ## Scope
 
-- Implement and maintain CLI-only behavior for installer/setup workflows.
+- Implement CLI-only behavior for installer/setup workflows and the stdio MCP server subcommand.
 - Keep root package focused on OpenCode plugin runtime entry.
-- Avoid mixing plugin runtime logic into this package.
+- Keep MCP startup as a CLI process surface; do not add host-native MCP bridges or per-host server bundles.
 
 ## Tech Stack
 
