@@ -133,6 +133,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       try {
         if (input.workflow === undefined) return usage("workflow.evidence", "workflow is required");
         if ((input.file === undefined) === (input.declareKind === undefined)) return usage("workflow.evidence", "provide exactly one of file or declareKind");
+        if (input.declareKind !== undefined && !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.declareKind)) {
+          return usage("workflow.evidence", `--declare-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`);
+        }
         const root = resolveProcessHarnessDir(context.cwd, input.harness);
         if (root === null) return usage("workflow.evidence", "harness dir not found; supply harness");
         setArtifactStore(createFsStore(root));
