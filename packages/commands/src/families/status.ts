@@ -179,11 +179,14 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             return ok("status.workflow-close", receipt);
           }
           if (session !== undefined && !path.isAbsolute(session)) {
-            return refused("status.workflow-close", "command.invalid-input", "--session must be an absolute path");
+            return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "--session must be an absolute path" };
           }
           setArtifactStore(createFsStore(harnessDir));
           const snapshotDir = path.join(resolveWorkflowDir(harnessDir, { harnessDir }), workflow);
           const statusFile = path.join(harnessDir, "status.json");
+          if (!existsSync(path.join(snapshotDir, WORKFLOW_SNAPSHOT_FILE))) {
+            return refused("status.workflow-close", "workflow.snapshot-not-found", `workflow snapshot not found: ${path.join(snapshotDir, WORKFLOW_SNAPSHOT_FILE)}`);
+          }
           const closed = await closeWorkflow(workflow, snapshotDir, { endedAt: endedAt ?? todayString(), ...(session ? { sessionPath: session } : {}) });
           let hadRootEntry = false;
           try {

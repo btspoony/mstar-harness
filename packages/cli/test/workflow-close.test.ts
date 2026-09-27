@@ -38,6 +38,30 @@ interface RunResult {
   stderr: string;
 }
 
+interface CommandEnvelope {
+  version: number;
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function envelope(result: RunResult): CommandEnvelope {
+  return JSON.parse(result.stdout) as CommandEnvelope;
+}
+
+function message(result: RunResult): string {
+  return envelope(result).message ?? "";
+}
+
+function violationCodes(result: RunResult): string[] {
+  const gate = envelope(result).details?.gate as { violations?: Array<{ code: string }> } | undefined;
+  return gate?.violations?.map(({ code }) => code) ?? [];
+}
+
 /**
  * Spawn env with ambient harness env vars pinned out: the CLI
  * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
@@ -133,7 +157,6 @@ describe("mstar status workflow-close", () => {
     setupHarness((harness, { snapshot, root }) => {
       const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
 
       const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(doc.status).toBe("completed");
@@ -145,7 +168,8 @@ describe("mstar status workflow-close", () => {
       expect(rootAfter.workflows).toEqual([]);
 
       // Fresh close (not the already-closed notice).
-      expect(result.stdout).toContain(`workflow-close: ${WORKFLOW_ID} closed (status completed, ended_at 2026-09-12)`);
+      expect(envelope(result)).toMatchObject({ command: "status.workflow-close", status: "ok" });
+      expect(envelope(result).data?.unregistered).toBe(true);
 
       // Product contract: the unregistered root still validates (exit 0).
       const validate = runCli(["status", "validate", root]);
@@ -161,7 +185,7 @@ describe("mstar status workflow-close", () => {
 
         const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("terminal-dangling-merge-lease");
+        expect(message(result)).toContain("terminal-dangling-merge-lease");
 
         // Before-write refusal preserves bytes (snapshot AND root — the
         // unregister never runs when the close refuses).
@@ -190,7 +214,7 @@ describe("mstar status workflow-close", () => {
 
         const result = runCli(closeArgs(harness));
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("every plan row must be Done");
+        expect(message(result)).toContain("every plan row must be Done");
 
         expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
         expect(readFileSync(root, "utf8")).toBe(beforeRoot);
@@ -208,7 +232,7 @@ describe("mstar status workflow-close", () => {
       (harness, { snapshot }) => {
         const result = runCli(["status", "workflow-close", "--workflow", "wf-missing", "--harness", harness]);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("workflow snapshot not found");
+        expect(message(result)).toContain("workflow snapshot not found");
         // No snapshot, no dir side effect for the unknown id.
         expect(existsSync(snapshot)).toBe(false);
         expect(existsSync(join(harness, "workflows", "wf-missing"))).toBe(false);
@@ -226,7 +250,8 @@ describe("mstar status workflow-close", () => {
         // No --ended-at: the default (today) must NOT reach the files.
         const result = runCli(closeArgs(harness));
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain(`workflow-close: ${WORKFLOW_ID} already closed`);
+        expect(envelope(result)).toMatchObject({ command: "status.workflow-close", status: "ok" });
+        expect(envelope(result).data?.unregistered).toBe(false);
 
         // Neither file is rewritten — the original terminal timestamps stay.
         expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
@@ -250,7 +275,7 @@ describe("mstar status workflow-close", () => {
       writeFileSync(root, v1Root);
       const partial = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(partial.exitCode).toBe(1);
-      expect(partial.stderr).toContain("partial close");
+      expect(message(partial)).toContain("partial close");
 
       const afterPartial = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(afterPartial.status).toBe("completed");
@@ -263,8 +288,8 @@ describe("mstar status workflow-close", () => {
       writeFileSync(root, JSON.stringify(rootDoc([rootEntry()]), null, 2));
       const retry = runCli(closeArgs(harness, ["--ended-at", "2026-09-20"]));
       expect(retry.exitCode).toBe(0);
-      expect(retry.stdout).toContain(`workflow-close: ${WORKFLOW_ID} already closed`);
-      expect(retry.stdout).toContain(`unregistered ${WORKFLOW_ID}`);
+      expect(envelope(retry)).toMatchObject({ command: "status.workflow-close", status: "ok" });
+      expect(envelope(retry).data?.unregistered).toBe(true);
 
       const docAfter = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(docAfter.ended_at).toBe("2026-09-12");
@@ -278,7 +303,7 @@ describe("mstar status workflow-close", () => {
     setupHarness((harness) => {
       const result = runCli(["status", "workflow-close", "--harness", harness]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage");
+      expect(result.stderr).toContain("required option '--workflow <id>' not specified");
     });
   });
 
@@ -286,7 +311,7 @@ describe("mstar status workflow-close", () => {
     setupHarness((harness) => {
       const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", harness]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("invalid workflow id");
+      expect(message(result)).toContain("invalid workflow id");
       // The guard fires before any I/O — no dir appears at the escaped path.
       expect(existsSync(join(harness, "escape"))).toBe(false);
     });
@@ -345,7 +370,6 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12", "--session", sessionPath]));
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
       const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(doc.status).toBe("completed");
       expect(doc.ended_at).toBe("2026-09-12");
@@ -361,10 +385,10 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness));
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("is coordinated");
-      expect(result.stderr).toContain("--session <coordinator envelope>");
+      expect(message(result)).toContain("is coordinated");
+      expect(message(result)).toContain("--session <coordinator envelope>");
       // The row gate is not what refused this close: rows are Done.
-      expect(result.stderr).not.toContain("every plan row must be Done");
+      expect(message(result)).not.toContain("every plan row must be Done");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
@@ -379,7 +403,7 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("every plan row must be Done");
+      expect(message(result)).toContain("every plan row must be Done");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
@@ -394,7 +418,7 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("--session must be an absolute path");
+      expect(message(result)).toContain("--session must be an absolute path");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
     });
   });
@@ -418,8 +442,10 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness));
         expect(result.exitCode).toBe(0);
-        expect(result.stderr).toBe("");
-        expect(result.stdout).toContain("phase 6 (post-merge close): OK");
+        const response = envelope(result);
+        const gate = response.data?.gate as { ok?: boolean };
+        expect(response).toMatchObject({ command: "iteration.gate", status: "ok" });
+        expect(gate.ok).toBe(true);
       },
       // Seam S3 (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §6 S3): the phase-6 gate
       // consults the registered delivery-kind evidence — the shared
@@ -433,7 +459,7 @@ describe("mstar iteration gate --phase 6", () => {
     setupHarness((harness) => {
       const result = runCli(gateArgs(harness));
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("PHASE6_NOT_TERMINAL");
+      expect(violationCodes(result)).toContain("PHASE6_NOT_TERMINAL");
     });
   });
 
@@ -442,7 +468,7 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness));
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("PHASE6_ROOT_ENTRY_PRESENT");
+        expect(violationCodes(result)).toContain("PHASE6_ROOT_ENTRY_PRESENT");
       },
       { snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }) },
     );
@@ -453,7 +479,7 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness));
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("PHASE6_DANGLING_LEASE");
+        expect(violationCodes(result)).toContain("PHASE6_DANGLING_LEASE");
       },
       {
         snapshot: snapshotDoc({
@@ -478,7 +504,7 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness, "wf-missing"));
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("workflow snapshot not found");
+        expect(message(result)).toContain("workflow snapshot not found");
       },
       { snapshot: null, root: null },
     );
@@ -488,7 +514,7 @@ describe("mstar iteration gate --phase 6", () => {
     setupHarness((harness) => {
       const result = runCli(["iteration", "gate", "--phase", "5", "--workflow", WORKFLOW_ID, "--harness", harness]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage");
+      expect(message(result)).toContain("usage");
     });
   });
 
@@ -504,12 +530,12 @@ describe("mstar iteration gate --phase 6", () => {
         // Running plan row → phase-2-execute verdict, gate passes (exit 0).
         const okRun = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", compassPath, "--harness", harness]);
         expect(okRun.exitCode).toBe(0);
-        expect(okRun.stdout).toContain("transition: phase-2-execute");
+        expect((envelope(okRun).data?.transition)).toBe("phase-2-execute");
 
         // Phase 2–5 form without --compass → usage error (exit 2).
         const noCompass = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", harness]);
         expect(noCompass.exitCode).toBe(2);
-        expect(noCompass.stderr).toContain("usage");
+        expect(message(noCompass)).toContain("usage");
       },
       {
         snapshot: snapshotDoc({
@@ -561,9 +587,9 @@ describe("mstar workflow evidence", () => {
       // The close refuses first — incomplete delivery, zero writes.
       const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
-      expect(refused.stderr).toContain("delivery.merge");
-      expect(refused.stderr).toContain("mstar workflow evidence");
+      expect(message(refused)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+      expect(message(refused)).toContain("delivery.merge");
+      expect(message(refused)).toContain("mstar workflow evidence");
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
 
@@ -572,14 +598,13 @@ describe("mstar workflow evidence", () => {
       });
       const recorded = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-12T01:00:00Z"]));
       expect(recorded.exitCode).toBe(0);
-      expect(recorded.stderr).toBe("");
-      expect(recorded.stdout).toContain(`workflow evidence: OK \u2014 ${WORKFLOW_ID} delivery evidence recorded`);
+      expect(envelope(recorded)).toMatchObject({ command: "workflow.evidence", status: "ok" });
 
       // Idempotent re-recording: same evidence, no rewrite (byte-identical).
       const afterRecord = readFileSync(snapshot, "utf8");
       const again = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-13T01:00:00Z"]));
       expect(again.exitCode).toBe(0);
-      expect(again.stdout).toContain("already carries this delivery evidence");
+      expect(envelope(again)).toMatchObject({ command: "workflow.evidence", status: "ok" });
       expect(readFileSync(snapshot, "utf8")).toBe(afterRecord);
 
       // The close now completes and unregisters the root entry.
@@ -616,8 +641,8 @@ describe("mstar workflow evidence", () => {
       const refused = runCli(evidenceArgs(harness, payload));
       expect(refused.exitCode).toBe(1);
       // The refusal names the authorization seam (the same one the close uses).
-      expect(refused.stderr).toContain("is coordinated");
-      expect(refused.stderr).toContain("--session <coordinator envelope>");
+      expect(message(refused)).toContain("is coordinated");
+      expect(message(refused)).toContain("--session <coordinator envelope>");
       expect(readFileSync(snapshot, "utf8")).toBe(before);
 
       const recorded = runCli(evidenceArgs(harness, payload, ["--session", sessionFile, "--at", "2026-09-12T01:00:00Z"]));
@@ -633,27 +658,26 @@ describe("mstar workflow evidence", () => {
       // Missing --file.
       const missing = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--harness", harness]);
       expect(missing.exitCode).toBe(2);
-      expect(missing.stderr).toContain("--file is required");
+      expect(envelope(missing)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       // Relative --file.
       const relative = runCli(evidenceArgs(harness, "delivery-evidence.json"));
       expect(relative.exitCode).toBe(2);
-      expect(relative.stderr).toContain("--file must be an absolute path");
+      expect(envelope(relative)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       // Malformed JSON payload.
       const badPath = join(harness, "bad.json");
       writeFileSync(badPath, "{ not json", "utf8");
       const malformed = runCli(evidenceArgs(harness, badPath));
       expect(malformed.exitCode).toBe(1);
-      expect(malformed.stderr).toContain("not valid JSON");
       // The two modes are exclusive, and the declared kind is an enum.
       const both = runCli([
         "workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", badPath,
         "--declare-kind", "development", "--branch-source", "feature/a", "--branch-target", "main", "--harness", harness,
       ]);
       expect(both.exitCode).toBe(2);
-      expect(both.stderr).toContain("not both");
+      expect(envelope(both)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const unknownKind = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "wing-it", "--harness", harness]);
       expect(unknownKind.exitCode).toBe(2);
-      expect(unknownKind.stderr).toContain("--declare-kind must be one of");
+      expect(message(unknownKind)).toContain("--declare-kind must be one of");
       expect(readFileSync(snapshot, "utf8")).toBe(before);
     });
   });
@@ -667,14 +691,14 @@ describe("mstar workflow evidence", () => {
       // The close refuses: no declared kind (and it is never inferred).
       const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+      expect(message(refused)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
 
       // An incoherent declaration is refused by the shared per-kind rule.
       const incoherent = runCli([
         "workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "development", "--branch-source", "feature/a", "--harness", harness,
       ]);
       expect(incoherent.exitCode).toBe(1);
-      expect(incoherent.stderr).toContain("delivery source and target branches");
+      expect(message(incoherent)).toContain("delivery source and target branches");
 
       const declared = runCli([
         "workflow", "evidence", "--workflow", WORKFLOW_ID,
@@ -682,7 +706,7 @@ describe("mstar workflow evidence", () => {
         "--at", "2026-09-12T01:00:00Z", "--harness", harness,
       ]);
       expect(declared.exitCode).toBe(0);
-      expect(declared.stdout).toContain(`workflow evidence: OK \u2014 ${WORKFLOW_ID} delivery kind declared (development`);
+      expect(envelope(declared)).toMatchObject({ command: "workflow.evidence", status: "ok" });
 
       // One-time: a second declaration is refused, even with the same kind.
       const again = runCli([
@@ -690,7 +714,7 @@ describe("mstar workflow evidence", () => {
         "--declare-kind", "development", "--branch-source", "feature/plan-a", "--branch-target", "main", "--harness", harness,
       ]);
       expect(again.exitCode).toBe(1);
-      expect(again.stderr).toContain("already declares");
+      expect(message(again)).toContain("already declares");
 
       // Record the evidence, then close: the declaration, the anchors and every
       // member agree, so the close completes and the gate passes.
@@ -708,7 +732,7 @@ describe("mstar workflow evidence", () => {
       expect(stored.delivery_kind).toBe("development");
       const gate = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", harness]);
       expect(gate.exitCode).toBe(0);
-      expect(gate.stdout).toContain("phase 6 (post-merge close): OK");
+      expect((envelope(gate).data?.gate as { ok?: boolean }).ok).toBe(true);
       // The declaration never touched the root register (nothing was unregistered yet).
       expect(readFileSync(root, "utf8")).not.toBe(beforeRoot);
     });
@@ -735,7 +759,7 @@ describe("mstar workflow evidence", () => {
         "--declare-kind", "development", "--branch-source", "feature/other", "--branch-target", "main", "--harness", harness,
       ]);
       expect(conflicting.exitCode).toBe(1);
-      expect(conflicting.stderr).toContain('branch.source is already "feature/registered"');
+      expect(message(conflicting)).toContain('branch.source is already "feature/registered"');
       expect(readFileSync(snapshot, "utf8")).toBe(before);
 
       const restated = runCli([
