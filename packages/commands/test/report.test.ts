@@ -123,13 +123,30 @@ describe("report command", () => {
     }, versions);
     expect(report.prompt).not.toContain("BEGIN PRIVATE KEY");
     expect(report.prompt).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
-    expect(report.redactions).toEqual([{ field: "arguments", count: 5 }]);
+    expect(report.redactions).toEqual([{ field: "arguments", count: 1 }]);
     const argumentsLine = report.prompt.split("\n").find((line) => line.startsWith("Arguments: "));
     expect(argumentsLine).toBeDefined();
     expect(JSON.parse(argumentsLine!.slice("Arguments: ".length))).toEqual(Array(5).fill("[REDACTED]"));
     const fences = report.prompt.split("\n").filter((line) => /^`+$/.test(line));
     expect(fences).toEqual(["`````", "`````"]);
   });
+  test("counts distinct joined redaction findings separately from masked argument items", () => {
+    const report = createReport({
+      arguments: [
+        "-----BEGIN " + "PRIVATE KEY-----\nkey-material-one",
+        "-----END " + "PRIVATE KEY-----",
+        "-----BEGIN " + "PRIVATE KEY-----\nkey-material-two",
+        "-----END " + "PRIVATE KEY-----",
+      ],
+    }, versions);
+    expect(report.redactions).toEqual([{ field: "arguments", count: 2 }]);
+    const argumentsLine = report.prompt.split("\n").find((line) => line.startsWith("Arguments: "));
+    expect(argumentsLine).toBeDefined();
+    expect(JSON.parse(argumentsLine!.slice("Arguments: ".length))).toEqual(Array(4).fill("[REDACTED]"));
+    expect(report.prompt).not.toContain("key-material-one");
+    expect(report.prompt).not.toContain("key-material-two");
+  });
+
 
   test("preserves argument arrays when no match crosses an item boundary", () => {
     const report = createReport({ arguments: ["one", "two", "three"] }, versions);

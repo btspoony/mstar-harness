@@ -129,11 +129,6 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
     const itemJoinedValue = itemValues.join("\n");
     const crossesBoundary = joinedValue !== itemJoinedValue;
     safeArguments = crossesBoundary ? input.arguments.map(() => "[REDACTED]") : itemValues;
-    const count = crossesBoundary ? input.arguments.length : joinedResult.findings.length;
-    if (count > 0) {
-      const argumentRedaction = redactions.find((entry) => entry.field === "arguments");
-      if (argumentRedaction !== undefined) argumentRedaction.count = count;
-    }
   }
   const redactSurface = (field: string, value: string): string => {
     const result = redact(field, value);
