@@ -144,12 +144,16 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
       const flags = cliOptionFlags(definition, option);
-      if (option.variadic) {
-        command.option(flags, "", (value: string, previous: string[] = []) => [...previous, value]);
-      } else if (option.required) {
-        command.requiredOption(flags, "");
+      const appendValue = option.variadic
+        ? (value: string, previous: string[] = []) => [...previous, value]
+        : undefined;
+      if (option.required) {
+        if (appendValue) command.requiredOption(flags, option.key, appendValue);
+        else command.requiredOption(flags, option.key);
+      } else if (appendValue) {
+        command.option(flags, option.key, appendValue);
       } else {
-        command.option(flags, "");
+        command.option(flags, option.key);
       }
     }
   }

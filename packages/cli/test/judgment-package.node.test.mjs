@@ -130,12 +130,16 @@ async function expectCode(promise, code) {
   await assert.rejects(promise, (error) => error?.code === code);
 }
 
-test("unpacked CLI stays inert when disabled and caller-forged mount markers cannot attest", async () => {
+test("unpacked CLI emits a provider error envelope without creating a mailbox when no channel is mounted", async () => {
   assert.ok(existsSync(BUNDLE), "build the CLI bundle before the packaging proof");
   const packageRoot = temporaryRoot("unpacked");
   const workspace = join(packageRoot, "workspace");
   mkdirSync(join(packageRoot, "package", "dist"), { recursive: true });
   mkdirSync(workspace, { recursive: true });
+  const judgmentPackage = join(packageRoot, "package", "node_modules", "@mstar-harness", "judgment");
+  mkdirSync(judgmentPackage, { recursive: true });
+  cpSync(join(REPO, "packages/judgment/package.json"), join(judgmentPackage, "package.json"));
+  cpSync(join(REPO, "packages/judgment/dist"), join(judgmentPackage, "dist"), { recursive: true });
   const unpacked = join(packageRoot, "package", "dist", "mstar-harness.js");
   cpSync(BUNDLE, unpacked);
   writeFileSync(join(packageRoot, "package", "package.json"), JSON.stringify({ type: "module", bin: { "mstar-harness": "dist/mstar-harness.js" } }));
@@ -146,10 +150,17 @@ test("unpacked CLI stays inert when disabled and caller-forged mount markers can
   });
   assert.equal(proc.status, 0, proc.stderr);
   assert.deepEqual(JSON.parse(proc.stdout), {
-    schema: "mstar.judgment-cli/v1",
-    contractRevision: CONTRACT_REVISION,
-    status: "disabled",
-    advice: null,
+    version: 1,
+    command: "judgment.review-advice",
+    status: "ok",
+    code: "judgment.review-advice.ok",
+    exitCode: 0,
+    data: {
+      schema: "mstar.judgment-cli/v1",
+      contractRevision: CONTRACT_REVISION,
+      status: "disabled",
+      advice: null,
+    },
   });
   assert.equal(existsSync(join(workspace, ".jev-mailbox")), false);
   assert.equal(proc.stdout.trim().split("\n").length, 1);
@@ -236,11 +247,13 @@ test("packaged CLI refuses caller-forged mounted mailbox without request writes"
   });
   assert.equal(proc.status, 1, proc.stderr);
   assert.deepEqual(JSON.parse(proc.stdout), {
-    schema: "mstar.judgment-cli/v1",
-    contractRevision: CONTRACT_REVISION,
-    status: "unavailable",
-    advice: null,
-    code: "jev.channel-unavailable",
+    version: 1,
+    command: "judgment.review-advice",
+    status: "error",
+    code: "judgment.provider-failed",
+    exitCode: 1,
+    message: "Judgment provider is unavailable",
+    details: { boundary: "jev.channel-unavailable" },
   });
   assert.deepEqual(readdirSync(requestDirectory), []);
 });

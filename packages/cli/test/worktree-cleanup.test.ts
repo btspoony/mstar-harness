@@ -1303,7 +1303,7 @@ describe("mstar worktree cleanup — remote deletion is an expected-OID compare-
         fx.root,
       );
       expect(applied.exitCode).toBe(1);
-      expect(envelope(applied).code).toBe("cleanup.refuse.facts-changed");
+      expect(envelope(applied).code).toBe("worktree.cleanup.refused");
       // The remote branch survives at the moved tip; no retry with a newer OID.
       expect(git(["rev-parse", "refs/heads/iteration/wf-2"], fx.bare)).toBe(movedTip);
     } finally {
@@ -1322,7 +1322,7 @@ describe("mstar worktree cleanup — exit contract", () => {
     const fx = basicFixture("mstar-cleanup-nowf-");
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "no-such-wf", "--harness", fx.root], fx.root);
-      expect(envelope(result).status).toBe("error");
+      expect(envelope(result).status).toBe("refused");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
