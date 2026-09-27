@@ -339,7 +339,26 @@ function mockPi(cwd: string): CustomToolAPI {
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
+  details?: unknown;
 }
+
+function toolDetails(result: ToolResult): Record<string, unknown> {
+  if (result.details === null || typeof result.details !== "object" || Array.isArray(result.details)) {
+    throw new Error(`expected structured tool details, received ${JSON.stringify(result.details)}`);
+  }
+  return result.details as Record<string, unknown>;
+}
+
+function violationCodes(result: ToolResult): string[] {
+  const violations = toolDetails(result).violations;
+  if (!Array.isArray(violations)) return [];
+  return violations.flatMap((violation) =>
+    typeof violation === "object" && violation !== null && "code" in violation && typeof violation.code === "string"
+      ? [violation.code]
+      : [],
+  );
+}
+
 
 async function runTool(
   factory: (pi: CustomToolAPI) => CustomTool,
@@ -1052,7 +1071,8 @@ describe("mstar_worktree_check: full L1 inputs (worktree-write model)", () => {
   test("L1 refuses when main sits on a lifecycle-owned branch (recorded expectation + ownership)", async () => {
     const res = await runTool(mstarWorktreeCheck, ownedRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain("worktree.main.residency-switched");
+    expect(toolDetails(res)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
+    expect(violationCodes(res)).toContain("worktree.main.residency-switched");
   });
 
   test("L1 mainBranch param transports the recorded expectation; missing expectation refuses", async () => {
@@ -1065,16 +1085,18 @@ describe("mstar_worktree_check: full L1 inputs (worktree-write model)", () => {
       mainBranch,
     });
     expect(withParam.isError).not.toBe(true);
-    expect(withParam.content[0]!.text).toContain("l1 pre-dispatch check OK");
+    expect(toolDetails(withParam)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: true, violations: [] });
 
     const without = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
     expect(without.isError).toBe(true);
-    expect(without.content[0]!.text).toContain("worktree.main.expected-branch-missing");
+    expect(toolDetails(without)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
+    expect(violationCodes(without)).toContain("worktree.main.expected-branch-missing");
   });
 
   test("L1 refuses on an unreadable sibling lifecycle snapshot (no silent skip)", async () => {
     const res = await runTool(mstarWorktreeCheck, siblingRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain("worktree.l1.lifecycle-snapshot-unreadable");
+    expect(toolDetails(res)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
+    expect(toolDetails(res).refusal).toMatchObject({ kind: "refusal", code: "worktree.l1.lifecycle-snapshot-unreadable" });
   });
 });

@@ -74421,46 +74421,47 @@ import path10 from "node:path";
 import { readFileSync as readFileSync92 } from "node:fs";
 import path11 from "node:path";
 import { existsSync as existsSync52, readFileSync as readFileSync102, readdirSync as readdirSync22, statSync as statSync8 } from "node:fs";
+import path222 from "node:path";
+import fs from "node:fs";
 import path12 from "node:path";
+import fs2 from "node:fs";
+import os from "node:os";
+import path13 from "node:path";
+import fs3, { realpathSync as realpathSync10 } from "node:fs";
+import path14 from "node:path";
+import fs4 from "node:fs";
+import fs5 from "node:fs";
+import os2 from "node:os";
+import path15 from "node:path";
+import os3 from "node:os";
+import path16 from "node:path";
+import fs7 from "node:fs";
+import os4 from "node:os";
+import path17 from "node:path";
+import fs8 from "node:fs";
+import path18 from "node:path";
+import fs9 from "node:fs";
+import path19 from "node:path";
+import fs10 from "node:fs";
+import os5 from "node:os";
+import path20 from "node:path";
+import fs11 from "node:fs";
+import path21 from "node:path";
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { existsSync as existsSync62, readFileSync as readFileSync112, statSync as statSync22 } from "node:fs";
-import path13 from "node:path";
+import path23 from "node:path";
 import { randomUUID as randomUUID22 } from "node:crypto";
 import { existsSync as existsSync72, readFileSync as readFileSync122, renameSync as renameSync5, unlinkSync as unlinkSync8, openSync as openSync3, fstatSync as fstatSync2, lstatSync as lstatSync9, closeSync as closeSync3, linkSync } from "node:fs";
-import path14 from "node:path";
+import path24 from "node:path";
 import { randomUUID as randomUUID32 } from "node:crypto";
 import { resolve as resolve15 } from "node:path";
-import fs from "node:fs";
+import fs12 from "node:fs";
 import { createHash as createHash20 } from "node:crypto";
-import path15 from "node:path";
+import path25 from "node:path";
 import { execFileSync as execFileSync22 } from "node:child_process";
 import fs13 from "node:fs";
 import os6 from "node:os";
 import path26 from "node:path";
-import path16 from "node:path";
-import fs3 from "node:fs";
-import os from "node:os";
-import path17 from "node:path";
-import fs4, { realpathSync as realpathSync10 } from "node:fs";
-import path18 from "node:path";
-import fs5 from "node:fs";
-import fs6 from "node:fs";
-import os2 from "node:os";
-import path19 from "node:path";
-import os3 from "node:os";
-import path20 from "node:path";
-import fs8 from "node:fs";
-import os4 from "node:os";
-import path21 from "node:path";
-import fs9 from "node:fs";
-import path222 from "node:path";
-import fs10 from "node:fs";
-import path23 from "node:path";
-import fs11 from "node:fs";
-import os5 from "node:os";
-import path24 from "node:path";
-import fs12 from "node:fs";
-import path25 from "node:path";
 
 // ../engine/dist/audit.js
 import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
@@ -76138,7 +76139,8 @@ function getStatusCommandDefinitions() {
         { key: "expect", flags: "--expect <token>", required: false },
         { key: "operation", flags: "--operation <id>", required: false },
         { key: "reason", flags: "--reason <text>", required: false },
-        { key: "json", flags: "--json", required: false }
+        { key: "json", flags: "--json", required: false },
+        { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" }
       ] },
       input: exports_external.object({
         workflow: exports_external.string().min(1),
@@ -76181,6 +76183,9 @@ function getStatusCommandDefinitions() {
           const activeRequested = activeFields.some((field) => field !== undefined);
           const active = await resolveExecutionReadRoute({ harnessDir }) === "execution";
           if (activeRequested || active) {
+            if (active && !activeRequested) {
+              return refused("status.workflow-close", "execution.consumer-not-ready", "File-based workflow close is unavailable while active execution authority is enabled");
+            }
             if (endedAt !== undefined || session !== undefined) {
               return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active execution close cannot combine --ended-at or --session with its CAS envelope" };
             }
@@ -77100,7 +77105,7 @@ function getPlanCommandDefinitions() {
         arguments: [],
         options: [
           ...optionKeys.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`, required: false })),
-          ...verb === "bind" ? [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" }] : []
+          { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" }
         ]
       },
       input: inputSchema,
@@ -77365,7 +77370,7 @@ function getWorkflowCommandDefinitions() {
       } catch (error62) {
         return refused6("workflow.register", error62);
       }
-    }),
+    }, [{ key: "sessionId", context: "sessionId" }]),
     makeDefinition("workflow.evidence", "Record delivery evidence or one-time kind declaration; legacy file writes and active DB transitions stay disjoint.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input2, context) => {
       try {
         if (input2.workflow === undefined)
@@ -77399,7 +77404,7 @@ function getWorkflowCommandDefinitions() {
       } catch (error62) {
         return refused6("workflow.evidence", error62);
       }
-    }),
+    }, [{ key: "sessionId", context: "sessionId" }]),
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input2, context) => {
       try {
         if (input2.session === undefined)
@@ -77471,7 +77476,7 @@ function getWorkflowCommandDefinitions() {
       } catch (error62) {
         return refused6(id, error62);
       }
-    }));
+    }, [{ key: "sessionId", context: "sessionId" }]));
   }
   defs.push(makeDefinition("iteration.register", "Register a create-only iteration workflow with its branch anchors and Todo rows.", "write", ["workflow", "compassRef", "branchBase", "branchIntegration", "branchTargetIteration", "row", "project", "startedAt", "harness", "expect", "operation"], async (input2, context) => {
     try {
@@ -77494,7 +77499,7 @@ function getWorkflowCommandDefinitions() {
     } catch (error62) {
       return refused6("iteration.register", error62);
     }
-  }));
+  }, [{ key: "sessionId", context: "sessionId" }]));
   return defs;
 }
 var inputSchema2 = exports_external.object({
@@ -78550,7 +78555,7 @@ var inputSchemas = {
   "review-package": exports_external.object({ base: exports_external.string().optional(), head: exports_external.string().optional(), outfile: exports_external.string().optional(), context: exports_external.string().optional() }),
   "check-context": exports_external.object({ context: exports_external.string().optional(), kind: exports_external.enum(["source", "artifact", "launch"]).optional(), target: exports_external.string().optional() }),
   "evidence.capture": exports_external.object({ request: exports_external.string().optional(), argv: exports_external.array(exports_external.string()).optional() }),
-  "evidence.verify": exports_external.object({ sddDir: exports_external.string().optional(), plan: exports_external.string().optional(), task: exports_external.string().optional(), run: exports_external.string().optional(), target: exports_external.string().optional() })
+  "evidence.verify": exports_external.object({ sddDir: exports_external.string().optional(), plan: exports_external.string().optional(), task: exports_external.string().optional(), run: exports_external.string().uuid().optional(), target: exports_external.string().optional() })
 };
 function ok10(id, data) {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -78637,6 +78642,18 @@ async function execute7(id, input2, invocation) {
         runId: required3(input2.run, "--run"),
         ...input2.target !== undefined ? { targetPath: input2.target } : {}
       });
+      const assessment = result;
+      if (assessment.integrity?.ok === false || assessment.applicability === "uncertain" || assessment.applicability === "changed") {
+        return {
+          version: 1,
+          command: id,
+          status: "refused",
+          code: "sdd.evidence.assessment-failed",
+          exitCode: 1,
+          message: "SDD evidence assessment did not pass",
+          details: result
+        };
+      }
       return ok10(id, result);
     }
     throw new SddScriptError(`unsupported SDD command: ${id}`, 2);
@@ -78659,6 +78676,1221 @@ function cliDefinition4(verb) {
 }
 function getSddCommandDefinitions() {
   return verbs6.map(cliDefinition4);
+}
+function resolveProjectRoot2() {
+  const candidate = process.env.MSTAR_CLI_PROJECT_ROOT || process.env.INIT_CWD || process.env.PWD;
+  if (candidate && candidate.trim())
+    return path12.resolve(candidate);
+  return resolveProjectRoot();
+}
+function joinWithinRoot(root, ...segments) {
+  const base = path12.resolve(root);
+  const resolved = path12.resolve(base, ...segments);
+  const withinRoot = resolved === base || resolved.startsWith(base + path12.sep) || base.endsWith(path12.sep) && resolved.startsWith(base);
+  if (!withinRoot)
+    throw new Error(`path escapes ${base}: ${segments.join(path12.sep)}`);
+  return resolved;
+}
+function findUpPackageRoot(startDir, predicate) {
+  let dir = path12.resolve(startDir);
+  for (;; ) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(joinWithinRoot(dir, "package.json"), "utf8"));
+      if (predicate(manifest))
+        return dir;
+    } catch {}
+    const parent = path12.dirname(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function declaresWorkspaces(manifest) {
+  return Array.isArray(manifest.workspaces) || typeof manifest.workspaces === "string" || manifest.workspaces !== undefined && manifest.workspaces !== null && typeof manifest.workspaces === "object";
+}
+function resolveCliProjectRoot() {
+  const override = process.env.MSTAR_CLI_PROJECT_ROOT;
+  if (override && override.trim())
+    return path12.resolve(override);
+  const monorepoRoot = findUpPackageRoot(process.cwd(), declaresWorkspaces);
+  if (monorepoRoot)
+    return monorepoRoot;
+  const packageRoot = findUpPackageRoot(process.cwd(), () => true);
+  if (packageRoot)
+    return packageRoot;
+  return process.cwd();
+}
+function resolveCliPath(userPath) {
+  if (path12.isAbsolute(userPath))
+    return userPath;
+  const root = resolveCliProjectRoot();
+  return root.endsWith(path12.sep) ? root + userPath : root + path12.sep + userPath;
+}
+function splitVersion(v) {
+  const dash = v.indexOf("-");
+  if (dash === -1)
+    return [v, undefined];
+  return [v.slice(0, dash), v.slice(dash + 1)];
+}
+function compareCore(a, b) {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0;i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0)
+      return d;
+  }
+  return 0;
+}
+function comparePrerelease(a, b) {
+  if (a === undefined && b === undefined)
+    return 0;
+  if (a === undefined)
+    return 1;
+  if (b === undefined)
+    return -1;
+  const ia = a.split(".");
+  const ib = b.split(".");
+  const n = Math.min(ia.length, ib.length);
+  for (let i = 0;i < n; i++) {
+    const d = compareIdentifier(ia[i], ib[i]);
+    if (d !== 0)
+      return d;
+  }
+  return ia.length - ib.length;
+}
+function compareIdentifier(a, b) {
+  const aNum = /^\d+$/.test(a);
+  const bNum = /^\d+$/.test(b);
+  if (aNum && bNum) {
+    const na = BigInt(a);
+    const nb = BigInt(b);
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  }
+  if (aNum)
+    return -1;
+  if (bNum)
+    return 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function compareSemver(a, b) {
+  const [coreA, preA] = splitVersion(a);
+  const [coreB, preB] = splitVersion(b);
+  const coreDiff = compareCore(coreA, coreB);
+  if (coreDiff !== 0)
+    return coreDiff;
+  return comparePrerelease(preA, preB);
+}
+var PLUGIN_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+function versionFromJsonFile(filePath) {
+  let raw;
+  try {
+    raw = fs2.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const version2 = JSON.parse(raw).version;
+    if (typeof version2 === "string" && PLUGIN_VERSION_SHAPE_RE.test(version2.trim()))
+      return version2.trim();
+  } catch {}
+  return null;
+}
+function resolveOpencodePluginPackageRoot(packagesRoot = path13.join(os.homedir(), ".cache", "opencode", "packages")) {
+  let specs;
+  try {
+    specs = fs2.readdirSync(path13.join(packagesRoot, "@mstar-harness"), { withFileTypes: true });
+  } catch {
+    return path13.join(packagesRoot, "@mstar-harness", "opencode");
+  }
+  let best;
+  for (const spec of specs) {
+    if (!spec.isDirectory())
+      continue;
+    const root = path13.join(packagesRoot, "@mstar-harness", spec.name, "node_modules", "@mstar-harness", "opencode");
+    const version2 = versionFromJsonFile(path13.join(root, "package.json"));
+    if (version2 !== null && (best === undefined || compareSemver(version2, best.version) > 0)) {
+      best = { version: version2, root };
+    }
+  }
+  return best?.root ?? path13.join(packagesRoot, "@mstar-harness", "opencode");
+}
+var PLUGIN_UPDATE_HINTS = {
+  opencode: "update the Morning Star plugin (@mstar-harness/opencode) and restart OpenCode.",
+  cursor: "update the Morning Star plugin checkout (git pull, or re-run mstar-harness init --target cursor).",
+  codex: "update the Morning Star plugin: codex plugin marketplace upgrade, then codex plugin add morning-star-harness@mstar-repo.",
+  zcode: "update the Morning Star plugin in ZCode (Settings → Plugin Management → update from the mstar-local marketplace).",
+  omp: "update the Morning Star plugin: omp plugin install @mstar-harness/omp.",
+  dsh: "update the Morning Star plugin: re-run mstar-harness init --target dsh (re-adds @mstar-harness/dsh in the web profile).",
+  kimi: "update the Morning Star plugin via the Kimi TUI: /plugins install."
+};
+var NOT_INSTALLED_NOTES = {
+  opencode: "No installed Morning Star plugin found under ~/.cache/opencode/packages/ (run mstar-harness init --target opencode to add @mstar-harness/opencode).",
+  cursor: "No installed Morning Star plugin found under ~/.cursor/plugins/ (run mstar-harness init --target cursor).",
+  codex: "No installed Morning Star plugin found in `codex plugin list` (install: codex plugin add morning-star-harness@mstar-repo).",
+  zcode: "No installed Morning Star plugin found under ~/.zcode/cli/plugins/cache/ (install from the mstar-local marketplace).",
+  omp: "No installed Morning Star plugin found in `omp plugin list` (install: omp plugin install @mstar-harness/omp).",
+  dsh: "No installed Morning Star plugin found under ~/.dsh/profiles/ (run mstar-harness init --target dsh to add @mstar-harness/dsh).",
+  kimi: "No installed Morning Star plugin found under $KIMI_CODE_HOME/plugins/managed (install via the Kimi TUI: /plugins install)."
+};
+function formatPluginVersionDoctorNote(target, cliVersion, installed) {
+  if (installed === null)
+    return NOT_INSTALLED_NOTES[target];
+  const diff = compareSemver(cliVersion, installed);
+  if (diff === 0)
+    return `Plugin/CLI versions aligned (${installed}).`;
+  if (diff > 0)
+    return `CLI ${cliVersion} is newer than installed plugin ${installed} — ${PLUGIN_UPDATE_HINTS[target]}`;
+  return `Installed plugin ${installed} is newer than CLI ${cliVersion} — update the global CLI: npm i -g @mstar-harness/cli@latest (or @${installed}).`;
+}
+var PLUGIN_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+var MCP_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+var PLUGIN_TOP_LEVEL_FIELDS = {
+  $schema: true,
+  name: true,
+  version: true,
+  description: true,
+  author: true,
+  homepage: true,
+  repository: true,
+  license: true,
+  keywords: true,
+  extensions: true
+};
+var PLUGIN_NAME_PATTERN = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+function stripMcpPathPrefix(raw) {
+  if (raw.startsWith("./"))
+    return raw.slice(2);
+  if (raw.startsWith("${PLUGIN_ROOT}/"))
+    return raw.slice("${PLUGIN_ROOT}/".length);
+  if (raw.startsWith("${PLUGIN_DATA}/"))
+    return raw.slice("${PLUGIN_DATA}/".length);
+  if (raw === "${PLUGIN_ROOT}" || raw === "${PLUGIN_DATA}")
+    return "";
+  return null;
+}
+function escapesPluginRoot(remainder) {
+  const normalized = path14.posix.normalize(remainder);
+  return normalized.startsWith("..") || path14.posix.isAbsolute(normalized);
+}
+var SKILL_NAME_PATTERN = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+var HTTP_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+var MCP_SERVER_TYPES = {
+  stdio: true,
+  "streamable-http": true,
+  sse: true
+};
+var STDIO_FIELDS = { type: true, command: true, args: true, env: true, cwd: true };
+var REMOTE_FIELDS = { type: true, url: true, headers: true };
+var AUTHOR_FIELDS = { name: true, email: true, url: true };
+function describeType(value) {
+  if (value === null)
+    return "null";
+  if (Array.isArray(value))
+    return "array";
+  return typeof value;
+}
+function isPlainObject14(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseScalar3(raw) {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2 && (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+function parseFrontmatter2(filePath) {
+  const content3 = fs3.readFileSync(filePath, "utf8");
+  const match = content3.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!match)
+    return null;
+  const result = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!field)
+      continue;
+    result[field[1]] = parseScalar3(field[2]);
+  }
+  return result;
+}
+function isValidMcpUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    return false;
+  if (!parsed.hostname)
+    return false;
+  if (parsed.username || parsed.password || parsed.hash)
+    return false;
+  const host = parsed.hostname;
+  const isLoopback = host === "localhost" || host === "::1" || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(host);
+  if (!isLoopback && parsed.protocol !== "https:")
+    return false;
+  return true;
+}
+function validateManifest(manifest, errors3, warnings) {
+  if (!isPlainObject14(manifest)) {
+    errors3.push("plugin.json: manifest must be a JSON object");
+    return;
+  }
+  const doc2 = manifest;
+  for (const key of Object.keys(doc2)) {
+    if (!Object.hasOwn(PLUGIN_TOP_LEVEL_FIELDS, key)) {
+      warnings.push(`plugin.json: unknown top-level field "${key}" (ignored; client-specific data belongs under "extensions")`);
+    }
+  }
+  const schema2 = doc2["$schema"];
+  if (typeof schema2 !== "string") {
+    errors3.push(`plugin.json: "$schema" is required and must be the string ${PLUGIN_SCHEMA_URL}`);
+  } else if (schema2 !== PLUGIN_SCHEMA_URL) {
+    errors3.push(`plugin.json: unsupported "$schema" ${JSON.stringify(schema2)} (expected ${PLUGIN_SCHEMA_URL})`);
+  }
+  const name = doc2.name;
+  if (typeof name !== "string" || name.length === 0) {
+    errors3.push('plugin.json: "name" is required and must be a non-empty string');
+  } else {
+    if (name.length > 64) {
+      errors3.push(`plugin.json: "name" must be 1-64 characters (got ${name.length})`);
+    }
+    if (!PLUGIN_NAME_PATTERN.test(name)) {
+      errors3.push(`plugin.json: "name" ${JSON.stringify(name)} violates Agent Plugins name rules ` + `(lowercase alphanumerics, hyphens, periods; no "--" or ".."; must start and end alphanumeric)`);
+    }
+  }
+  for (const field of ["version", "description", "homepage", "repository", "license"]) {
+    const value = doc2[field];
+    if (value === undefined)
+      continue;
+    if (typeof value !== "string") {
+      errors3.push(`plugin.json: "${field}" must be a string (got ${describeType(value)})`);
+    }
+  }
+  if (doc2.author !== undefined) {
+    if (!isPlainObject14(doc2.author)) {
+      errors3.push('plugin.json: "author" must be an object with optional string fields name/email/url');
+    } else {
+      const author = doc2.author;
+      for (const key of Object.keys(author)) {
+        if (!Object.hasOwn(AUTHOR_FIELDS, key)) {
+          errors3.push(`plugin.json: "author" has unknown field "${key}" (only name, email, url are allowed)`);
+        }
+      }
+      for (const key of ["name", "email", "url"]) {
+        const value = author[key];
+        if (value !== undefined && typeof value !== "string") {
+          errors3.push(`plugin.json: "author.${key}" must be a string (got ${describeType(value)})`);
+        }
+      }
+    }
+  }
+  if (doc2.keywords !== undefined) {
+    if (!Array.isArray(doc2.keywords) || doc2.keywords.some((entry) => typeof entry !== "string")) {
+      errors3.push('plugin.json: "keywords" must be an array of strings');
+    }
+  }
+  if (doc2.extensions !== undefined) {
+    if (!isPlainObject14(doc2.extensions)) {
+      warnings.push('plugin.json: "extensions" is not an object — ignored');
+    } else {
+      for (const [namespace, value] of Object.entries(doc2.extensions)) {
+        if (!isPlainObject14(value)) {
+          warnings.push(`plugin.json: "extensions.${namespace}" is not an object — ignored`);
+        }
+      }
+    }
+  }
+}
+function validateMcpServer(name, entry, errors3) {
+  const prefix = `mcp.json: mcpServers.${name}`;
+  if (!isPlainObject14(entry)) {
+    errors3.push(`${prefix} must be an object`);
+    return;
+  }
+  const server = entry;
+  const type = server.type;
+  if (typeof type !== "string" || !Object.hasOwn(MCP_SERVER_TYPES, type)) {
+    errors3.push(`${prefix}: "type" must be one of "stdio" | "streamable-http" | "sse" (got ${JSON.stringify(type)})`);
+    return;
+  }
+  if (type === "stdio") {
+    for (const key of Object.keys(server)) {
+      if (!Object.hasOwn(STDIO_FIELDS, key)) {
+        errors3.push(`${prefix}: unknown field "${key}" for stdio server (allowed: type, command, args, env, cwd)`);
+      }
+    }
+    const command6 = server.command;
+    if (typeof command6 !== "string" || command6.length === 0) {
+      errors3.push(`${prefix}: "command" is required and must be a non-empty string`);
+    } else {
+      if (/\s/.test(command6)) {
+        errors3.push(`${prefix}: "command" must be a single executable token, not a shell command string`);
+      } else if (command6.includes("/") && !command6.startsWith("./")) {
+        errors3.push(`${prefix}: "command" must be a bare executable name or a plugin-relative path beginning with "./"`);
+      } else if (command6.startsWith("./") && escapesPluginRoot(command6.slice(2))) {
+        errors3.push(`${prefix}: "command" must remain within the plugin root (got "${command6}")`);
+      }
+    }
+    if (server.args !== undefined) {
+      if (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string")) {
+        errors3.push(`${prefix}: "args" must be an array of strings`);
+      }
+    }
+    if (server.env !== undefined) {
+      if (!isPlainObject14(server.env)) {
+        errors3.push(`${prefix}: "env" must be an object of strings`);
+      } else {
+        for (const [key, value] of Object.entries(server.env)) {
+          if (key === "PLUGIN_ROOT" || key === "PLUGIN_DATA") {
+            errors3.push(`${prefix}: "env" must not set reserved variable "${key}" (clients supply it themselves)`);
+          }
+          if (typeof value !== "string") {
+            errors3.push(`${prefix}: "env.${key}" must be a string`);
+          }
+        }
+      }
+    }
+    if (server.cwd !== undefined) {
+      if (typeof server.cwd !== "string") {
+        errors3.push(`${prefix}: "cwd" must be a string`);
+      } else {
+        const remainder = stripMcpPathPrefix(server.cwd);
+        if (remainder === null) {
+          errors3.push(`${prefix}: "cwd" must be "./…", "${"${PLUGIN_ROOT}"}…", or "${"${PLUGIN_DATA}"}…"`);
+        } else if (escapesPluginRoot(remainder)) {
+          errors3.push(`${prefix}: "cwd" must remain within the plugin root (got "${server.cwd}")`);
+        }
+      }
+    }
+    return;
+  }
+  for (const key of Object.keys(server)) {
+    if (!Object.hasOwn(REMOTE_FIELDS, key)) {
+      errors3.push(`${prefix}: unknown field "${key}" for ${type} server (allowed: type, url, headers)`);
+    }
+  }
+  const url2 = server.url;
+  if (typeof url2 !== "string" || url2.length === 0) {
+    errors3.push(`${prefix}: "url" is required and must be a non-empty string`);
+  } else if (!isValidMcpUrl(url2)) {
+    errors3.push(`${prefix}: "url" must be an absolute http(s) URL without user info or fragment; non-loopback endpoints must use https`);
+  }
+  if (server.headers !== undefined) {
+    if (!isPlainObject14(server.headers)) {
+      errors3.push(`${prefix}: "headers" must be an object of strings`);
+    } else {
+      const seen = new Set;
+      for (const [key, value] of Object.entries(server.headers)) {
+        if (typeof value !== "string") {
+          errors3.push(`${prefix}: "headers.${key}" must be a string`);
+          continue;
+        }
+        if (value.includes("\r") || value.includes(`
+`)) {
+          errors3.push(`${prefix}: "headers.${key}" value must be a single HTTP header value`);
+        }
+        if (!HTTP_HEADER_NAME_PATTERN.test(key)) {
+          errors3.push(`${prefix}: "headers.${key}" is not a valid HTTP header name`);
+        } else {
+          const lower = key.toLowerCase();
+          if (seen.has(lower)) {
+            errors3.push(`${prefix}: header "${key}" is duplicated (case-insensitive)`);
+          }
+          seen.add(lower);
+        }
+      }
+    }
+  }
+}
+function validateMcp(root, manifestSchema, errors3) {
+  const mcpPath = `${root}${path14.sep}mcp.json`;
+  if (!fs3.existsSync(mcpPath))
+    return;
+  let parsed;
+  try {
+    parsed = readJson(mcpPath);
+  } catch (error62) {
+    errors3.push(`mcp.json: ${error62.message}`);
+    return;
+  }
+  if (!isPlainObject14(parsed)) {
+    errors3.push("mcp.json: configuration must be a JSON object");
+    return;
+  }
+  const doc2 = parsed;
+  for (const key of Object.keys(doc2)) {
+    if (key !== "$schema" && key !== "mcpServers") {
+      errors3.push(`mcp.json: unknown top-level field "${key}" (only "$schema" and "mcpServers" allowed)`);
+    }
+  }
+  const schema2 = doc2["$schema"];
+  if (typeof schema2 !== "string") {
+    errors3.push(`mcp.json: "$schema" is required and must be the string ${MCP_SCHEMA_URL}`);
+  } else if (schema2 !== MCP_SCHEMA_URL) {
+    errors3.push(`mcp.json: unsupported "$schema" ${JSON.stringify(schema2)} (expected ${MCP_SCHEMA_URL})`);
+  } else {
+    const manifestVersion = typeof manifestSchema === "string" ? manifestSchema.match(/^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\/plugin\.schema\.json$/)?.[1] : undefined;
+    const mcpVersion = schema2.match(/^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\/mcp\.schema\.json$/)?.[1];
+    if (manifestVersion && mcpVersion && manifestVersion !== mcpVersion) {
+      errors3.push(`mcp.json: "$schema" targets Agent Plugins ${mcpVersion} but plugin.json targets ${manifestVersion} (versions must match)`);
+    }
+  }
+  const servers = doc2.mcpServers;
+  if (!isPlainObject14(servers)) {
+    errors3.push('mcp.json: "mcpServers" is required and must be an object');
+    return;
+  }
+  for (const [serverName, entry] of Object.entries(servers)) {
+    validateMcpServer(serverName, entry, errors3);
+  }
+}
+function validateSkills(root, errors3, warnings) {
+  const skillsPath = `${root}${path14.sep}skills`;
+  try {
+    if (!fs3.existsSync(skillsPath))
+      return;
+    if (!fs3.statSync(skillsPath).isDirectory()) {
+      errors3.push("skills: skills/ is not a directory (component type invalid)");
+      return;
+    }
+    const entries = fs3.readdirSync(skillsPath, { withFileTypes: true });
+    const realRoot = realpathSync10(root);
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink())
+        continue;
+      const skillDir = entry.name;
+      let realSkillPath;
+      try {
+        realSkillPath = realpathSync10(`${skillsPath}${path14.sep}${skillDir}`);
+      } catch (error62) {
+        warnings.push(`skills: ${skillDir}/ cannot be resolved (${error62.message}; skill skipped)`);
+        continue;
+      }
+      const insideRoot = realSkillPath === realRoot || realSkillPath.startsWith(realRoot + path14.sep) || realRoot.endsWith(path14.sep) && realSkillPath.startsWith(realRoot);
+      if (!insideRoot) {
+        warnings.push(`skills: ${skillDir}/ resolves outside the plugin root (${realSkillPath}; skill skipped)`);
+        continue;
+      }
+      const skillMdPath = `${skillsPath}${path14.sep}${skillDir}${path14.sep}SKILL.md`;
+      if (!fs3.existsSync(skillMdPath) || !fs3.statSync(skillMdPath).isFile()) {
+        warnings.push(`skills: ${skillDir}/ has no SKILL.md (directory is not a skill; ignored)`);
+        continue;
+      }
+      let realSkillMdPath;
+      try {
+        realSkillMdPath = realpathSync10(skillMdPath);
+      } catch (error62) {
+        warnings.push(`skills: ${skillDir}/SKILL.md cannot be resolved (${error62.message}; skill skipped)`);
+        continue;
+      }
+      const skillMdInsideRoot = realSkillMdPath.startsWith(realRoot + path14.sep) || realRoot.endsWith(path14.sep) && realSkillMdPath.startsWith(realRoot);
+      if (!skillMdInsideRoot) {
+        warnings.push(`skills: ${skillDir}/SKILL.md resolves outside the plugin root (${realSkillMdPath}; skill skipped)`);
+        continue;
+      }
+      const frontmatter = parseFrontmatter2(realSkillMdPath);
+      if (!frontmatter) {
+        warnings.push(`skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)`);
+        continue;
+      }
+      const skillName = frontmatter.name;
+      const problems = [];
+      if (skillName !== skillDir) {
+        problems.push(`frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`);
+      } else if (!SKILL_NAME_PATTERN.test(skillName)) {
+        problems.push(`frontmatter "name" violates Agent Skills name rules ` + `(lowercase alphanumerics and hyphens, no "--", no leading or trailing hyphen)`);
+      }
+      if (typeof skillName === "string" && skillName.length > 64) {
+        problems.push(`frontmatter "name" must be at most 64 characters (got ${skillName.length})`);
+      }
+      const description = frontmatter.description;
+      if (typeof description !== "string" || description.trim().length === 0) {
+        problems.push(`frontmatter "description" is required and must be non-empty`);
+      } else if (description.length > 1024) {
+        problems.push(`frontmatter "description" must be at most 1024 characters (got ${description.length})`);
+      }
+      for (const problem of problems) {
+        warnings.push(`skills: ${skillDir}/SKILL.md ${problem} (skill skipped)`);
+      }
+    }
+  } catch (error62) {
+    errors3.push(`skills: ${error62.message}`);
+  }
+}
+function validateAgentPlugin(root) {
+  const errors3 = [];
+  const warnings = [];
+  if (!fs3.existsSync(root) || !fs3.statSync(root).isDirectory()) {
+    errors3.push(`plugin root: not a directory: ${root}`);
+    return { ok: false, errors: errors3, warnings };
+  }
+  const manifestPath = `${root}${path14.sep}plugin.json`;
+  if (!fs3.existsSync(manifestPath)) {
+    errors3.push(`plugin.json: manifest not found at ${manifestPath} (plugin root must contain plugin.json)`);
+    return { ok: false, errors: errors3, warnings };
+  }
+  let manifest;
+  try {
+    manifest = readJson(manifestPath);
+  } catch (error62) {
+    errors3.push(`plugin.json: ${error62.message}`);
+    return { ok: false, errors: errors3, warnings };
+  }
+  validateManifest(manifest, errors3, warnings);
+  const manifestSchema = isPlainObject14(manifest) ? manifest["$schema"] : undefined;
+  validateMcp(root, manifestSchema, errors3);
+  validateSkills(root, errors3, warnings);
+  return { ok: errors3.length === 0, errors: errors3, warnings };
+}
+var PLUGIN_NAME2 = "morning-star-harness";
+var CODEX_MARKETPLACE_NAME = "mstar-repo";
+var MARKETPLACE_GIT_SOURCE = "btspoony/mstar-harness";
+var CODEX_PLUGIN_ID = `${PLUGIN_NAME2}@${CODEX_MARKETPLACE_NAME}`;
+function parseCodexMarketplaceNames(dump) {
+  const parsed = JSON.parse(dump);
+  const list2 = Array.isArray(parsed.marketplaces) ? parsed.marketplaces : [];
+  return list2.map((entry) => entry && typeof entry === "object" && ("name" in entry) && typeof entry.name === "string" ? entry.name : "").filter((name) => name !== "");
+}
+function parseCodexInstalledEntries(dump) {
+  const parsed = JSON.parse(dump);
+  const list2 = Array.isArray(parsed.installed) ? parsed.installed : [];
+  return list2.filter((entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry));
+}
+function parseCodexInstalledPluginIds(dump) {
+  return parseCodexInstalledEntries(dump).map((entry) => typeof entry.pluginId === "string" ? entry.pluginId : "").filter((pluginId) => pluginId !== "");
+}
+function isCodexAvailable(probe) {
+  try {
+    probe();
+    return true;
+  } catch {
+    return false;
+  }
+}
+function legacyCodexMarketplaceNote(raw, legacyPath) {
+  try {
+    const parsed = JSON.parse(raw);
+    const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+    const hasMstar = plugins.some((entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry) && ("name" in entry) && entry.name === PLUGIN_NAME2);
+    if (hasMstar) {
+      return `Legacy personal marketplace entry found at ${legacyPath} — the ${PLUGIN_NAME2} plugin now installs from the repo marketplace (${MARKETPLACE_GIT_SOURCE}). Remove the entry, then install: codex plugin add ${CODEX_PLUGIN_ID}`;
+    }
+  } catch {}
+  return null;
+}
+var CODEX_BIN = "codex";
+var CODEX_INSTALL_HINT = "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
+function diagnoseCodexHost(runCodex, legacyMarketplacePath) {
+  const errors3 = [];
+  const notes = [];
+  let legacyRaw;
+  try {
+    legacyRaw = fs4.readFileSync(legacyMarketplacePath, "utf8");
+  } catch {
+    legacyRaw = "";
+  }
+  const legacyNote = legacyCodexMarketplaceNote(legacyRaw, legacyMarketplacePath);
+  if (legacyNote)
+    notes.push(legacyNote);
+  if (!isCodexAvailable(() => runCodex(["--version"]))) {
+    errors3.push(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
+    return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors: errors3, notes };
+  }
+  try {
+    const marketplaces = parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"]));
+    if (!marketplaces.includes(CODEX_MARKETPLACE_NAME)) {
+      errors3.push(`Marketplace ${CODEX_MARKETPLACE_NAME} not configured (run init, or: ${CODEX_BIN} plugin marketplace add ${MARKETPLACE_GIT_SOURCE} --ref main).`);
+    }
+    const installed = parseCodexInstalledPluginIds(runCodex(["plugin", "list", "--json"]));
+    if (marketplaces.includes(CODEX_MARKETPLACE_NAME) && !installed.includes(CODEX_PLUGIN_ID)) {
+      notes.push(`Plugin not installed yet: ${CODEX_BIN} plugin add ${CODEX_PLUGIN_ID}`);
+    }
+  } catch (error62) {
+    const message = error62 instanceof Error ? error62.message : String(error62);
+    errors3.push(`Could not query ${CODEX_BIN} plugin marketplace list: ${message}`);
+  }
+  return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors: errors3, notes };
+}
+var CURSOR_PLUGIN_NAME = "morning-star-harness";
+var CURSOR_PLUGIN_MARKER = ".cursor-plugin/plugin.json";
+var CURSOR_PLUGIN_LINK = ".cursor/plugins/morning-star-harness";
+var CURSOR_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
+function globalInstallPath(home = os2.homedir()) {
+  return path15.join(home, ".cursor", "plugins", "local", CURSOR_PLUGIN_NAME);
+}
+function projectInstallPath(projectRoot = resolveProjectRoot2()) {
+  return path15.join(projectRoot, CURSOR_PLUGIN_LINK);
+}
+function validateGitCheckout(checkoutPath) {
+  const errors3 = [];
+  let stat;
+  try {
+    stat = fs5.lstatSync(checkoutPath);
+  } catch {
+    errors3.push(`Missing checkout directory: ${checkoutPath}`);
+    return errors3;
+  }
+  if (stat.isSymbolicLink()) {
+    errors3.push(`Path must be a real directory, not a symlink: ${checkoutPath}. Run: mstar-harness init --target cursor`);
+    return errors3;
+  }
+  if (!fs5.existsSync(path15.join(checkoutPath, ".git"))) {
+    errors3.push(`Path is not a git checkout: ${checkoutPath}`);
+  }
+  const marker = path15.join(checkoutPath, CURSOR_PLUGIN_MARKER);
+  if (!fs5.existsSync(marker))
+    errors3.push(`Missing marker file: ${marker}`);
+  return errors3;
+}
+function validatePluginAgents(pluginRoot) {
+  const errors3 = [];
+  const agentsDir = path15.join(pluginRoot, "agents");
+  if (!fs5.existsSync(agentsDir)) {
+    errors3.push(`Missing plugin agents directory: ${agentsDir}`);
+    return errors3;
+  }
+  for (const agentName of CURSOR_AGENT_SMOKE_NAMES) {
+    const agentPath = path15.join(agentsDir, `${agentName}.md`);
+    if (!fs5.existsSync(agentPath)) {
+      errors3.push(`Missing plugin agent file: ${agentPath}`);
+      continue;
+    }
+    const content3 = fs5.readFileSync(agentPath, "utf8");
+    if (!/^---\nname:\s/m.test(content3)) {
+      errors3.push(`Plugin agent ${agentName}.md must use Cursor-first frontmatter (name, description, model before OpenCode fields).`);
+    }
+  }
+  return errors3;
+}
+function diagnoseCursorHost(scope, roots) {
+  const location = scope === "global" ? roots?.global ?? globalInstallPath() : roots?.project ?? projectInstallPath();
+  return {
+    location,
+    errors: [...validateGitCheckout(location), ...validatePluginAgents(location)]
+  };
+}
+function kimiManagedRoot(kimiCodeHome = process.env.KIMI_CODE_HOME ?? path16.join(os3.homedir(), ".kimi-code")) {
+  return path16.join(kimiCodeHome, "plugins", "managed");
+}
+function diagnoseKimiHost(kimiCodeHome) {
+  return { location: kimiManagedRoot(kimiCodeHome), errors: [], notes: [] };
+}
+var DSH_BIN = "dsh";
+var DSH_PROFILE = "web";
+var DSH_PROFILE_FLAG = "--profile";
+var DSH_DUMP_FLAG = "--dump-config";
+var DSH_HOME_ENV = "DSH_HOME";
+var DSH_HOME_SUBDIR = ".dsh";
+var DSH_PROFILES_DIR = "profiles";
+var DSH_INSTALL_HINT = "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
+var DSH_PLUGIN_SPECS = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
+var DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
+function dshLoaderName(spec) {
+  const at = spec.lastIndexOf("@");
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+var DSH_FALLBACKS_LOADER_NAME = dshLoaderName(DSH_FALLBACKS_SPEC);
+var FALLBACKS_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+var DISABLED_MARKERS = /\b(?:disabled: true|enabled: false)\b/;
+function resolveDshHome(dshHome) {
+  if (dshHome !== undefined)
+    return dshHome;
+  return process.env[DSH_HOME_ENV] ?? path17.join(os4.homedir(), DSH_HOME_SUBDIR);
+}
+function resolveDshProfileDir(dshHome) {
+  return path17.join(resolveDshHome(dshHome), DSH_PROFILES_DIR, DSH_PROFILE);
+}
+function readInstalledFallbacksVersion(profileDir) {
+  const pkgJson = path17.join(profileDir, "node_modules", DSH_FALLBACKS_LOADER_NAME, "package.json");
+  try {
+    const raw = fs7.readFileSync(pkgJson, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !("version" in parsed) || typeof parsed.version !== "string") {
+      return null;
+    }
+    const trimmed = parsed.version.trim();
+    if (FALLBACKS_VERSION_SHAPE_RE.test(trimmed))
+      return trimmed;
+  } catch {}
+  return null;
+}
+function fallbacksVersionDrifted(profileDir) {
+  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION))
+    return false;
+  const installedVersion = readInstalledFallbacksVersion(profileDir);
+  if (installedVersion === null)
+    return true;
+  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
+}
+function isDshAvailable(probe) {
+  try {
+    probe();
+    return true;
+  } catch {
+    return false;
+  }
+}
+function parseDshLoaderEntries(dump) {
+  const entries = [];
+  let current = null;
+  for (const line of dump.split(`
+`)) {
+    if (/^- id: /.test(line)) {
+      if (current)
+        entries.push(current);
+      current = { name: "", enabled: !DISABLED_MARKERS.test(line) };
+    } else if (current) {
+      const nameMatch = /^  name: (.+)$/.exec(line);
+      if (nameMatch) {
+        let name = nameMatch[1].trim();
+        if (DISABLED_MARKERS.test(line)) {
+          current.enabled = false;
+          name = name.replace(/\s*,?\s*(?:disabled: true|enabled: false)\s*$/, "");
+        }
+        current.name = name.replace(/^['"]|['"]$/g, "");
+      } else if (/^  disabled: true$/.test(line) || /^  enabled: false$/.test(line)) {
+        current.enabled = false;
+      } else if (line.trim() !== "" && !line.startsWith("  ")) {
+        entries.push(current);
+        current = null;
+      }
+    }
+  }
+  if (current)
+    entries.push(current);
+  if (dump.trim() !== "" && (entries.length === 0 || entries.some((entry) => !entry.name))) {
+    return null;
+  }
+  return entries;
+}
+function diagnoseDshHost(runDsh, roots) {
+  const errors3 = [];
+  const notes = [];
+  const profileDir = resolveDshProfileDir(roots?.dshHome);
+  if (!isDshAvailable(() => runDsh(["--version"]))) {
+    errors3.push(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
+    return { location: profileDir, errors: errors3, notes };
+  }
+  let dump;
+  try {
+    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG]);
+  } catch (error62) {
+    const message = error62 instanceof Error ? error62.message : String(error62);
+    errors3.push(`Warning: could not probe installed plugins (${message}); cannot verify install state.`);
+    return { location: profileDir, errors: errors3, notes };
+  }
+  const entries = parseDshLoaderEntries(dump);
+  if (entries === null) {
+    errors3.push("Warning: could not parse installed plugins from dump (unexpected format); cannot verify install state.");
+    return { location: profileDir, errors: errors3, notes };
+  }
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  for (const spec of DSH_PLUGIN_SPECS) {
+    const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
+    const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
+    if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
+      const installedVersion = readInstalledFallbacksVersion(profileDir);
+      const installedLabel = installedVersion ?? "unknown";
+      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
+      errors3.push(`${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`);
+      continue;
+    }
+    notes.push(`${spec}: ${state}`);
+    if (state === "mounted")
+      continue;
+    const hint = state === "uninstalled" ? "Run: mstar-harness init --target dsh" : "Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.";
+    errors3.push(`${spec} is ${state}. ${hint}`);
+  }
+  return { location: profileDir, errors: errors3, notes };
+}
+var PACKAGE_NAMES = {
+  "morning-star": true,
+  "morning-star-harness": true,
+  "github:btspoony/mstar-harness": true,
+  "@mstar-harness/omp": true
+};
+var SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
+var COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
+function parseOmpPluginList(raw) {
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed))
+    return parsed;
+  if (parsed && typeof parsed === "object") {
+    const record2 = parsed;
+    if (Array.isArray(record2.plugins))
+      return record2.plugins;
+    const entries = [];
+    for (const key of ["npm", "marketplace"]) {
+      const group = record2[key];
+      if (Array.isArray(group)) {
+        for (const item of group) {
+          if (item && typeof item === "object")
+            entries.push(item);
+        }
+      }
+    }
+    if (entries.length > 0)
+      return entries;
+  }
+  return [];
+}
+function findInstalledPlugin(plugins) {
+  return plugins.find((entry) => {
+    const name = typeof entry.name === "string" ? entry.name : "";
+    const pathValue = typeof entry.path === "string" ? entry.path : "";
+    const manifest = entry.manifest && typeof entry.manifest === "object" ? entry.manifest : null;
+    const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
+    if (Object.hasOwn(PACKAGE_NAMES, name) || Object.hasOwn(PACKAGE_NAMES, manifestName))
+      return true;
+    if (name.includes("morning-star") || manifestName.includes("morning-star"))
+      return true;
+    return pathValue.includes("mstar-harness") || pathValue.includes(`${path18.sep}morning-star`);
+  });
+}
+function validatePluginTree(pluginRoot) {
+  const errors3 = [];
+  const markerPath = path18.join(pluginRoot, "plugin.json");
+  if (!fs8.existsSync(markerPath))
+    errors3.push(`Missing omp plugin marker: ${markerPath}`);
+  for (const skill of SKILL_SMOKE) {
+    const skillPath = path18.join(pluginRoot, "skills", skill, "SKILL.md");
+    if (!fs8.existsSync(skillPath))
+      errors3.push(`Missing skill: ${skillPath}`);
+  }
+  for (const command6 of COMMAND_SMOKE) {
+    const commandPath = path18.join(pluginRoot, "commands", `${command6}.md`);
+    if (!fs8.existsSync(commandPath))
+      errors3.push(`Missing command: ${commandPath}`);
+  }
+  const hostRef = path18.join(pluginRoot, "skills", "mstar-host", "references", "omp.md");
+  if (!fs8.existsSync(hostRef))
+    errors3.push(`Missing omp host reference: ${hostRef}`);
+  return errors3;
+}
+function diagnoseOmpHost(input2) {
+  const errors3 = [...input2.localHarnessRepoErrors];
+  errors3.push(...validatePluginTree(path18.join(input2.harnessRepoPath, "packages", "omp")));
+  if (!input2.ompAvailable) {
+    errors3.push("omp CLI not found on PATH (required for omp target doctor checks).");
+  } else {
+    const installed = findInstalledPlugin(input2.installedPlugins);
+    if (!installed) {
+      errors3.push(`Morning Star plugin not found in \`omp plugin list\` (expected one of: ${Object.keys(PACKAGE_NAMES).join(", ")}). Run: mstar-harness init --target omp --scope ${input2.scope}`);
+    } else if (installed.enabled === false) {
+      errors3.push(`Morning Star omp plugin is installed but disabled (${String(installed.name)}).`);
+    }
+  }
+  for (const entry of input2.missingGitignoreEntries)
+    errors3.push(`Missing .gitignore entry: ${entry}`);
+  return { location: input2.harnessRepoPath, errors: errors3 };
+}
+var OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
+function isLegacyMorningStarGitPlugin(plugin) {
+  const raw = plugin.trim();
+  const match = /^morning-star@git\+(.+)$/i.exec(raw);
+  if (!match)
+    return false;
+  const spec = match[1].split("#")[0].trim().toLowerCase();
+  return /^https?:\/\/github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) || /^ssh:\/\/git@github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) || /^git@github\.com:btspoony\/mstar-harness(\.git)?$/.test(spec);
+}
+function isMstarHarnessOpencodePlugin(plugin) {
+  const value = plugin.trim();
+  return value === "@mstar-harness/opencode" || value.startsWith("@mstar-harness/opencode@");
+}
+function isAnyMstarHarnessOpencodeSlot(plugin) {
+  return isLegacyMorningStarGitPlugin(plugin) || isMstarHarnessOpencodePlugin(plugin);
+}
+function validateOpencodeConfig(config2) {
+  const errors3 = [];
+  if (config2.$schema !== OPENCODE_CONFIG_SCHEMA) {
+    errors3.push(`Missing or invalid $schema (expected: ${OPENCODE_CONFIG_SCHEMA}).`);
+  }
+  const plugins = Array.isArray(config2.plugin) ? config2.plugin : [];
+  const hasMstarOpencode = plugins.some((item) => typeof item === "string" && isAnyMstarHarnessOpencodeSlot(item.trim()));
+  if (!hasMstarOpencode) {
+    errors3.push("Missing @mstar-harness/opencode plugin entry in `plugin` (or legacy morning-star git plugin).");
+  }
+  return errors3;
+}
+function getOpencodeDoctorWarnings(config2, allRoles) {
+  const warnings = [];
+  const plugins = Array.isArray(config2.plugin) ? config2.plugin : [];
+  const strings = plugins.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+  const hasNpm = strings.some(isMstarHarnessOpencodePlugin);
+  const hasLegacy = strings.some(isLegacyMorningStarGitPlugin);
+  if (hasLegacy && !hasNpm) {
+    warnings.push("Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` to rewrite to `@mstar-harness/opencode@latest`.");
+  }
+  if (hasLegacy && hasNpm) {
+    warnings.push("Both legacy `morning-star@git+…` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.");
+  }
+  const agent = config2.agent && typeof config2.agent === "object" && !Array.isArray(config2.agent) ? config2.agent : {};
+  const missingModels = allRoles.filter((roleId) => {
+    const role = agent[roleId] && typeof agent[roleId] === "object" && !Array.isArray(agent[roleId]) ? agent[roleId] : {};
+    return typeof role.model !== "string" || !role.model.trim();
+  });
+  if (missingModels.length) {
+    warnings.push(`${missingModels.length} role(s) have no explicit agent.<role>.model — OpenCode default model will be used (recommended for fastest setup).`);
+  }
+  return warnings;
+}
+function diagnoseOpencodeHost(root, allRoles) {
+  const location = path19.join(root, "opencode.json");
+  let config2;
+  try {
+    const parsed = JSON.parse(fs9.readFileSync(location, "utf8"));
+    config2 = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error62) {
+    if (error62 && typeof error62 === "object" && "code" in error62 && error62.code === "ENOENT") {
+      return { location, errors: [`Missing config file: ${location}`], warnings: [] };
+    }
+    const message = error62 instanceof Error ? error62.message : String(error62);
+    return { location, errors: [`Could not read config file ${location}: ${message}`], warnings: [] };
+  }
+  const errors3 = validateOpencodeConfig(config2);
+  return {
+    location,
+    errors: errors3,
+    warnings: errors3.length ? [] : getOpencodeDoctorWarnings(config2, allRoles)
+  };
+}
+var MARKETPLACE_ID = "mstar-local";
+var MARKETPLACE_NAME = "mstar-local";
+var GITHUB_REPO = "btspoony/mstar-harness";
+var PLUGIN_NAME4 = "morning-star-harness";
+var HARNESS_PROCESS_GITIGNORE = [
+  ".mstar/**",
+  "!.mstar/AGENTS.md",
+  "!.mstar/knowledge/",
+  "!.mstar/knowledge/**",
+  "!.mstar/specs/",
+  "!.mstar/specs/**",
+  ".agents/**",
+  "!.agents/AGENTS.md",
+  "!.agents/knowledge/",
+  "!.agents/knowledge/**",
+  "!.agents/specs/",
+  "!.agents/specs/**",
+  ".mstarc"
+];
+var ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
+var ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
+var ZCODE_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
+var HARNESS_MARKERS = [".codex-plugin/plugin.json", ZCODE_PLUGIN_MARKER, ".omp-plugin/plugin.json"];
+function ensureObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function readJson5(file2) {
+  return ensureObject(JSON.parse(fs10.readFileSync(file2, "utf8")));
+}
+function findKnownMarketplace(raw) {
+  const marketplaces = Array.isArray(raw.marketplaces) ? raw.marketplaces : [];
+  return marketplaces.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && entry.id === MARKETPLACE_ID);
+}
+function findMarketplacePlugin(raw) {
+  const plugins = Array.isArray(raw.plugins) ? raw.plugins : [];
+  return plugins.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && entry.name === PLUGIN_NAME4);
+}
+function validateMarketplaceJson(file2) {
+  const errors3 = [];
+  if (!fs10.existsSync(file2)) {
+    errors3.push(`Missing ZCode marketplace: ${file2}`);
+    return errors3;
+  }
+  const raw = readJson5(file2);
+  if (raw.name !== MARKETPLACE_NAME)
+    errors3.push(`ZCode marketplace name must be ${MARKETPLACE_NAME} (in ${file2}).`);
+  const entry = findMarketplacePlugin(raw);
+  if (!entry) {
+    errors3.push(`Missing ${PLUGIN_NAME4} plugin entry in ${file2}.`);
+    return errors3;
+  }
+  const source = ensureObject(entry.source);
+  if (source.source !== "github")
+    errors3.push("ZCode marketplace plugin source.source must be `github`.");
+  if (source.repo !== GITHUB_REPO)
+    errors3.push(`ZCode marketplace plugin source.repo must be ${GITHUB_REPO}.`);
+  return errors3;
+}
+function validateKnownMarketplaces(file2) {
+  const errors3 = [];
+  if (!fs10.existsSync(file2)) {
+    errors3.push(`Missing ZCode known_marketplaces.json: ${file2}`);
+    return errors3;
+  }
+  const entry = findKnownMarketplace(readJson5(file2));
+  if (!entry) {
+    errors3.push(`Missing ${MARKETPLACE_ID} entry in ${file2}.`);
+    return errors3;
+  }
+  if (entry.id !== MARKETPLACE_ID)
+    errors3.push(`known_marketplaces entry id must be ${MARKETPLACE_ID}.`);
+  const source = ensureObject(entry.source);
+  if (source.source !== "github")
+    errors3.push("known_marketplaces entry source.source must be github.");
+  if (source.repo !== GITHUB_REPO)
+    errors3.push(`known_marketplaces entry source.repo must be ${GITHUB_REPO}.`);
+  return errors3;
+}
+function validatePluginAgents2(pluginRoot) {
+  const errors3 = [];
+  const agentsDir = path20.join(pluginRoot, "agents");
+  if (!fs10.existsSync(agentsDir)) {
+    errors3.push(`Missing plugin agents directory: ${agentsDir}`);
+    return errors3;
+  }
+  for (const agentName of ZCODE_AGENT_SMOKE_NAMES) {
+    const agentPath = path20.join(agentsDir, `${agentName}.md`);
+    if (!fs10.existsSync(agentPath))
+      errors3.push(`Missing plugin agent file: ${agentPath}`);
+  }
+  return errors3;
+}
+function validateLocalHarnessRepo(harnessRepoPath) {
+  const errors3 = [];
+  if (!fs10.existsSync(harnessRepoPath)) {
+    errors3.push(`Missing local harness repo: ${harnessRepoPath}`);
+    return errors3;
+  }
+  if (!HARNESS_MARKERS.some((marker) => fs10.existsSync(path20.join(harnessRepoPath, marker)))) {
+    errors3.push(`Local harness repo is missing a plugin marker (expected one of: ${HARNESS_MARKERS.join(", ")}).`);
+  }
+  return errors3;
+}
+function validateGitCheckout2(checkoutPath) {
+  const errors3 = [];
+  let stat;
+  try {
+    stat = fs10.lstatSync(checkoutPath);
+  } catch {
+    errors3.push(`Missing checkout directory: ${checkoutPath}`);
+    return errors3;
+  }
+  if (stat.isSymbolicLink()) {
+    errors3.push(`Path must be a real directory, not a symlink: ${checkoutPath}. Run: mstar-harness init --target cursor`);
+    return errors3;
+  }
+  if (!fs10.existsSync(path20.join(checkoutPath, ".git")))
+    errors3.push(`Path is not a git checkout: ${checkoutPath}`);
+  const marker = path20.join(checkoutPath, ZCODE_PLUGIN_MARKER);
+  if (!fs10.existsSync(marker))
+    errors3.push(`Missing marker file: ${marker}`);
+  return errors3;
+}
+function diagnoseZcodeHost(scope, roots = {}) {
+  const pluginsRoot = roots.pluginsRoot ?? path20.join(os5.homedir(), ".zcode", "cli", "plugins");
+  const projectRoot = roots.projectRoot ?? resolveProjectRoot2();
+  const harnessRepoPath = roots.harnessRepoPath ?? path20.join(os5.homedir(), ".mstar", "harness");
+  const knownMarketplacesPath = path20.join(pluginsRoot, "known_marketplaces.json");
+  const marketplacePath = path20.join(pluginsRoot, "marketplaces", MARKETPLACE_ID, "marketplace.json");
+  const errors3 = validateLocalHarnessRepo(harnessRepoPath);
+  if (scope === "project") {
+    const checkoutPath = path20.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
+    errors3.push(...validateGitCheckout2(checkoutPath));
+    const gitignorePath = path20.join(projectRoot, ".gitignore");
+    const gitignore = fs10.existsSync(gitignorePath) ? fs10.readFileSync(gitignorePath, "utf8") : "";
+    const lines = gitignore.split(/\r?\n/);
+    if (!lines.includes(ZCODE_PLUGIN_CHECKOUT_PROJECT)) {
+      errors3.push(`Missing .gitignore entry: ${ZCODE_PLUGIN_CHECKOUT_PROJECT}`);
+    }
+    if (!hasHarnessRootDeclaration(gitignore)) {
+      for (const entry of HARNESS_PROCESS_GITIGNORE) {
+        if (!lines.includes(entry))
+          errors3.push(`Missing .gitignore entry: ${entry}`);
+      }
+    }
+    errors3.push(...validatePluginAgents2(checkoutPath));
+  } else {
+    errors3.push(...validatePluginAgents2(harnessRepoPath));
+  }
+  errors3.push(...validateKnownMarketplaces(knownMarketplacesPath));
+  errors3.push(...validateMarketplaceJson(marketplacePath));
+  return { location: knownMarketplacesPath, errors: errors3 };
+}
+var MCP_PACKAGE_LAYOUTS = {
+  omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  dsh: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
+  cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
+  codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
+  kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
+  zcode: { buildInfo: "mcp/bundles/zcode/dist/mcp/build-info.json", executable: "mcp/bundles/zcode/dist/mcp/stdio.js", versionManifest: ".zcode-plugin/plugin.json" }
+};
+function record2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function readJson6(file2) {
+  try {
+    return record2(JSON.parse(fs11.readFileSync(file2, "utf8")));
+  } catch {
+    return null;
+  }
+}
+function actualRuntime() {
+  return process.versions.bun === undefined ? { kind: "node", version: process.versions.node } : { kind: "bun", version: process.versions.bun };
+}
+function diagnoseMcpTarget(target, packageRoot, runtime = actualRuntime()) {
+  const layout = MCP_PACKAGE_LAYOUTS[target];
+  const buildInfoPath = path21.join(packageRoot, layout.buildInfo);
+  const executablePath = path21.join(packageRoot, layout.executable);
+  const manifestPath = path21.join(packageRoot, layout.versionManifest);
+  const missing = [buildInfoPath, executablePath, manifestPath].filter((file2) => !fs11.existsSync(file2));
+  const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0 ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.` : null;
+  if (missing.length > 0) {
+    return {
+      target,
+      status: "unavailable",
+      location: buildInfoPath,
+      runtimeFloor,
+      errors: [
+        `MCP package unavailable for ${target}; missing ${missing.map((file2) => path21.relative(packageRoot, file2)).join(", ")}.`,
+        ...runtimeError === null ? [] : [runtimeError]
+      ],
+      notes: []
+    };
+  }
+  const manifest = readJson6(manifestPath);
+  const buildInfo = readJson6(buildInfoPath);
+  const version2 = manifest?.version;
+  const protocols = buildInfo?.supportedProtocols;
+  const mismatch = [];
+  if (manifest === null || buildInfo === null) {
+    mismatch.push("package manifest or MCP build metadata is not valid JSON object data.");
+  } else {
+    if (typeof version2 !== "string" || version2 === "")
+      mismatch.push("package manifest has no version.");
+    for (const key of ["pluginVersion", "engineVersion", "mcpVersion"]) {
+      if (typeof buildInfo[key] !== "string" || buildInfo[key] !== version2) {
+        mismatch.push(`${key} does not match packaged version ${String(version2 ?? "unknown")}.`);
+      }
+    }
+    if (buildInfo.hostTarget !== target)
+      mismatch.push(`hostTarget does not match ${target}.`);
+    if (!Array.isArray(protocols) || protocols.length === 0 || protocols.some((item) => typeof item !== "string" || item.length === 0)) {
+      mismatch.push("supportedProtocols is missing or invalid.");
+    }
+  }
+  if (runtimeError !== null)
+    mismatch.push(runtimeError);
+  return {
+    target,
+    status: mismatch.length === 0 ? "aligned" : "mismatch",
+    location: buildInfoPath,
+    runtimeFloor,
+    errors: mismatch,
+    notes: mismatch.length === 0 ? [`MCP package metadata and files aligned for ${target} (${String(version2)}).`] : []
+  };
+}
+function mcpTargetPackageRoot(target, repositoryRoot, options = {}) {
+  if (target === "opencode")
+    return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
+  if (target === "dsh")
+    return path21.join(resolveDshProfileDir(options.dshHome), "node_modules", "@mstar-harness", "dsh");
+  return target === "omp" ? path21.join(repositoryRoot, "packages", "omp") : repositoryRoot;
 }
 function assignmentExecutionMode(text7) {
   for (const line of text7.split(/\r?\n/)) {
@@ -78706,40 +79938,40 @@ function rejected(id, result, fallback) {
 function gateData(result) {
   return { ok: result.ok, violations: result.violations };
 }
-function absolute4(cwd, input2) {
-  return path12.isAbsolute(input2) ? input2 : path12.resolve(cwd, input2);
+function absolute4(_cwd, input2) {
+  return resolveCliPath(input2);
 }
 var codeExtensions = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 var provenanceExtensions = { ".md": true, ".ts": true };
 var skipDirs = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true };
 function lintType(file2) {
-  const base = path12.basename(file2);
+  const base = path222.basename(file2);
   if (base === "STRATEGY.md")
     return "strategy";
   if (base === "SKILL.md")
     return "skill";
   if (/^task-\d+-report\.md$/i.test(base))
     return "report";
-  const dir = path12.dirname(file2);
-  if (dir.includes(`${path12.sep}plans${path12.sep}`) || dir.endsWith(`${path12.sep}plans`) || /^\d{8}-[a-z0-9.-]+\.md$/i.test(base))
+  const dir = path222.dirname(file2);
+  if (dir.includes(`${path222.sep}plans${path222.sep}`) || dir.endsWith(`${path222.sep}plans`) || /^\d{8}-[a-z0-9.-]+\.md$/i.test(base))
     return "plan";
-  return codeExtensions[path12.extname(base).toLowerCase()] ? "code" : null;
+  return codeExtensions[path222.extname(base).toLowerCase()] ? "code" : null;
 }
 function collectTargets(dir, accept = (file2) => lintType(file2) !== null) {
   const targets = [];
   const visit2 = (current) => {
     for (const entry of readdirSync22(current, { withFileTypes: true })) {
-      if (entry.name.includes(path12.sep))
+      if (entry.name.includes(path222.sep))
         continue;
       const child = current + entry.name;
       if (entry.isDirectory()) {
         if (!skipDirs[entry.name])
-          visit2(child + path12.sep);
+          visit2(child + path222.sep);
       } else if (entry.isFile() && accept(child))
         targets.push(child);
     }
   };
-  visit2(dir.endsWith(path12.sep) ? dir : `${dir}${path12.sep}`);
+  visit2(dir.endsWith(path222.sep) ? dir : `${dir}${path222.sep}`);
   return targets;
 }
 function parseHeaderField(text7, label) {
@@ -78787,7 +80019,7 @@ function lintOne(file2, type, prVariant = false) {
         violations.push({ ok: false, severity: "medium", code: `lint.provenance.${citation.kind}`, message: `provenance ${citation.kind} citation at line ${citation.line}: "${citation.match}" — tracked content must not disclose local plan/iteration ids or dated harness deep paths`, fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>) or a synthetic example slug (any -example- segment)` });
       break;
     default:
-      throw new SddScriptError(`usage: lint <target> — unsupported file type "${path12.basename(file2)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`, 2);
+      throw new SddScriptError(`usage: lint <target> — unsupported file type "${path222.basename(file2)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`, 2);
   }
   return { violations, markers };
 }
@@ -78795,7 +80027,7 @@ async function execute8(id, input2, context) {
   try {
     switch (id) {
       case "dispatch.validate": {
-        const file2 = required4(input2.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]");
+        const file2 = absolute4(context.cwd, required4(input2.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync52(file2))
           throw new Error(`assignment file not found: ${file2}`);
         const text7 = readFileSync102(file2, "utf8");
@@ -78837,22 +80069,32 @@ async function execute8(id, input2, context) {
         const workflow = required4(input2.workflow, "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)");
         if (input2.control !== undefined && input2.integration !== undefined)
           throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both", 2);
+        if (input2.control !== undefined)
+          context.effects.writeStderr?.("[mstar-harness] --control is deprecated; use --integration");
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\"))
           throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input2.harness) ?? context.controlRoot;
         if (!harness)
           throw new Error("harness directory not found");
-        const snapshotPath2 = path12.join(harness, "workflows", workflow, "snapshot.json");
+        const snapshotPath2 = path222.join(harness, "workflows", workflow, "snapshot.json");
         if (!existsSync52(snapshotPath2))
           throw new Error(`workflow snapshot not found: ${snapshotPath2}`);
         let snapshot;
+        let snapshotDiagnostics = [];
         try {
-          snapshot = readWorkflowSnapshot(path12.dirname(snapshotPath2)).snapshot;
+          const read = readWorkflowSnapshot(path222.dirname(snapshotPath2));
+          snapshot = read.snapshot;
+          snapshotDiagnostics = read.diagnostics;
         } catch (error62) {
           if (!(error62 instanceof WorkflowSnapshotValidationError))
             throw error62;
           const first = error62.violations[0];
           return refusal(id, first?.code ?? "workflow.snapshot.invalid", first?.message ?? "invalid workflow snapshot", { violations: error62.violations });
+        }
+        for (const diagnostic of snapshotDiagnostics) {
+          if (!diagnostic.ok) {
+            context.effects.writeStderr?.(`[mstar-harness] ${diagnostic.code}: ${diagnostic.message}`);
+          }
         }
         const rows = Array.isArray(snapshot.plans) ? snapshot.plans.filter((row) => row?.id === plan || row?.plan_id === plan) : [];
         if (!rows.length)
@@ -78875,10 +80117,18 @@ async function execute8(id, input2, context) {
           return refusal(id, siblingScan.code, siblingScan.detail);
         for (const other of siblingScan.branches)
           lifecycleBranches.add(other);
+        const snapshotWithoutSelectedLease = {
+          ...snapshot,
+          plans: snapshot.plans.map((row) => row.id === plan || row.plan_id === plan ? { ...row, execution_lease: undefined } : row)
+        };
+        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedLease]))
+          lifecycleBranches.add(branch);
+        const integrationPath = input2.integration ?? input2.control ?? snapshot.integration_worktree_path;
+        const integrationBranch = snapshot.branch?.integration;
         const gate2 = l1PreDispatchCheck({
           workflowType: snapshot.type,
-          integrationWorktreePath: path12.resolve(input2.integration ?? input2.control ?? snapshot.integration_worktree_path ?? ""),
-          integrationBranch: String(snapshot.branch?.integration ?? ""),
+          integrationWorktreePath: integrationPath === undefined ? "" : path222.resolve(integrationPath),
+          integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
           mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
           expectedMainBranch: input2.mainBranch ?? String(snapshot.branch?.base ?? ""),
           lifecycleBranches: [...lifecycleBranches],
@@ -78939,18 +80189,18 @@ async function execute8(id, input2, context) {
         if (!existsSync52(abs))
           throw new Error(`lint target not found: ${abs}`);
         const isDir = statSync8(abs).isDirectory();
-        const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file2) => provenanceExtensions[path12.extname(file2).toLowerCase()] === true) : collectTargets(abs);
+        const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file2) => provenanceExtensions[path222.extname(file2).toLowerCase()] === true) : collectTargets(abs);
         const results = targets.map((file2) => ({ file: file2, ...lintOne(file2, forced, input2.prVariant === true) }));
         return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }) : ok11(id, { results });
       }
       case "design-md.validate": {
         const dir = absolute4(context.cwd, required4(input2.dir, "usage: design-md validate <dir>"));
-        const lightPath = path12.join(dir, "DESIGN.md");
+        const lightPath = path222.join(dir, "DESIGN.md");
         if (!existsSync52(lightPath))
           throw new Error(`design file not found: ${lightPath}`);
         const light = readFileSync102(lightPath, "utf8");
         const violations = [...validateDesignTokenFrontmatter(light).violations];
-        const darkPath = path12.join(dir, "DESIGN.dark.md");
+        const darkPath = path222.join(dir, "DESIGN.dark.md");
         if (existsSync52(darkPath))
           violations.push(...assertLightDarkParity(light, readFileSync102(darkPath, "utf8")).violations);
         const level = completenessLevel(light);
@@ -78971,12 +80221,12 @@ async function execute8(id, input2, context) {
       }
       case "skill.lint": {
         const dir = absolute4(context.cwd, required4(input2.skillDir, "usage: skill lint <skill-dir>"));
-        const skillFile = path12.join(dir, "SKILL.md");
+        const skillFile = path222.join(dir, "SKILL.md");
         if (!existsSync52(skillFile))
           throw new Error(`SKILL.md not found: ${skillFile}`);
         const text7 = readFileSync102(skillFile, "utf8");
         const violations = [...lintSkillFrontmatter(text7).violations];
-        const profile = classifySkillLint(path12.basename(dir));
+        const profile = classifySkillLint(path222.basename(dir));
         if (profile.mode !== null)
           violations.push(...lintFiveQuestion(stripFrontmatter(text7), profile.mode).violations);
         violations.push(...findEphemeralCitations(text7).map((citation) => ({ ok: false, severity: "medium", code: `skill.ephemeral.${citation.kind}`, message: `ephemeral ${citation.kind} citation at line ${citation.line}: "${citation.match}" — task artifacts and SDD deeplinks survive nothing; durable skill text cites in-repo artifacts only (knowledge conventions §3)`, fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>, {SDD_DIR}/task-N-report.md) or cite a stable in-repo artifact instead` })));
@@ -78985,13 +80235,13 @@ async function execute8(id, input2, context) {
       }
       case "roles.validate": {
         const rolesDir = absolute4(context.cwd, input2.rolesDir ?? "skills/mstar-roles");
-        const skillsRoot = absolute4(context.cwd, input2.skillsDir ?? path12.dirname(rolesDir));
+        const skillsRoot = absolute4(context.cwd, input2.skillsDir ?? path222.dirname(rolesDir));
         const violations = [...validateRoleMapping(rolesDir).violations];
         const skillTexts = {};
         for (const entry of readdirSync22(skillsRoot, { withFileTypes: true })) {
           if (!entry.isDirectory() || !entry.name.startsWith("mstar-"))
             continue;
-          const file2 = path12.join(skillsRoot, entry.name, "SKILL.md");
+          const file2 = path222.join(skillsRoot, entry.name, "SKILL.md");
           if (!existsSync52(file2))
             continue;
           try {
@@ -79094,8 +80344,8 @@ function required5(value, label) {
     throw new SddScriptError(`${label} is required`, 2);
   return value;
 }
-function resolvePath2(cwd, value) {
-  return path13.resolve(cwd, value);
+function resolvePath2(_cwd, value) {
+  return resolveCliPath(value);
 }
 function parseFindings(text7) {
   let data;
@@ -79291,7 +80541,7 @@ async function execute9(verb, input2, context) {
       const listed = await process22({ argv: ["git", "ls-files", "-z", "--", "."], cwd: root, env: {}, signal: context.signal });
       if (listed.exitCode !== 0 || listed.signal !== null)
         throw new SddScriptError("not a git repository or git unavailable — refusing to report an empty scan as clean", 2);
-      const files = listed.stdout.split("\x00").filter(Boolean).map((file2) => path13.join(root, file2));
+      const files = listed.stdout.split("\x00").filter(Boolean).map((file2) => path23.join(root, file2));
       const result2 = scanSecrets(files);
       return result2.unreadableFiles > 0 || result2.findings.length > 0 ? { version: 1, command: id, status: "refused", code: result2.unreadableFiles > 0 ? "audit.secret-scan.incomplete" : "audit.secret-scan.findings", exitCode: 1, message: result2.unreadableFiles > 0 ? `failed to read ${result2.unreadableFiles} tracked files; refusing to report clean` : `${result2.findings.length} secret findings`, details: { findings: result2.findings, unreadableFiles: result2.unreadableFiles } } : ok12(id, { findings: [], unreadableFiles: 0, filesScanned: files.length });
     }
@@ -79369,7 +80619,7 @@ var failure5 = (id, error62) => error62 instanceof UsageError2 ? { version: 1, c
 
 class UsageError2 extends Error {
 }
-var abs = (cwd, file2) => path14.isAbsolute(file2) ? file2 : path14.resolve(cwd, file2);
+var abs = (cwd, file2) => path24.isAbsolute(file2) ? file2 : path24.resolve(cwd, file2);
 var need = (value, name) => {
   if (value === undefined || value === "")
     throw new UsageError2(`${name} is required`);
@@ -79502,8 +80752,8 @@ ${response.stdout}`) && plan.inlineComments.length)
       return ok13(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
     }
     if (verb === "worktree-cleanup") {
-      const worktreePath = path14.resolve(abs(context.cwd, need(input2.worktreePath, "--path")));
-      const sidecarPath = path14.join(path14.dirname(worktreePath), `.${path14.basename(worktreePath)}.prreview.json`);
+      const worktreePath = path24.resolve(abs(context.cwd, need(input2.worktreePath, "--path")));
+      const sidecarPath = path24.join(path24.dirname(worktreePath), `.${path24.basename(worktreePath)}.prreview.json`);
       if (!existsSync72(sidecarPath))
         throw new Error(`no setup sidecar found at ${sidecarPath} - run pr-review worktree-setup first`);
       const sidecar = JSON.parse(readFileSync122(sidecarPath, "utf8"));
@@ -79512,7 +80762,7 @@ ${response.stdout}`) && plan.inlineComments.length)
         throw new Error(`--branch does not match the recorded review branch ${JSON.stringify(branch)} - refusing to delete a foreign branch`);
       if (input2.reportSaved !== true && sidecar.reportSaved !== true)
         throw new Error("refusing cleanup: the local report is not saved yet - save it first or pass --report-saved");
-      const gitRoot = typeof sidecar.repoRoot === "string" && sidecar.repoRoot !== "" ? sidecar.repoRoot : path14.dirname(worktreePath);
+      const gitRoot = typeof sidecar.repoRoot === "string" && sidecar.repoRoot !== "" ? sidecar.repoRoot : path24.dirname(worktreePath);
       if (existsSync72(worktreePath)) {
         const removed = await spawn2(context, ["git", "worktree", "remove", worktreePath], gitRoot);
         if (removed.exitCode !== 0 || removed.signal !== null)
@@ -79529,7 +80779,7 @@ ${response.stdout}`) && plan.inlineComments.length)
         if (deleted.exitCode !== 0 || deleted.signal !== null)
           throw new Error(deleted.stderr || `failed to delete ${branch}`);
       }
-      const diffPath = path14.join(path14.dirname(worktreePath), `.${path14.basename(worktreePath)}.prreview.diff`);
+      const diffPath = path24.join(path24.dirname(worktreePath), `.${path24.basename(worktreePath)}.prreview.diff`);
       try {
         const fd = openSync3(diffPath, "r");
         try {
@@ -79593,7 +80843,7 @@ ${response.stdout}`) && plan.inlineComments.length)
       if (input2.tier !== undefined && !["quick", "default", "deep"].includes(input2.tier))
         throw new UsageError2("--tier must be quick | default | deep");
       const skillRoot = abs(context.cwd, input2.skillRoot ?? "skills/mstar-audit");
-      return ok13(id, { prompt: prReviewSeatPrompt({ stage: input2.stage === "1" ? 1 : 2, domain: need(input2.domain, "--domain"), seat: need(input2.seat, "--seat"), skillRoot, worktreePath: path14.resolve(need(input2.worktree, "--worktree")), reconFacts: input2.recon ?? [], ...input2.security ? { securitySeat: true } : {}, ...input2.tier ? { tier: input2.tier } : {}, ...input2.diffFile ? { diffFile: abs(context.cwd, input2.diffFile) } : {}, ...input2.collectFolded ? { collectFolded: true } : {} }) });
+      return ok13(id, { prompt: prReviewSeatPrompt({ stage: input2.stage === "1" ? 1 : 2, domain: need(input2.domain, "--domain"), seat: need(input2.seat, "--seat"), skillRoot, worktreePath: path24.resolve(need(input2.worktree, "--worktree")), reconFacts: input2.recon ?? [], ...input2.security ? { securitySeat: true } : {}, ...input2.tier ? { tier: input2.tier } : {}, ...input2.diffFile ? { diffFile: abs(context.cwd, input2.diffFile) } : {}, ...input2.collectFolded ? { collectFolded: true } : {} }) });
     }
     return ok13(id, { budgets: PR_REVIEW_TIER_BUDGETS });
   } catch (error62) {
@@ -79726,11 +80976,11 @@ function definitions() {
   return [
     make("sdd.exec", execInput, [{ key: "argv", required: true, variadic: true }], [{ key: "context", flags: "--context <path>", required: false }], ["read", "validate", "process"], "Run an admitted literal argv child in the SDD feature worktree.", async (input2, invocation) => {
       try {
-        if (!input2.context || !path15.isAbsolute(input2.context))
+        if (!input2.context || !path25.isAbsolute(input2.context))
           throw new SddScriptError("usage: sdd exec --context <absolute.json> -- <executable> [args...]", 2);
         if (!input2.argv?.length)
           throw new SddScriptError("argv after -- must include the child executable", 2);
-        const decoded = JSON.parse(fs.readFileSync(input2.context, "utf8"));
+        const decoded = JSON.parse(fs12.readFileSync(input2.context, "utf8"));
         if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded))
           throw new SddScriptError("context file must contain a JSON object", 2);
         const context = resolveSddExecutionContext(decoded);
@@ -79831,15 +81081,15 @@ async function setupReviewWorktree(input2, invocation) {
   const existing = new Set((await git(invocation, ["for-each-ref", "--format=%(refname:short)", "refs/heads"], repoRoot)).split(/\r?\n/).filter(Boolean));
   const seed = mode === "pr" ? prNumber : Math.abs([...headSpec].reduce((hash2, char) => (hash2 * 31 + char.charCodeAt(0)) % 1000003, 7)) || 1;
   const reviewBranch = pickReviewBranchName(existing, seed, new Date().toISOString().slice(0, 10).replace(/-/g, ""));
-  const worktreePath = path15.resolve(input2.targetPath ?? path15.join(repoRoot, ".worktrees", `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
+  const worktreePath = path25.resolve(input2.targetPath ?? path25.join(repoRoot, ".worktrees", `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
   if (input2.targetPath === undefined) {
-    fs.mkdirSync(path15.join(repoRoot, ".worktrees"), { recursive: true });
+    fs12.mkdirSync(path25.join(repoRoot, ".worktrees"), { recursive: true });
     if (await gitProbe(invocation, ["check-ignore", ".worktrees/"], repoRoot) === "") {
-      const exclude = path15.resolve(repoRoot, await git(invocation, ["rev-parse", "--git-path", "info/exclude"], repoRoot));
-      const contents = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+      const exclude = path25.resolve(repoRoot, await git(invocation, ["rev-parse", "--git-path", "info/exclude"], repoRoot));
+      const contents = fs12.existsSync(exclude) ? fs12.readFileSync(exclude, "utf8") : "";
       if (!contents.split(`
 `).some((line) => line.trim() === ".worktrees/"))
-        fs.appendFileSync(exclude, `${contents === "" || contents.endsWith(`
+        fs12.appendFileSync(exclude, `${contents === "" || contents.endsWith(`
 `) ? "" : `
 `}.worktrees/
 `);
@@ -79900,49 +81150,49 @@ async function setupReviewWorktree(input2, invocation) {
 ## Diff
 `, await git(invocation, ["diff", "-U10", range], worktreePath)];
     const diffText = parts.join("");
-    const diffFile = path15.join(path15.dirname(worktreePath), `.${path15.basename(worktreePath)}.prreview.diff`);
-    const sidecarFile = path15.join(path15.dirname(worktreePath), `.${path15.basename(worktreePath)}.prreview.json`);
+    const diffFile = path25.join(path25.dirname(worktreePath), `.${path25.basename(worktreePath)}.prreview.diff`);
+    const sidecarFile = path25.join(path25.dirname(worktreePath), `.${path25.basename(worktreePath)}.prreview.json`);
     let diffFd;
     let sidecarFd;
     let snapshotStat;
     try {
-      sidecarFd = fs.openSync(sidecarFile, "wx+");
+      sidecarFd = fs12.openSync(sidecarFile, "wx+");
       const sidecar = { reviewBranch: mode === "pr" ? reviewBranch : "", worktreePath, base: recordedBase, mergeBase, diffCmd, reportSaved: false, createdAt: new Date().toISOString(), repoRoot, diffFile, diffFileSha256: createHash20("sha256").update(diffText).digest("hex") };
-      fs.writeSync(sidecarFd, JSON.stringify(sidecar, null, 2));
-      diffFd = fs.openSync(diffFile, "wx");
-      fs.writeFileSync(diffFd, diffText);
-      const stat = fs.fstatSync(diffFd);
+      fs12.writeSync(sidecarFd, JSON.stringify(sidecar, null, 2));
+      diffFd = fs12.openSync(diffFile, "wx");
+      fs12.writeFileSync(diffFd, diffText);
+      const stat = fs12.fstatSync(diffFd);
       snapshotStat = { dev: stat.dev, ino: stat.ino };
-      fs.ftruncateSync(sidecarFd, 0);
-      fs.writeSync(sidecarFd, JSON.stringify({ ...sidecar, diffFileDev: stat.dev, diffFileIno: String(stat.ino), diffFileMtimeMs: stat.mtimeMs }, null, 2), 0);
-      fs.closeSync(diffFd);
+      fs12.ftruncateSync(sidecarFd, 0);
+      fs12.writeSync(sidecarFd, JSON.stringify({ ...sidecar, diffFileDev: stat.dev, diffFileIno: String(stat.ino), diffFileMtimeMs: stat.mtimeMs }, null, 2), 0);
+      fs12.closeSync(diffFd);
       diffFd = undefined;
-      fs.closeSync(sidecarFd);
+      fs12.closeSync(sidecarFd);
       sidecarFd = undefined;
       return ok14("pr-review.worktree-setup", { reviewBranch: mode === "pr" ? reviewBranch : null, worktreePath, base: recordedBase, mergeBase: mergeBase || null, diffCmd, diffFile });
     } catch (error210) {
       if (diffFd !== undefined) {
-        const openStat = fs.fstatSync(diffFd);
-        fs.closeSync(diffFd);
+        const openStat = fs12.fstatSync(diffFd);
+        fs12.closeSync(diffFd);
         try {
-          const pathStat = fs.lstatSync(diffFile);
+          const pathStat = fs12.lstatSync(diffFile);
           if (pathStat.dev === openStat.dev && pathStat.ino === openStat.ino)
-            fs.unlinkSync(diffFile);
+            fs12.unlinkSync(diffFile);
         } catch {}
       } else if (snapshotStat !== undefined) {
         try {
-          const pathStat = fs.lstatSync(diffFile);
+          const pathStat = fs12.lstatSync(diffFile);
           if (pathStat.dev === snapshotStat.dev && pathStat.ino === snapshotStat.ino)
-            fs.unlinkSync(diffFile);
+            fs12.unlinkSync(diffFile);
         } catch {}
       }
       if (sidecarFd !== undefined) {
-        const openStat = fs.fstatSync(sidecarFd);
-        fs.closeSync(sidecarFd);
+        const openStat = fs12.fstatSync(sidecarFd);
+        fs12.closeSync(sidecarFd);
         try {
-          const pathStat = fs.lstatSync(sidecarFile);
+          const pathStat = fs12.lstatSync(sidecarFile);
           if (pathStat.dev === openStat.dev && pathStat.ino === openStat.ino)
-            fs.unlinkSync(sidecarFile);
+            fs12.unlinkSync(sidecarFile);
         } catch {}
       }
       if (createdWorktree) {
@@ -79968,9 +81218,9 @@ function cleanupClaims(snapshot, field, value) {
   const claims = [];
   const pathKey = (candidate) => {
     try {
-      return fs.realpathSync(candidate);
+      return fs12.realpathSync(candidate);
     } catch {
-      return path15.resolve(candidate);
+      return path25.resolve(candidate);
     }
   };
   if (field === "branch" && snapshot.branch?.integration === value)
@@ -80006,17 +81256,17 @@ async function cleanupWorktrees(input2, invocation) {
   if (!harness)
     throw new Error("harness directory not found");
   const root = resolveWorkflowDir(harness, { harnessDir: harness });
-  const selected = readWorkflowSnapshot(path15.join(root, input2.workflow)).snapshot;
+  const selected = readWorkflowSnapshot(path25.join(root, input2.workflow)).snapshot;
   const snapshots = [selected];
   let unreadable = false;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+  for (const entry of fs12.readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name === input2.workflow)
       continue;
-    const snapshotPath2 = path15.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
-    if (!fs.existsSync(snapshotPath2))
+    const snapshotPath2 = path25.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
+    if (!fs12.existsSync(snapshotPath2))
       continue;
     try {
-      snapshots.push(readWorkflowSnapshot(path15.dirname(snapshotPath2)).snapshot);
+      snapshots.push(readWorkflowSnapshot(path25.dirname(snapshotPath2)).snapshot);
     } catch {
       unreadable = true;
     }
@@ -80043,9 +81293,9 @@ async function cleanupWorktrees(input2, invocation) {
   const targets = [];
   const pathKey = (value) => {
     try {
-      return fs.realpathSync(value);
+      return fs12.realpathSync(value);
     } catch {
-      return path15.resolve(value);
+      return path25.resolve(value);
     }
   };
   const assertedPaths = new Set((input2.worktree ?? []).map(pathKey));
@@ -80232,1178 +81482,6 @@ function getDashboardCommandDefinitions() {
     description: "Start the read-only Morning Star dashboard on 127.0.0.1",
     execute: execute12
   }];
-}
-function resolveProjectRoot2() {
-  const candidate = process.env.MSTAR_CLI_PROJECT_ROOT || process.env.INIT_CWD || process.env.PWD;
-  if (candidate && candidate.trim())
-    return path16.resolve(candidate);
-  return resolveProjectRoot();
-}
-function splitVersion(v) {
-  const dash = v.indexOf("-");
-  if (dash === -1)
-    return [v, undefined];
-  return [v.slice(0, dash), v.slice(dash + 1)];
-}
-function compareCore(a, b) {
-  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
-  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
-  for (let i = 0;i < 3; i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0)
-      return d;
-  }
-  return 0;
-}
-function comparePrerelease(a, b) {
-  if (a === undefined && b === undefined)
-    return 0;
-  if (a === undefined)
-    return 1;
-  if (b === undefined)
-    return -1;
-  const ia = a.split(".");
-  const ib = b.split(".");
-  const n = Math.min(ia.length, ib.length);
-  for (let i = 0;i < n; i++) {
-    const d = compareIdentifier(ia[i], ib[i]);
-    if (d !== 0)
-      return d;
-  }
-  return ia.length - ib.length;
-}
-function compareIdentifier(a, b) {
-  const aNum = /^\d+$/.test(a);
-  const bNum = /^\d+$/.test(b);
-  if (aNum && bNum) {
-    const na = BigInt(a);
-    const nb = BigInt(b);
-    return na < nb ? -1 : na > nb ? 1 : 0;
-  }
-  if (aNum)
-    return -1;
-  if (bNum)
-    return 1;
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-function compareSemver(a, b) {
-  const [coreA, preA] = splitVersion(a);
-  const [coreB, preB] = splitVersion(b);
-  const coreDiff = compareCore(coreA, coreB);
-  if (coreDiff !== 0)
-    return coreDiff;
-  return comparePrerelease(preA, preB);
-}
-var PLUGIN_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-function versionFromJsonFile(filePath) {
-  let raw;
-  try {
-    raw = fs3.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-  try {
-    const version2 = JSON.parse(raw).version;
-    if (typeof version2 === "string" && PLUGIN_VERSION_SHAPE_RE.test(version2.trim()))
-      return version2.trim();
-  } catch {}
-  return null;
-}
-function resolveOpencodePluginPackageRoot(packagesRoot = path17.join(os.homedir(), ".cache", "opencode", "packages")) {
-  let specs;
-  try {
-    specs = fs3.readdirSync(path17.join(packagesRoot, "@mstar-harness"), { withFileTypes: true });
-  } catch {
-    return path17.join(packagesRoot, "@mstar-harness", "opencode");
-  }
-  let best;
-  for (const spec of specs) {
-    if (!spec.isDirectory())
-      continue;
-    const root = path17.join(packagesRoot, "@mstar-harness", spec.name, "node_modules", "@mstar-harness", "opencode");
-    const version2 = versionFromJsonFile(path17.join(root, "package.json"));
-    if (version2 !== null && (best === undefined || compareSemver(version2, best.version) > 0)) {
-      best = { version: version2, root };
-    }
-  }
-  return best?.root ?? path17.join(packagesRoot, "@mstar-harness", "opencode");
-}
-var PLUGIN_UPDATE_HINTS = {
-  opencode: "update the Morning Star plugin (@mstar-harness/opencode) and restart OpenCode.",
-  cursor: "update the Morning Star plugin checkout (git pull, or re-run mstar-harness init --target cursor).",
-  codex: "update the Morning Star plugin: codex plugin marketplace upgrade, then codex plugin add morning-star-harness@mstar-repo.",
-  zcode: "update the Morning Star plugin in ZCode (Settings → Plugin Management → update from the mstar-local marketplace).",
-  omp: "update the Morning Star plugin: omp plugin install @mstar-harness/omp.",
-  dsh: "update the Morning Star plugin: re-run mstar-harness init --target dsh (re-adds @mstar-harness/dsh in the web profile).",
-  kimi: "update the Morning Star plugin via the Kimi TUI: /plugins install."
-};
-var NOT_INSTALLED_NOTES = {
-  opencode: "No installed Morning Star plugin found under ~/.cache/opencode/packages/ (run mstar-harness init --target opencode to add @mstar-harness/opencode).",
-  cursor: "No installed Morning Star plugin found under ~/.cursor/plugins/ (run mstar-harness init --target cursor).",
-  codex: "No installed Morning Star plugin found in `codex plugin list` (install: codex plugin add morning-star-harness@mstar-repo).",
-  zcode: "No installed Morning Star plugin found under ~/.zcode/cli/plugins/cache/ (install from the mstar-local marketplace).",
-  omp: "No installed Morning Star plugin found in `omp plugin list` (install: omp plugin install @mstar-harness/omp).",
-  dsh: "No installed Morning Star plugin found under ~/.dsh/profiles/ (run mstar-harness init --target dsh to add @mstar-harness/dsh).",
-  kimi: "No installed Morning Star plugin found under $KIMI_CODE_HOME/plugins/managed (install via the Kimi TUI: /plugins install)."
-};
-function formatPluginVersionDoctorNote(target, cliVersion, installed) {
-  if (installed === null)
-    return NOT_INSTALLED_NOTES[target];
-  const diff = compareSemver(cliVersion, installed);
-  if (diff === 0)
-    return `Plugin/CLI versions aligned (${installed}).`;
-  if (diff > 0)
-    return `CLI ${cliVersion} is newer than installed plugin ${installed} — ${PLUGIN_UPDATE_HINTS[target]}`;
-  return `Installed plugin ${installed} is newer than CLI ${cliVersion} — update the global CLI: npm i -g @mstar-harness/cli@latest (or @${installed}).`;
-}
-var PLUGIN_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
-var MCP_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
-var PLUGIN_TOP_LEVEL_FIELDS = {
-  $schema: true,
-  name: true,
-  version: true,
-  description: true,
-  author: true,
-  homepage: true,
-  repository: true,
-  license: true,
-  keywords: true,
-  extensions: true
-};
-var PLUGIN_NAME_PATTERN = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
-function stripMcpPathPrefix(raw) {
-  if (raw.startsWith("./"))
-    return raw.slice(2);
-  if (raw.startsWith("${PLUGIN_ROOT}/"))
-    return raw.slice("${PLUGIN_ROOT}/".length);
-  if (raw.startsWith("${PLUGIN_DATA}/"))
-    return raw.slice("${PLUGIN_DATA}/".length);
-  if (raw === "${PLUGIN_ROOT}" || raw === "${PLUGIN_DATA}")
-    return "";
-  return null;
-}
-function escapesPluginRoot(remainder) {
-  const normalized = path18.posix.normalize(remainder);
-  return normalized.startsWith("..") || path18.posix.isAbsolute(normalized);
-}
-var SKILL_NAME_PATTERN = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-var HTTP_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-var MCP_SERVER_TYPES = {
-  stdio: true,
-  "streamable-http": true,
-  sse: true
-};
-var STDIO_FIELDS = { type: true, command: true, args: true, env: true, cwd: true };
-var REMOTE_FIELDS = { type: true, url: true, headers: true };
-var AUTHOR_FIELDS = { name: true, email: true, url: true };
-function describeType(value) {
-  if (value === null)
-    return "null";
-  if (Array.isArray(value))
-    return "array";
-  return typeof value;
-}
-function isPlainObject14(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseScalar3(raw) {
-  const trimmed = raw.trim();
-  if (trimmed.length >= 2 && (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-function parseFrontmatter2(filePath) {
-  const content3 = fs4.readFileSync(filePath, "utf8");
-  const match = content3.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  if (!match)
-    return null;
-  const result = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!field)
-      continue;
-    result[field[1]] = parseScalar3(field[2]);
-  }
-  return result;
-}
-function isValidMcpUrl(raw) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-    return false;
-  if (!parsed.hostname)
-    return false;
-  if (parsed.username || parsed.password || parsed.hash)
-    return false;
-  const host = parsed.hostname;
-  const isLoopback = host === "localhost" || host === "::1" || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(host);
-  if (!isLoopback && parsed.protocol !== "https:")
-    return false;
-  return true;
-}
-function validateManifest(manifest, errors3, warnings) {
-  if (!isPlainObject14(manifest)) {
-    errors3.push("plugin.json: manifest must be a JSON object");
-    return;
-  }
-  const doc2 = manifest;
-  for (const key of Object.keys(doc2)) {
-    if (!Object.hasOwn(PLUGIN_TOP_LEVEL_FIELDS, key)) {
-      warnings.push(`plugin.json: unknown top-level field "${key}" (ignored; client-specific data belongs under "extensions")`);
-    }
-  }
-  const schema2 = doc2["$schema"];
-  if (typeof schema2 !== "string") {
-    errors3.push(`plugin.json: "$schema" is required and must be the string ${PLUGIN_SCHEMA_URL}`);
-  } else if (schema2 !== PLUGIN_SCHEMA_URL) {
-    errors3.push(`plugin.json: unsupported "$schema" ${JSON.stringify(schema2)} (expected ${PLUGIN_SCHEMA_URL})`);
-  }
-  const name = doc2.name;
-  if (typeof name !== "string" || name.length === 0) {
-    errors3.push('plugin.json: "name" is required and must be a non-empty string');
-  } else {
-    if (name.length > 64) {
-      errors3.push(`plugin.json: "name" must be 1-64 characters (got ${name.length})`);
-    }
-    if (!PLUGIN_NAME_PATTERN.test(name)) {
-      errors3.push(`plugin.json: "name" ${JSON.stringify(name)} violates Agent Plugins name rules (lowercase alphanumerics, hyphens, periods; no "--" or ".."; must start and end alphanumeric)`);
-    }
-  }
-  for (const field of ["version", "description", "homepage", "repository", "license"]) {
-    const value = doc2[field];
-    if (value === undefined)
-      continue;
-    if (typeof value !== "string") {
-      errors3.push(`plugin.json: "${field}" must be a string (got ${describeType(value)})`);
-    }
-  }
-  if (doc2.author !== undefined) {
-    if (!isPlainObject14(doc2.author)) {
-      errors3.push('plugin.json: "author" must be an object with optional string fields name/email/url');
-    } else {
-      const author = doc2.author;
-      for (const key of Object.keys(author)) {
-        if (!Object.hasOwn(AUTHOR_FIELDS, key)) {
-          errors3.push(`plugin.json: "author" has unknown field "${key}" (only name, email, url are allowed)`);
-        }
-      }
-      for (const key of ["name", "email", "url"]) {
-        const value = author[key];
-        if (value !== undefined && typeof value !== "string") {
-          errors3.push(`plugin.json: "author.${key}" must be a string (got ${describeType(value)})`);
-        }
-      }
-    }
-  }
-  if (doc2.keywords !== undefined) {
-    if (!Array.isArray(doc2.keywords) || doc2.keywords.some((entry) => typeof entry !== "string")) {
-      errors3.push('plugin.json: "keywords" must be an array of strings');
-    }
-  }
-  if (doc2.extensions !== undefined) {
-    if (!isPlainObject14(doc2.extensions)) {
-      warnings.push('plugin.json: "extensions" is not an object — ignored');
-    } else {
-      for (const [namespace, value] of Object.entries(doc2.extensions)) {
-        if (!isPlainObject14(value)) {
-          warnings.push(`plugin.json: "extensions.${namespace}" is not an object — ignored`);
-        }
-      }
-    }
-  }
-}
-function validateMcpServer(name, entry, errors3) {
-  const prefix = `mcp.json: mcpServers.${name}`;
-  if (!isPlainObject14(entry)) {
-    errors3.push(`${prefix} must be an object`);
-    return;
-  }
-  const server = entry;
-  const type = server.type;
-  if (typeof type !== "string" || !Object.hasOwn(MCP_SERVER_TYPES, type)) {
-    errors3.push(`${prefix}: "type" must be one of "stdio" | "streamable-http" | "sse" (got ${JSON.stringify(type)})`);
-    return;
-  }
-  if (type === "stdio") {
-    for (const key of Object.keys(server)) {
-      if (!Object.hasOwn(STDIO_FIELDS, key)) {
-        errors3.push(`${prefix}: unknown field "${key}" for stdio server (allowed: type, command, args, env, cwd)`);
-      }
-    }
-    const command6 = server.command;
-    if (typeof command6 !== "string" || command6.length === 0) {
-      errors3.push(`${prefix}: "command" is required and must be a non-empty string`);
-    } else {
-      if (/\s/.test(command6)) {
-        errors3.push(`${prefix}: "command" must be a single executable token, not a shell command string`);
-      } else if (command6.includes("/") && !command6.startsWith("./")) {
-        errors3.push(`${prefix}: "command" must be a bare executable name or a plugin-relative path beginning with "./"`);
-      } else if (command6.startsWith("./") && escapesPluginRoot(command6.slice(2))) {
-        errors3.push(`${prefix}: "command" must remain within the plugin root (got "${command6}")`);
-      }
-    }
-    if (server.args !== undefined) {
-      if (!Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string")) {
-        errors3.push(`${prefix}: "args" must be an array of strings`);
-      }
-    }
-    if (server.env !== undefined) {
-      if (!isPlainObject14(server.env)) {
-        errors3.push(`${prefix}: "env" must be an object of strings`);
-      } else {
-        for (const [key, value] of Object.entries(server.env)) {
-          if (key === "PLUGIN_ROOT" || key === "PLUGIN_DATA") {
-            errors3.push(`${prefix}: "env" must not set reserved variable "${key}" (clients supply it themselves)`);
-          }
-          if (typeof value !== "string") {
-            errors3.push(`${prefix}: "env.${key}" must be a string`);
-          }
-        }
-      }
-    }
-    if (server.cwd !== undefined) {
-      if (typeof server.cwd !== "string") {
-        errors3.push(`${prefix}: "cwd" must be a string`);
-      } else {
-        const remainder = stripMcpPathPrefix(server.cwd);
-        if (remainder === null) {
-          errors3.push(`${prefix}: "cwd" must be "./…", "${"${PLUGIN_ROOT}"}…", or "${"${PLUGIN_DATA}"}…"`);
-        } else if (escapesPluginRoot(remainder)) {
-          errors3.push(`${prefix}: "cwd" must remain within the plugin root (got "${server.cwd}")`);
-        }
-      }
-    }
-    return;
-  }
-  for (const key of Object.keys(server)) {
-    if (!Object.hasOwn(REMOTE_FIELDS, key)) {
-      errors3.push(`${prefix}: unknown field "${key}" for ${type} server (allowed: type, url, headers)`);
-    }
-  }
-  const url2 = server.url;
-  if (typeof url2 !== "string" || url2.length === 0) {
-    errors3.push(`${prefix}: "url" is required and must be a non-empty string`);
-  } else if (!isValidMcpUrl(url2)) {
-    errors3.push(`${prefix}: "url" must be an absolute http(s) URL without user info or fragment; non-loopback endpoints must use https`);
-  }
-  if (server.headers !== undefined) {
-    if (!isPlainObject14(server.headers)) {
-      errors3.push(`${prefix}: "headers" must be an object of strings`);
-    } else {
-      const seen = new Set;
-      for (const [key, value] of Object.entries(server.headers)) {
-        if (typeof value !== "string") {
-          errors3.push(`${prefix}: "headers.${key}" must be a string`);
-          continue;
-        }
-        if (value.includes("\r") || value.includes(`
-`)) {
-          errors3.push(`${prefix}: "headers.${key}" value must be a single HTTP header value`);
-        }
-        if (!HTTP_HEADER_NAME_PATTERN.test(key)) {
-          errors3.push(`${prefix}: "headers.${key}" is not a valid HTTP header name`);
-        } else {
-          const lower = key.toLowerCase();
-          if (seen.has(lower)) {
-            errors3.push(`${prefix}: header "${key}" is duplicated (case-insensitive)`);
-          }
-          seen.add(lower);
-        }
-      }
-    }
-  }
-}
-function validateMcp(root, manifestSchema, errors3) {
-  const mcpPath = `${root}${path18.sep}mcp.json`;
-  if (!fs4.existsSync(mcpPath))
-    return;
-  let parsed;
-  try {
-    parsed = readJson(mcpPath);
-  } catch (error210) {
-    errors3.push(`mcp.json: ${error210.message}`);
-    return;
-  }
-  if (!isPlainObject14(parsed)) {
-    errors3.push("mcp.json: configuration must be a JSON object");
-    return;
-  }
-  const doc2 = parsed;
-  for (const key of Object.keys(doc2)) {
-    if (key !== "$schema" && key !== "mcpServers") {
-      errors3.push(`mcp.json: unknown top-level field "${key}" (only "$schema" and "mcpServers" allowed)`);
-    }
-  }
-  const schema2 = doc2["$schema"];
-  if (typeof schema2 !== "string") {
-    errors3.push(`mcp.json: "$schema" is required and must be the string ${MCP_SCHEMA_URL}`);
-  } else if (schema2 !== MCP_SCHEMA_URL) {
-    errors3.push(`mcp.json: unsupported "$schema" ${JSON.stringify(schema2)} (expected ${MCP_SCHEMA_URL})`);
-  } else {
-    const manifestVersion = typeof manifestSchema === "string" ? manifestSchema.match(/^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\/plugin\.schema\.json$/)?.[1] : undefined;
-    const mcpVersion = schema2.match(/^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\/mcp\.schema\.json$/)?.[1];
-    if (manifestVersion && mcpVersion && manifestVersion !== mcpVersion) {
-      errors3.push(`mcp.json: "$schema" targets Agent Plugins ${mcpVersion} but plugin.json targets ${manifestVersion} (versions must match)`);
-    }
-  }
-  const servers = doc2.mcpServers;
-  if (!isPlainObject14(servers)) {
-    errors3.push('mcp.json: "mcpServers" is required and must be an object');
-    return;
-  }
-  for (const [serverName, entry] of Object.entries(servers)) {
-    validateMcpServer(serverName, entry, errors3);
-  }
-}
-function validateSkills(root, errors3, warnings) {
-  const skillsPath = `${root}${path18.sep}skills`;
-  try {
-    if (!fs4.existsSync(skillsPath))
-      return;
-    if (!fs4.statSync(skillsPath).isDirectory()) {
-      errors3.push("skills: skills/ is not a directory (component type invalid)");
-      return;
-    }
-    const entries = fs4.readdirSync(skillsPath, { withFileTypes: true });
-    const realRoot = realpathSync10(root);
-    for (const entry of entries) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink())
-        continue;
-      const skillDir = entry.name;
-      let realSkillPath;
-      try {
-        realSkillPath = realpathSync10(`${skillsPath}${path18.sep}${skillDir}`);
-      } catch (error210) {
-        warnings.push(`skills: ${skillDir}/ cannot be resolved (${error210.message}; skill skipped)`);
-        continue;
-      }
-      const insideRoot = realSkillPath === realRoot || realSkillPath.startsWith(realRoot + path18.sep) || realRoot.endsWith(path18.sep) && realSkillPath.startsWith(realRoot);
-      if (!insideRoot) {
-        warnings.push(`skills: ${skillDir}/ resolves outside the plugin root (${realSkillPath}; skill skipped)`);
-        continue;
-      }
-      const skillMdPath = `${skillsPath}${path18.sep}${skillDir}${path18.sep}SKILL.md`;
-      if (!fs4.existsSync(skillMdPath) || !fs4.statSync(skillMdPath).isFile()) {
-        warnings.push(`skills: ${skillDir}/ has no SKILL.md (directory is not a skill; ignored)`);
-        continue;
-      }
-      let realSkillMdPath;
-      try {
-        realSkillMdPath = realpathSync10(skillMdPath);
-      } catch (error210) {
-        warnings.push(`skills: ${skillDir}/SKILL.md cannot be resolved (${error210.message}; skill skipped)`);
-        continue;
-      }
-      const skillMdInsideRoot = realSkillMdPath.startsWith(realRoot + path18.sep) || realRoot.endsWith(path18.sep) && realSkillMdPath.startsWith(realRoot);
-      if (!skillMdInsideRoot) {
-        warnings.push(`skills: ${skillDir}/SKILL.md resolves outside the plugin root (${realSkillMdPath}; skill skipped)`);
-        continue;
-      }
-      const frontmatter = parseFrontmatter2(realSkillMdPath);
-      if (!frontmatter) {
-        warnings.push(`skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)`);
-        continue;
-      }
-      const skillName = frontmatter.name;
-      const problems = [];
-      if (skillName !== skillDir) {
-        problems.push(`frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`);
-      } else if (!SKILL_NAME_PATTERN.test(skillName)) {
-        problems.push(`frontmatter "name" violates Agent Skills name rules (lowercase alphanumerics and hyphens, no "--", no leading or trailing hyphen)`);
-      }
-      if (typeof skillName === "string" && skillName.length > 64) {
-        problems.push(`frontmatter "name" must be at most 64 characters (got ${skillName.length})`);
-      }
-      const description = frontmatter.description;
-      if (typeof description !== "string" || description.trim().length === 0) {
-        problems.push(`frontmatter "description" is required and must be non-empty`);
-      } else if (description.length > 1024) {
-        problems.push(`frontmatter "description" must be at most 1024 characters (got ${description.length})`);
-      }
-      for (const problem of problems) {
-        warnings.push(`skills: ${skillDir}/SKILL.md ${problem} (skill skipped)`);
-      }
-    }
-  } catch (error210) {
-    errors3.push(`skills: ${error210.message}`);
-  }
-}
-function validateAgentPlugin(root) {
-  const errors3 = [];
-  const warnings = [];
-  if (!fs4.existsSync(root) || !fs4.statSync(root).isDirectory()) {
-    errors3.push(`plugin root: not a directory: ${root}`);
-    return { ok: false, errors: errors3, warnings };
-  }
-  const manifestPath = `${root}${path18.sep}plugin.json`;
-  if (!fs4.existsSync(manifestPath)) {
-    errors3.push(`plugin.json: manifest not found at ${manifestPath} (plugin root must contain plugin.json)`);
-    return { ok: false, errors: errors3, warnings };
-  }
-  let manifest;
-  try {
-    manifest = readJson(manifestPath);
-  } catch (error210) {
-    errors3.push(`plugin.json: ${error210.message}`);
-    return { ok: false, errors: errors3, warnings };
-  }
-  validateManifest(manifest, errors3, warnings);
-  const manifestSchema = isPlainObject14(manifest) ? manifest["$schema"] : undefined;
-  validateMcp(root, manifestSchema, errors3);
-  validateSkills(root, errors3, warnings);
-  return { ok: errors3.length === 0, errors: errors3, warnings };
-}
-var PLUGIN_NAME2 = "morning-star-harness";
-var CODEX_MARKETPLACE_NAME = "mstar-repo";
-var MARKETPLACE_GIT_SOURCE = "btspoony/mstar-harness";
-var CODEX_PLUGIN_ID = `${PLUGIN_NAME2}@${CODEX_MARKETPLACE_NAME}`;
-function parseCodexMarketplaceNames(dump) {
-  const parsed = JSON.parse(dump);
-  const list2 = Array.isArray(parsed.marketplaces) ? parsed.marketplaces : [];
-  return list2.map((entry) => entry && typeof entry === "object" && ("name" in entry) && typeof entry.name === "string" ? entry.name : "").filter((name) => name !== "");
-}
-function parseCodexInstalledEntries(dump) {
-  const parsed = JSON.parse(dump);
-  const list2 = Array.isArray(parsed.installed) ? parsed.installed : [];
-  return list2.filter((entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry));
-}
-function parseCodexInstalledPluginIds(dump) {
-  return parseCodexInstalledEntries(dump).map((entry) => typeof entry.pluginId === "string" ? entry.pluginId : "").filter((pluginId) => pluginId !== "");
-}
-function isCodexAvailable(probe) {
-  try {
-    probe();
-    return true;
-  } catch {
-    return false;
-  }
-}
-function legacyCodexMarketplaceNote(raw, legacyPath) {
-  try {
-    const parsed = JSON.parse(raw);
-    const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
-    const hasMstar = plugins.some((entry) => entry !== null && typeof entry === "object" && !Array.isArray(entry) && ("name" in entry) && entry.name === PLUGIN_NAME2);
-    if (hasMstar) {
-      return `Legacy personal marketplace entry found at ${legacyPath} — the ${PLUGIN_NAME2} plugin now installs from the repo marketplace (${MARKETPLACE_GIT_SOURCE}). Remove the entry, then install: codex plugin add ${CODEX_PLUGIN_ID}`;
-    }
-  } catch {}
-  return null;
-}
-var CODEX_BIN = "codex";
-var CODEX_INSTALL_HINT = "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
-function diagnoseCodexHost(runCodex, legacyMarketplacePath) {
-  const errors3 = [];
-  const notes = [];
-  let legacyRaw;
-  try {
-    legacyRaw = fs5.readFileSync(legacyMarketplacePath, "utf8");
-  } catch {
-    legacyRaw = "";
-  }
-  const legacyNote = legacyCodexMarketplaceNote(legacyRaw, legacyMarketplacePath);
-  if (legacyNote)
-    notes.push(legacyNote);
-  if (!isCodexAvailable(() => runCodex(["--version"]))) {
-    errors3.push(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
-    return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors: errors3, notes };
-  }
-  try {
-    const marketplaces = parseCodexMarketplaceNames(runCodex(["plugin", "marketplace", "list", "--json"]));
-    if (!marketplaces.includes(CODEX_MARKETPLACE_NAME)) {
-      errors3.push(`Marketplace ${CODEX_MARKETPLACE_NAME} not configured (run init, or: ${CODEX_BIN} plugin marketplace add ${MARKETPLACE_GIT_SOURCE} --ref main).`);
-    }
-    const installed = parseCodexInstalledPluginIds(runCodex(["plugin", "list", "--json"]));
-    if (marketplaces.includes(CODEX_MARKETPLACE_NAME) && !installed.includes(CODEX_PLUGIN_ID)) {
-      notes.push(`Plugin not installed yet: ${CODEX_BIN} plugin add ${CODEX_PLUGIN_ID}`);
-    }
-  } catch (error210) {
-    const message = error210 instanceof Error ? error210.message : String(error210);
-    errors3.push(`Could not query ${CODEX_BIN} plugin marketplace list: ${message}`);
-  }
-  return { location: `${CODEX_BIN} marketplaces (config.toml)`, errors: errors3, notes };
-}
-var CURSOR_PLUGIN_NAME = "morning-star-harness";
-var CURSOR_PLUGIN_MARKER = ".cursor-plugin/plugin.json";
-var CURSOR_PLUGIN_LINK = ".cursor/plugins/morning-star-harness";
-var CURSOR_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
-function globalInstallPath(home = os2.homedir()) {
-  return path19.join(home, ".cursor", "plugins", "local", CURSOR_PLUGIN_NAME);
-}
-function projectInstallPath(projectRoot = resolveProjectRoot2()) {
-  return path19.join(projectRoot, CURSOR_PLUGIN_LINK);
-}
-function validateGitCheckout(checkoutPath) {
-  const errors3 = [];
-  let stat;
-  try {
-    stat = fs6.lstatSync(checkoutPath);
-  } catch {
-    errors3.push(`Missing checkout directory: ${checkoutPath}`);
-    return errors3;
-  }
-  if (stat.isSymbolicLink()) {
-    errors3.push(`Path must be a real directory, not a symlink: ${checkoutPath}. Run: mstar-harness init --target cursor`);
-    return errors3;
-  }
-  if (!fs6.existsSync(path19.join(checkoutPath, ".git"))) {
-    errors3.push(`Path is not a git checkout: ${checkoutPath}`);
-  }
-  const marker = path19.join(checkoutPath, CURSOR_PLUGIN_MARKER);
-  if (!fs6.existsSync(marker))
-    errors3.push(`Missing marker file: ${marker}`);
-  return errors3;
-}
-function validatePluginAgents(pluginRoot) {
-  const errors3 = [];
-  const agentsDir = path19.join(pluginRoot, "agents");
-  if (!fs6.existsSync(agentsDir)) {
-    errors3.push(`Missing plugin agents directory: ${agentsDir}`);
-    return errors3;
-  }
-  for (const agentName of CURSOR_AGENT_SMOKE_NAMES) {
-    const agentPath = path19.join(agentsDir, `${agentName}.md`);
-    if (!fs6.existsSync(agentPath)) {
-      errors3.push(`Missing plugin agent file: ${agentPath}`);
-      continue;
-    }
-    const content3 = fs6.readFileSync(agentPath, "utf8");
-    if (!/^---\nname:\s/m.test(content3)) {
-      errors3.push(`Plugin agent ${agentName}.md must use Cursor-first frontmatter (name, description, model before OpenCode fields).`);
-    }
-  }
-  return errors3;
-}
-function diagnoseCursorHost(scope, roots) {
-  const location = scope === "global" ? roots?.global ?? globalInstallPath() : roots?.project ?? projectInstallPath();
-  return {
-    location,
-    errors: [...validateGitCheckout(location), ...validatePluginAgents(location)]
-  };
-}
-function kimiManagedRoot(kimiCodeHome = process.env.KIMI_CODE_HOME ?? path20.join(os3.homedir(), ".kimi-code")) {
-  return path20.join(kimiCodeHome, "plugins", "managed");
-}
-function diagnoseKimiHost(kimiCodeHome) {
-  return { location: kimiManagedRoot(kimiCodeHome), errors: [], notes: [] };
-}
-var DSH_BIN = "dsh";
-var DSH_PROFILE = "web";
-var DSH_PROFILE_FLAG = "--profile";
-var DSH_DUMP_FLAG = "--dump-config";
-var DSH_HOME_ENV = "DSH_HOME";
-var DSH_HOME_SUBDIR = ".dsh";
-var DSH_PROFILES_DIR = "profiles";
-var DSH_INSTALL_HINT = "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
-var DSH_PLUGIN_SPECS = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
-var DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
-function dshLoaderName(spec) {
-  const at = spec.lastIndexOf("@");
-  return at > 0 ? spec.slice(0, at) : spec;
-}
-var DSH_FALLBACKS_LOADER_NAME = dshLoaderName(DSH_FALLBACKS_SPEC);
-var FALLBACKS_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-var DISABLED_MARKERS = /\b(?:disabled: true|enabled: false)\b/;
-function resolveDshHome(dshHome) {
-  if (dshHome !== undefined)
-    return dshHome;
-  return process.env[DSH_HOME_ENV] ?? path21.join(os4.homedir(), DSH_HOME_SUBDIR);
-}
-function resolveDshProfileDir(dshHome) {
-  return path21.join(resolveDshHome(dshHome), DSH_PROFILES_DIR, DSH_PROFILE);
-}
-function readInstalledFallbacksVersion(profileDir) {
-  const pkgJson = path21.join(profileDir, "node_modules", DSH_FALLBACKS_LOADER_NAME, "package.json");
-  try {
-    const raw = fs8.readFileSync(pkgJson, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || !("version" in parsed) || typeof parsed.version !== "string") {
-      return null;
-    }
-    const trimmed = parsed.version.trim();
-    if (FALLBACKS_VERSION_SHAPE_RE.test(trimmed))
-      return trimmed;
-  } catch {}
-  return null;
-}
-function fallbacksVersionDrifted(profileDir) {
-  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION))
-    return false;
-  const installedVersion = readInstalledFallbacksVersion(profileDir);
-  if (installedVersion === null)
-    return true;
-  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
-}
-function isDshAvailable(probe) {
-  try {
-    probe();
-    return true;
-  } catch {
-    return false;
-  }
-}
-function parseDshLoaderEntries(dump) {
-  const entries = [];
-  let current = null;
-  for (const line of dump.split(`
-`)) {
-    if (/^- id: /.test(line)) {
-      if (current)
-        entries.push(current);
-      current = { name: "", enabled: !DISABLED_MARKERS.test(line) };
-    } else if (current) {
-      const nameMatch = /^  name: (.+)$/.exec(line);
-      if (nameMatch) {
-        let name = nameMatch[1].trim();
-        if (DISABLED_MARKERS.test(line)) {
-          current.enabled = false;
-          name = name.replace(/\s*,?\s*(?:disabled: true|enabled: false)\s*$/, "");
-        }
-        current.name = name.replace(/^['"]|['"]$/g, "");
-      } else if (/^  disabled: true$/.test(line) || /^  enabled: false$/.test(line)) {
-        current.enabled = false;
-      } else if (line.trim() !== "" && !line.startsWith("  ")) {
-        entries.push(current);
-        current = null;
-      }
-    }
-  }
-  if (current)
-    entries.push(current);
-  if (dump.trim() !== "" && (entries.length === 0 || entries.some((entry) => !entry.name))) {
-    return null;
-  }
-  return entries;
-}
-function diagnoseDshHost(runDsh, roots) {
-  const errors3 = [];
-  const notes = [];
-  const profileDir = resolveDshProfileDir(roots?.dshHome);
-  if (!isDshAvailable(() => runDsh(["--version"]))) {
-    errors3.push(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
-    return { location: profileDir, errors: errors3, notes };
-  }
-  let dump;
-  try {
-    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG]);
-  } catch (error210) {
-    const message = error210 instanceof Error ? error210.message : String(error210);
-    errors3.push(`Warning: could not probe installed plugins (${message}); cannot verify install state.`);
-    return { location: profileDir, errors: errors3, notes };
-  }
-  const entries = parseDshLoaderEntries(dump);
-  if (entries === null) {
-    errors3.push("Warning: could not parse installed plugins from dump (unexpected format); cannot verify install state.");
-    return { location: profileDir, errors: errors3, notes };
-  }
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
-  for (const spec of DSH_PLUGIN_SPECS) {
-    const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
-    const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
-    if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
-      const installedVersion = readInstalledFallbacksVersion(profileDir);
-      const installedLabel = installedVersion ?? "unknown";
-      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
-      errors3.push(`${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`);
-      continue;
-    }
-    notes.push(`${spec}: ${state}`);
-    if (state === "mounted")
-      continue;
-    const hint = state === "uninstalled" ? "Run: mstar-harness init --target dsh" : "Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.";
-    errors3.push(`${spec} is ${state}. ${hint}`);
-  }
-  return { location: profileDir, errors: errors3, notes };
-}
-var PACKAGE_NAMES = {
-  "morning-star": true,
-  "morning-star-harness": true,
-  "github:btspoony/mstar-harness": true,
-  "@mstar-harness/omp": true
-};
-var SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
-var COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
-function parseOmpPluginList(raw) {
-  const parsed = JSON.parse(raw);
-  if (Array.isArray(parsed))
-    return parsed;
-  if (parsed && typeof parsed === "object") {
-    const record2 = parsed;
-    if (Array.isArray(record2.plugins))
-      return record2.plugins;
-    const entries = [];
-    for (const key of ["npm", "marketplace"]) {
-      const group = record2[key];
-      if (Array.isArray(group)) {
-        for (const item of group) {
-          if (item && typeof item === "object")
-            entries.push(item);
-        }
-      }
-    }
-    if (entries.length > 0)
-      return entries;
-  }
-  return [];
-}
-function findInstalledPlugin(plugins) {
-  return plugins.find((entry) => {
-    const name = typeof entry.name === "string" ? entry.name : "";
-    const pathValue = typeof entry.path === "string" ? entry.path : "";
-    const manifest = entry.manifest && typeof entry.manifest === "object" ? entry.manifest : null;
-    const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
-    if (Object.hasOwn(PACKAGE_NAMES, name) || Object.hasOwn(PACKAGE_NAMES, manifestName))
-      return true;
-    if (name.includes("morning-star") || manifestName.includes("morning-star"))
-      return true;
-    return pathValue.includes("mstar-harness") || pathValue.includes(`${path222.sep}morning-star`);
-  });
-}
-function validatePluginTree(pluginRoot) {
-  const errors3 = [];
-  const markerPath = path222.join(pluginRoot, "plugin.json");
-  if (!fs9.existsSync(markerPath))
-    errors3.push(`Missing omp plugin marker: ${markerPath}`);
-  for (const skill of SKILL_SMOKE) {
-    const skillPath = path222.join(pluginRoot, "skills", skill, "SKILL.md");
-    if (!fs9.existsSync(skillPath))
-      errors3.push(`Missing skill: ${skillPath}`);
-  }
-  for (const command6 of COMMAND_SMOKE) {
-    const commandPath = path222.join(pluginRoot, "commands", `${command6}.md`);
-    if (!fs9.existsSync(commandPath))
-      errors3.push(`Missing command: ${commandPath}`);
-  }
-  const hostRef = path222.join(pluginRoot, "skills", "mstar-host", "references", "omp.md");
-  if (!fs9.existsSync(hostRef))
-    errors3.push(`Missing omp host reference: ${hostRef}`);
-  return errors3;
-}
-function diagnoseOmpHost(input2) {
-  const errors3 = [...input2.localHarnessRepoErrors];
-  errors3.push(...validatePluginTree(path222.join(input2.harnessRepoPath, "packages", "omp")));
-  if (!input2.ompAvailable) {
-    errors3.push("omp CLI not found on PATH (required for omp target doctor checks).");
-  } else {
-    const installed = findInstalledPlugin(input2.installedPlugins);
-    if (!installed) {
-      errors3.push(`Morning Star plugin not found in \`omp plugin list\` (expected one of: ${Object.keys(PACKAGE_NAMES).join(", ")}). Run: mstar-harness init --target omp --scope ${input2.scope}`);
-    } else if (installed.enabled === false) {
-      errors3.push(`Morning Star omp plugin is installed but disabled (${String(installed.name)}).`);
-    }
-  }
-  for (const entry of input2.missingGitignoreEntries)
-    errors3.push(`Missing .gitignore entry: ${entry}`);
-  return { location: input2.harnessRepoPath, errors: errors3 };
-}
-var OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
-function isLegacyMorningStarGitPlugin(plugin) {
-  const raw = plugin.trim();
-  const match = /^morning-star@git\+(.+)$/i.exec(raw);
-  if (!match)
-    return false;
-  const spec = match[1].split("#")[0].trim().toLowerCase();
-  return /^https?:\/\/github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) || /^ssh:\/\/git@github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) || /^git@github\.com:btspoony\/mstar-harness(\.git)?$/.test(spec);
-}
-function isMstarHarnessOpencodePlugin(plugin) {
-  const value = plugin.trim();
-  return value === "@mstar-harness/opencode" || value.startsWith("@mstar-harness/opencode@");
-}
-function isAnyMstarHarnessOpencodeSlot(plugin) {
-  return isLegacyMorningStarGitPlugin(plugin) || isMstarHarnessOpencodePlugin(plugin);
-}
-function validateOpencodeConfig(config2) {
-  const errors3 = [];
-  if (config2.$schema !== OPENCODE_CONFIG_SCHEMA) {
-    errors3.push(`Missing or invalid $schema (expected: ${OPENCODE_CONFIG_SCHEMA}).`);
-  }
-  const plugins = Array.isArray(config2.plugin) ? config2.plugin : [];
-  const hasMstarOpencode = plugins.some((item) => typeof item === "string" && isAnyMstarHarnessOpencodeSlot(item.trim()));
-  if (!hasMstarOpencode) {
-    errors3.push("Missing @mstar-harness/opencode plugin entry in `plugin` (or legacy morning-star git plugin).");
-  }
-  return errors3;
-}
-function getOpencodeDoctorWarnings(config2, allRoles) {
-  const warnings = [];
-  const plugins = Array.isArray(config2.plugin) ? config2.plugin : [];
-  const strings = plugins.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
-  const hasNpm = strings.some(isMstarHarnessOpencodePlugin);
-  const hasLegacy = strings.some(isLegacyMorningStarGitPlugin);
-  if (hasLegacy && !hasNpm) {
-    warnings.push("Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` to rewrite to `@mstar-harness/opencode@latest`.");
-  }
-  if (hasLegacy && hasNpm) {
-    warnings.push("Both legacy `morning-star@git+…` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.");
-  }
-  const agent = config2.agent && typeof config2.agent === "object" && !Array.isArray(config2.agent) ? config2.agent : {};
-  const missingModels = allRoles.filter((roleId) => {
-    const role = agent[roleId] && typeof agent[roleId] === "object" && !Array.isArray(agent[roleId]) ? agent[roleId] : {};
-    return typeof role.model !== "string" || !role.model.trim();
-  });
-  if (missingModels.length) {
-    warnings.push(`${missingModels.length} role(s) have no explicit agent.<role>.model — OpenCode default model will be used (recommended for fastest setup).`);
-  }
-  return warnings;
-}
-function diagnoseOpencodeHost(root, allRoles) {
-  const location = path23.join(root, "opencode.json");
-  let config2;
-  try {
-    const parsed = JSON.parse(fs10.readFileSync(location, "utf8"));
-    config2 = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch (error210) {
-    if (error210 && typeof error210 === "object" && "code" in error210 && error210.code === "ENOENT") {
-      return { location, errors: [`Missing config file: ${location}`], warnings: [] };
-    }
-    const message = error210 instanceof Error ? error210.message : String(error210);
-    return { location, errors: [`Could not read config file ${location}: ${message}`], warnings: [] };
-  }
-  const errors3 = validateOpencodeConfig(config2);
-  return {
-    location,
-    errors: errors3,
-    warnings: errors3.length ? [] : getOpencodeDoctorWarnings(config2, allRoles)
-  };
-}
-var MARKETPLACE_ID = "mstar-local";
-var MARKETPLACE_NAME = "mstar-local";
-var GITHUB_REPO = "btspoony/mstar-harness";
-var PLUGIN_NAME4 = "morning-star-harness";
-var HARNESS_PROCESS_GITIGNORE = [
-  ".mstar/**",
-  "!.mstar/AGENTS.md",
-  "!.mstar/knowledge/",
-  "!.mstar/knowledge/**",
-  "!.mstar/specs/",
-  "!.mstar/specs/**",
-  ".agents/**",
-  "!.agents/AGENTS.md",
-  "!.agents/knowledge/",
-  "!.agents/knowledge/**",
-  "!.agents/specs/",
-  "!.agents/specs/**",
-  ".mstarc"
-];
-var ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
-var ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
-var ZCODE_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
-var HARNESS_MARKERS = [".codex-plugin/plugin.json", ZCODE_PLUGIN_MARKER, ".omp-plugin/plugin.json"];
-function ensureObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-function readJson5(file2) {
-  return ensureObject(JSON.parse(fs11.readFileSync(file2, "utf8")));
-}
-function findKnownMarketplace(raw) {
-  const marketplaces = Array.isArray(raw.marketplaces) ? raw.marketplaces : [];
-  return marketplaces.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && entry.id === MARKETPLACE_ID);
-}
-function findMarketplacePlugin(raw) {
-  const plugins = Array.isArray(raw.plugins) ? raw.plugins : [];
-  return plugins.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && entry.name === PLUGIN_NAME4);
-}
-function validateMarketplaceJson(file2) {
-  const errors3 = [];
-  if (!fs11.existsSync(file2)) {
-    errors3.push(`Missing ZCode marketplace: ${file2}`);
-    return errors3;
-  }
-  const raw = readJson5(file2);
-  if (raw.name !== MARKETPLACE_NAME)
-    errors3.push(`ZCode marketplace name must be ${MARKETPLACE_NAME} (in ${file2}).`);
-  const entry = findMarketplacePlugin(raw);
-  if (!entry) {
-    errors3.push(`Missing ${PLUGIN_NAME4} plugin entry in ${file2}.`);
-    return errors3;
-  }
-  const source = ensureObject(entry.source);
-  if (source.source !== "github")
-    errors3.push("ZCode marketplace plugin source.source must be `github`.");
-  if (source.repo !== GITHUB_REPO)
-    errors3.push(`ZCode marketplace plugin source.repo must be ${GITHUB_REPO}.`);
-  return errors3;
-}
-function validateKnownMarketplaces(file2) {
-  const errors3 = [];
-  if (!fs11.existsSync(file2)) {
-    errors3.push(`Missing ZCode known_marketplaces.json: ${file2}`);
-    return errors3;
-  }
-  const entry = findKnownMarketplace(readJson5(file2));
-  if (!entry) {
-    errors3.push(`Missing ${MARKETPLACE_ID} entry in ${file2}.`);
-    return errors3;
-  }
-  if (entry.id !== MARKETPLACE_ID)
-    errors3.push(`known_marketplaces entry id must be ${MARKETPLACE_ID}.`);
-  const source = ensureObject(entry.source);
-  if (source.source !== "github")
-    errors3.push("known_marketplaces entry source.source must be github.");
-  if (source.repo !== GITHUB_REPO)
-    errors3.push(`known_marketplaces entry source.repo must be ${GITHUB_REPO}.`);
-  return errors3;
-}
-function validatePluginAgents2(pluginRoot) {
-  const errors3 = [];
-  const agentsDir = path24.join(pluginRoot, "agents");
-  if (!fs11.existsSync(agentsDir)) {
-    errors3.push(`Missing plugin agents directory: ${agentsDir}`);
-    return errors3;
-  }
-  for (const agentName of ZCODE_AGENT_SMOKE_NAMES) {
-    const agentPath = path24.join(agentsDir, `${agentName}.md`);
-    if (!fs11.existsSync(agentPath))
-      errors3.push(`Missing plugin agent file: ${agentPath}`);
-  }
-  return errors3;
-}
-function validateLocalHarnessRepo(harnessRepoPath) {
-  const errors3 = [];
-  if (!fs11.existsSync(harnessRepoPath)) {
-    errors3.push(`Missing local harness repo: ${harnessRepoPath}`);
-    return errors3;
-  }
-  if (!HARNESS_MARKERS.some((marker) => fs11.existsSync(path24.join(harnessRepoPath, marker)))) {
-    errors3.push(`Local harness repo is missing a plugin marker (expected one of: ${HARNESS_MARKERS.join(", ")}).`);
-  }
-  return errors3;
-}
-function validateGitCheckout2(checkoutPath) {
-  const errors3 = [];
-  let stat;
-  try {
-    stat = fs11.lstatSync(checkoutPath);
-  } catch {
-    errors3.push(`Missing checkout directory: ${checkoutPath}`);
-    return errors3;
-  }
-  if (stat.isSymbolicLink()) {
-    errors3.push(`Path must be a real directory, not a symlink: ${checkoutPath}. Run: mstar-harness init --target cursor`);
-    return errors3;
-  }
-  if (!fs11.existsSync(path24.join(checkoutPath, ".git")))
-    errors3.push(`Path is not a git checkout: ${checkoutPath}`);
-  const marker = path24.join(checkoutPath, ZCODE_PLUGIN_MARKER);
-  if (!fs11.existsSync(marker))
-    errors3.push(`Missing marker file: ${marker}`);
-  return errors3;
-}
-function diagnoseZcodeHost(scope, roots = {}) {
-  const pluginsRoot = roots.pluginsRoot ?? path24.join(os5.homedir(), ".zcode", "cli", "plugins");
-  const projectRoot = roots.projectRoot ?? resolveProjectRoot2();
-  const harnessRepoPath = roots.harnessRepoPath ?? path24.join(os5.homedir(), ".mstar", "harness");
-  const knownMarketplacesPath = path24.join(pluginsRoot, "known_marketplaces.json");
-  const marketplacePath = path24.join(pluginsRoot, "marketplaces", MARKETPLACE_ID, "marketplace.json");
-  const errors3 = validateLocalHarnessRepo(harnessRepoPath);
-  if (scope === "project") {
-    const checkoutPath = path24.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
-    errors3.push(...validateGitCheckout2(checkoutPath));
-    const gitignorePath = path24.join(projectRoot, ".gitignore");
-    const gitignore = fs11.existsSync(gitignorePath) ? fs11.readFileSync(gitignorePath, "utf8") : "";
-    const lines = gitignore.split(/\r?\n/);
-    if (!lines.includes(ZCODE_PLUGIN_CHECKOUT_PROJECT)) {
-      errors3.push(`Missing .gitignore entry: ${ZCODE_PLUGIN_CHECKOUT_PROJECT}`);
-    }
-    if (!hasHarnessRootDeclaration(gitignore)) {
-      for (const entry of HARNESS_PROCESS_GITIGNORE) {
-        if (!lines.includes(entry))
-          errors3.push(`Missing .gitignore entry: ${entry}`);
-      }
-    }
-    errors3.push(...validatePluginAgents2(checkoutPath));
-  } else {
-    errors3.push(...validatePluginAgents2(harnessRepoPath));
-  }
-  errors3.push(...validateKnownMarketplaces(knownMarketplacesPath));
-  errors3.push(...validateMarketplaceJson(marketplacePath));
-  return { location: knownMarketplacesPath, errors: errors3 };
-}
-var MCP_PACKAGE_LAYOUTS = {
-  omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  dsh: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
-  codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
-  kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
-  zcode: { buildInfo: "mcp/bundles/zcode/dist/mcp/build-info.json", executable: "mcp/bundles/zcode/dist/mcp/stdio.js", versionManifest: ".zcode-plugin/plugin.json" }
-};
-function record2(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-function readJson6(file2) {
-  try {
-    return record2(JSON.parse(fs12.readFileSync(file2, "utf8")));
-  } catch {
-    return null;
-  }
-}
-function actualRuntime() {
-  return process.versions.bun === undefined ? { kind: "node", version: process.versions.node } : { kind: "bun", version: process.versions.bun };
-}
-function diagnoseMcpTarget(target, packageRoot, runtime = actualRuntime()) {
-  const layout = MCP_PACKAGE_LAYOUTS[target];
-  const buildInfoPath = path25.join(packageRoot, layout.buildInfo);
-  const executablePath = path25.join(packageRoot, layout.executable);
-  const manifestPath = path25.join(packageRoot, layout.versionManifest);
-  const missing = [buildInfoPath, executablePath, manifestPath].filter((file2) => !fs12.existsSync(file2));
-  const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
-  const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0 ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.` : null;
-  if (missing.length > 0) {
-    return {
-      target,
-      status: "unavailable",
-      location: buildInfoPath,
-      runtimeFloor,
-      errors: [
-        `MCP package unavailable for ${target}; missing ${missing.map((file2) => path25.relative(packageRoot, file2)).join(", ")}.`,
-        ...runtimeError === null ? [] : [runtimeError]
-      ],
-      notes: []
-    };
-  }
-  const manifest = readJson6(manifestPath);
-  const buildInfo = readJson6(buildInfoPath);
-  const version2 = manifest?.version;
-  const protocols = buildInfo?.supportedProtocols;
-  const mismatch = [];
-  if (manifest === null || buildInfo === null) {
-    mismatch.push("package manifest or MCP build metadata is not valid JSON object data.");
-  } else {
-    if (typeof version2 !== "string" || version2 === "")
-      mismatch.push("package manifest has no version.");
-    for (const key of ["pluginVersion", "engineVersion", "mcpVersion"]) {
-      if (typeof buildInfo[key] !== "string" || buildInfo[key] !== version2) {
-        mismatch.push(`${key} does not match packaged version ${String(version2 ?? "unknown")}.`);
-      }
-    }
-    if (buildInfo.hostTarget !== target)
-      mismatch.push(`hostTarget does not match ${target}.`);
-    if (!Array.isArray(protocols) || protocols.length === 0 || protocols.some((item) => typeof item !== "string" || item.length === 0)) {
-      mismatch.push("supportedProtocols is missing or invalid.");
-    }
-  }
-  if (runtimeError !== null)
-    mismatch.push(runtimeError);
-  return {
-    target,
-    status: mismatch.length === 0 ? "aligned" : "mismatch",
-    location: buildInfoPath,
-    runtimeFloor,
-    errors: mismatch,
-    notes: mismatch.length === 0 ? [`MCP package metadata and files aligned for ${target} (${String(version2)}).`] : []
-  };
-}
-function mcpTargetPackageRoot(target, repositoryRoot, options = {}) {
-  if (target === "opencode")
-    return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
-  if (target === "dsh")
-    return path25.join(resolveDshProfileDir(options.dshHome), "node_modules", "@mstar-harness", "dsh");
-  return target === "omp" ? path25.join(repositoryRoot, "packages", "omp") : repositoryRoot;
 }
 var doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"];
 var hostSignals = [

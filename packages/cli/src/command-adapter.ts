@@ -164,6 +164,9 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       return stdin;
     },
     spawn: spawnProcess,
+    writeStderr(message: string) {
+      process.stderr.write(`${message}\n`);
+    },
     async startDashboard(request) {
       const running = await startDashboard(request);
       const handle = { url: running.url, async close() { await running.close(); } };

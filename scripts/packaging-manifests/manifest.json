@@ -24,7 +24,7 @@
           {
             "root": "packages/cli/src",
             "files": 24,
-            "sha256": "c1575b6c675d0aa1c06484c74f407aad0c1103030c03f9ff24099ce692be4482"
+            "sha256": "0595451962faf82a6d946e80a8bbb6b1a38be4edf765a2a115e5cf971208e4b6"
           }
         ],
         "files": [
@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "34d43c31d8b726b8d24534ec81eeba713eeac321ebb785c11edf6244c1b8e995",
+            "sha256": "0ac38a3ba0662d5319d3fca8a49bca02f41c4bd527aea70c5c035c049b56a816",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "142e783f06c8223af50f50d8ce0daf60178b7f345feb27c13ff627b39ed81a5d"
+            "sha256": "f2da1a4bff6bdae27fb16464781a6abf8466db3034c4096e0cc7305594fc7312"
           }
         ]
       },
@@ -290,7 +290,7 @@
           {
             "root": "packages/mcp/dist",
             "files": 26,
-            "sha256": "2bd0bfda405ea2af664d5621b3ca1dcefc6883e5c1da96d9a24fc378eea397ad",
+            "sha256": "2a39646befadd6e94a5467f66b5e58813e569818e96eea19f99c204eaf0563bd",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -319,7 +319,7 @@
           },
           {
             "path": "mcp/bundles/codex/dist/mcp/stdio.js",
-            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/cursor/dist/mcp/build-info.json",
@@ -327,7 +327,7 @@
           },
           {
             "path": "mcp/bundles/cursor/dist/mcp/stdio.js",
-            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/dsh/dist/mcp/build-info.json",
@@ -335,7 +335,7 @@
           },
           {
             "path": "mcp/bundles/dsh/dist/mcp/stdio.js",
-            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/kimi/dist/mcp/build-info.json",
@@ -343,7 +343,7 @@
           },
           {
             "path": "mcp/bundles/kimi/dist/mcp/stdio.js",
-            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/omp/dist/mcp/build-info.json",
@@ -351,7 +351,7 @@
           },
           {
             "path": "mcp/bundles/omp/dist/mcp/stdio.js",
-            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/opencode/dist/mcp/build-info.json",
@@ -359,7 +359,7 @@
           },
           {
             "path": "mcp/bundles/opencode/dist/mcp/stdio.js",
-            "sha256": "3c7890cd766bb621193f38367a1a36de4a61d58b5f2db3046e2fcb3f71b8ffeb"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "mcp/bundles/zcode/dist/mcp/build-info.json",
@@ -367,7 +367,7 @@
           },
           {
             "path": "mcp/bundles/zcode/dist/mcp/stdio.js",
-            "sha256": "ad01da0d93c7d41b3de34248283aacf1214a5aef208339661008ce20ecea0cd9"
+            "sha256": "8cdb14389d23f770b7fdfc7e927e24102a1be20000d39fad35e844030e04b61a"
           },
           {
             "path": "packages/dsh/mcp/build-info.json",
@@ -379,7 +379,7 @@
           },
           {
             "path": "packages/mcp/dist/stdio.js",
-            "sha256": "24eba5835bebe5cd39bba18fdbf4b7a44a5bb43031b4171e165eeedfe5a31d51"
+            "sha256": "120b742fea1746791bee24ef67b4804fb7419cd709b1b356d9aac9710edbb366"
           },
           {
             "path": "packages/omp/mcp/build-info.json",
@@ -559,13 +559,13 @@
           {
             "root": "packages/opencode/src",
             "files": 2,
-            "sha256": "31027c6e4c181e906cb9b7c8cadadc1fbc4f5507aba92ace4328206c297975ac"
+            "sha256": "86caae49c611f2ae06c7f66e0e7109333f86915c5b01f2743ab25587551da835"
           }
         ],
         "files": [
           {
             "path": "packages/opencode/package.json",
-            "sha256": "5c251e4e8cbbec4429b12a9aafe5fd4430e0a840a1162ea86ffa3a89e2d71805"
+            "sha256": "d92546a48e6f769fdde27c606623c59bc7d3e564efb4330108e3483ba63624f1"
           }
         ]
       },
@@ -574,7 +574,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "d223f5b0e42275d707aa9de7e967f6f05035470cf945223bfde391cb065c7e92",
+            "sha256": "5b3232445dadfcf1b7436071834e43febdbc8fcc53fe98bfcbfd2050fa57d04c",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -583,7 +583,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "640905916a76f504ad17c9043e788542b661f169acaf42e6f2177dc9279c8f68"
+            "sha256": "d24bfce8586e0b45756dfb7fc973ba98d1174bcc583bc3a467e1b23936ef374d"
           }
         ]
       },

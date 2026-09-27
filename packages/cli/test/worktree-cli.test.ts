@@ -51,6 +51,38 @@ interface RunResult {
   stderr: string;
 }
 
+
+interface CommandOutput {
+  version: number;
+  command: string;
+  status: string;
+  code: string;
+  exitCode: number;
+  message?: string;
+  data?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+function commandOutput(result: RunResult): CommandOutput {
+  const value: unknown = JSON.parse(result.stdout);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected command envelope on stdout, received ${JSON.stringify(result.stdout)}`);
+  }
+  return value as CommandOutput;
+}
+
+function expectOutput(
+  result: RunResult,
+  status: string,
+  code: string,
+  exitCode: number,
+  command = "worktree.check",
+): CommandOutput {
+  const output = commandOutput(result);
+  expect(output).toMatchObject({ version: 1, command, status, code, exitCode });
+  return output;
+}
+
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
 function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
@@ -200,10 +232,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
-      expect(result.stdout).toContain("main worktree:");
-      expect(result.stdout).toContain(topo.mainBranch);
+      const output = expectOutput(result, "ok", "worktree.check.ok", 0);
+      expect(output.data).toMatchObject({ ok: true, violations: [] });
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -220,8 +250,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.main.residency-switched");
+      expectOutput(result, "refused", "worktree.main.residency-switched", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -236,9 +265,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.main.expected-branch-missing");
-      expect(result.stderr).not.toContain("worktree.main.residency-switched");
+      expectOutput(result, "refused", "worktree.main.expected-branch-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -250,9 +277,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
       const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
-      expect(result.stdout).toContain(topo.mainBranch);
+      expectOutput(result, "ok", "worktree.check.ok", 0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -273,8 +298,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toContain("workflow.snapshot.legacy-control-worktree-path");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -296,8 +320,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -319,8 +342,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toContain("--control");
       expect(result.stderr).toContain("deprecated");
     } finally {
@@ -335,9 +357,9 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--integration", root, "--control", root],
         root,
       );
-      expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: worktree check <plan-id>");
-      expect(result.stderr).toContain("--control");
+      const output = expectOutput(result, "usage", "usage", 2);
+      expect(output.message).toContain("usage: worktree check <plan-id>");
+      expect(output.message).toContain("--control");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -352,8 +374,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.lease-equals-main");
+      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -369,8 +390,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.feature-missing");
+      expectOutput(result, "refused", "worktree.l1.feature-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -386,10 +406,9 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.branch-mismatch");
-      expect(result.stderr).toContain("feature/plan-a");
-      expect(result.stderr).toContain("feature/wrong");
+      expectOutput(result, "refused", "worktree.l1.branch-mismatch", 1);
+      expect(commandOutput(result).message).toContain("feature/plan-a");
+      expect(commandOutput(result).message).toContain("feature/wrong");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -400,8 +419,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     try {
       writeSnapshot(root, snapshotDoc([]));
       const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.plan-not-found");
+      expectOutput(result, "refused", "worktree.l1.plan-not-found", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -416,8 +434,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.integration-missing");
+      expectOutput(result, "refused", "worktree.l1.integration-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -429,9 +446,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       writeSnapshot(root, snapshotDoc([]));
       for (const bad of ["../../etc", "a/b", "..", "."]) {
         const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", bad, "--harness", root]);
-        expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("invalid workflow id");
-        expect(result.stderr).not.toContain("workflow snapshot not found");
+        const output = expectOutput(result, "refused", "worktree.check.refused", 1);
+        expect(output.message).toContain("invalid workflow id");
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -447,8 +463,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -469,8 +484,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ),
       );
       const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.ambiguous");
+      expectOutput(result, "refused", "worktree.l1.ambiguous", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -485,8 +499,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -510,8 +523,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.lease-equals-main");
+      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -534,8 +546,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.lease-equals-main");
+      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -559,9 +570,8 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.main.residency-switched");
-      expect(result.stderr).toContain("owned by an active lifecycle");
+      const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
+      expect(output.message).toContain("owned by an active lifecycle");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -582,11 +592,7 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.lifecycle-snapshot-unreadable");
-      // The observed main line remains available before refusal.
-      expect(result.stdout).toContain("main worktree:");
-      expect(result.stdout).not.toContain("worktree L1 check");
+      expectOutput(result, "refused", "worktree.l1.lifecycle-snapshot-unreadable", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -609,8 +615,7 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -628,9 +633,7 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l1.lifecycle-register-unreadable");
-      expect(result.stdout).not.toContain("worktree L1 check");
+      expectOutput(result, "refused", "worktree.l1.lifecycle-register-unreadable", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -671,8 +674,7 @@ describe("mstar worktree check — process-harness discovery starts at the verif
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--main-branch", mainBranch],
         linked,
       );
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L1 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -681,7 +683,7 @@ describe("mstar worktree check — process-harness discovery starts at the verif
 });
 
 describe("mstar status validate — canonical snapshot reader advisory", () => {
-  test("legacy-only snapshot: medium advisory on stderr, exit 0, source bytes unchanged", () => {
+  test("legacy-only snapshot: JSON advisory preserved, exit 0, source bytes unchanged", () => {
     const root = tmpRoot("mstar-status-legacy-");
     try {
       const workflowDir = join(root, "workflows", "wf-legacy");
@@ -703,9 +705,10 @@ describe("mstar status validate — canonical snapshot reader advisory", () => {
       );
       writeFileSync(snapshotPath, raw);
       const result = runCli(["status", "validate", snapshotPath]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`${snapshotPath}: OK`);
-      expect(result.stderr).toContain("workflow.snapshot.legacy-control-worktree-path");
+      const output = expectOutput(result, "ok", "status.ok", 0, "status.validate");
+      expect(output.data).toMatchObject({ path: snapshotPath });
+      const diagnostics = output.data?.diagnostics as Array<{ code: string }>;
+      expect(diagnostics.some((diagnostic) => diagnostic.code === "workflow.snapshot.legacy-control-worktree-path")).toBe(true);
       expect(readFileSync(snapshotPath, "utf8")).toBe(raw); // advisory never rewrites the source
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -720,8 +723,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
       const linked = worktreeFixture(root);
       const tracks = JSON.stringify([{ worktreePath: linked, workingBranch: "feature/plan-a" }]);
       const result = runCli(["worktree", "check", "--l2", "--tracks", tracks]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("worktree L2 check: OK");
+      expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -734,8 +736,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
       const missing = join(root, "no-such-track");
       const tracks = JSON.stringify([{ worktreePath: missing, workingBranch: "feature/plan-a" }]);
       const result = runCli(["worktree", "check", "--l2", "--tracks", tracks]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l2.track-missing");
+      expectOutput(result, "refused", "worktree.l2.track-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -747,8 +748,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
       const linked = worktreeFixture(root);
       const tracks = JSON.stringify([{ worktreePath: linked, workingBranch: "feature/other" }]);
       const result = runCli(["worktree", "check", "--l2", "--tracks", tracks]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("worktree.l2.branch-mismatch");
+      expectOutput(result, "refused", "worktree.l2.branch-mismatch", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -756,32 +756,31 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 
   test("empty tracks array → worktree.l2.no-tracks, exit 1", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", "[]"]);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("worktree.l2.no-tracks");
+    expectOutput(result, "refused", "worktree.l2.no-tracks", 1);
   });
 
   test("--l2 without --tracks → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2"]);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: worktree check --l2 --tracks");
+    const output = expectOutput(result, "usage", "usage", 2);
+    expect(output.message).toContain("usage: worktree check --l2 --tracks");
   });
 
   test("--tracks invalid JSON → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", "{not json"]);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("invalid JSON");
+    const output = expectOutput(result, "usage", "usage", 2);
+    expect(output.message).toContain("invalid JSON");
   });
 
   test("--tracks not an array → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", '{"worktreePath": "/x"}' ]);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("expected a JSON array");
+    const output = expectOutput(result, "usage", "usage", 2);
+    expect(output.message).toContain("expected a JSON array");
   });
 
   test("--tracks entry missing workingBranch → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", '[{"worktreePath": "/abs/path"}]']);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("every track needs string worktreePath + workingBranch");
+    const output = expectOutput(result, "usage", "usage", 2);
+    expect(output.message).toContain("every track needs string worktreePath + workingBranch");
   });
 });
 
@@ -794,8 +793,8 @@ test("retained track ownership prevents main from carrying an active track", () 
     const row = { ...PLAN_A(linked), metadata: { track_branches: [mainBranch] } };
     writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
     const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("owned by an active lifecycle");
+    const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
+    expect(output.message).toContain("owned by an active lifecycle");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
