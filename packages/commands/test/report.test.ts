@@ -84,6 +84,32 @@ describe("report command", () => {
     expect(report.redactions[0]).not.toHaveProperty("line");
   });
 
+  test("redacts credentials in injected surface version, host, and platform facts", () => {
+    const secret = "sk-123456789012345678901234";
+    const surface: SurfaceVersions = {
+      engine: secret,
+      cli: secret,
+      plugin: secret,
+      host: secret,
+      platform: secret,
+    };
+    const report = createReport({}, surface);
+    expect(report.prompt).not.toContain(secret);
+    expect(JSON.stringify(report)).not.toContain(secret);
+    expect(report.prompt).toContain('CLI (observed): "[REDACTED]"');
+    expect(report.prompt).toContain('Engine (observed): "[REDACTED]"');
+    expect(report.prompt).toContain('Plugin (observed): "[REDACTED]"');
+    expect(report.prompt).toContain('Host (observed): "[REDACTED]"');
+    expect(report.prompt).toContain('Platform (observed): "[REDACTED]"');
+    expect(report.redactions).toEqual([
+      { field: "versions.cli", count: 1 },
+      { field: "versions.engine", count: 1 },
+      { field: "versions.plugin", count: 1 },
+      { field: "host", count: 1 },
+      { field: "platform", count: 1 },
+    ]);
+  });
+
   test("redactor counts distinct line/type findings once, including overlapping matches", () => {
     const report = createReport({ title: "sk-123456789012345678901234 sk-abcdefghijklmnopqrstuvwx" }, versions);
     expect(report.redactions).toEqual([{ field: "title", count: 1 }]);

@@ -116,6 +116,22 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
     if (result.count > 0) redactions.push({ field, count: result.count });
   }
   const safe = (field: string, fallback = "absent") => sanitized.get(field) ?? fallback;
+  const redactSurface = (field: string, value: string): string => {
+    const result = redact(field, value);
+    if (result.count > 0) redactions.push({ field, count: result.count });
+    return result.value;
+  };
+  const safeVersions = {
+    cli: versions.cli === null ? "unknown" : redactSurface("versions.cli", versions.cli),
+    engine: versions.engine === null ? "unknown" : redactSurface("versions.engine", versions.engine),
+    plugin: versions.plugin === null ? "unknown" : redactSurface("versions.plugin", versions.plugin),
+  };
+  const hostValue = input.host === undefined
+    ? versions.host === null ? "unknown" : redactSurface("host", versions.host)
+    : safe("host");
+  const platformValue = input.platform === undefined
+    ? versions.platform === null ? "unknown" : redactSurface("platform", versions.platform)
+    : safe("platform");
   const safeArguments = typeof input.arguments === "string"
     ? safe("arguments")
     : input.arguments === undefined
@@ -125,7 +141,7 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
     const value = sanitized.get(`versionOverrides.${field}`);
     return value === undefined ? [] : [[field, value] as const];
   });
-  const dataValues = [...sanitized.values()];
+  const dataValues = [...sanitized.values(), ...Object.values(safeVersions), hostValue, platformValue];
   const fence = "`".repeat(Math.max(3, maxBacktickRun(dataValues) + 1));
   const lines = [
     "Review this draft before submission. Redaction is not a guarantee that every secret was removed.",
@@ -133,17 +149,17 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
     fence,
     `Title: ${json(safe("title"))}`,
     "Versions:",
-    `- CLI (${versions.cli === null ? "unknown" : "observed"}): ${json(versions.cli ?? "unknown")}`,
-    `- Engine (${versions.engine === null ? "unknown" : "observed"}): ${json(versions.engine ?? "unknown")}`,
-    `- Plugin (${versions.plugin === null ? "unknown" : "observed"}): ${json(versions.plugin ?? "unknown")}`,
+    `- CLI (${versions.cli === null ? "unknown" : "observed"}): ${json(safeVersions.cli)}`,
+    `- Engine (${versions.engine === null ? "unknown" : "observed"}): ${json(safeVersions.engine)}`,
+    `- Plugin (${versions.plugin === null ? "unknown" : "observed"}): ${json(safeVersions.plugin)}`,
   ];
   if (overrideValues.length > 0) {
     lines.push("Caller-supplied version overrides:");
     for (const [field, value] of overrideValues) lines.push(`- ${field}: ${json(value)}`);
   }
   lines.push(
-    `Host (${input.host === undefined ? versions.host === null ? "unknown" : "observed" : "caller-supplied"}): ${json(safe("host", versions.host ?? "unknown"))}`,
-    `Platform (${input.platform === undefined ? versions.platform === null ? "unknown" : "observed" : "caller-supplied"}): ${json(safe("platform", versions.platform ?? "unknown"))}`,
+    `Host (${input.host === undefined ? versions.host === null ? "unknown" : "observed" : "caller-supplied"}): ${json(hostValue)}`,
+    `Platform (${input.platform === undefined ? versions.platform === null ? "unknown" : "observed" : "caller-supplied"}): ${json(platformValue)}`,
   );
   if (input.command !== undefined) lines.push(`Command: ${json(safe("command"))}`);
   if (safeArguments !== undefined) lines.push(`Arguments: ${typeof safeArguments === "string" ? json(safeArguments) : JSON.stringify(safeArguments)}`);
