@@ -29,6 +29,8 @@ const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
+/** Invalid-input coverage spawns many CLI processes; avoid the 5s default under CI load. */
+const MULTI_CLI_TEST_TIMEOUT_MS = 120_000;
 
 interface RunResult {
   exitCode: number | null;
@@ -266,7 +268,7 @@ describe("mstar iteration register", () => {
       expect(help.stdout).toContain("--branch-target-iteration");
       expect(help.stdout).toContain("--row");
     });
-  });
+  }, MULTI_CLI_TEST_TIMEOUT_MS);
 
   test("engine refusals exit 1 with authoritative bytes unchanged; orphan retry recovers (exit 0)", async () => {
     await setupHarness((harness, { root, snapshot }) => {

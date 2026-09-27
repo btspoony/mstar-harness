@@ -29,6 +29,8 @@ const WORKFLOW_ID = "wf-plana";
 const PLAN_ID = "plan-a";
 const PEER_PLAN_ID = "plan-b";
 const PROJECT_ID = "proj-a";
+/** Multi-process CLI integration tests need a CI-safe budget beyond Bun's 5s default. */
+const CLI_INTEGRATION_TIMEOUT = 120_000;
 
 interface RunResult {
   exitCode: number | null;
@@ -981,7 +983,7 @@ describe("mstar plan — linked-control-root", () => {
     );
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale).code).toBe("coordination.invalid-transition");
-  });
+  }, CLI_INTEGRATION_TIMEOUT);
 });
 
 describe("mstar plan — scoped-operations", () => {
@@ -1235,7 +1237,7 @@ describe("mstar plan — scoped-operations", () => {
     expect(released.exitCode).toBe(0);
     expect(JSON.parse(released.stdout)).toMatchObject({ command: "status.findings-cleanup", status: "ok", exitCode: 0 });
     expect(existsSync(fixture.projectRegisterPath)).toBe(false);
-  });
+  }, CLI_INTEGRATION_TIMEOUT);
 
   test("issue authority: a plan session cannot close an issue linked to another plan", () => {
     const fixture = makeFixture();
@@ -1334,7 +1336,7 @@ describe("mstar plan — scoped-operations", () => {
 const INTEGRATION_BRANCH = "integration/plan-a";
 
 /** Every recovery case drives 10+ CLI subprocesses; 5s is a load-dependent coin flip. */
-const RECOVERY_TIMEOUT = 120_000;
+const RECOVERY_TIMEOUT = CLI_INTEGRATION_TIMEOUT;
 
 /** `git` with stdout captured — these fixtures need pins, not side effects. */
 function gitOut(args: string[], cwd: string): string {
