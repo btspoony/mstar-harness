@@ -227,7 +227,9 @@
         "@opencode-ai/plugin": "1.4.8",
       },
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/mcp": "workspace:*",
       },
     },
   },

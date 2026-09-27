@@ -47,6 +47,6 @@ if (import.meta.main) {
   // repo-root agents/ is the cross-host subagent surface and must not carry them.
   mergeTree("opencode-agents", sourceOpenCodeAgents, destAgents);
   copyTree("commands", sourceCommands, destCommands);
-  await buildMcpPlugin("opencode");
-  console.log(`bundle-harness-assets: synced skills -> ${destSkills}, agents -> ${destAgents} (+ OpenCode-only overlays), commands -> ${destCommands}`);
+  const builtPackageRoot = await buildMcpPlugin("opencode");
+  console.log(`bundle-harness-assets: synced skills -> ${destSkills}, agents -> ${destAgents} (+ OpenCode-only overlays), commands -> ${destCommands}, MCP stdio -> ${path.join(builtPackageRoot, "mcp", "stdio.js")}`);
 }
