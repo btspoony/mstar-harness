@@ -62,9 +62,10 @@
       "version": "3.11.2",
       "devDependencies": {
         "@deepseek-ai/dsh-util-code-language": "0.1.7-rc.2",
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
+        "@mstar-harness/mcp": "workspace:*",
         "@shikijs/langs": "^4.3.1",
-        "@types/mdast": "^4.0.4",
         "@types/node": "^25.6.0",
         "@types/react": "~18.3.1",
         "anser": "^2.3.5",

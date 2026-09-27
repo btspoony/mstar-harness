@@ -10,6 +10,7 @@ import {
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { adoptExecutionBinding, clearExecutionBinding } from './workflow-selection.ts'
+import { executeDshMstarArgv } from '../mcp.ts'
 import type { HarnessResolver } from './_shared.ts'
 const SPOOF_KEYS = [
   'MSTAR_EXECUTION_IDENTITY',
@@ -120,6 +121,13 @@ async function handleExecutionCommand(invocation: CommandInvocation, resolver: H
   }
   const scope = { workflowId: request.workflowId, role: request.role, planId: request.planId }
   executionContextFor({ harnessDir }, { source: 'host', sessionId: facts.sessionId, ...scope })
+  const nativeResult = await executeDshMstarArgv(request.argv, invocation, resolver)
+  if (nativeResult !== null) {
+    return {
+      kind: nativeResult.status === 'ok' ? 'success' : 'error',
+      text: JSON.stringify(nativeResult),
+    }
+  }
   const result = await runExecutionCommand(request.argv, identityEnv(process.env, { sessionId: facts.sessionId, ...scope }), invocation.signal)
   return { kind: result.code === 0 ? 'success' : 'error', text: result.code === 0 ? result.stdout : result.stderr || `execution exited with code ${result.code}` }
 }

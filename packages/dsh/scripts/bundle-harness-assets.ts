@@ -40,6 +40,7 @@ if (import.meta.main) {
   copyTree("skills", sourceSkills, destSkills);
   copyTree("commands", sourceCommands, destCommands);
   copyTree("agents", sourceAgents, destHarnessAgents);
+  // Copy the self-contained MCP stdio server and build metadata into the package root.
   await buildMcpPlugin("dsh");
   console.log(
     `bundle-harness-assets: synced skills -> ${destSkills}, commands -> ${destCommands}, agents -> ${destHarnessAgents}`,
