@@ -26,3 +26,7 @@ packages/cli/src/dashboard/assets.generated.ts
 
 packages/mcp/dist/
 packages/dsh/mcp/
+packages/opencode/mcp/
+packages/omp/mcp/
+packages/opencode/mcp/
+packages/dsh/mcp/
