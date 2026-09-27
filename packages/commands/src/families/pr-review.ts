@@ -53,7 +53,13 @@ function parseTarget(raw: string): PrReportTarget {
   throw new UsageError(`invalid --target ${JSON.stringify(raw)}; expected pr:<n> | branch:<slug> | diff:<sha> | diff`);
 }
 async function spawn(context: InvocationContext, argv: string[], cwd = context.cwd, stdin?: string) {
-  return context.effects.spawn({ argv, cwd, env: {}, ...(stdin !== undefined ? { stdin } : {}), signal: context.signal });
+  return context.effects.spawn({
+    argv,
+    cwd,
+    env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    ...(stdin !== undefined ? { stdin } : {}),
+    signal: context.signal,
+  });
 }
 function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComments"][number] | null {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
