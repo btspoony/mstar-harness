@@ -5,9 +5,9 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/commands": "workspace:*",
+        "@mstar-harness/commands": "^3.11.2",
         "@mstar-harness/engine": "^3.11.2",
-        "@mstar-harness/mcp": "workspace:*",
+        "@mstar-harness/mcp": "^3.11.2",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
@@ -225,12 +225,12 @@
       "name": "@mstar-harness/opencode",
       "version": "3.11.2",
       "dependencies": {
+        "@mstar-harness/commands": "workspace:*",
+        "@mstar-harness/mcp": "workspace:*",
         "@opencode-ai/plugin": "1.4.8",
       },
       "devDependencies": {
-        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
-        "@mstar-harness/mcp": "workspace:*",
       },
     },
   },

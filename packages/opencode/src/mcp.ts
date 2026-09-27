@@ -61,7 +61,9 @@ export function createOpenCodeMcpTools(servicesBySession: OpenCodeMcpServices): 
 
     tools[name] = tool({
       description: definition.description,
+      args: schema.shape,
       async execute(params, context) {
+
         const nativeContext = context;
         let sessionServices = servicesBySession.get(nativeContext.sessionID);
         if (sessionServices === undefined) {

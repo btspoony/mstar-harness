@@ -16,7 +16,7 @@ var __export = (target, all) => {
 };
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/engine/dist/engine.js
+// ../engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync4, readFileSync as readFileSync12, realpathSync as realpathSync6 } from "node:fs";
@@ -39875,7 +39875,7 @@ function latestGoverningMigration(db) {
   return row ?? null;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create2 = Object.create;
 var __defProp3 = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -39915,7 +39915,7 @@ var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__
   enumerable: true
 }) : target, mod));
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/dialects-DoSzNhcb.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/dialects-DoSzNhcb.mjs
 var DRAFT_2020_12_URIS = new Set(["https://json-schema.org/draft/2020-12/schema", "http://json-schema.org/draft/2020-12/schema"]);
 var DRAFT_2019_09_URIS = new Set(["https://json-schema.org/draft/2019-09/schema", "http://json-schema.org/draft/2019-09/schema"]);
 var DRAFT_07_URIS = new Set(["https://json-schema.org/draft-07/schema", "http://json-schema.org/draft-07/schema"]);
@@ -39936,7 +39936,7 @@ function declaredDialect(schema, remedy) {
   throw new Error(`JSON Schema declares an unsupported dialect ("$schema": "${schema.$schema.slice(0, 200)}"). The default validator supports JSON Schema 2020-12, 2019-09, draft-07, and draft-06; ${remedy}`);
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/external.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/external.js
 var exports_external = {};
 __export(exports_external, {
   $brand: () => $brand,
@@ -40199,7 +40199,7 @@ __export(exports_external, {
   xor: () => xor
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/index.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/index.js
 var exports_core2 = {};
 __export(exports_core2, {
   $ZodAny: () => $ZodAny,
@@ -40516,7 +40516,7 @@ __export(exports_core2, {
   withParser: () => withParser
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/util.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   BIGINT_FORMAT_RANGES: () => BIGINT_FORMAT_RANGES,
@@ -41352,7 +41352,7 @@ function constantCatch(value) {
   return fn;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/core.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/core.js
 var _a;
 var NEVER = /* @__PURE__ */ Object.freeze({
   status: "aborted"
@@ -41475,7 +41475,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/errors.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/errors.js
 function _getMessage() {
   const internals = this._zod;
   internals.message ?? (internals.message = JSON.stringify(internals.def, jsonStringifyReplacer, 2));
@@ -41668,7 +41668,7 @@ function prettifyError(error) {
 `);
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/parse.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/parse.js
 function finalizeParams(callee, params) {
   return { callee: params?.callee ?? callee, Err: params?.Err };
 }
@@ -41827,7 +41827,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx);
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/regexes.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/regexes.js
 var exports_regexes = {};
 __export(exports_regexes, {
   anyString: () => anyString,
@@ -41999,7 +41999,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/checks.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a2;
   inst._zod ?? (inst._zod = {});
@@ -42473,7 +42473,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/doc.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = [], closed = {}) {
     this.content = [];
@@ -42515,14 +42515,14 @@ ${content3.join(`
   }
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/versions.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 6,
   patch: 5
 };
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/schemas.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a2;
   inst ?? (inst = {});
@@ -44923,7 +44923,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/memoizer.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/memoizer.js
 class $ZodCyclicError extends Error {
   constructor() {
     super(`Cannot parse a reference cycle that closes through a transform`);
@@ -45195,7 +45195,7 @@ function isBackEdge(ctx, value) {
   const backEdges = ctx[STATE]?.backEdges;
   return backEdges !== undefined && isRef(value) && backEdges.has(value);
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/index.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/index.js
 var exports_locales = {};
 __export(exports_locales, {
   ar: () => ar_default,
@@ -45263,7 +45263,7 @@ __export(exports_locales, {
   zhTW: () => zh_TW_default
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ar.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "حرف", verb: "أن يحوي" },
@@ -45374,7 +45374,7 @@ function ar_default() {
     localeError: error()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/az.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmalıdır" },
@@ -45484,7 +45484,7 @@ function az_default() {
     localeError: error2()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/be.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count, one2, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -45652,7 +45652,7 @@ function be_default() {
     localeError: error3()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/bg.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "символа", verb: "да съдържа" },
@@ -45777,7 +45777,7 @@ function bg_default() {
     localeError: error4()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/bn.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/bn.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "অক্ষর", verb: "থাকতে হবে" },
@@ -45890,7 +45890,7 @@ function bn_default() {
     localeError: error5()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ca.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ca.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "caràcters", verb: "contenir" },
@@ -46002,7 +46002,7 @@ function ca_default() {
     localeError: error6()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ckb.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ckb.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "پیت", verb: "بێت" },
@@ -46134,7 +46134,7 @@ function ckb_default() {
     localeError: error7()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/cs.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/cs.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "znaků", verb: "mít" },
@@ -46250,7 +46250,7 @@ function cs_default() {
     localeError: error8()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/da.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/da.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -46370,7 +46370,7 @@ function da_default() {
     localeError: error9()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/de.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/de.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -46483,7 +46483,7 @@ function de_default() {
     localeError: error10()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/el.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/el.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "χαρακτήρες", verb: "να έχει" },
@@ -46595,7 +46595,7 @@ function el_default() {
     localeError: error11()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/en.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/en.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -46717,7 +46717,7 @@ function en_default() {
     localeError: error12()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/eo.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/eo.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -46831,7 +46831,7 @@ function eo_default() {
     localeError: error13()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/es.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/es.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -46967,7 +46967,7 @@ function es_default() {
     localeError: error14()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fa.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fa.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "کاراکتر", verb: "داشته باشد" },
@@ -47086,7 +47086,7 @@ function fa_default() {
     localeError: error15()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fi.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fi.js
 var error16 = () => {
   const Sizable = {
     string: { unit: "merkkiä", subject: "merkkijonon" },
@@ -47203,7 +47203,7 @@ function fi_default() {
     localeError: error16()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fr.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fr.js
 var error17 = () => {
   const Sizable = {
     string: { unit: "caractères", verb: "avoir" },
@@ -47332,7 +47332,7 @@ function fr_default() {
     localeError: error17()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fr-CA.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/fr-CA.js
 var error18 = () => {
   const Sizable = {
     string: { unit: "caractères", verb: "avoir" },
@@ -47444,7 +47444,7 @@ function fr_CA_default() {
     localeError: error18()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/gu.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/gu.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "અક્ષર", verb: "હોવા જોઈએ" },
@@ -47557,7 +47557,7 @@ function gu_default() {
     localeError: error19()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/he.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/he.js
 var error20 = () => {
   const TypeNames = {
     string: { label: "מחרוזת", gender: "f" },
@@ -47757,7 +47757,7 @@ function he_default() {
     localeError: error20()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hi.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hi.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "अक्षर", verb: "रखने के लिए" },
@@ -47868,7 +47868,7 @@ function hi_default() {
     localeError: error21()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hr.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hr.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "znakova", verb: "imati" },
@@ -47994,7 +47994,7 @@ function hr_default() {
     localeError: error22()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hu.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hu.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -48107,7 +48107,7 @@ function hu_default() {
     localeError: error23()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hy.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count, one2, many) {
   return Math.abs(count) === 1 ? one2 : many;
 }
@@ -48265,7 +48265,7 @@ function hy_default() {
     localeError: error24()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/id.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/id.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -48376,7 +48376,7 @@ function id_default() {
     localeError: error25()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/is.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/is.js
 var error26 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "að hafa" },
@@ -48490,7 +48490,7 @@ function is_default() {
     localeError: error26()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/it.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/it.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -48603,7 +48603,7 @@ function it_default() {
     localeError: error27()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ja.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ja.js
 var error28 = () => {
   const Sizable = {
     string: { unit: "文字", verb: "である" },
@@ -48715,7 +48715,7 @@ function ja_default() {
     localeError: error28()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ka.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ka.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "სიმბოლო", verb: "უნდა შეიცავდეს" },
@@ -48832,7 +48832,7 @@ function ka_default() {
     localeError: error29()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/km.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/km.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "តួអក្សរ", verb: "គួរមាន" },
@@ -48948,11 +48948,11 @@ function km_default() {
   };
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/kh.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/kn.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/kn.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "ಅಕ್ಷರಗಳು", verb: "ಹೊಂದಲು" },
@@ -49065,7 +49065,7 @@ function kn_default() {
     localeError: error31()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ko.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ko.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "문자", verb: "to have" },
@@ -49181,7 +49181,7 @@ function ko_default() {
     localeError: error32()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/lt.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text7) => {
   return text7.charAt(0).toUpperCase() + text7.slice(1);
 };
@@ -49388,7 +49388,7 @@ function lt_default() {
     localeError: error33()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/mk.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/mk.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "знаци", verb: "да имаат" },
@@ -49502,7 +49502,7 @@ function mk_default() {
     localeError: error34()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ms.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ms.js
 var error35 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -49614,7 +49614,7 @@ function ms_default() {
     localeError: error35()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ne.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ne.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "अक्षर", verb: "हुनुपर्छ" },
@@ -49725,7 +49725,7 @@ function ne_default() {
     localeError: error36()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/nl.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/nl.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -49840,7 +49840,7 @@ function nl_default() {
     localeError: error37()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/nn.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/nn.js
 var error38 = () => {
   const Sizable = {
     string: { unit: "teikn", verb: "å ha" },
@@ -49953,7 +49953,7 @@ function nn_default() {
     localeError: error38()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/no.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/no.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "å ha" },
@@ -50066,7 +50066,7 @@ function no_default() {
     localeError: error39()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ota.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ota.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmalıdır" },
@@ -50180,7 +50180,7 @@ function ota_default() {
     localeError: error40()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ps.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ps.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "توکي", verb: "ولري" },
@@ -50299,7 +50299,7 @@ function ps_default() {
     localeError: error41()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pl.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pl.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "znaków", verb: "mieć" },
@@ -50413,7 +50413,7 @@ function pl_default() {
     localeError: error42()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pt.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pt.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "caracteres" },
@@ -50555,7 +50555,7 @@ function pt_default() {
     localeError: error43()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pt-BR.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/pt-BR.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "caracteres" },
@@ -50698,7 +50698,7 @@ function pt_BR_default() {
     localeError: error44()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ro.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ro.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "caractere", verb: "să aibă" },
@@ -50820,7 +50820,7 @@ function ro_default() {
     localeError: error45()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ru.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count, one2, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -50988,7 +50988,7 @@ function ru_default() {
     localeError: error46()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sk.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sk.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "mať" },
@@ -51104,7 +51104,7 @@ function sk_default() {
     localeError: error47()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sl.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sl.js
 var error48 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -51218,7 +51218,7 @@ function sl_default() {
     localeError: error48()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sv.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/sv.js
 var error49 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -51333,7 +51333,7 @@ function sv_default() {
     localeError: error49()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ta.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ta.js
 var error50 = () => {
   const Sizable = {
     string: { unit: "எழுத்துக்கள்", verb: "கொண்டிருக்க வேண்டும்" },
@@ -51448,7 +51448,7 @@ function ta_default() {
     localeError: error50()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tg.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tg.js
 var error51 = () => {
   const Sizable = {
     string: { unit: "аломат", verb: "дошта бошад" },
@@ -51564,7 +51564,7 @@ function tg_default() {
     localeError: error51()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/th.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/th.js
 var error52 = () => {
   const Sizable = {
     string: { unit: "ตัวอักษร", verb: "ควรมี" },
@@ -51679,7 +51679,7 @@ function th_default() {
     localeError: error52()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tk.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tk.js
 var error53 = () => {
   const Sizable = {
     string: { unit: "simwol", verb: "bolmaly" },
@@ -51786,7 +51786,7 @@ function tk_default() {
     localeError: error53()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tr.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/tr.js
 var error54 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmalı" },
@@ -51896,7 +51896,7 @@ function tr_default() {
     localeError: error54()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/uk.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/uk.js
 var error55 = () => {
   const Sizable = {
     string: { unit: "символів", verb: "матиме" },
@@ -52010,11 +52010,11 @@ function uk_default() {
   };
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ua.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ur.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/ur.js
 var error56 = () => {
   const Sizable = {
     string: { unit: "حروف", verb: "ہونا" },
@@ -52129,7 +52129,7 @@ function ur_default() {
     localeError: error56()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/uz.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/uz.js
 var error57 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo‘lishi kerak" },
@@ -52242,7 +52242,7 @@ function uz_default() {
     localeError: error57()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/vi.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/vi.js
 var error58 = () => {
   const Sizable = {
     string: { unit: "ký tự", verb: "có" },
@@ -52355,7 +52355,7 @@ function vi_default() {
     localeError: error58()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/zh-CN.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/zh-CN.js
 var error59 = () => {
   const Sizable = {
     string: { unit: "字符", verb: "包含" },
@@ -52469,7 +52469,7 @@ function zh_CN_default() {
     localeError: error59()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/zh-TW.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/zh-TW.js
 var error60 = () => {
   const Sizable = {
     string: { unit: "字元", verb: "擁有" },
@@ -52581,7 +52581,7 @@ function zh_TW_default() {
     localeError: error60()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/yo.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/locales/yo.js
 var error61 = () => {
   const Sizable = {
     string: { unit: "àmi", verb: "ní" },
@@ -52693,7 +52693,7 @@ function yo_default() {
     localeError: error61()
   };
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/registries.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/registries.js
 var _a2;
 var $output = /* @__PURE__ */ Symbol("ZodOutput");
 var $input = /* @__PURE__ */ Symbol("ZodInput");
@@ -52743,7 +52743,7 @@ function registry() {
 }
 (_a2 = globalThis).__zod_globalRegistry ?? (_a2.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/compile.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/compile.js
 var INVALID = Symbol.for("zod.compile.invalid");
 var FALLBACK_FLAG = Symbol.for("zod.compile.fallback");
 
@@ -54341,7 +54341,7 @@ function generateTransformCheck(doc, ctx, schema, accessor) {
   }
   return accessor;
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/api.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/api.js
 function snapshotChecks(def) {
   if (def.checks)
     def.checks = [...def.checks];
@@ -55278,7 +55278,7 @@ function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
   const inst = new Class2(def);
   return inst;
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/to-json-schema.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/to-json-schema.js
 function assignProps(target, ...sources) {
   for (const source of sources) {
     for (const key of Reflect.ownKeys(source)) {
@@ -55801,7 +55801,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   extractDefs(ctx, schema);
   return finalize(ctx, schema);
 };
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema-processors.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema-processors.js
 var narrowMin = (agg, key, value) => {
   if (agg[key] === undefined || value > agg[key])
     agg[key] = value;
@@ -56544,7 +56544,7 @@ function toJSONSchema(input, params) {
   extractDefs(ctx, input);
   return finalize(ctx, input);
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema-generator.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema-generator.js
 class JSONSchemaGenerator {
   get metadataRegistry() {
     return this.ctx.metadataRegistry;
@@ -56605,9 +56605,9 @@ class JSONSchemaGenerator {
     return plainResult;
   }
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/json-schema.js
 var exports_json_schema = {};
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
 var exports_schemas2 = {};
 __export(exports_schemas2, {
   ZodAny: () => ZodAny,
@@ -56788,7 +56788,7 @@ __export(exports_schemas2, {
   xor: () => xor
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/checks.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/checks.js
 var exports_checks2 = {};
 __export(exports_checks2, {
   endsWith: () => _endsWith,
@@ -56823,7 +56823,7 @@ __export(exports_checks2, {
   uppercase: () => _uppercase
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/errors.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]);
 function _lazyMethod(proto, key, make) {
   Object.defineProperty(proto, key, {
@@ -56869,7 +56869,7 @@ var ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, undefi
   Parent: Error
 });
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/parse.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/parse.js
 var parse4 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -56883,7 +56883,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
 function _ensureDefaultLocale() {
   if (!globalConfig.localeError)
     config(en_default());
@@ -58325,7 +58325,7 @@ function preprocess2(fn, schema) {
     out: schema
   });
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/compat.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -58349,7 +58349,7 @@ function getErrorMap() {
 }
 var ZodFirstPartyTypeKind;
 (function(ZodFirstPartyTypeKind2) {})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/iso.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   ZodISODate: () => ZodISODate,
@@ -58374,7 +58374,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/from-json-schema.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...exports_schemas2,
   ...exports_checks2,
@@ -59094,7 +59094,7 @@ function fromJSONSchema(schema, params) {
   };
   return convertSchema(normalized, ctx);
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/visit.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/core/visit.js
 var RESOLVING = Symbol("z.visit/resolving");
 function visit(schema, fnOrHandlers) {
   const fn = typeof fnOrHandlers === "function" ? fnOrHandlers : (node3, rewritten) => {
@@ -59246,7 +59246,7 @@ function visit(schema, fnOrHandlers) {
   return run(schema);
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/deep-partial.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/deep-partial.js
 function deepPartial(schema) {
   return visit(schema, {
     object: (s) => s.partial(),
@@ -59256,7 +59256,7 @@ function deepPartial(schema) {
     }
   });
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/in-out.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/in-out.js
 function withChecks(side, checks2) {
   if (!checks2?.length)
     return side;
@@ -59282,7 +59282,7 @@ function output(schema) {
     prefault: (s, rewritten) => rewritten ? s._zod.def.innerType : s
   });
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/coerce.js
+// ../../node_modules/.bun/zod@4.6.5/node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
 __export(exports_coerce, {
   bigint: () => bigint3,
@@ -59306,7 +59306,7 @@ function bigint3(params) {
 function date4(params) {
   return _coercedDate(ZodDate, params);
 }
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+core@2.1.0/node_modules/@modelcontextprotocol/core/dist/auth-CGP0BDVq.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+core@2.1.0/node_modules/@modelcontextprotocol/core/dist/auth-CGP0BDVq.mjs
 var LATEST_PROTOCOL_VERSION = "2025-11-25";
 var SUPPORTED_PROTOCOL_VERSIONS = [
   LATEST_PROTOCOL_VERSION,
@@ -60248,7 +60248,7 @@ var OAuthTokenRevocationRequestSchema = object({
   token_type_hint: string5().optional()
 }).strip();
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/src-D-y6h4N7.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/src-D-y6h4N7.mjs
 var BRANDS = Symbol.for("mcp.sdk.errorBrands");
 function stampErrorBrands(instance, ctor) {
   const brands = /* @__PURE__ */ new Set;
@@ -64873,7 +64873,7 @@ function normalizeRawShapeSchema(schema) {
   return schema;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/ajvProvider-CEoC__sr.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/ajvProvider-CEoC__sr.mjs
 var require_code$1 = /* @__PURE__ */ __commonJSMin((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = undefined;
@@ -72447,10 +72447,10 @@ var AjvJsonSchemaValidator = class {
 };
 var Ajv = import_ajv.Ajv;
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/shimsNode.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/shimsNode.mjs
 import process2 from "node:process";
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/mcp-Dw2OlZ1f.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/mcp-Dw2OlZ1f.mjs
 var COMPLETABLE_SYMBOL = Symbol.for("mcp.completable");
 function isCompletable(schema) {
   return !!schema && typeof schema === "object" && COMPLETABLE_SYMBOL in schema;
@@ -73860,7 +73860,7 @@ function unwrapOptionalSchema(schema) {
   return schema.def?.innerType ?? schema;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/stdio.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/stdio.mjs
 var swallowsErrorsAfterClose = Symbol("swallowsErrorsAfterClose");
 var StdioServerTransport = class {
   _readBuffer;
@@ -74391,10 +74391,10 @@ function toError(value) {
   return value instanceof Error ? value : new Error(String(value));
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/index.mjs
+// ../../node_modules/.bun/@modelcontextprotocol+server@2.1.0/node_modules/@modelcontextprotocol/server/dist/index.mjs
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/commands/dist/index.js
+// ../commands/dist/index.js
 import http from "node:http";
 import { existsSync as existsSync17 } from "node:fs";
 import path2 from "node:path";
@@ -74462,7 +74462,7 @@ import path24 from "node:path";
 import fs12 from "node:fs";
 import path25 from "node:path";
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/engine/dist/audit.js
+// ../engine/dist/audit.js
 import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
 import { AsyncLocalStorage as AsyncLocalStorage22 } from "node:async_hooks";
 import { createRequire as createRequire3 } from "node:module";
@@ -75044,7 +75044,7 @@ function redactSecrets2(text7, filePath) {
   return { text: out, findings: sorted };
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/commands/dist/index.js
+// ../commands/dist/index.js
 var MAX_DASHBOARD_SEARCH_LENGTH = 200;
 var DASHBOARD_API_VIEWS = {
   "/api/issues": "issues",
@@ -82095,7 +82095,7 @@ async function executeCommand(id3, input2, context) {
   }
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/mcp/src/effects.ts
+// ../mcp/src/effects.ts
 import { AsyncLocalStorage as AsyncLocalStorage6 } from "node:async_hooks";
 import { spawn as nodeSpawn } from "node:child_process";
 import { createHash as createHash22, randomUUID as randomUUID11 } from "node:crypto";
@@ -82609,7 +82609,7 @@ function spawnBounded(request, allowTruncation = false, maxStreamBytes = MAX_STR
   });
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/mcp/src/outcome.ts
+// ../mcp/src/outcome.ts
 function validateCommandOutcome(definition3, envelope2) {
   const result = envelope2 !== null && typeof envelope2 === "object" ? envelope2 : null;
   if (result === null || result.command !== definition3.id) {
@@ -82629,7 +82629,7 @@ function validateCommandOutcome(definition3, envelope2) {
   return failure9.data;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/mcp/src/register.ts
+// ../mcp/src/register.ts
 function mcpToolName(commandId) {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
 }
@@ -82696,7 +82696,7 @@ function registerMcpCommands(server, definitions2, resolveContext, services = []
   }
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/mcp/src/server.ts
+// ../mcp/src/server.ts
 function createMcpServer(resolveContext, definitions2 = getCommandDefinitions()) {
   const server = new McpServer({ name: "mstar-harness", version: "3.11.2" });
   const services = [];
@@ -82726,7 +82726,7 @@ function createMcpServer(resolveContext, definitions2 = getCommandDefinitions())
   return server;
 }
 
-// ../../../../../../Users/bibi/workspace/ai/mstar-harness/.worktrees/20260926-mcp-ci-fix/packages/mcp/src/stdio.ts
+// ../mcp/src/stdio.ts
 var resolveContext = (_definition, _input, signal, _services, effects) => ({
   cwd: process.cwd(),
   controlRoot: resolveProcessHarnessDir(process.cwd()),
