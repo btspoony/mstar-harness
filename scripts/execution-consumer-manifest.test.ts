@@ -175,6 +175,22 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/cli/scripts/build-web.ts", "export const web = 1;\n");
   write(root, "packages/cli/dist/mstar-harness.js", "// cli bundle\n");
 
+  packageJson(root, "packages/mcp", { bun: ">=1.4.0", node: ">=24.18.0" });
+  write(root, "packages/mcp/tsconfig.json", '{ "include": ["src", "scripts"] }\n');
+  write(root, "packages/mcp/src/stdio.ts", "export const stdio = 1;\n");
+  write(root, "packages/mcp/src/build-info.ts", "export const buildInfo = 1;\n");
+  write(root, "packages/mcp/scripts/package-smoke.ts", "export const smoke = 1;\n");
+  write(root, "scripts/build-mcp-plugins.ts", "export const builder = 1;\n");
+  write(root, "packages/mcp/dist/stdio.js", "// MCP server bundle\n");
+  for (const target of ["cursor", "codex", "kimi", "zcode"]) {
+    write(root, `packages/mcp/dist/plugins/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
+    write(root, `packages/mcp/dist/plugins/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
+  }
+  for (const target of ["omp", "opencode", "dsh"]) {
+    write(root, `packages/${target}/mcp/stdio.js`, `// ${target} server bundle\n`);
+    write(root, `packages/${target}/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
+  }
+
   packageJson(root, "packages/dsh", { bun: ">=1.4.0" });
   write(root, "packages/dsh/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/dsh/src/index.ts", "export const dsh = 1;\n");
@@ -300,6 +316,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "cli",
       "dsh",
       "engine",
+      "mcp",
       "omp",
       "opencode",
       "zcode",

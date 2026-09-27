@@ -14,6 +14,7 @@
  *   2026-09-03). The `hooks/` + `tools/` root mirrors are produced by the
  *   `build` script from the `dist/` bundles.
  */
+import { buildMcpPlugin } from "../../../scripts/build-mcp-plugins.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +54,7 @@ if (!fs.existsSync(sourcePluginManifest)) {
   process.exit(1);
 }
 fs.copyFileSync(sourcePluginManifest, path.join(packageRoot, "plugin.json"));
+await buildMcpPlugin("omp");
 
 console.log(
   `bundle-harness-assets: synced skills/commands/agents -> harness-* + root mirrors, assets -> assets, plugin.json`,
