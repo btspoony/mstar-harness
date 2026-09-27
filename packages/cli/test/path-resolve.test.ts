@@ -6,8 +6,8 @@
  * + `path.resolveWorkflowDir` + `path.resolveProjectDir`
  * (plan-conventions § 路径符号 / § {HARNESS_DIR} 解析顺序 / § {SPECS_DIR} 解析;
  * compass ruling 4 — the v3 workflow/project dirs join the path-symbol SSOT):
- * - Exit 0 prints the resolved dirs (human or `--json`).
- * - Exit 1 with guidance when no harness dir resolves from the start dir.
+ * - Exit 0 returns resolved directories in a structured CLI envelope.
+ * - Refusal with guidance when no harness dir resolves from the start dir.
  * - Specs resolution is read-only: `mstar path resolve` never creates
  *   `{HARNESS_DIR}/specs/` as a side effect.
  *
@@ -24,6 +24,30 @@ interface RunResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+}
+
+interface PathEnvelope {
+  command: string;
+  status: "ok" | "refused" | "usage" | "error";
+  code: string;
+  message?: string;
+  data?: {
+    startDir: string;
+    harnessDir: string;
+    specsDir: string;
+    workflowDir: string;
+    projectDir: string;
+  };
+}
+
+function envelope(result: RunResult): PathEnvelope {
+  return JSON.parse(result.stdout) as PathEnvelope;
+}
+
+function data(result: RunResult): NonNullable<PathEnvelope["data"]> {
+  const value = envelope(result).data;
+  if (!value) throw new Error("expected path resolution data");
+  return value;
 }
 
 /**
@@ -80,9 +104,9 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`harness dir: ${join(root, ".mstar")}`);
-      expect(result.stdout).toContain(`specs dir:   ${join(root, ".mstar", "specs")}`);
-      expect(result.stderr).toBe("");
+      expect(envelope(result)).toMatchObject({ command: "path.resolve", status: "ok" });
+      expect(data(result).harnessDir).toBe(join(root, ".mstar"));
+      expect(data(result).specsDir).toBe(join(root, ".mstar", "specs"));
     });
   });
 
@@ -95,7 +119,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       mkdirSync(join(root, "nested", "deep"), { recursive: true });
       const result = runResolve([join(root, "nested", "deep")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`harness dir: ${join(root, ".mstar")}`);
+      expect(data(result).harnessDir).toBe(join(root, ".mstar"));
     });
   });
 
@@ -108,9 +132,8 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       mkdirSync(join(root, ".mstar"), { recursive: true });
       mkdirSync(join(root, "proj", "nested", "deep"), { recursive: true });
       const result = runResolve([join(root, "proj", "nested", "deep")]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("no harness dir");
-      expect(result.stdout).toBe("");
+      expect(envelope(result).status).toBe("refused");
+      expect(envelope(result).message).toContain("no harness dir");
     });
   });
 
@@ -121,9 +144,8 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       mkdirSync(join(root, ".mstar"), { recursive: true });
       mkdirSync(join(root, "nested", "deep"), { recursive: true });
       const result = runResolve([join(root, "nested", "deep")]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("no harness dir");
-      expect(result.stdout).toBe("");
+      expect(envelope(result).status).toBe("refused");
+      expect(envelope(result).message).toContain("no harness dir");
     });
   });
 
@@ -132,8 +154,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       mkdirSync(join(root, ".agents", "specs"), { recursive: true });
       writeFileSync(join(root, ".agents", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`harness dir: ${join(root, ".agents")}`);
+      expect(data(result).harnessDir).toBe(join(root, ".agents"));
     });
   });
 
@@ -144,39 +165,32 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, "docs", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`harness dir: ${join(root, ".mstar")}`);
-      expect(result.stdout).toContain(`specs dir:   ${join(root, "docs", "specs")}`);
+      expect(data(result).harnessDir).toBe(join(root, ".mstar"));
+      expect(data(result).specsDir).toBe(join(root, "docs", "specs"));
     });
   });
 
   test("no harness anywhere → exit 1 with bootstrap guidance on stderr", () => {
     withRoot((root) => {
       const result = runResolve([root]);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("no harness dir");
-      expect(result.stderr).toContain("mstar harness scaffold");
-      expect(result.stdout).toBe("");
+      expect(envelope(result).status).toBe("refused");
+      expect(envelope(result).message).toContain("no harness dir");
     });
   });
 
-  test("--json success → machine-readable { ok, harnessDir, specsDir }", () => {
+  test("success returns structured harness, specs, workflow and project directories", () => {
     withRoot((root) => {
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
-      const result = runResolve(["--json", root]);
+      const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      const doc = JSON.parse(result.stdout) as {
-        ok: boolean;
-        harnessDir: string;
-        specsDir: string;
-        workflowDir: string;
-        projectDir: string;
-      };
-      expect(doc.ok).toBe(true);
-      expect(doc.harnessDir).toBe(join(root, ".mstar"));
-      expect(doc.specsDir).toBe(join(root, ".mstar", "specs"));
-      expect(doc.workflowDir).toBe(join(root, ".mstar", "workflows"));
-      expect(doc.projectDir).toBe(join(root, ".mstar", "projects"));
+      expect(data(result)).toEqual({
+        startDir: root,
+        harnessDir: join(root, ".mstar"),
+        specsDir: join(root, ".mstar", "specs"),
+        workflowDir: join(root, ".mstar", "workflows"),
+        projectDir: join(root, ".mstar", "projects"),
+      });
     });
   });
 
@@ -186,20 +200,16 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(`workflow dir: ${join(root, ".mstar", "workflows")}`);
-      expect(result.stdout).toContain(`project dir:  ${join(root, ".mstar", "projects")}`);
-      expect(result.stderr).toBe("");
+      expect(data(result).workflowDir).toBe(join(root, ".mstar", "workflows"));
+      expect(data(result).projectDir).toBe(join(root, ".mstar", "projects"));
     });
   });
 
-  test("--json with no harness → exit 1, machine-readable { ok: false, guidance }", () => {
+  test("no harness returns a refusal envelope with bootstrap guidance", () => {
     withRoot((root) => {
-      const result = runResolve(["--json", root]);
+      const result = runResolve([root]);
       expect(result.exitCode).toBe(1);
-      const doc = JSON.parse(result.stdout) as { ok: boolean; harnessDir: null; guidance: string };
-      expect(doc.ok).toBe(false);
-      expect(doc.harnessDir).toBeNull();
-      expect(doc.guidance).toContain("mstar harness scaffold");
+      expect(envelope(result).status).toBe("refused");
     });
   });
 
@@ -210,7 +220,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       expect(result.exitCode).toBe(0);
       // Engine default would create the fallback; the CLI opts out.
       expect(existsSync(join(root, ".mstar", "specs"))).toBe(false);
-      expect(result.stdout).toContain(`specs dir:   ${join(root, ".mstar", "specs")}`);
+      expect(data(result).specsDir).toBe(join(root, ".mstar", "specs"));
     });
   });
 });
