@@ -78,8 +78,9 @@ interface CliEnvelope {
   exitCode: number;
   message?: string;
   data?: Record<string, unknown>;
-  details?: { violations?: { code: string }[] };
+  details?: { violations?: { code: string }[]; results?: LintResult[]; findings?: Finding[]; unreadableFiles?: number };
 }
+type Finding = { file?: string; line?: number; type?: string; kind?: string; code?: string };
 
 function cliEnvelope(result: RunResult, status?: string, code?: string): CliEnvelope {
   const envelope = JSON.parse(result.stdout) as CliEnvelope;
@@ -94,6 +95,23 @@ function violationCodes(result: RunResult): string[] {
   const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");
   const violations = envelope.details?.violations ?? (envelope.data?.violations as { code: string }[] | undefined);
   return violations?.map(({ code }) => code) ?? [envelope.code];
+}
+
+interface LintResult {
+  file: string;
+  violations: { code: string; message: string }[];
+  markers: string[];
+}
+
+function lintResults(result: RunResult): LintResult[] {
+  const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");
+  const results = envelope.details?.results ?? envelope.data?.results;
+  if (!Array.isArray(results)) throw new Error(`lint returned no per-file results: ${result.stdout}`);
+  return results as LintResult[];
+}
+
+function lintViolationCodes(result: RunResult): string[] {
+  return lintResults(result).flatMap(({ violations }) => violations.map(({ code }) => code));
 }
 
 /** Temp dir per test, cleaned up after. */
@@ -256,8 +274,7 @@ describe("mstar lint — content-type lints", () => {
       writeFileSync(file, "# Plan\n\n## Goal\nShip TBD module.\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.plan-quality.placeholder");
-      expect(result.stderr).toContain("FAIL");
+      expect(lintViolationCodes(result)).toContain("lint.plan-quality.placeholder");
     });
   });
 
@@ -267,8 +284,7 @@ describe("mstar lint — content-type lints", () => {
       writeFileSync(file, "# Plan\n\n## Goal\nShip the module.\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
-      expect(result.stderr).toBe("");
+      expect(lintResults(result)[0]?.violations).toEqual([]);
     });
   });
 
@@ -278,8 +294,8 @@ describe("mstar lint — content-type lints", () => {
       writeFileSync(file, "# Strategy\n\nNo sections here.\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.strategy.missing-section");
-      expect(result.stderr).toContain('"Vision"');
+      expect(lintViolationCodes(result)).toContain("lint.strategy.missing-section");
+      expect(lintResults(result)[0]?.violations.map(({ message }) => message).join("\n")).toContain('"Vision"');
     });
   });
 
@@ -302,7 +318,7 @@ describe("mstar lint — content-type lints", () => {
       );
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expect(lintResults(result)[0]?.violations).toEqual([]);
     });
   });
 
@@ -312,8 +328,7 @@ describe("mstar lint — content-type lints", () => {
       writeFileSync(file, "---\nname: My-Skill\n---\n\n# Body\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.frontmatter.name.format");
-      expect(result.stderr).toContain("lint.frontmatter.description.missing");
+      expect(lintViolationCodes(result)).toEqual(expect.arrayContaining(["lint.frontmatter.name.format", "lint.frontmatter.description.missing"]));
     });
   });
 
@@ -326,7 +341,7 @@ describe("mstar lint — content-type lints", () => {
       );
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expect(lintResults(result)[0]?.violations).toEqual([]);
     });
   });
 
@@ -336,9 +351,7 @@ describe("mstar lint — content-type lints", () => {
       writeFileSync(file, "Did the work. Output looked fine.\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.sdd-tdd.missing-tests");
-      expect(result.stderr).toContain("lint.sdd-tdd.missing-command");
-      expect(result.stderr).toContain("lint.sdd-tdd.missing-output");
+      expect(lintViolationCodes(result)).toEqual(expect.arrayContaining(["lint.sdd-tdd.missing-tests", "lint.sdd-tdd.missing-command", "lint.sdd-tdd.missing-output"]));
     });
   });
 
@@ -355,8 +368,8 @@ Check result: exit 0; changed scope line found.
 `);
         const result = runCli(["lint", file]);
         expect(result.exitCode).toBe(reason === "TBD" ? 1 : 0);
-        if (reason === "TBD") expect(result.stderr).toContain("lint.sdd-evidence.reason");
-        else expect(result.stdout).toContain("OK");
+        if (reason === "TBD") expect(lintViolationCodes(result)).toContain("lint.sdd-evidence.reason");
+        else expect(lintResults(result)[0]?.violations).toEqual([]);
       });
     });
   }
@@ -370,7 +383,7 @@ Check result: exit 0; changed scope line found.
       );
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
+      expect(lintResults(result)[0]?.violations).toEqual([]);
     });
   });
 
@@ -380,8 +393,8 @@ Check result: exit 0; changed scope line found.
       writeFileSync(file, "// temporary: hack\nconst x = 1;\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.temporary.no-removal-path");
-      expect(result.stdout).toContain("temporary marker @1");
+      expect(lintViolationCodes(result)).toContain("lint.temporary.no-removal-path");
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("temporary marker @1");
     });
   });
 
@@ -391,9 +404,9 @@ Check result: exit 0; changed scope line found.
       writeFileSync(file, "// temporary: shim — removal tracked in status.json\nconst x = 1;\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("temporary marker @1");
-      expect(result.stdout).toContain("removal: status.json");
-      expect(result.stderr).toBe("");
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("temporary marker @1");
+      expect(markers).toContain("removal: status.json");
     });
   });
 
@@ -403,8 +416,7 @@ Check result: exit 0; changed scope line found.
       writeFileSync(file, "// simplify: naive scan; upgrade: index the map\nconst y = 2;\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("simplify marker @1");
-      expect(result.stderr).toBe("");
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
     });
   });
 
@@ -414,8 +426,9 @@ Check result: exit 0; changed scope line found.
       writeFileSync(join(dir, "20260808-good-plan.md"), "# Plan\n\n## Goal\nShip it.\n");
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("20260808-good-plan.md: OK");
-      expect(result.stderr).toContain("20260808-bad-plan.md: FAIL");
+      const results = lintResults(result);
+      expect(results.find(({ file }) => file.endsWith("20260808-good-plan.md"))?.violations).toEqual([]);
+      expect(results.find(({ file }) => file.endsWith("20260808-bad-plan.md"))?.violations.map(({ code }) => code)).toContain("lint.plan-quality.placeholder");
     });
   });
 
@@ -425,7 +438,7 @@ Check result: exit 0; changed scope line found.
       writeFileSync(join(dir, "STRATEGY.md"), "# S\n\n## Vision\n## What we build\n## What we don't build\n## Guiding Principles\n## Technology Direction\n## Decision Log\n");
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(lintResults(result).every(({ violations }) => violations.length === 0)).toBe(true);
     });
   });
 
@@ -434,14 +447,14 @@ Check result: exit 0; changed scope line found.
       writeFileSync(join(dir, "notes.txt"), "plain prose\n");
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("no lintable files");
+      expect(lintResults(result)).toEqual([]);
     });
   });
 
   test("missing <target> arg → usage, exit 2", () => {
     const result = runCli(["lint"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: lint <target>");
+    expect(result.stderr).toContain("missing required argument 'target'");
   });
 
   test("existing unclassifiable file → usage, exit 2", () => {
@@ -450,7 +463,7 @@ Check result: exit 0; changed scope line found.
       writeFileSync(file, "prose\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("unsupported file type");
+      expect(cliEnvelope(result, "usage", "usage").message).toContain("unsupported file type");
     });
   });
 
@@ -458,7 +471,7 @@ Check result: exit 0; changed scope line found.
     withTempDir((dir) => {
       const result = runCli(["lint", join(dir, "nope.ts")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint target not found");
+      expect(cliEnvelope(result, "refused").message).toContain("lint target not found");
     });
   });
 });
@@ -483,11 +496,11 @@ describe("mstar lint --type provenance", () => {
       );
       const result = runCli(["lint", "--type", "provenance", file]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.provenance.plan-id");
-      expect(result.stderr).toContain("lint.provenance.harness-path");
-      expect(result.stderr).toContain("line 3");
-      expect(result.stderr).toContain("line 4");
-      expect(result.stderr).toContain("20991231-sample-plan");
+      const violations = lintResults(result)[0]?.violations ?? [];
+      expect(violations.map(({ code }) => code)).toEqual(expect.arrayContaining(["lint.provenance.plan-id", "lint.provenance.harness-path"]));
+      expect(violations.map(({ message }) => message).join("\n")).toContain("line 3");
+      expect(violations.map(({ message }) => message).join("\n")).toContain("line 4");
+      expect(violations.map(({ message }) => message).join("\n")).toContain("20991231-sample-plan");
     });
   });
 
@@ -505,8 +518,7 @@ describe("mstar lint --type provenance", () => {
       );
       const result = runCli(["lint", "--type", "provenance", file]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("OK");
-      expect(result.stderr).toBe("");
+      expect(lintResults(result)[0]?.violations).toEqual([]);
     });
   });
 
@@ -516,9 +528,9 @@ describe("mstar lint --type provenance", () => {
       writeFileSync(join(dir, "20991231-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
       const result = runCli(["lint", "--type", "provenance", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("20991231-real-plan.md: FAIL");
-      expect(result.stderr).toContain("lint.provenance.plan-id");
-      expect(result.stdout).toContain("20991231-clean-plan.md: OK");
+      const results = lintResults(result);
+      expect(results.find(({ file }) => file.endsWith("20991231-real-plan.md"))?.violations.map(({ code }) => code)).toContain("lint.provenance.plan-id");
+      expect(results.find(({ file }) => file.endsWith("20991231-clean-plan.md"))?.violations).toEqual([]);
     });
   });
 
@@ -532,11 +544,10 @@ describe("mstar lint --type provenance", () => {
       writeFileSync(join(dir, "notes.txt"), "tracked in plan 20991231-sample-plan\n");
       const result = runCli(["lint", "--type", "provenance", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("README.md: FAIL");
-      expect(result.stderr).toContain("lint.provenance.plan-id");
-      expect(result.stdout).toContain("notes.md: OK");
-      expect(result.stdout).not.toContain("notes.txt");
-      expect(result.stderr).not.toContain("notes.txt");
+      const results = lintResults(result);
+      expect(results.find(({ file }) => file.endsWith("README.md"))?.violations.map(({ code }) => code)).toContain("lint.provenance.plan-id");
+      expect(results.find(({ file }) => file.endsWith("notes.md"))?.violations).toEqual([]);
+      expect(results.some(({ file }) => file.endsWith("notes.txt"))).toBe(false);
     });
   });
 
@@ -546,15 +557,14 @@ describe("mstar lint --type provenance", () => {
       writeFileSync(file, "prose\n");
       const result = runCli(["lint", "--type", "nope", file]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage");
-      expect(result.stderr).toContain("provenance");
+      expect(cliEnvelope(result, "usage", "usage").message).toContain("provenance");
     });
   });
 
   test("--type provenance without a target → usage, exit 2", () => {
     const result = runCli(["lint", "--type", "provenance"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: lint <target>");
+    expect(result.stderr).toContain("missing required argument 'target'");
   });
 });
 
@@ -568,8 +578,9 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
       writeFileSync(join(dir, "DESIGN.md"), DESIGN_LEVEL1);
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("design-md validate (tokens): OK");
-      expect(result.stdout).toContain("design-md completeness level: MVP");
+      const envelope = cliEnvelope(result, "ok", "design-md.validate.ok");
+      expect(envelope.data?.ok).toBe(true);
+      expect(envelope.data?.completeness).toMatchObject({ level: "MVP" });
     });
   });
 
@@ -578,7 +589,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
       writeFileSync(join(dir, "DESIGN.md"), DESIGN_LEVEL1.replace('"#ffffff"', '"not-a-color"'));
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("design-md.tokens.color-format");
+      expect(violationCodes(result)).toContain("design-md.tokens.color-format");
     });
   });
 
@@ -592,7 +603,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
       );
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("design-md.parity.missing-dark");
+      expect(violationCodes(result)).toContain("design-md.parity.missing-dark");
     });
   });
 
@@ -600,14 +611,14 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
     withTempDir((dir) => {
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("design file not found");
+      expect(cliEnvelope(result, "refused").message).toContain("design file not found");
     });
   });
 
   test("missing <dir> arg → usage, exit 2", () => {
     const result = runCli(["design-md", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: design-md validate <dir>");
+    expect(result.stderr).toContain("missing required argument 'dir'");
   });
 });
 
@@ -628,9 +639,11 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       const outDir = join(dir, "audit-2026-08-08");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("audit scaffold: OK");
-      expect(result.stdout).toContain("created: 001-fix-n-1-query.md");
-      expect(result.stdout).toContain("created: 002-add-index.md");
+      expect(cliEnvelope(result, "ok", "audit.scaffold.ok").data).toMatchObject({
+        outDir,
+        files: ["001-fix-n-1-query.md", "002-add-index.md"],
+        nextNumber: 3,
+      });
       expect(existsSync(join(outDir, "001-fix-n-1-query.md"))).toBe(true);
       expect(existsSync(join(outDir, "002-add-index.md"))).toBe(true);
       expect(existsSync(join(outDir, "README.md"))).toBe(true);
@@ -838,7 +851,7 @@ Index the audit table.
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", dependsOn: "plan-002.md", description: "d" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("dependsOn must be");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("dependsOn must be");
     });
   });
 
@@ -848,7 +861,7 @@ Index the audit table.
       writeFileSync(findingsFile, "not json");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("not valid JSON");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("not valid JSON");
     });
   });
 
@@ -858,7 +871,7 @@ Index the audit table.
       writeFileSync(findingsFile, "null");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("must be a JSON array or an object with a findings array");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("must be an array or an object with a findings array");
     });
   });
 
@@ -868,7 +881,7 @@ Index the audit table.
       writeFileSync(findingsFile, "{}");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("must be a JSON array or an object with a findings array");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("must be an array or an object with a findings array");
     });
   });
 
@@ -878,7 +891,7 @@ Index the audit table.
       writeFileSync(findingsFile, JSON.stringify({ findings: null }));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("must be a JSON array or an object with a findings array");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("must be an array or an object with a findings array");
     });
   });
 
@@ -920,7 +933,7 @@ Index the audit table.
       );
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("kind must be one of Hardening|Checked and clean");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("kind must be Hardening|Checked and clean");
     });
   });
 
@@ -930,7 +943,7 @@ Index the audit table.
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P9", effort: "M", risk: "LOW", category: "perf", description: "d" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("priority must be one of P1|P2|P3");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("priority must be one of P1|P2|P3");
     });
   });
 
@@ -940,21 +953,21 @@ Index the audit table.
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("non-empty title and description");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("needs non-empty title and description");
     });
   });
 
   test("missing args → usage, exit 2", () => {
     const result = runCli(["audit", "scaffold"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: audit scaffold <findings-file>");
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("findings");
   });
 
   test("nonexistent findings file → exit 1", () => {
     withTempDir((dir) => {
       const result = runCli(["audit", "scaffold", join(dir, "nope.json"), "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("findings file not found");
+      expect(cliEnvelope(result, "refused", "audit.scaffold.refused").message).toContain("findings file not found");
     });
   });
 
@@ -1045,8 +1058,9 @@ Index the audit table.
       );
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("audit.finding.fingerprint.order");
-      expect(result.stderr).toContain("findings[1].fingerprint");
+      const envelope = cliEnvelope(result, "usage", "command.invalid-input");
+      expect(envelope.message).toContain("audit.finding.fingerprint.order");
+      expect(envelope.message).toContain("findings[1].fingerprint");
       expect(existsSync(join(dir, "out"))).toBe(false); // zero new files on rejection
     });
     withTempDir((dir) => {
@@ -1057,8 +1071,9 @@ Index the audit table.
       );
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("audit.finding.path.unsafe");
-      expect(result.stderr).not.toContain("../escape.ts");
+      const envelope = cliEnvelope(result, "usage", "command.invalid-input");
+      expect(envelope.message).toContain("audit.finding.path.unsafe");
+      expect(envelope.message).not.toContain("../escape.ts");
     });
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
@@ -1069,9 +1084,10 @@ Index the audit table.
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
       // grammar-valid but credential-shaped: the secret rule fires (not grammar)
-      expect(result.stderr).toContain("audit.finding.fingerprint.secret");
-      expect(result.stderr).not.toContain("audit.finding.fingerprint.grammar");
-      expect(result.stderr).not.toContain("AKIAIOSFODNN7");
+      const envelope = cliEnvelope(result, "usage", "command.invalid-input");
+      expect(envelope.message).toContain("audit.finding.fingerprint.secret");
+      expect(envelope.message).not.toContain("audit.finding.fingerprint.grammar");
+      expect(envelope.message).not.toContain("AKIAIOSFODNN7");
     });
   });
 
@@ -1117,19 +1133,13 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       expect(result.exitCode).toBe(1);
       // 3 hits: the whole-match AWS shape + the VALUE_PATTERNS `token` row on
       // the same line, plus the never-commit `.env.production` filename.
-      expect(result.stderr).toContain("secret-scan: 3 findings");
-      // Finding shape: {file, line, type} only — Hard Rule 4, never a value.
-      const aws = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("aws-access-key"));
-      expect(aws).toBeDefined();
-      expect(JSON.parse(aws!)).toEqual({ file: join(dir, "sub", "config.ts"), line: 1, type: "aws-access-key" });
-      const envHit = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("env-file"));
-      expect(envHit).toBeDefined();
-      expect(JSON.parse(envHit!).line).toBe(1);
-      for (const line of result.stdout.split("\n").filter((l) => l.startsWith("{"))) {
-        expect(JSON.parse(line).file).toBeDefined();
-        expect(JSON.parse(line).line).toBeGreaterThan(0);
-        expect(JSON.parse(line).type).toBeDefined();
-      }
+      const findings = cliEnvelope(result, "refused", "audit.secret-scan.findings").details?.findings ?? [];
+      expect(findings).toHaveLength(3);
+      const aws = findings.find(({ type }) => type === "aws-access-key");
+      expect(aws).toEqual({ file: join(dir, "sub", "config.ts"), line: 1, type: "aws-access-key" });
+      const envHit = findings.find(({ type }) => type === "env-file");
+      expect(envHit?.line).toBe(1);
+      expect(findings.every(({ file, line, type }) => Boolean(file) && Number(line) > 0 && Boolean(type))).toBe(true);
       // Hard Rule 4 at the shipped boundary: the seeded raw values must be
       // absent from BOTH output streams.
       expect(result.stdout + result.stderr).not.toContain(awsKey);
@@ -1144,8 +1154,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       execFileSync("git", ["add", "-A"], { cwd: dir });
       const result = runCli(["audit", "secret-scan", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("secret-scan: clean");
-      expect(result.stdout).not.toContain("{\"file\"");
+      expect(cliEnvelope(result, "ok", "audit.secret-scan.ok").data).toMatchObject({ findings: [], unreadableFiles: 0, filesScanned: 1 });
     });
   });
 
@@ -1157,15 +1166,15 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       // NOT staged → not tracked → not scanned
       const result = runCli(["audit", "secret-scan", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("clean");
+      expect(cliEnvelope(result, "ok", "audit.secret-scan.ok").data).toMatchObject({ findings: [], unreadableFiles: 0, filesScanned: 0 });
       execFileSync("git", ["add", "leak.ts"], { cwd: dir });
       const tracked = runCli(["audit", "secret-scan", dir]);
       expect(tracked.exitCode).toBe(1);
-      expect(tracked.stdout).toContain('"type":"token"');
+      expect(cliEnvelope(tracked, "refused", "audit.secret-scan.findings").details?.findings?.map(({ type }) => type)).toContain("token");
       expect(tracked.stdout + tracked.stderr).not.toContain(token);
       const bad = runCli(["audit", "secret-scan", join(dir, "no-such-dir")]);
       expect(bad.exitCode).toBe(2);
-      expect(bad.stderr).toContain("not a directory");
+      expect(cliEnvelope(bad, "usage", "command.invalid-input").message).toContain("not a directory");
     });
   });
 
@@ -1183,9 +1192,8 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       execFileSync("git", ["add", "-A"], { cwd: dir });
       const result = runCli(["audit", "secret-scan", pkg]);
       expect(result.exitCode).toBe(1);
-      const stripe = result.stdout.split("\n").find((l) => l.startsWith("{") && l.includes("stripe-live-key"));
-      expect(stripe).toBeDefined();
-      expect(JSON.parse(stripe!)).toEqual({ file: join(pkg, "leak.ts"), line: 1, type: "stripe-live-key" });
+      const findings = cliEnvelope(result, "refused", "audit.secret-scan.findings").details?.findings ?? [];
+      expect(findings.find(({ type }) => type === "stripe-live-key")).toEqual({ file: join(pkg, "leak.ts"), line: 1, type: "stripe-live-key" });
     });
   });
 
@@ -1194,7 +1202,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       writeFileSync(join(dir, "main.ts"), `const ok = 1;\n`);
       const result = runCli(["audit", "secret-scan", dir]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("not a git repository or git unavailable");
+      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("not a git repository or git unavailable");
     });
   });
 
@@ -1208,8 +1216,9 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
       try {
         const result = runCli(["audit", "secret-scan", dir]);
         expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("failed to read");
-        expect(result.stderr).toContain("1 tracked file");
+        const envelope = cliEnvelope(result, "refused", "audit.secret-scan.incomplete");
+        expect(envelope.message).toContain("failed to read");
+        expect(envelope.details?.unreadableFiles).toBe(1);
       } finally {
         chmodSync(locked, 0o644);
       }
@@ -1222,8 +1231,8 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
     withTempDir((dir) => {
       const result = runCli(["audit", "supply-chain", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("audit.supply.lockfile-missing");
-      expect(result.stdout).toContain('"kind":"lockfile-missing"');
+      const findings = cliEnvelope(result, "refused", "audit.supply-chain.findings").details?.findings ?? [];
+      expect(findings.map(({ kind }) => kind)).toContain("lockfile-missing");
     });
   });
 
@@ -1232,7 +1241,7 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
       for (const name of ["package-lock.json", "yarn.lock"]) writeFileSync(join(dir, name), "{}\n");
       const result = runCli(["audit", "supply-chain", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain('"kind":"lockfile-duplicate"');
+      expect(cliEnvelope(result, "refused", "audit.supply-chain.findings").details?.findings?.map(({ kind }) => kind)).toContain("lockfile-duplicate");
     });
   });
 
@@ -1247,9 +1256,7 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
       );
       const result = runCli(["audit", "supply-chain", dir]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("supply-chain: OK");
-      expect(result.stdout).toContain("supply-chain: OK");
-      expect(result.stdout).not.toContain('{"kind"');
+      expect(cliEnvelope(result, "ok", "audit.supply-chain.ok").data).toMatchObject({ ok: true, violations: [], findings: [] });
     });
   });
 });
@@ -1310,13 +1317,12 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("audit promote: OK");
-      expect(result.stdout).toContain("workflow audit-2026-08-08");
+      const promoted = cliEnvelope(result, "ok", "audit.promote.ok");
+      expect(promoted.data?.workflowId).toBe("audit-2026-08-08");
 
       // snapshot has exactly the selected plan as a Todo row
       const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
       expect(existsSync(snapshotPath)).toBe(true);
-      expect(result.stdout).toContain(snapshotPath);
       const snapshot = readJson(snapshotPath);
       expect(snapshot.type).toBe("plan");
       expect(snapshot.status).toBe("running");
@@ -1340,7 +1346,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
     });
   });
 
-  test("missing <audit-dir> or --plans → usage, exit 2", () => {
+  test("missing <audit-dir> or --plans → argument error", () => {
     const noDir = runCli(["audit", "promote",
         "--delivery-kind",
         "development",
@@ -1350,9 +1356,14 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
     expect(noDir.exitCode).toBe(2);
-    expect(noDir.stderr).toContain("usage: audit promote <audit-dir> --plans <ids>");
+    expect(cliEnvelope(noDir, "usage", "command.invalid-input").message).toContain("audit-dir");
 
-    const noPlans = runCli(["audit", "promote", "audit-2026-08-08",
+    withTempDir((dir) => {
+      const { outDir } = scaffoldFixture(dir);
+      const noPlans = runCli([
+        "audit",
+        "promote",
+        outDir,
         "--delivery-kind",
         "development",
         "--branch-source",
@@ -1360,8 +1371,9 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "--branch-target",
         "main",
       ]);
-    expect(noPlans.exitCode).toBe(2);
-    expect(noPlans.stderr).toContain("usage: audit promote <audit-dir> --plans <ids>");
+      expect(noPlans.exitCode).toBe(2);
+      expect(cliEnvelope(noPlans, "usage", "command.invalid-input").message).toContain("plans");
+    });
   });
 
   test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", () => {
@@ -1376,7 +1388,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ], { cwd: dir });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("pass --harness or set MSTAR_HARNESS_DIR");
+      expect(cliEnvelope(result, "refused").message).toContain("harness");
     });
   });
 
@@ -1401,7 +1413,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("workflow audit-2026-08-08-custom");
+      expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08-custom");
       expect(
         existsSync(join(harnessDir, "workflows", "audit-2026-08-08-custom", "snapshot.json")),
       ).toBe(true);
@@ -1438,8 +1450,8 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(second.exitCode).toBe(1);
-      expect(second.stderr).toContain("catalog.registration-conflict");
-      expect(second.stderr).toContain(snapshotPath);
+      const refusal = cliEnvelope(second, "refused", "catalog.registration-conflict");
+      expect(refusal.message).toContain(snapshotPath);
 
       // First rows intact.
       const after = readJson(snapshotPath);
@@ -1462,7 +1474,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const result = runCli(["compound", "validate", doc]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("compound validate (schema): OK");
+      expect(cliEnvelope(result, "ok", "compound.validate.ok").data?.ok).toBe(true);
     });
   });
 
@@ -1472,7 +1484,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, "---\ndate: 2026-08-08\n---\n");
       const result = runCli(["compound", "validate", doc]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("compound.schema.missing-field");
+      expect(violationCodes(result)).toContain("compound.schema.missing-field");
     });
   });
 
@@ -1487,7 +1499,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       // The README index is retired in authority (state-projection contract
       // §4, P4 adjudication): compound.index.missing-readme is superseded by
       // the actionable retired-reader refusal.
-      expect(result.stderr).toContain("compound.index.retired");
+      expect(cliEnvelope(result, "refused", "compound.index.retired").message).toContain("no longer a register");
     });
   });
 
@@ -1500,7 +1512,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n");
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("compound.scope.outside");
+      expect(violationCodes(result)).toContain("compound.scope.outside");
     });
   });
 
@@ -1512,27 +1524,25 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
-      // A README index row no longer satisfies the index gate (state-projection
-      // contract §4): the retired reader refuses with exit 1 even when the row
-      // exists. The schema + scope gates still evaluate on the doc.
+      // The retired README reader refuses even when the row exists. The
+      // separate outside-scope case above keeps the scope guard covered.
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("compound.index.retired");
-      expect(result.stdout).toContain("compound validate (schema): OK");
-      expect(result.stdout).toContain("compound validate (scope guard): OK");
+      const envelope = cliEnvelope(result, "refused", "compound.index.retired");
+      expect(envelope.details?.violations?.map(({ code }) => code) ?? [envelope.code]).toEqual(["compound.index.retired"]);
     });
   });
 
   test("missing <doc-path> arg → usage, exit 2", () => {
     const result = runCli(["compound", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: compound validate <doc-path>");
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("docPath");
   });
 
   test("nonexistent doc → exit 1", () => {
     withTempDir((dir) => {
       const result = runCli(["compound", "validate", join(dir, "nope.md")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("knowledge doc not found");
+      expect(cliEnvelope(result, "refused").message).toContain("not found");
     });
   });
 });
@@ -1589,9 +1599,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_GOOD);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (frontmatter): OK");
-      expect(result.stdout).toContain("skill lint (five questions): OK");
-      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
     });
   });
 
@@ -1604,8 +1612,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       );
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("skill-authoring.five-question.load-order");
-      expect(result.stderr).toContain("skill-authoring.five-question.evidence");
+      expect(violationCodes(result)).toEqual(expect.arrayContaining(["skill-authoring.five-question.load-order", "skill-authoring.five-question.evidence"]));
     });
   });
 
@@ -1615,7 +1622,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       writeFileSync(join(dir, "skill", "SKILL.md"), "---\nname: Bad-Name\n---\n\n## Load Order\n## Workflow\n## Decision Rules\n## Evidence\n## References\n");
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("lint.frontmatter.name.format");
+      expect(violationCodes(result)).toContain("lint.frontmatter.name.format");
     });
   });
 
@@ -1624,14 +1631,14 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       mkdirSync(join(dir, "skill"));
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("SKILL.md not found");
+      expect(cliEnvelope(result, "refused").message).toContain("SKILL.md");
     });
   });
 
   test("missing <skill-dir> arg → usage, exit 2", () => {
     const result = runCli(["skill", "lint"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: skill lint <skill-dir>");
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("skillDir");
   });
 
   test("concrete task-artifact citation → skill.ephemeral.task-artifact, exit 1", () => {
@@ -1640,10 +1647,9 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("skill lint (ephemeral citations): FAIL");
-      expect(result.stderr).toContain("skill.ephemeral.task-artifact");
-      expect(result.stderr).toContain('"task-3-report"');
-      expect(result.stderr).toContain("line 12");
+      const envelope = cliEnvelope(result, "refused");
+      expect(violationCodes(result)).toContain("skill.ephemeral.task-artifact");
+      expect(JSON.stringify(envelope)).toContain("task-3-report");
     });
   });
 
@@ -1653,9 +1659,9 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("skill.ephemeral.sdd-deeplink");
-      expect(result.stderr).toContain('".mstar/sdd/20260815-x"');
-      expect(result.stderr).toContain("line 17");
+      const envelope = cliEnvelope(result, "refused");
+      expect(violationCodes(result)).toContain("skill.ephemeral.sdd-deeplink");
+      expect(JSON.stringify(envelope)).toContain(".mstar/sdd/20260815-x");
     });
   });
 
@@ -1665,7 +1671,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_PLACEHOLDERS);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
     });
   });
 });
@@ -1688,10 +1694,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
         env: { MSTAR_CLI_PROJECT_ROOT: dir },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (frontmatter): OK");
-      expect(result.stdout).toContain("skill lint (five questions): OK");
-      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
-      expect(result.stderr).not.toContain("SKILL.md not found");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data).toMatchObject({ ok: true, violations: [], exempt: false });
     });
   });
 
@@ -1708,8 +1711,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
       writeFileSync(join(member, "package.json"), JSON.stringify({ name: "@mono/cli" }));
       const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: member });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (frontmatter): OK");
-      expect(result.stderr).not.toContain("SKILL.md not found");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data).toMatchObject({ ok: true, violations: [], exempt: false });
     });
   });
 
@@ -1722,7 +1724,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
       mkdirSync(nested, { recursive: true });
       const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: nested });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data).toMatchObject({ ok: true, violations: [], exempt: false });
     });
   });
 
@@ -1733,8 +1735,9 @@ describe("project-root path resolution — relative dev-command args (audit-002)
       // fixture under the bare cwd.
       const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: dir });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("SKILL.md not found");
-      expect(result.stderr).toContain(join(dir, "skills", "mstar-audit"));
+      const refusal = cliEnvelope(result, "refused");
+      expect(refusal.message).toContain("SKILL.md not found");
+      expect(refusal.message).toContain(join(dir, "skills", "mstar-audit"));
     });
   });
 
@@ -1746,7 +1749,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
         env: { MSTAR_CLI_PROJECT_ROOT: join(dir, "nope") },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data).toMatchObject({ ok: true, violations: [], exempt: false });
     });
   });
 });
@@ -1794,8 +1797,7 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("skill lint (frontmatter): OK");
-        expect(result.stderr).not.toContain("SKILL.md not found");
+        expect(cliEnvelope(result, "ok", "skill.lint.ok").data).toMatchObject({ ok: true, violations: [], exempt: false });
       },
     },
     {
@@ -1810,8 +1812,7 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("OK");
-        expect(result.stderr).toBe("");
+        expect(lintResults(result)[0]).toMatchObject({ file: join(_dir, "strategy", "STRATEGY.md"), violations: [] });
       },
     },
     {
@@ -1823,8 +1824,7 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("dispatch validate: OK");
-        expect(result.stderr).toBe("");
+        expect(cliEnvelope(result, "ok", "dispatch.validate.ok").data).toMatchObject({ ok: true, violations: [] });
       },
     },
     {
@@ -1845,9 +1845,9 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("compound.index.retired");
-        expect(result.stdout).toContain("compound validate (schema): OK");
-        expect(result.stdout).toContain("compound validate (scope guard): OK");
+        const envelope = cliEnvelope(result, "refused", "compound.index.retired");
+        expect(envelope.details?.violations?.map(({ code }) => code)).toContain("compound.index.retired");
+        expect(envelope.details?.violations?.map(({ code }) => code)).not.toContain("compound.scope.outside");
       },
     },
     {
@@ -1859,8 +1859,7 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("design-md validate (tokens): OK");
-        expect(result.stdout).toContain("design-md completeness level: MVP");
+        expect(cliEnvelope(result, "ok", "design-md.validate.ok").data).toMatchObject({ ok: true, completeness: { level: "MVP" } });
       },
     },
     {
@@ -1872,8 +1871,10 @@ describe("project-root path resolution — all six dev commands with relative ar
       },
       assert: (dir, result) => {
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("audit scaffold: OK");
-        expect(result.stdout).toContain("created: 001-fix-n-1-query.md");
+        expect(cliEnvelope(result, "ok", "audit.scaffold.ok").data).toMatchObject({
+          outDir: join(dir, "out"),
+          files: ["001-fix-n-1-query.md"],
+        });
         // --dir "out" resolved against the project root, not the nested cwd.
         expect(existsSync(join(dir, "out", "001-fix-n-1-query.md"))).toBe(true);
         expect(existsSync(join(dir, "out", "README.md"))).toBe(true);
@@ -1914,12 +1915,10 @@ A topic skill body without a Load Order heading.
     // cwd = packages/cli: resolveCliProjectRoot walks up to the monorepo root,
     // so --roles-dir defaults to <root>/skills/mstar-roles and --skills-dir to
     // <root>/skills — the real corpus must pass (same guarantee Task 2 guards).
-    const result = runCli(["roles", "validate"]);
+    const result = runCli(["roles", "validate"], { cwd: resolve(CLI_ROOT, "..", "..") });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("roles validate (mapping): OK");
-    expect(result.stdout).toContain("roles validate (load order): OK");
-    expect(result.stdout).toMatch(/roles validate: OK \(\d+ violations?, \d+ sibling skills? scanned; load-order over \d+, core exempt\)/);
-    expect(result.stderr).toBe("");
+    const envelope = cliEnvelope(result, "ok", "roles.validate.ok");
+    expect(envelope.data).toMatchObject({ ok: true, violations: [], siblingCount: expect.any(Number), loadOrderChecked: expect.any(Number) });
   });
 
   test("--roles-dir / --skills-dir overrides; load-order violation exits 1 with one row each", () => {
@@ -1931,11 +1930,8 @@ A topic skill body without a Load Order heading.
       expect(result.exitCode).toBe(1);
       // Mapping still passes on the real roles dir — the failure is isolated to
       // the load-order lint so the row contract is asserted exactly.
-      expect(result.stdout).toContain("roles validate (mapping): OK");
-      expect(result.stderr).toContain("roles validate (load order): FAIL (1 violation)");
-      expect(result.stderr).toContain("roles.loadorder.section.missing");
-      expect(result.stderr).toContain('skill "mstar-foo"');
-      expect(result.stdout).toContain("roles validate: FAIL (1 violation, 1 sibling skill scanned; load-order over 1)");
+      const envelope = cliEnvelope(result, "refused", "roles.loadorder.section.missing");
+      expect(envelope.message).toContain('skill "mstar-foo"');
     });
   });
 
@@ -1943,17 +1939,9 @@ A topic skill body without a Load Order heading.
     withTempDir((dir) => {
       const result = runCli(["roles", "validate", "--roles-dir", dir, "--skills-dir", dir]);
       expect(result.exitCode).toBe(1);
-      // Row-cardinality pin: the FAIL header count must equal the number of
-      // reference.missing violation rows on stderr (printChecklist emits one
-      // row per violation), and the stdout summary must agree.
-      const header = /roles validate \(mapping\): FAIL \((\d+) violations?\)/.exec(result.stderr);
-      expect(header).not.toBeNull();
-      const declared = Number(header![1]);
-      expect(declared).toBeGreaterThan(0);
-      expect((result.stderr.match(/roles\.mapping\.reference\.missing/g) ?? []).length).toBe(declared);
-      expect(result.stdout).toContain(
-        `roles validate: FAIL (${declared} violations, 0 sibling skills scanned; load-order over 0)`,
-      );
+      const violations = cliEnvelope(result, "refused").details?.violations ?? [];
+      const missingReferences = violations.filter(({ code }) => code === "roles.mapping.reference.missing");
+      expect(missingReferences.length).toBeGreaterThan(0);
     });
   });
 
@@ -1966,26 +1954,23 @@ A topic skill body without a Load Order heading.
       mkdirSync(join(skillsRoot, "mstar-foo", "SKILL.md"), { recursive: true });
       const result = runCli(["roles", "validate", "--roles-dir", REPO_ROLES_DIR, "--skills-dir", skillsRoot]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("roles validate (load order): OK");
-      expect(result.stdout).toContain("roles validate: OK (0 violations, 0 sibling skills scanned; load-order over 0)");
+      expect(cliEnvelope(result, "ok", "roles.validate.ok").data).toMatchObject({ siblingCount: 0, loadOrderChecked: 0 });
     });
   });
 
-  test("relative --roles-dir resolves against the project root (F-S2 pattern)", () => {
+  test("relative --roles-dir resolves against MSTAR_CLI_PROJECT_ROOT", () => {
     withTempDir((dir) => {
       // Copy the real roles dir into the fixture project root so the mapping
       // passes; the sibling scan then covers the copied mstar-roles SKILL.md.
       cpSync(REPO_ROLES_DIR, join(dir, "skills", "mstar-roles"), { recursive: true });
       const nested = join(dir, "nested", "deep");
       mkdirSync(nested, { recursive: true });
-      const result = runCli(["roles", "validate", "--roles-dir", "skills/mstar-roles"], {
+      const result = runCli(["roles", "validate", "--roles-dir", "skills/mstar-roles", "--skills-dir", join(dir, "skills")], {
         cwd: nested,
         env: { MSTAR_CLI_PROJECT_ROOT: dir },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("roles validate (mapping): OK");
-      expect(result.stdout).toContain("roles validate (load order): OK");
-      expect(result.stdout).toContain("roles validate: OK (0 violations, 1 sibling skill scanned; load-order over 1)");
+      expect(cliEnvelope(result, "ok", "roles.validate.ok").data).toMatchObject({ siblingCount: 1, loadOrderChecked: 1 });
     });
   });
 });
@@ -2127,13 +2112,13 @@ function captureInputOf(occurrenceKey: string, severity: string): Record<string,
  * workspace, so it runs before any register-shaped file exists.
  */
 function seedIssueStore(dir: string, severity = "high"): string {
-  const init = runCli(["store", "init", "--harness", dir, "--json"]);
+  const init = runCli(["store", "init", "--harness", dir]);
   expect(init.exitCode).toBe(0);
   const payloadPath = join(dir, "capture.json");
   writeFileSync(payloadPath, JSON.stringify(captureInputOf("occ-1", severity)), "utf8");
   const added = runCli([
     "issue", "add", "--harness", dir, "--operation-id", "slice4-capture-1", "--actor", "project-manager",
-    "--file", payloadPath, "--json",
+    "--file", payloadPath,
   ]);
   expect(added.exitCode).toBe(0);
   const envelope = JSON.parse(added.stdout) as { data?: { issueId?: unknown } };
@@ -2148,7 +2133,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       seedIssueStore(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "status.tech-debt.ok").data).toMatchObject({
+      expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({
         total_open: 1,
         by_severity: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
         by_project: { _default: 1 },
@@ -2192,7 +2177,7 @@ describe("mstar status findings-cleanup — issue-linkage gate over the issue st
       seedIssueStore(dir, "critical");
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
       expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "status.findings-cleanup.ok").data).toMatchObject({ planId: "p1", violations: [] });
+      expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({ planId: "p1", violations: [] });
     });
   });
   test("a missing store fails closed instead of passing as no findings (exit 1)", () => {
@@ -2222,10 +2207,8 @@ describe("mstar status backlog-register / backlog-close — retired verbs name t
   ] as const) {
     test(`${verb}: refuses with the migration path and writes no register (exit 1)`, () => {
       withTempDir((dir) => {
-        const result = runCli(["status", verb, "--harness", dir, "--key", "k1", "--entry", "{}", "--id", "x"]);
-        expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain(`status ${verb}: removed`);
-        expect(result.stderr).toContain(`mstar ${replacement}`);
+        const result = runCli(["status", verb], { cwd: dir });
+        expect(cliEnvelope(result, "refused", "status.verb-retired").message).toContain(`mstar ${replacement}`);
         expect(existsSync(join(dir, "projects"))).toBe(false);
       });
     });

@@ -101,13 +101,12 @@ function writeJson(path: string, value: unknown): void {
   writeText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** A plan row in the `validatePlanRow` shape, carrying its project id. */
+/** An iteration row in the registration API shape, retaining project scope. */
 function planRow(): Record<string, unknown> {
   return {
     id: PLAN_ID,
-    plan_id: PLAN_ID,
     title: `Plan ${PLAN_ID}`,
-    file: `.mstar/plans/${PLAN_ID}.md`,
+    file: `plans/${PLAN_ID}.md`,
     status: "Todo",
     metadata: { project_id: PROJECT_ID },
   };
@@ -146,7 +145,22 @@ interface Fixture {
 }
 function initializeFixtureStore(harness: string, cwd: string): void {
   const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
-  const script = `import { initializeExecutionAuthority, initializeStore } from ${JSON.stringify(engineEntry)}; const context = { harnessDir: ${JSON.stringify(harness)} }; const store = await initializeStore(context); store.close(); await initializeExecutionAuthority(context);`;
+  const script = `import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, registerCatalogEntity } from ${JSON.stringify(engineEntry)};
+const context = { harnessDir: ${JSON.stringify(harness)} };
+const store = await initializeStore(context); store.close();
+const initialized = await initializeExecutionAuthority(context);
+await registerCatalogEntity(context, { kind: "plan", id: ${JSON.stringify(PLAN_ID)}, title: ${JSON.stringify(`Plan ${PLAN_ID}`)}, rootKind: "plans", relativePath: ${JSON.stringify(`plans/${PLAN_ID}.md`)} }, { operationId: "register-plan", actor: "issue-cutover.test" });
+const caller = { sessionId: "fixture-coordinator", role: "coordinator", workflowId: ${JSON.stringify(WORKFLOW_ID)}, planId: null };
+await createExecutionWorkflow({ harnessDir: ${JSON.stringify(harness)}, caller }, {
+  entry: { id: ${JSON.stringify(WORKFLOW_ID)}, type: "plan", started_at: "2026-09-18T00:00:00Z", dir: ${JSON.stringify(`workflows/${WORKFLOW_ID}`)} },
+  snapshot: {
+    schema_version: 1, id: ${JSON.stringify(WORKFLOW_ID)}, type: "plan", status: "running",
+    started_at: "2026-09-18T00:00:00Z", updated_at: "2026-09-18T00:00:00Z",
+    plans: [${JSON.stringify(planRow())}], delivery_kind: "development",
+    branch: { source: "feature/plan-issues", target: "main" },
+  },
+  expected: initialized.token, operationId: "create-issues-workflow",
+});`;
   const result = Bun.spawnSync([process.execPath, "-e", script], {
     cwd,
     env: cliEnv(),
@@ -181,68 +195,22 @@ async function makeFixture(): Promise<Fixture> {
   // Initialize the active DB directly; the CLI store-init command is not an
   // input surface for test setup.
   initializeFixtureStore(harness, root);
-
-  writeJson(join(harness, "status.json"), {
-    version: 2,
-    updated_at: "2026-09-18T00:00:00Z",
-    workflows: [
-      {
-        id: WORKFLOW_ID,
-        status: "running",
-        type: "iteration",
-        started_at: "2026-09-18T00:00:00Z",
-        dir: `workflows/${WORKFLOW_ID}`,
-      },
-    ],
-  });
   writeJson(snapshotPath, {
     schema_version: 1,
     id: WORKFLOW_ID,
-    type: "iteration",
+    type: "plan",
     status: "running",
     started_at: "2026-09-18T00:00:00Z",
     updated_at: "2026-09-18T00:00:00Z",
-    branch: { base: "main" },
     plans: [planRow()],
+    delivery_kind: "development",
+    branch: { source: "feature/plan-issues", target: "main" },
   });
+
   writeText(join(sddDir, "assignment.md"), assignmentText({ harness, planPath, worktreePath, sddDir }));
 
   const planSessionId = "fixture-plan-pm";
   const coordinatorSessionId = "fixture-coordinator";
-  const rootToken = (await readExecutionAuthority({ harnessDir: harness })).token;
-  const registered = runCli(
-    [
-      "workflow",
-      "register",
-      "--workflow",
-      WORKFLOW_ID,
-      "--plan-id",
-      PLAN_ID,
-      "--plan-title",
-      `Plan ${PLAN_ID}`,
-      "--plan-file",
-      `plans/${PLAN_ID}.md`,
-      "--delivery-kind",
-      "development",
-      "--project",
-      PROJECT_ID,
-      "--branch-source",
-      "feature/plan-issues",
-      "--branch-target",
-      "main",
-      "--expect",
-      rootToken,
-      "--operation",
-      "register-issues",
-      "--harness",
-      harness,
-      "--session-id",
-      coordinatorSessionId,
-    ],
-    root,
-  );
-  expect(registered.exitCode).toBe(0);
-
   const coordinatorWorkflowToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID })).token;
   const coordinatorBound = runCli(
     [
@@ -396,8 +364,8 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
     );
     expect(added.exitCode).toBe(0);
     const addedPayload = jsonOf(added);
-    expect(addedPayload.status).toBe("ok");
     expect((addedPayload.plan as Record<string, unknown>).id).toBe(PLAN_ID);
+    expect((addedPayload.coordination as Record<string, unknown>).revision).toBeGreaterThan(0);
 
     // The DB is the only target, and the CLI reads it back through its own
     // issue surface — the register path stays absent.
@@ -439,7 +407,7 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "--file",
         evidencePath,
         "--expect-issue",
-        String(receipt.revision),
+        String(open[0]!.revision),
         "--expect",
         planToken(fixture),
         "--operation",
