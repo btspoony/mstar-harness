@@ -1140,7 +1140,7 @@ describe("mstar pr-review post", () => {
       writeFileSync(findings, JSON.stringify([{ path: "src/x.ts", line: 3, body: "off-by-one" }]));
       const noGhProc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "pr-review", "post", "--pr", "42", "--body-file", body, "--findings", findings], {
         cwd: CLI_ROOT,
-        env: { ...cliEnv(), PATH: "/usr/bin:/bin" }, // never contains gh
+        env: { ...cliEnv(), PATH: "/nonexistent-path-for-gh-isolation" }, // never contains gh on any platform
         stdout: "pipe",
         stderr: "pipe",
       });
