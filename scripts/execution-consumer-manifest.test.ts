@@ -183,8 +183,8 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "scripts/build-mcp-plugins.ts", "export const builder = 1;\n");
   write(root, "packages/mcp/dist/stdio.js", "// MCP server bundle\n");
   for (const target of ["cursor", "codex", "kimi", "zcode"]) {
-    write(root, `packages/mcp/dist/plugins/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
-    write(root, `packages/mcp/dist/plugins/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
+    write(root, `mcp/bundles/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
+    write(root, `mcp/bundles/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
   }
   for (const target of ["omp", "opencode", "dsh"]) {
     write(root, `packages/${target}/mcp/stdio.js`, `// ${target} server bundle\n`);
@@ -751,6 +751,7 @@ describe("execution-consumer-manifest — CLI", () => {
       "packages/cli/dist/execution-consumer.json",
       "packages/dsh/dist/execution-consumer.json",
       "packages/engine/dist/execution-consumer.json",
+      "packages/mcp/dist/execution-consumer.json",
       "packages/omp/dist/execution-consumer.json",
       "packages/opencode/dist/execution-consumer.json",
       "scripts/packaging-manifests/manifest.json",
@@ -964,6 +965,7 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
       "scripts/packaging-manifests/cli.json",
       "scripts/packaging-manifests/dsh.json",
       "scripts/packaging-manifests/engine.json",
+      "scripts/packaging-manifests/mcp.json",
       "scripts/packaging-manifests/omp.json",
       "scripts/packaging-manifests/opencode.json",
       "scripts/packaging-manifests/zcode.json",
@@ -1035,7 +1037,7 @@ describe("execution-consumer-manifest — canonical per-consumer evidence docume
     }
     // And the manifest this producer already verifies stays valid with them on
     // disk: the evidence documents are not part of any digested closure.
-    expect(executionConsumerManifestPaths(root).length).toBe(6);
+    expect(executionConsumerManifestPaths(root).length).toBe(7);
   });
 
   test("--write publishes the evidence documents and --check verifies them", async () => {
