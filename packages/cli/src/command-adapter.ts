@@ -48,7 +48,16 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
     for (const [key, value] of Object.entries(options)) {
       const option = definition.cli.options.find((entry) => optionKey(entry.flags) === key);
       if (option !== undefined && value !== undefined) {
-        input[option.key] = option.variadic && !Array.isArray(value) ? [value] : value;
+        let decoded = option.variadic && !Array.isArray(value) ? [value] : value;
+        if (definition.id === "report" && option.key === "exitStatus") decoded = Number(decoded);
+        if (definition.id === "report" && option.key === "versionOverrides") {
+          try {
+            decoded = JSON.parse(String(decoded));
+          } catch {
+            decoded = null;
+          }
+        }
+        input[option.key] = decoded;
       }
     }
   }

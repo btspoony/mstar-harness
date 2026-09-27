@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
-import { commandEnvelopeSchema } from "./definitions.js";
-import type { CommandDefinition, SurfaceVersions } from "./types.js";
+import type { SurfaceVersions } from "./types.js";
+
 
 const issueUrl = "https://github.com/btspoony/mstar-harness/issues/new";
 const FIELD_LIMIT = 8192;
@@ -175,33 +175,4 @@ export function createReport(input: ReportInput, versions: SurfaceVersions): Rep
   return { issueUrl, prompt: lines.join("\n"), redactions };
 }
 
-export function getReportCommandDefinitions(): readonly CommandDefinition<ReportInput, ReportData>[] {
-  return [{
-    id: "report",
-    cli: {
-      path: ["report"],
-      aliases: [],
-      arguments: [],
-      options: Object.keys(reportInputSchema.shape).map((key) => ({
-        key,
-        flags: `--${key} <${key}>`,
-        required: false,
-      })),
-    },
-    input: reportInputSchema,
-    output: commandEnvelopeSchema as CommandDefinition<ReportInput, ReportData>["output"],
-    effects: ["validate"],
-    description: "Create an offline, redacted issue-report draft.",
-    async execute(input, context) {
-      try {
-        return { version: 1, command: "report", status: "ok", code: "report.ok", exitCode: 0, data: createReport(input, context.versions) };
-      } catch (error) {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "report.input-too-large") {
-          return error as ReportInputTooLarge;
-        }
-        throw error;
-      }
-    },
-  }];
-}
 
