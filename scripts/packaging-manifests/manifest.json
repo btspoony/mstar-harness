@@ -144,7 +144,7 @@
           "targetRoot": "packages/dsh/harness-skills",
           "mode": "copy",
           "files": 122,
-          "sha256": "bf0c3752b4ec454868b543b703612a8c3dfdd5828986e1c9c07d4fe5a9fcf90a"
+          "sha256": "058c8d4562101c8f780e673315c128a1f7fdd319e41230b25b4c8b5d67928f45"
         }
       ]
     },
@@ -164,7 +164,7 @@
           {
             "root": "packages/engine/src",
             "files": 82,
-            "sha256": "be54d99ac17bfbb52bc22ae209703f94ab84e7f7a8a2ace391cd205a65e6457a"
+            "sha256": "68239ae2323fb652bcb889476def429bf9e1dfc43c308e508a978105e450c7d6"
           }
         ],
         "files": [
@@ -223,10 +223,34 @@
           {
             "root": "packages/mcp/src",
             "files": 7,
-            "sha256": "3d0fb7e489272988bbf358002147d5155584b7fcb9623ccc8ffbae46ce6591b2"
+            "sha256": "a0787f362761991c922b9ccada9841625b6e8ca1365a4a2d9ca7220b6601a3ef"
           }
         ],
         "files": [
+          {
+            "path": "mcp/codex-plugin.json",
+            "sha256": "348cc6fca4657e1f56da13ed39a4bc966ab01b4a6ef544c5c1dd3384a2a8a0d0"
+          },
+          {
+            "path": "mcp/codex.json",
+            "sha256": "6d486e7ca60e94cc473d9ce04624bf682fdd06304e2dc0de5eb06415224b5387"
+          },
+          {
+            "path": "mcp/cursor.json",
+            "sha256": "cb7466f2dd42e01ecd2a5f3f4e477a1939b295832747f23297241d827cfa1f1f"
+          },
+          {
+            "path": "mcp/kimi-launcher.mjs",
+            "sha256": "a0836059bc182e98f37fb9d86998952cc8a1a7b67f8ca30a3dcbe868e057f40d"
+          },
+          {
+            "path": "mcp/kimi.json",
+            "sha256": "0e562c53280fb82b6fb85f6722be03ef95a808eefa384761f7cbf246082ea337"
+          },
+          {
+            "path": "mcp/zcode.json",
+            "sha256": "5eff3780322e931966f844b1a50d36ade67b68db53061f519e13c2483a661c77"
+          },
           {
             "path": "packages/mcp/package.json",
             "sha256": "e64df0e2ee5a019aeea951528b0d3418ef6d87214a241c7fdb5bca8ee5e426ce"
@@ -237,7 +261,7 @@
           },
           {
             "path": "scripts/build-mcp-plugins.ts",
-            "sha256": "a56965f393e81b4f469d4e8aff717c57e1bfb4250686f37a59ed10725cb727fd"
+            "sha256": "2dd0820129903cd194fbe7913dc2db432bde08933ce111e122909732e012602b"
           }
         ]
       },
@@ -467,22 +491,22 @@
           "targetRoot": "packages/omp/harness-skills",
           "mode": "copy",
           "files": 122,
-          "sha256": "bf0c3752b4ec454868b543b703612a8c3dfdd5828986e1c9c07d4fe5a9fcf90a"
+          "sha256": "058c8d4562101c8f780e673315c128a1f7fdd319e41230b25b4c8b5d67928f45"
         },
         {
           "sourceRoot": "skills",
           "targetRoot": "packages/omp/skills",
           "mode": "copy",
           "files": 122,
-          "sha256": "bf0c3752b4ec454868b543b703612a8c3dfdd5828986e1c9c07d4fe5a9fcf90a"
+          "sha256": "058c8d4562101c8f780e673315c128a1f7fdd319e41230b25b4c8b5d67928f45"
         }
       ]
     },
     {
       "id": "opencode",
       "packageRoot": "packages/opencode",
-      "capability": "decision-only",
-      "capabilityNote": "OpenCode hook is log/decision-only: without native per-call session identity the writer association is refused and this consumer is excluded operationally (contract §6 H4 / S15).",
+      "capability": "writer",
+      "capabilityNote": null,
       "entrypoint": "packages/opencode/dist/mstar.js",
       "runtime": {
         "target": "node",
@@ -554,7 +578,7 @@
           "targetRoot": "packages/opencode/harness-skills",
           "mode": "copy",
           "files": 122,
-          "sha256": "bf0c3752b4ec454868b543b703612a8c3dfdd5828986e1c9c07d4fe5a9fcf90a"
+          "sha256": "058c8d4562101c8f780e673315c128a1f7fdd319e41230b25b4c8b5d67928f45"
         }
       ]
     },
@@ -579,7 +603,7 @@
           {
             "root": "packages/engine/src",
             "files": 82,
-            "sha256": "be54d99ac17bfbb52bc22ae209703f94ab84e7f7a8a2ace391cd205a65e6457a"
+            "sha256": "68239ae2323fb652bcb889476def429bf9e1dfc43c308e508a978105e450c7d6"
           }
         ],
         "files": [

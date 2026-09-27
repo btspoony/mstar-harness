@@ -178,6 +178,16 @@ function buildFixture(options: FixtureOptions = {}): string {
     write(root, `mcp/bundles/${target}/dist/mcp/stdio.js`, `// ${target} server bundle\n`);
     write(root, `mcp/bundles/${target}/dist/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
   }
+  for (const file of [
+    "cursor.json",
+    "codex.json",
+    "codex-plugin.json",
+    "kimi.json",
+    "kimi-launcher.mjs",
+    "zcode.json",
+  ]) {
+    write(root, `mcp/${file}`, `// ${file} loader config\n`);
+  }
   for (const target of ["omp", "opencode", "dsh"]) {
     write(root, `packages/${target}/mcp/stdio.js`, `// ${target} server bundle\n`);
     write(root, `packages/${target}/mcp/build-info.json`, `{"hostTarget":"${target}"}\n`);
@@ -363,10 +373,10 @@ describe("execution-consumer-manifest — canonical collection", () => {
       ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
     expect(engineDist?.files).toBe(4);
 
-    // decision-only is explicit, never an absent or writer capability.
+    // OpenCode's native MCP tools execute mutating commands, so it is a writer.
     const opencode = manifest.consumers.find((consumer) => consumer.id === "opencode");
-    expect(opencode?.capability).toBe("decision-only");
-    expect(opencode?.capabilityNote).toContain("decision-only");
+    expect(opencode?.capability).toBe("writer");
+    expect(opencode?.capabilityNote).toBeNull();
 
     // ZCode has no package metadata; its floor is declared as the canonical
     // one and the inlined engine source is part of its input closure.
@@ -450,6 +460,10 @@ describe("execution-consumer-manifest — verification refusals", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
     verifyExecutionConsumerManifest(manifest);
+    const loaderDrift = buildFixture();
+    const loaderManifest = collectExecutionConsumerManifest(loaderDrift);
+    writeFileSync(join(loaderDrift, "mcp/codex.json"), "// stale Codex loader config\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(loaderManifest), "consumer.digest-mismatch");
 
     writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
     expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
@@ -591,7 +605,7 @@ describe("execution-consumer-manifest — verification refusals", () => {
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(runtimeTamper)), "consumer.runtime-mismatch");
 
     const capabilityTamper = cloneManifest(manifest);
-    consumerIn(capabilityTamper, "opencode").capability = "writer";
+    consumerIn(capabilityTamper, "opencode").capability = "decision-only";
     expectRefusal(
       () => verifyExecutionConsumerManifest(asManifest(capabilityTamper)),
       "consumer.capability-mismatch",

@@ -297,6 +297,12 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "packages/mcp/package.json",
       "packages/mcp/tsconfig.json",
       "scripts/build-mcp-plugins.ts",
+      "mcp/cursor.json",
+      "mcp/codex.json",
+      "mcp/codex-plugin.json",
+      "mcp/kimi.json",
+      "mcp/kimi-launcher.mjs",
+      "mcp/zcode.json",
     ],
     generatedTrees: [
       { root: "packages/mcp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
@@ -387,9 +393,8 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
   {
     id: "opencode",
     packageRoot: "packages/opencode",
-    capability: "decision-only",
-    capabilityNote:
-      "OpenCode hook is log/decision-only: without native per-call session identity the writer association is refused and this consumer is excluded operationally (contract §6 H4 / S15).",
+    capability: "writer",
+    capabilityNote: null,
     runtime: { target: "node", declaration: "package-engines" },
     packageJson: "packages/opencode/package.json",
     entrypoint: "packages/opencode/dist/mstar.js",
