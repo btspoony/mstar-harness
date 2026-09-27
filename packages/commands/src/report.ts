@@ -1,0 +1,191 @@
+import { z } from "zod";
+import { redactSecrets } from "@mstar-harness/engine/src/audit";
+import { commandEnvelopeSchema } from "./definitions.js";
+import type { CommandDefinition, SurfaceVersions } from "./types.js";
+
+const issueUrl = "https://github.com/btspoony/mstar-harness/issues/new";
+const FIELD_LIMIT = 8192;
+const TOTAL_LIMIT = 32768;
+
+const versionOverridesSchema = z.object({
+  cli: z.string().optional(),
+  engine: z.string().optional(),
+  plugin: z.string().optional(),
+}).strict();
+
+export const reportInputSchema = z.object({
+  title: z.string().optional(),
+  command: z.string().optional(),
+  arguments: z.union([z.string(), z.array(z.string()).max(128)]).optional(),
+  expected: z.string().optional(),
+  actual: z.string().optional(),
+  reproduction: z.string().optional(),
+  stableCode: z.string().optional(),
+  exitStatus: z.number().int().safe().optional(),
+  host: z.string().optional(),
+  platform: z.string().optional(),
+  versionOverrides: versionOverridesSchema.optional(),
+}).strict();
+
+export type ReportInput = z.infer<typeof reportInputSchema>;
+export type ReportData = {
+  issueUrl: string;
+  prompt: string;
+  redactions: readonly { field: string; count: number }[];
+};
+
+function suppliedTextFields(input: ReportInput): [string, string][] {
+  const fields: [string, string][] = [];
+  for (const field of ["title", "command", "expected", "actual", "reproduction", "stableCode", "host", "platform"] as const) {
+    if (input[field] !== undefined) fields.push([field, input[field]!]);
+  }
+  if (input.arguments !== undefined) {
+    fields.push(["arguments", typeof input.arguments === "string" ? input.arguments : input.arguments.join("\n")]);
+  }
+  if (input.versionOverrides !== undefined) {
+    for (const field of ["cli", "engine", "plugin"] as const) {
+      const value = input.versionOverrides[field];
+      if (value !== undefined) fields.push([`versionOverrides.${field}`, value]);
+    }
+  }
+  return fields;
+}
+
+type ReportInputTooLarge = {
+  version: 1;
+  command: "report";
+  status: "refused";
+  code: "report.input-too-large";
+  exitCode: number;
+  message: string;
+  details: { field: string; limit: number };
+};
+
+function failure(field: string, limit: number): ReportInputTooLarge {
+  return {
+    version: 1,
+    command: "report",
+    status: "refused",
+    code: "report.input-too-large",
+    exitCode: 1,
+    message: `input field ${field} exceeds ${limit} UTF-8 bytes`,
+    details: { field, limit },
+  };
+}
+
+function redact(field: string, value: string): { value: string; count: number } {
+  const result = redactSecrets(value);
+  return {
+    value: result.text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"),
+    count: result.findings.length,
+  };
+}
+
+function json(value: string): string {
+  return JSON.stringify(value);
+}
+
+function maxBacktickRun(values: Iterable<string>): number {
+  let max = 0;
+  for (const value of values) {
+    for (const match of value.matchAll(/`+/g)) max = Math.max(max, match[0].length);
+  }
+  return max;
+}
+
+export function createReport(input: ReportInput, versions: SurfaceVersions): ReportData {
+  const fields = suppliedTextFields(input);
+  for (const [field, value] of fields) {
+    const bytes = field === "arguments" && Array.isArray(input.arguments)
+      ? input.arguments.reduce((total, argument) => total + Buffer.byteLength(argument, "utf8"), 0)
+      : Buffer.byteLength(value, "utf8");
+    if (bytes > FIELD_LIMIT) throw failure(field, FIELD_LIMIT);
+  }
+  const totalBytes = fields.reduce((total, [field, value]) => total + (
+    field === "arguments" && Array.isArray(input.arguments)
+      ? input.arguments.reduce((argumentTotal, argument) => argumentTotal + Buffer.byteLength(argument, "utf8"), 0)
+      : Buffer.byteLength(value, "utf8")
+  ), 0);
+  if (totalBytes > TOTAL_LIMIT) throw failure("total", TOTAL_LIMIT);
+
+  const redactions: { field: string; count: number }[] = [];
+  const sanitized = new Map<string, string>();
+  for (const [field, value] of fields) {
+    const result = redact(field, value);
+    sanitized.set(field, result.value);
+    if (result.count > 0) redactions.push({ field, count: result.count });
+  }
+  const safe = (field: string, fallback = "absent") => sanitized.get(field) ?? fallback;
+  const safeArguments = typeof input.arguments === "string"
+    ? safe("arguments")
+    : input.arguments === undefined
+      ? undefined
+      : input.arguments.map((value) => redactSecrets(value).text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]"));
+  const overrideValues = ["cli", "engine", "plugin"].flatMap((field) => {
+    const value = sanitized.get(`versionOverrides.${field}`);
+    return value === undefined ? [] : [[field, value] as const];
+  });
+  const dataValues = [...sanitized.values()];
+  const fence = "`".repeat(Math.max(3, maxBacktickRun(dataValues) + 1));
+  const lines = [
+    "Review this draft before submission. Redaction is not a guarantee that every secret was removed.",
+    `Issue URL: ${issueUrl}`,
+    fence,
+    `Title: ${json(safe("title"))}`,
+    "Versions:",
+    `- CLI (${versions.cli === null ? "unknown" : "observed"}): ${json(versions.cli ?? "unknown")}`,
+    `- Engine (${versions.engine === null ? "unknown" : "observed"}): ${json(versions.engine ?? "unknown")}`,
+    `- Plugin (${versions.plugin === null ? "unknown" : "observed"}): ${json(versions.plugin ?? "unknown")}`,
+  ];
+  if (overrideValues.length > 0) {
+    lines.push("Caller-supplied version overrides:");
+    for (const [field, value] of overrideValues) lines.push(`- ${field}: ${json(value)}`);
+  }
+  lines.push(
+    `Host (${input.host === undefined ? versions.host === null ? "unknown" : "observed" : "caller-supplied"}): ${json(safe("host", versions.host ?? "unknown"))}`,
+    `Platform (${input.platform === undefined ? versions.platform === null ? "unknown" : "observed" : "caller-supplied"}): ${json(safe("platform", versions.platform ?? "unknown"))}`,
+  );
+  if (input.command !== undefined) lines.push(`Command: ${json(safe("command"))}`);
+  if (safeArguments !== undefined) lines.push(`Arguments: ${typeof safeArguments === "string" ? json(safeArguments) : JSON.stringify(safeArguments)}`);
+  lines.push(
+    `Expected: ${json(safe("expected"))}`,
+    `Actual: ${json(safe("actual"))}`,
+    `Stable code: ${json(safe("stableCode"))}`,
+    `Exit status: ${input.exitStatus === undefined ? "absent" : input.exitStatus}`,
+    `Reproduction: ${json(safe("reproduction"))}`,
+    "Complete fields marked absent with the user before submission.",
+    fence,
+  );
+  return { issueUrl, prompt: lines.join("\n"), redactions };
+}
+
+export function getReportCommandDefinitions(): readonly CommandDefinition<ReportInput, ReportData>[] {
+  return [{
+    id: "report",
+    cli: {
+      path: ["report"],
+      aliases: [],
+      arguments: [],
+      options: Object.keys(reportInputSchema.shape).map((key) => ({
+        key,
+        flags: `--${key} <${key}>`,
+        required: false,
+      })),
+    },
+    input: reportInputSchema,
+    output: commandEnvelopeSchema as CommandDefinition<ReportInput, ReportData>["output"],
+    effects: ["validate"],
+    description: "Create an offline, redacted issue-report draft.",
+    async execute(input, context) {
+      try {
+        return { version: 1, command: "report", status: "ok", code: "report.ok", exitCode: 0, data: createReport(input, context.versions) };
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "report.input-too-large") {
+          return error as ReportInputTooLarge;
+        }
+        throw error;
+      }
+    },
+  }];
+}
+

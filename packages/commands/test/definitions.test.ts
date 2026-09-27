@@ -27,8 +27,8 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 
 describe("command definitions", () => {
   test("canonical registry includes all composed family identities", () => {
-    // C7 closes the 122-identity census (report=123 via P2).
-    expect(getCommandDefinitions()).toHaveLength(122);
+    // P1 adds report as the 123rd canonical command.
+    expect(getCommandDefinitions()).toHaveLength(123);
     expect(getCommandDefinitions().map(({ id }) => id)).toEqual([
       "status.validate",
       "status.workflow-close",
@@ -152,6 +152,7 @@ describe("command definitions", () => {
       "host.detect",
       "host.skill-root",
       "schema",
+      "report",
     ]);
   });
 
