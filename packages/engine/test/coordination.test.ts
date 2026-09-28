@@ -2012,17 +2012,20 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
   }, 30000);
 
-  test("delivery evidence refuses before Done and succeeds after Done with a full registered tail", async () => {
+  test("delivery evidence is captured before Done and completes the close with a full registered tail (A19)", async () => {
     const fixture = await acceptedStandaloneFixture();
-    const before = readFileSync(fixture.snapshotPath);
-    await expect(
-      recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
-        sessionPath: fixture.coordinatorSession,
-        evidence: { compound: { outcome: "created" } },
-        at: "2026-09-15T01:00:00Z",
-      }),
-    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    // §R5/A19 external evidence arrives when it arrives: capturing the delivery
+    // tail while the row is still InReview is legal and is NOT a completion (the
+    // retired `PHASE6_PLAN_ROW_NOT_DONE` write-time pin is gone — the semantic
+    // boundary is the close, which consults the complete registered tail).
+    const captured = await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
+      sessionPath: fixture.coordinatorSession,
+      evidence: { compound: { outcome: "created" } },
+      at: "2026-09-15T01:00:00Z",
+    });
+    expect(captured.written).toBe(true);
+    expect(snapshotOf(fixture).delivery).toEqual({ compound: { outcome: "created" } });
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
     await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
     await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
