@@ -3834,6 +3834,61 @@ describe("execution-close-composition: §R5/§R10 the close composes what the ro
     }).toEqual({ root: 1, store: 1, workflow: 1 });
   }, 30000);
 
+  test("report.only recovery: a Done row whose fulfilment was never recorded gets the projection repaired, never rewritten (A17/A20)", async () => {
+    const fixture = await lifecycleFixture("close-report-only-done", "report-only");
+    const { context } = fixture;
+    clearRecordedFulfilment(context);
+    await acceptedAttempt(fixture, "close-report-only-done");
+    // The residue a foreign writer leaves: the row records its COMPLETED shape
+    // (Done, completed handoff, no held lease) while the workflow's own
+    // fulfilment projection was never written. The close owes the projection —
+    // not a second row write.
+    const completedAt = "2026-01-03T00:00:00.000Z";
+    withRaw(context, (db) => {
+      const row = db
+        .prepare("select state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, OWN_PLAN) as { state_json: string; coordination_json: string };
+      const state = parsedJson(row.state_json);
+      state.status = "Done";
+      const coordination = parsedJson(row.coordination_json);
+      const handoff = coordination.handoff as Record<string, unknown>;
+      handoff.state = "completed";
+      handoff.completed_at = completedAt;
+      db.prepare(
+        "update execution_plans set state_json = ?, coordination_json = ? where workflow_id = ? and plan_id = ?",
+      ).run(JSON.stringify(state), JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+      db.prepare(
+        "update execution_leases set lease_json = json_set(lease_json, '$.status', 'released') " +
+          "where workflow_id = ? and plan_id = ?",
+      ).run(WORKFLOW_ID, OWN_PLAN);
+    });
+    const rowBefore = planFootprint(context, OWN_PLAN);
+
+    const closed = await workflowMutationOn(fixture, "op-close-report-only-done", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(storedWorkflow(context).delivery).toMatchObject({
+      completion: { policy: "acceptance report", evidence: fixture.evidence[OWN_PLAN]!.qa },
+    });
+    // The completed row was NOT rewritten: its own bytes, its coordination and
+    // its revision are exactly what they were.
+    const rowAfter = planFootprint(context, OWN_PLAN);
+    expect({
+      plan_state: rowAfter.plan_state,
+      plan_coordination: rowAfter.plan_coordination,
+      plan_revision: rowAfter.plan_revision,
+    }).toEqual({
+      plan_state: rowBefore.plan_state,
+      plan_coordination: rowBefore.plan_coordination,
+      plan_revision: rowBefore.plan_revision,
+    });
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+  }, 30000);
+
   test("report.only recovery: a genuinely absent acceptance keeps the work and names only that decision (A18)", async () => {
     const fixture = await lifecycleFixture("close-report-only-absent", "report-only");
     const { context } = fixture;
