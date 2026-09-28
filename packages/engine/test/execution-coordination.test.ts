@@ -52,6 +52,7 @@ import {
   type ExecutionPlanWitness,
   type ExecutionReceipt,
   type ExecutionSessionRef,
+  type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
 import type { CoordinationOperation } from "../src/index.js";
@@ -3696,4 +3697,277 @@ describe("execution-concurrency: §3.1/§4.1 concurrent accepted plan operations
       summary: "second",
     });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * W6 — the close composes fulfilment → row Done → terminal removal
+ * (E10; §R5/§R10, A14/A17–A20/#270)
+ * ------------------------------------------------------------------------ */
+
+/** The workflow header one lifecycle test reads from the store. */
+function storedWorkflow(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(context, `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+  if (row === undefined) throw new Error("fixture: the workflow holds no stored header");
+  return parsedJson(row.state_json);
+}
+
+/** §3 one PUBLISHED workflow call, at the token the store serves right now. */
+async function workflowMutationOn(
+  fixture: LifecycleFixture,
+  operationId: string,
+  operation: Record<string, unknown>,
+  expected?: ExecutionToken,
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const workflow = (await readExecutionState(fixture.context)).data.workflows.find(
+    (candidate) => candidate.state.id === WORKFLOW_ID,
+  );
+  if (workflow === undefined) throw new Error("fixture: the workflow is not registered");
+  return mutateExecutionWorkflow(domainContext(fixture.context, fixture.coordinatorCaller), {
+    operationId,
+    session: fixture.coordinator,
+    expected: expected ?? workflow.workflowToken,
+    workflowId: WORKFLOW_ID,
+    operation,
+  } as never);
+}
+
+/**
+ * The residue a registration leaves when it declared its completion policy but
+ * never recorded the fulfilment: nothing about the ACCEPTED report is missing,
+ * only the workflow's own projection of it.
+ */
+function clearRecordedFulfilment(context: StoreContext): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      `update execution_workflows set state_json = json_remove(state_json, '$.delivery') where workflow_id = ?`,
+    ).run(WORKFLOW_ID);
+  });
+}
+
+/** One plan row's status planted directly, without moving its revision. */
+function plantRowStatus(context: StoreContext, planId: string, status: string): void {
+  withRaw(context, (db) => {
+    const row = db
+      .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(WORKFLOW_ID, planId) as { state_json?: unknown } | undefined;
+    if (row === undefined) throw new Error(`fixture: no plan row ${planId}`);
+    const state = parsedJson(row.state_json);
+    state.status = status;
+    db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(
+      JSON.stringify(state),
+      WORKFLOW_ID,
+      planId,
+    );
+  });
+}
+
+/** Everything a refused or composed close must account for, as one comparable value. */
+function closeFootprint(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    "select (select revision from execution_meta where id = 1) as root_revision, " +
+      "(select revision from store_meta where id = 1) as store_revision, " +
+      `(select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_revision, ` +
+      `(select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_state, ` +
+      `(select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+      `(select group_concat(plan_id || ':' || json_extract(state_json, '$.status')) from execution_plans where workflow_id = '${WORKFLOW_ID}') as rows, ` +
+      "(select count(*) as n from execution_operations) as operations, " +
+      "(select count(*) as n from execution_sessions) as sessions, " +
+      "(select count(*) as n from execution_leases) as leases",
+  );
+  return row!;
+}
+
+/** The development delivery tail this route's close consults (contract §4c/§4d/§4f). */
+const DEVELOPMENT_TAIL = {
+  compound: { outcome: "created" },
+  pr: { repo: "o/r", head: `feature/${OWN_PLAN}`, target: "main" },
+  merge: { provider: "github", evidence: "PR #255 merged" },
+} as const;
+
+describe("execution-close-composition: §R5/§R10 the close composes what the rows' evidence entails", () => {
+  test("report.only recovery: ONE close records the fulfilment, completes the row and unregisters (A17/#270, no Git)", async () => {
+    const fixture = await lifecycleFixture("close-report-only", "report-only");
+    const { context } = fixture;
+    // The accepted report exists; the workflow's fulfilment projection does not.
+    clearRecordedFulfilment(context);
+    const handoffId = await acceptedAttempt(fixture, "close-report-only");
+    expect(storedWorkflow(context).delivery).toBeUndefined();
+    const before = closeFootprint(context);
+
+    // ONE ordinary close intent. The route owns no branch, no integration
+    // checkout and no PR identity, and the close demands none of them.
+    const closed = await workflowMutationOn(fixture, "op-close-report-only", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+
+    // Routing is gone from the receipt's own graph, and the history stayed.
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const stored = storedWorkflow(context);
+    // The fulfilment it recorded names the REGISTERED policy and the accepted
+    // report the decision was sealed against — resolved, never invented.
+    expect(stored.delivery).toMatchObject({
+      completion: { policy: "acceptance report", evidence: fixture.evidence[OWN_PLAN]!.qa },
+    });
+    expect(stored.status).toBe("completed");
+    expect(String(stored.ended_at)).not.toBe("");
+    // The row is Done with its completed handoff, and its ownership was
+    // RELEASED with provenance rather than deleted.
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: "close",
+    });
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+
+    // ONE handle: the workflow, the store and the root each advance exactly once.
+    const after = closeFootprint(context);
+    expect({
+      root: Number(after.root_revision) - Number(before.root_revision),
+      store: Number(after.store_revision) - Number(before.store_revision),
+      workflow: Number(after.workflow_revision) - Number(before.workflow_revision),
+    }).toEqual({ root: 1, store: 1, workflow: 1 });
+  }, 30000);
+
+  test("report.only recovery: a genuinely absent acceptance keeps the work and names only that decision (A18)", async () => {
+    const fixture = await lifecycleFixture("close-report-only-absent", "report-only");
+    const { context } = fixture;
+    clearRecordedFulfilment(context);
+    // The report exists but nobody accepted it: the ONE decision the close
+    // cannot supply is the acceptance, not a route's fields.
+    const handed = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-close-absent", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    const handoffId = handed.data.coordination!.handoff!.id;
+    const before = closeFootprint(context);
+
+    const refused = await refusalOf(() =>
+      workflowMutationOn(fixture, "op-close-report-only-absent", {
+        kind: "lifecycle",
+        status: "completed",
+        reason: "close",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    const recovery = refused.details!.recovery as {
+      outcome?: string;
+      commitState?: string;
+      applied?: readonly unknown[];
+      unresolved?: Array<Record<string, unknown>>;
+    };
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    expect(recovery.applied).toEqual([]);
+    const problem = recovery.unresolved![0]!;
+    expect(problem.component).toBe("plan-handoff");
+    expect(problem.path).toBe("handoff.state");
+    expect(String(problem.needed)).toContain("accepted");
+    expect(String(problem.needed)).toContain(`plan ${OWN_PLAN}`);
+    // Nothing was composed, nothing was registered twice: no phantom state.
+    expect(closeFootprint(context)).toEqual(before);
+
+    // The one necessary interaction (the acceptance) makes the same close succeed.
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-close-absent", { kind: "accept", handoffId });
+    const closed = await workflowMutationOn(fixture, "op-close-report-only-absent", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "close",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("Done");
+    expect(storedWorkflow(context).status).toBe("completed");
+  }, 30000);
+
+  test("evidence before Done: development evidence captured early is used by the close (A19)", async () => {
+    const fixture = await lifecycleFixture("close-development", "development");
+    const { context } = fixture;
+    const handoffId = await acceptedAttempt(fixture, "close-development");
+
+    // The external evidence (compound disposition, PR identity, verified-merge
+    // record) arrives BEFORE the row's `Done` projection: capturing it is legal,
+    // and the close composes that projection from the same evidence.
+    const captured = await workflowMutationOn(fixture, "op-close-delivery-early", {
+      kind: "delivery",
+      delivery: DEVELOPMENT_TAIL,
+    });
+    expect(captured.data.workflows[0]!.state.delivery).toMatchObject({
+      compound: { outcome: "created" },
+      pr: { head: `feature/${OWN_PLAN}`, target: "main" },
+      merge: { evidence: "PR #255 merged" },
+    });
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("InReview");
+
+    const closed = await workflowMutationOn(fixture, "op-close-development", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "delivery evidence verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const stored = storedWorkflow(context);
+    expect(stored.status).toBe("completed");
+    expect(stored.delivery).toMatchObject({ merge: { evidence: "PR #255 merged" } });
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({ status: "released" });
+  }, 30000);
+
+  test("interrupted integration: the close resumes the proven merge's bookkeeping without merging again (A14)", async () => {
+    const fixture = await lifecycleFixture("close-integration", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "close-integration");
+    const base = headOf(fixture.integrationPath);
+    // The merge RAN and the process died before the attempt was recorded: E09's
+    // seam finishes that bookkeeping from the OBSERVED merge (no re-merge).
+    const merged = mergeIntoIntegration(fixture);
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-close", {
+      kind: "integration-accept",
+      handoffId,
+    });
+    expect(recordedAttempt(context, OWN_PLAN).result_sha).toBe(merged);
+
+    // The other owned row is already Done and the delivery tail is recorded, so
+    // this close's whole work is the interrupted row.
+    plantRowStatus(context, PEER_PLAN, "Done");
+    await workflowMutationOn(fixture, "op-close-integration-delivery", { kind: "delivery", delivery: DEVELOPMENT_TAIL });
+    const headBefore = headOf(fixture.integrationPath);
+    const mergesBefore = firstParentMerges(fixture.integrationPath, base, headBefore);
+
+    const closed = await workflowMutationOn(fixture, "op-close-integration", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "integration result verified",
+    });
+
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    // No second merge, no re-pin: HEAD is where the interruption left it, with
+    // exactly ONE merge of the pinned source.
+    expect(headOf(fixture.integrationPath)).toBe(headBefore);
+    expect(firstParentMerges(fixture.integrationPath, base, headBefore)).toEqual(mergesBefore);
+    expect(firstParentMerges(fixture.integrationPath, base, headBefore)).toHaveLength(1);
+    // The completion is recorded and BOTH ownership records survive as
+    // provenance-bearing releases.
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(recordedAttempt(context, OWN_PLAN).result_sha).toBe(merged);
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+    });
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({
+      status: "released",
+      plan_id: OWN_PLAN,
+      prior_holder: COORDINATOR_ID,
+      released_by: COORDINATOR_ID,
+    });
+    expect(storedWorkflow(context).status).toBe("completed");
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+  }, 30000);
 });

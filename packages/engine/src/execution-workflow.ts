@@ -88,6 +88,13 @@ import {
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
+  applyEntailedCompletion,
+  completionFrameFor,
+  readEntailedCompletions,
+  type DeliveryRoutePin,
+  type EntailedRowCompletion,
+} from "./execution-coordination.js";
+import {
   ExecutionError,
   advanceWorkflowHeaderRevision,
   assertAuthorityGeneration,
@@ -452,6 +459,15 @@ type WorkflowEvidence = {
   gitWitness?: GitRefWitness;
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
+  /**
+   * §R5/§R10 (E10) the row completions a terminal `completed` close composes,
+   * derived before SQLite ownership from each owned row's recorded evidence.
+   * Empty for a close that has nothing to compose, and absent for every other
+   * transition.
+   */
+  completions?: readonly EntailedRowCompletion[];
+  /** The delivery route/policy pair those completions were proved against (§4.1). */
+  pinned?: DeliveryRoutePin;
 };
 
 /**
@@ -639,12 +655,46 @@ async function readWorkflowEvidence(
       return readPhaseEvidence(context, workflowId, operation);
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
+    case "lifecycle":
+      // §R5/§R10 a terminal `completed` close composes the fulfilment and the
+      // row completions its owned rows' recorded evidence entails. Every
+      // external read that composition needs (the report-only policy
+      // resolution, the development source proof, the integration merge proof
+      // and the findings gate) happens HERE, before SQLite ownership; the
+      // transaction re-verifies the pinned route, the digests and the Git
+      // witness at the commit boundary.
+      return operation.status === "completed"
+        ? readCloseEvidence(context, workflowId)
+        : {};
     default:
-      // The stored transitions (lifecycle, execution-policy, delivery) read no
-      // external evidence: their inputs are the store's own rows, which the
-      // transaction reads itself.
+      // The other stored transitions (phase-less lifecycle, execution-policy,
+      // delivery) read no external evidence: their inputs are the store's own
+      // rows, which the transaction reads itself.
       return {};
   }
+}
+
+/**
+ * §R5/§R10 the evidence of one terminal `completed` close. A workflow that is
+ * no longer a registered active lifecycle — an exact retry whose receipt the
+ * transaction below still serves — deliberately yields NO pending completion:
+ * the close's own registry absence is not this preflight's to report, and the
+ * transaction is the authority on why the address no longer resolves.
+ */
+async function readCloseEvidence(context: ExecutionContext, workflowId: string): Promise<WorkflowEvidence> {
+  let state;
+  try {
+    state = await readExecutionState(context);
+  } catch {
+    // The transaction's own reads report the store's actual state (staged,
+    // corrupt or unavailable); swallowing it here keeps a completed retry
+    // reaching its recorded receipt instead of failing on a preflight read.
+    return {};
+  }
+  const workflow = state.data.workflows.find((candidate) => candidate.state.id === workflowId);
+  if (workflow === undefined) return {};
+  const derived = await readEntailedCompletions(context, workflow);
+  return { completions: derived.completions, pinned: derived.pinned };
 }
 
 /** §4.1 the commit-window half of the pinned evidence: the same bytes, or a refusal. */
@@ -692,6 +742,23 @@ function refusalCodeOf(error: unknown): string | undefined {
 }
 
 /**
+ * §R5/§6.2 the report a refusal declared for ITSELF, when it carries one. A
+ * transition that names the ONE decision it cannot supply (the §6.2 shape both
+ * transports emit) is not relabelled by the frames around it: they add their own
+ * boundary facts and leave the report intact.
+ */
+function declaredRecoveryOf(error: unknown): RecoveryDetails | undefined {
+  if (!(error instanceof Error) || !("details" in error)) return undefined;
+  const details: unknown = error.details;
+  const recovery = isPlainObject(details) ? details.recovery : undefined;
+  if (!isPlainObject(recovery)) return undefined;
+  // Boundary cast: the sidecar is written by this engine's own recovery helpers
+  // (`unresolvedRecovery` / `withRecoveryDetails`), and the guard above proves it
+  // is the object shape they emit.
+  return recovery as unknown as RecoveryDetails;
+}
+
+/**
  * §4.1/§4.2 (A25) the typed cause of a transition whose external prerequisite is
  * unavailable: the refusal the evidence produced, unchanged, with the recovery
  * sidecar that states the stage it failed at, the known commit boundary (none —
@@ -710,18 +777,39 @@ function prerequisiteCause(
   // relabelled as a capability the transition could not read.
   if (code === "coordination.workflow-not-found") return error;
   const message = error instanceof Error ? error.message : String(error);
+  // §R5/§6.2 a refusal that DECLARED its own report — the ONE decision a
+  // transition cannot supply, in the §6.2 shape both transports emit — keeps it:
+  // the frame adds only its own read stage and the known commit boundary,
+  // instead of replacing the decision the caller must obtain with a generic
+  // prerequisite problem (the same rule the file route's row frame applies).
+  const declared = declaredRecoveryOf(error);
+  if (declared !== undefined) {
+    return withRecoveryDetails(error, { workflow_id: input.workflowId, stage: input.stage, commit_state: "none" });
+  }
+  // The evidence a transition reads depends on the transition: a phase /
+  // integration-worktree transition reads the registered compass and its Git
+  // probes, while a terminal close reads its owned rows' recorded completion
+  // evidence (and the Git proof a development/integration row's completion
+  // needs). The report names what THIS transition actually reads instead of a
+  // generic inventory.
+  const readsCompassFacts = input.operation.kind === "phase" || input.operation.kind === "integration-worktree";
   const problem: RecoveryProblem = {
     component: "operation-prerequisite",
     path: workflowOperationField(input.operation),
     code: code ?? "execution.prerequisite-unavailable",
     sourcesTried: [
-      `the workflow ${input.workflowId} header this store owns`,
-      "the lifecycle's registered compass and the Git probes its checkouts answer",
+      `the workflow ${input.workflowId} header and rows this store owns`,
+      readsCompassFacts
+        ? "the lifecycle's registered compass and the Git probes its checkouts answer"
+        : "the recorded completion evidence of the rows this transition composes",
     ],
     currentFacts: [
       input.stage === "read"
-        ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
-          `checkout probes) before it can decide, and this call did not get past that read`
+        ? readsCompassFacts
+          ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
+            `checkout probes) before it can decide, and this call did not get past that read`
+          : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a ` +
+            `completion needs) before it can decide, and this call did not get past that read`
         : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
           `matches what the transition decided against`,
       `the refusal reports: ${message}`,
@@ -1016,7 +1104,16 @@ export async function mutateExecutionWorkflow(
     // success the caller asked for, so this call reports it and spends nothing —
     // no revision, no timestamp, no receipt row. Stale evidence is not consulted:
     // a satisfied effect does not depend on the precursor file it once read.
-    if (workflowIntentHeld(stored.state, operation)) {
+    //
+    // §R10/A20 the ONE exception is a TERMINAL lifecycle intent: its effect
+    // includes losing the ACTIVE registry row, so a workflow that already
+    // records the terminal status while still holding its membership is exactly
+    // the residue this close repairs — it is never "already satisfied" here
+    // (this point is reached only through a readable registry row, so the
+    // membership fact is already established).
+    const terminalLifecycle =
+      operation.kind === "lifecycle" && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(operation.status);
+    if (!terminalLifecycle && workflowIntentHeld(stored.state, operation)) {
       return {
         ...readExecutionStateGraph(tx),
         operationId: resolved.call.operationId,
@@ -1044,7 +1141,7 @@ export async function mutateExecutionWorkflow(
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
     let receipt: ExecutionRead<ExecutionState>;
     try {
-      receipt = applyWorkflowOperation({ tx, witness, operation, evidence, at });
+      receipt = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
@@ -1079,33 +1176,65 @@ export async function mutateExecutionWorkflow(
  * lifecycle additionally loses its registry membership in the SAME transaction,
  * so a close that refuses leaves both the routing and the terminal state
  * exactly where they were.
+ *
+ * §R5/§R10 a terminal `completed` close composes the bookkeeping its owned rows'
+ * recorded evidence entails (E10) — the report-only fulfilment, the row
+ * `Done`/completed-handoff delta and the ownership release — BEFORE the terminal
+ * decision, through the same completion rules the plan route's `complete`
+ * applies. Everything therefore commits on ONE handle in ONE transaction: a
+ * crash leaves either the whole close or none of it, and the terminal decision
+ * judges the rows this transaction just completed.
  */
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
   witness: ExecutionWorkflowWitness;
+  read: ResolvedWorkflowWrite;
   operation: WorkflowExecutionOperation;
   evidence: WorkflowEvidence;
   at: string;
 }): ExecutionRead<ExecutionState> {
-  const { tx, witness, operation, evidence, at } = input;
+  const { tx, witness, read, operation, evidence, at } = input;
   const workflowId = witness.workflowId;
   const current = witness.view.state as unknown as WorkflowSnapshot;
-  if (isTerminalSnapshot(current)) {
+  // §R10/A20 a RESTATEMENT of the status a terminal lifecycle already records is
+  // its own membership repair: the outcome and its `ended_at` stay exactly as
+  // they were recorded, and only the outstanding ACTIVE registry row is cleaned
+  // up in this transaction. Every other request against a closed lifecycle is
+  // refused — a terminal outcome is never rewritten.
+  const residueRepair = isTerminalSnapshot(current) && operation.kind === "lifecycle" && operation.status === current.status;
+  if (isTerminalSnapshot(current) && !residueRepair) {
     throw invalidWorkflowTransition(
       `workflow ${workflowId} is ${current.status} \u2014 a closed lifecycle is never amended, and its history stays exactly as ` +
         `it was recorded`,
       { workflow_id: workflowId, status: current.status },
     );
   }
-  const rows = witness.view.plans.map((plan) => plan.plan as unknown as PlanRow);
-  const header = { ...(witness.view.state as unknown as Record<string, unknown>) };
+  const composed =
+    !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
+      ? composeEntailedCompletions({ tx, witness, read, evidence, at })
+      : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
+  // §R5 the rows the terminal decision reads are the ones this transaction just
+  // completed, and the ownership it reads is the ownership this transaction just
+  // released: both are re-read from the handle the transaction owns.
+  const effective = composed.completions.length === 0 ? witness : readExecutionWorkflowWitness(tx, read);
+  const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
+  const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
+  if (composed.fulfilment !== null) {
+    // The report-only fulfilment is the ONE member recorded BEFORE the row is
+    // marked `Done` (contract §1): the composition records it first, in the same
+    // atomic state the completion commits — never a second caller step and never
+    // a re-point of a fulfilment the row's `Done` was already authorized against
+    // (`entailedFulfilment` refuses that).
+    const stored = isPlainObject(header.delivery) ? (header.delivery as Record<string, unknown>) : {};
+    header.delivery = { ...stored, completion: composed.fulfilment };
+  }
   let membershipLost = false;
   switch (operation.kind) {
     case "phase":
       applyPhaseTransition({ header, rows, workflowId, operation, evidence });
       break;
     case "lifecycle":
-      membershipLost = applyLifecycleTransition({ header, rows, witness, workflowId, operation, at });
+      membershipLost = applyLifecycleTransition({ header, rows, witness: effective, workflowId, operation, at });
       break;
     case "execution-policy":
       header.execution_policy = applyExecutionPolicy(workflowId, operation.policy);
@@ -1122,6 +1251,62 @@ function applyWorkflowOperation(input: {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
   return readExecutionStateGraph(tx);
+}
+
+/**
+ * §R5/§R10 the row completions and the report-only fulfilment one terminal
+ * `completed` close composes, applied inside the close's own transaction. Each
+ * proof is matched to the row the transaction reads RIGHT NOW: a row that
+ * already records `Done` in that read composes nothing (a sibling operation in
+ * the window is never rewritten), and a row the preflight proved is completed
+ * here through the same rules `complete` applies.
+ */
+function composeEntailedCompletions(input: {
+  tx: ExecutionTransaction;
+  witness: ExecutionWorkflowWitness;
+  read: ResolvedWorkflowWrite;
+  evidence: WorkflowEvidence;
+  at: string;
+}): { completions: readonly EntailedRowCompletion[]; fulfilment: { policy: string; evidence: string } | null } {
+  const { tx, witness, read, evidence, at } = input;
+  const proofs = evidence.completions ?? [];
+  const pinned = evidence.pinned;
+  if (proofs.length === 0 || pinned === undefined) return { completions: [], fulfilment: null };
+  let fulfilment: { policy: string; evidence: string } | null = null;
+  const applied: EntailedRowCompletion[] = [];
+  for (const proof of proofs) {
+    // Each proof is matched to the row this transaction reads RIGHT NOW, and the
+    // ownership facts are read with it: a row another step of THIS transaction
+    // just completed is skipped, and a release composed for an earlier row is
+    // already visible to the next one instead of being re-derived from a stale
+    // sibling view.
+    const current = readExecutionWorkflowWitness(tx, read);
+    const row = current.view.plans.find((candidate) => candidate.plan.id === proof.planId);
+    if (row === undefined) continue;
+    if (proof.completesRow && rowStatusOf(row.plan as unknown as PlanRow) === "Done") continue;
+    const snapshot = {
+      ...(current.view.state as unknown as Record<string, unknown>),
+      plans: current.view.plans.map((plan) => plan.plan as unknown as PlanRow),
+      ...(current.view.integrationLease === null ? {} : { integration_merge_lease: current.view.integrationLease }),
+    } as unknown as WorkflowSnapshot;
+    applyEntailedCompletion({
+      tx,
+      frame: completionFrameFor({
+        workflow: current.view,
+        planId: proof.planId,
+        sessionId: witness.session.sessionId,
+      }),
+      snapshot,
+      pinned,
+      handoffId: proof.handoffId,
+      proof,
+      at,
+      what: "close",
+    });
+    if (proof.fulfilment !== null) fulfilment = proof.fulfilment;
+    applied.push(proof);
+  }
+  return { completions: applied, fulfilment };
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
@@ -1229,7 +1414,14 @@ function applyLifecycleTransition(input: {
 }): boolean {
   const { header, rows, witness, workflowId, operation, at } = input;
   const status = operation.status;
-  if (header.status === status) return false;
+  if (header.status === status) {
+    // §R10/A20 a RESTATEMENT of the status a terminal lifecycle already records
+    // is its own cleanup: the recorded outcome and its `ended_at` stay exactly
+    // as they were, and losing the outstanding ACTIVE registry row is the whole
+    // effect — the residue a crash or a foreign writer left behind. A running
+    // restatement remains the ordinary no-op it was.
+    return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status);
+  }
   if (!(WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
     header.status = status;
     delete header.ended_at;
@@ -1378,18 +1570,14 @@ function applyDeliveryEvidence(input: {
       );
     }
   }
-  const tail = members.filter((member) => member !== "completion");
-  if (tail.length > 0) {
-    const notDone = rows.filter((row) => rowStatusOf(row) !== "Done");
-    if (notDone.length > 0) {
-      throw invalidWorkflowTransition(
-        `workflow ${workflowId} cannot record the delivery tail (${tail.join(", ")}) while ` +
-          `${notDone.map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`).join(", ")} ` +
-          `${notDone.length === 1 ? "is" : "are"} not Done (contract \u00A73: row Done \u2192 compound disposition \u2192 PR identity \u2192 verified-merge record)`,
-        { workflow_id: workflowId },
-      );
-    }
-  }
+  // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence that
+  // arrives when it arrives: the engine captures it whenever it is observed and
+  // never makes the row's `Done` projection an ordering prerequisite, because
+  // the close composes that projection itself from the same evidence (E10). The
+  // semantic boundary is the CLOSE, which still requires the declared kind's
+  // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
+  // so the ordering is bookkeeping rather than a caller ceremony.
+  //
   // The mirror rule for the ONE member recorded BEFORE the row is Done
   // (contract §1: a report-only row "completes from an accepted handoff plus a
   // recorded fulfilment of that policy — the fulfilment is recorded before the

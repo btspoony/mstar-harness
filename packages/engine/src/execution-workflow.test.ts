@@ -678,11 +678,15 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
 
   test("delivery evidence follows the declared kind, records once and refuses a rewritten PR identity", async () => {
     const fixture = await workflowFixture("delivery");
-    // The delivery tail waits for every owned row: contract §3 ordering.
-    const early = await refusalOf(() =>
-      workflowMutation(fixture, "op-delivery-early", { kind: "delivery", delivery: { compound: { outcome: "created" } } }),
-    );
-    expect(early.code).toBe("coordination.invalid-transition");
+    // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence:
+    // it is captured when it is observed, whatever the row's own `Done`
+    // projection is, because the close composes that projection itself from the
+    // same evidence — the ordering is bookkeeping, never a caller ceremony.
+    const captured = await workflowMutation(fixture, "op-delivery-early", {
+      kind: "delivery",
+      delivery: { compound: { outcome: "created" } },
+    });
+    expect(captured.data.workflows[0]!.state.delivery).toMatchObject({ compound: { outcome: "created" } });
     setRowStatus(fixture.context, PLAN_ID, "Done");
 
     const before = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
@@ -722,11 +726,16 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const fixture = await workflowFixture("close-refusals");
     const before = await workflowFootprint(fixture.context);
 
+    // §R5/§R10 (A18) the close COMPOSES a row that its recorded evidence can
+    // complete; a row that records no reviewed evidence at all is the ONE
+    // decision the close cannot supply, and it is named on its own.
     const notDone = await refusalOf(() =>
       workflowMutation(fixture, "op-close-notdone", { kind: "lifecycle", status: "completed", reason: "done" }),
     );
     expect(notDone.code).toBe("coordination.invalid-transition");
-    expect(notDone.message).toContain("must be Done");
+    expect(notDone.message).toContain("records no handoff at all");
+    expect(notDone.details.needed).toContain("reviewed evidence");
+    expect(notDone.details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
     setRowStatus(fixture.context, PLAN_ID, "Done");
@@ -1676,5 +1685,105 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     expect(repeat.recovery?.applied).toEqual([]);
     expect(repeat.recovery?.commitState).toBe("none");
     expect(await workflowFootprint(fixture.context)).toEqual(afterAlias);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * E10 — the terminal close's residue repair and its convergence (§R5/§R10, A20/A28)
+ * ------------------------------------------------------------------------ */
+
+describe("execution-close-composition: §R10/A20 the terminal close's residue repair", () => {
+  test("terminal cleanup: a terminal snapshot whose registry row remains is repaired, preserving its outcome (A20)", async () => {
+    const fixture = await workflowFixture("close-residue");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const endedAt = "2026-01-05T06:07:08.000Z";
+    // The residue a crashed or foreign writer leaves: the lifecycle already
+    // records its terminal outcome and `ended_at`, while its ACTIVE registry row
+    // remains. It is a valid terminal snapshot, so nothing here is a rewrite.
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "update execution_workflows set state_json = json_set(state_json, '$.status', 'completed', '$.ended_at', ?) " +
+          "where workflow_id = ?",
+      ).run(endedAt, WORKFLOW_ID);
+    });
+    const before = revisions(fixture.context);
+    // §3.1 the CAS the close is admitted against, captured so the retry below is
+    // an EXACT retry of the same request (the close's receipt token is the POST-
+    // close ROOT token, which addresses a different kind).
+    const expected = await liveWorkflowToken(fixture);
+
+    const receipt = await workflowMutation(
+      fixture,
+      "op-close-residue",
+      { kind: "lifecycle", status: "completed", reason: "residue repaired" },
+      { expected },
+    );
+    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const [stored] = rows(
+      fixture.context,
+      `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+        `(select json_extract(state_json, '$.ended_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as ended_at`,
+    );
+    expect(stored!.registered).toBe(0);
+    // The recorded outcome and its time are PRESERVED, never rewritten.
+    expect(stored!.status).toBe("completed");
+    expect(stored!.ended_at).toBe(endedAt);
+    // One accepted operation: the workflow and the store each advance once, and
+    // the membership loss advances the root once.
+    const after = revisions(fixture.context);
+    expect(after).toEqual({ root: before.root + 1, store: before.store + 1, workflow: before.workflow + 1 });
+
+    // §R6/A28 the identical retry converges on the SAME effect: the recorded
+    // receipt is served, nothing is re-registered and no second cleanup runs.
+    const replay = await workflowMutation(
+      fixture,
+      "op-close-residue",
+      { kind: "lifecycle", status: "completed", reason: "residue repaired" },
+      { expected },
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.recovery?.outcome).toBe("already-satisfied");
+    expect(revisions(fixture.context)).toEqual(after);
+  });
+
+  test("terminal cleanup: a different terminal outcome is never rewritten over the recorded one (A20)", async () => {
+    const fixture = await workflowFixture("close-residue-outcome");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const endedAt = "2026-01-05T06:07:08.000Z";
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "update execution_workflows set state_json = json_set(state_json, '$.status', 'stopped', '$.ended_at', ?) " +
+          "where workflow_id = ?",
+      ).run(endedAt, WORKFLOW_ID);
+    });
+    const before = await workflowFootprint(fixture.context);
+
+    // A closed lifecycle is never amended and its outcome is never rewritten —
+    // only the restatement of the RECORDED status is its own membership repair.
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-close-residue-rewrite", {
+        kind: "lifecycle",
+        status: "completed",
+        reason: "claim it finished",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain("never amended");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    const repaired = await workflowMutation(fixture, "op-close-residue-stop", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "residue repaired",
+    });
+    expect(repaired.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const [stored] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at ` +
+        `from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(stored!.status).toBe("stopped");
+    expect(stored!.ended_at).toBe(endedAt);
   });
 });
