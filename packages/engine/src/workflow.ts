@@ -26,7 +26,7 @@
  *   snapshot), no harness-root pollution.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
   CoordinationError,
@@ -42,7 +42,7 @@ import {
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
-import { assertSafePathComponent } from "./path.js";
+import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
@@ -164,6 +164,15 @@ export type WorkflowBranchAnchors = {
  * notes append to the ledger only; row `notes` is read-only legacy and is
  * never a dual-write target, so the two never diverge by construction.
  */
+/**
+ * The Prepare phase an iteration factually sits in before any plan executes.
+ * Single source of truth for the free-form phase label: the registration
+ * producer writes it, and the Prepare readers/writers in coordination.ts
+ * derive or admit against it. Exported because coordination.ts already
+ * imports this module (the reverse import would create a cycle).
+ */
+export const PREPARE_PHASE = "phase-1-prepare";
+
 export type WorkflowSnapshot = {
   schema_version: 1;
   id: string;
@@ -1996,6 +2005,49 @@ export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot
 }
 
 /**
+ * Normalize the registration input's `compassRef` to the stored contract
+ * form: a harness-relative pointer. An absolute path that resolves inside
+ * the harness root names the identical reviewed document and is rewritten to
+ * its relative POSIX form; anything that would resolve outside the root
+ * refuses with the accepted form spelled out. The relative form is kept
+ * verbatim (resolved against the root and range-checked, never rewritten).
+ *
+ * Containment is decided on `canonicalizeNearestExisting` of both sides, so
+ * an in-root symlink whose target lies outside the harness is refused here —
+ * the same canonical read `readPrepareCompass` performs later — rather than
+ * being stored and failing at amendment time.
+ */
+function normalizeIterationCompassRef(
+  ref: string,
+  harnessRoot: string,
+  refuse: (detail: string) => Error,
+): string {
+  const rootCanon = canonicalizeNearestExisting(harnessRoot);
+  const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
+  const contained = (candidate: string): boolean => {
+    const canon = canonicalizeNearestExisting(candidate);
+    return canon === rootCanon || canon.startsWith(prefix);
+  };
+  if (isAbsolute(ref)) {
+    const resolved = resolve(ref);
+    if (!contained(resolved)) {
+      throw refuse(
+        `options.compassRef resolves outside the harness root — the reviewed compass_ref must address a ` +
+          `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
+      );
+    }
+    return relative(harnessRoot, resolved).split(sep).join("/");
+  }
+  if (!contained(resolve(harnessRoot, ref))) {
+    throw refuse(
+      `options.compassRef escapes the harness root — the reviewed compass_ref must address a document inside ` +
+        `${harnessRoot}; store the harness-relative pointer of that compass instead`,
+    );
+  }
+  return ref;
+}
+
+/**
  * The create-only `type: iteration` snapshot `registerIterationWorkflow`
  * writes: compass ref, the three branch anchors and one `Todo` row per
  * declared plan. Extracted for the same reason as
@@ -2012,6 +2064,10 @@ export function iterationWorkflowSnapshot(
     id: workflowId,
     type: "iteration",
     status: "running",
+    // A freshly registered iteration is factually in Prepare — every row is
+    // Todo and registration never authorizes execution (#293 producer fix:
+    // the consumer's admission demanded this label the producer never wrote).
+    phase: PREPARE_PHASE,
     started_at: startedAt,
     updated_at: startedAt.slice(0, 10),
     compass_ref: options.compassRef,
@@ -2095,6 +2151,14 @@ export async function registerIterationWorkflow(
   if (typeof options.compassRef !== "string" || options.compassRef.trim() === "") {
     throw refuse("options.compassRef must be a non-empty string");
   }
+  // The Prepare amendment's reader (`readPrepareCompass`) consumes a
+  // harness-relative pointer; an absolute spelling of the same in-root
+  // document is the identical reviewed compass, so it is normalized here —
+  // the stored form is always the relative contract form and a registered
+  // snapshot is amendable by construction (I-000243 disposition (a)). A
+  // pointer that cannot name a document inside this harness root is refused
+  // before any write, with the accepted form in the diagnostic.
+  const compassRef = normalizeIterationCompassRef(options.compassRef, harnessDir, refuse);
   if (typeof options.branch !== "object" || options.branch === null || Array.isArray(options.branch)) {
     throw refuse("options.branch must be an object (base, integration, target)");
   }
@@ -2153,7 +2217,7 @@ export async function registerIterationWorkflow(
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
   const store = getArtifactStore();
 
-  const snapshot = iterationWorkflowSnapshot(workflowId, { ...options, rows: resolvedRows }, startedAt);
+  const snapshot = iterationWorkflowSnapshot(workflowId, { ...options, compassRef, rows: resolvedRows }, startedAt);
 
   const entry: WorkflowEntry = {
     id: workflowId,
