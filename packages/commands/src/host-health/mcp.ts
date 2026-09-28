@@ -76,8 +76,11 @@ function isNpxMstarLaunch(entry: unknown): boolean {
  * specifically (not any server) whose command/args launch
  * `npx @mstar-harness/cli mcp`. */
 function codexMstarServerPresent(content: string): boolean {
+  // A commented-out table (`# [mcp_servers.mstar] ...`) cannot launch
+  // anything: strip comment lines before scanning for the table body.
+  const active = content.split("\n").filter((line) => !/^\s*#/.test(line)).join("\n");
   const table = /\[mcp_servers\.([A-Za-z0-9_-]+)\]([\s\S]*?)(?=\n\[|$)/g;
-  for (const match of content.matchAll(table)) {
+  for (const match of active.matchAll(table)) {
     if (match[1] !== "mstar") continue;
     const body = match[2] ?? "";
     const command = /command\s*=\s*"([^"]+)"/.exec(body)?.[1];

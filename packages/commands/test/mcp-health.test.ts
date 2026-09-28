@@ -108,6 +108,11 @@ describe("MCP doctor health", () => {
     mkdirSync(path.join(root, ".codex"), { recursive: true });
     writeFileSync(path.join(root, ".codex", "config.toml"), "[mcp_servers.other]\ncommand = \"npx\"\nargs = [\"-y\", \"@mstar-harness/cli\", \"mcp\"]\n", "utf8");
     expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
+
+    // A commented-out mstar table cannot launch anything — comment lines are
+    // stripped before the table scan.
+    writeFileSync(path.join(root, ".codex", "config.toml"), "# [mcp_servers.mstar]\n# command = \"npx\"\n# args = [\"-y\", \"@mstar-harness/cli\", \"mcp\"]\n", "utf8");
+    expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
   });
 
   test("dsh reads the Cordis sources under its profile", () => {
