@@ -214,6 +214,20 @@ describe("SDD command family", () => {
       }, invocation(fixture.feature, true));
       expect(failedCapture.status).toBe("error");
       expect(failedCapture.exitCode).toBe(3);
+      // The failed run still leaves a record; verifying it must NOT read as
+      // assessmentPassed even though there is no target (applicability
+      // "not-assessed") — the recorded outcome gates the flag.
+      const failedDetails = (failedCapture as { details?: { record?: { runId?: string } } }).details;
+      const failedRunId = failedDetails?.record !== null && typeof failedDetails?.record === "object"
+        ? (failedDetails.record as { runId?: string }).runId
+        : undefined;
+      expect(failedRunId).toBeString();
+      const failedVerify = await command("sdd.evidence.verify").execute({
+        sddDir: fixture.sddDir, plan: "plan", task: "task-1", run: failedRunId!,
+      }, invocation(fixture.feature, true));
+      expect(failedVerify.status).toBe("ok");
+      expect((failedVerify.data as { outcome: string }).outcome).toBe("failed");
+      expect((failedVerify.data as { assessmentPassed: boolean }).assessmentPassed).toBe(false);
     } finally {
       process.chdir(previousCwd);
       rmSync(root, { recursive: true, force: true });

@@ -10,12 +10,12 @@
  * Each case runs the real CLI as a subprocess against temp fixtures (and real
  * temp git repos where cheap) and asserts the exit code + printed output.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -1124,7 +1124,38 @@ describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded br
   });
 });
 
+/** A throwaway PATH dir that exposes ONLY git (symlinked from the ambient
+ * PATH): harness probing works, while gh stays unreachable no matter which
+ * prefix the runner installed it to. Registered for afterEach cleanup. */
+const ghlessPaths: string[] = [];
+
+function ghlessPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "ghless-path-"));
+  ghlessPaths.push(dir);
+  const git = which("git");
+  if (git !== null) symlinkSync(git, join(dir, "git"));
+  return dir;
+}
+
+function which(name: string): string | null {
+  for (const prefix of (process.env.PATH ?? "").split(delimiter)) {
+    if (prefix === "") continue;
+    const candidate = join(prefix, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // try the next PATH prefix
+    }
+  }
+  return null;
+}
+
 describe("mstar pr-review post", () => {
+  afterEach(() => {
+    for (const dir of ghlessPaths.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   /**
    * Planning path is exercised end-to-end: the command's first external step
    * IS `gh pr view`. To stay deterministic regardless of whether the runner
@@ -1140,14 +1171,17 @@ describe("mstar pr-review post", () => {
       writeFileSync(findings, JSON.stringify([{ path: "src/x.ts", line: 3, body: "off-by-one" }]));
       const noGhProc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "pr-review", "post", "--pr", "42", "--body-file", body, "--findings", findings], {
         cwd: CLI_ROOT,
-        env: { ...cliEnv(), PATH: "/nonexistent-path-for-gh-isolation" }, // never contains gh on any platform
+        // PATH is a throwaway dir that symlinks only git (harness probing
+        // needs it) — gh is unreachable on any platform regardless of where
+        // the runner installed it, and no system prefix is trusted.
+        env: { ...cliEnv(), PATH: ghlessPath() },
         stdout: "pipe",
         stderr: "pipe",
       });
       const result: RunResult = { exitCode: noGhProc.exitCode, stdout: noGhProc.stdout.toString(), stderr: noGhProc.stderr.toString() };
       expect(noGhProc.exitCode).toBe(1);
       expect(envelope(result).status).toBe("error");
-      expect(message(result)).toContain("Executable not found in $PATH");
+      expect(message(result)).toContain("executable not found in $PATH: gh");
     });
   });
 

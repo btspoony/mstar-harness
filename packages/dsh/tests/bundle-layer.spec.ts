@@ -73,13 +73,23 @@ function loadBundlePatch(): PatchOp[] {
   return parsed as PatchOp[]
 }
 
-/** The single `mstar` row the bundle inserts. */
-function mstarRow(): EntryRow {
+/** The `mstar` plugin row and the `mstar-mcp` MCP client row the bundle inserts. */
+function bundleRows(): EntryRow[] {
   const patches = loadBundlePatch()
   expect(patches).toHaveLength(1)
   const rows = patches[0]?.insert
-  expect(rows).toHaveLength(1)
-  const row = rows?.[0]
+  expect(rows).toHaveLength(2)
+  return rows!
+}
+
+function mstarRow(): EntryRow {
+  const row = bundleRows().find((entry) => entry.id === 'mstar')
+  expect(row).toBeDefined()
+  return row!
+}
+
+function mstarMcpRow(): EntryRow {
+  const row = bundleRows().find((entry) => entry.id === 'mstar-mcp')
   expect(row).toBeDefined()
   return row!
 }
@@ -93,10 +103,17 @@ describe('profile bundle layer (Task 4)', () => {
     expect(pkg.files).toContain('bundle')
   })
 
-  it('parses as a dsh-bundle patch: one `- insert:` op mounting the mstar plugin row', () => {
+  it('parses as a dsh-bundle patch: one `- insert:` op mounting the mstar plugin row and the mstar-mcp client row', () => {
     const row = mstarRow()
     expect(row.id).toBe('mstar')
     expect(row.name).toBe('@mstar-harness/dsh')
+    const mcp = mstarMcpRow()
+    expect(mcp.name).toBe('@deepseek-ai/dsh-mcp-client')
+    const config = mcp.config as Record<string, unknown>
+    expect(config.serverName).toBe('mstar')
+    expect(config.transport).toBe('stdio')
+    expect(config.command).toBe('npx')
+    expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp'])
   })
 
   it('defaults Enforcement OFF and ships no deployment-owned config keys', () => {

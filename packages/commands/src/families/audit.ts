@@ -62,7 +62,7 @@ function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${label} is required`, 2);
   return value;
 }
-function resolvePath(_cwd: string, value: string): string { return resolveCliPath(value); }
+function resolvePath(cwd: string, value: string): string { return path.isAbsolute(value) ? value : path.resolve(cwd, value); }
 function parseFindings(text: string): { findings: AuditFinding[]; needsVerification?: { lead: string; how: string; evidence?: string }[]; hardeningChecked?: { kind: "Hardening" | "Checked and clean"; text: string }[] } {
   let data: unknown;
   try { data = JSON.parse(text); } catch { throw new SddScriptError("findings file is not valid JSON", 2); }

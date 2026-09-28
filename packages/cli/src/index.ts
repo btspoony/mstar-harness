@@ -5,6 +5,7 @@ import { select } from "@inquirer/prompts";
 import { getCommandDefinitions } from "@mstar-harness/commands";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { Command, CommanderError } from "commander";
+import path from "node:path";
 import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
@@ -120,9 +121,16 @@ program
     await runInit({ ...options, noFallbacks: options.fallbacks === false, noGlobalCli: options.globalCli === false });
   });
 
+// Relative path arguments of the dev commands resolve against the project
+// root (audit-002 F-S2), which a caller may pin with MSTAR_CLI_PROJECT_ROOT;
+// otherwise the invocation directory stays the base.
+const invocationCwd = process.env.MSTAR_CLI_PROJECT_ROOT === undefined || process.env.MSTAR_CLI_PROJECT_ROOT === ""
+  ? process.cwd()
+  : path.resolve(process.env.MSTAR_CLI_PROJECT_ROOT);
+
 registerCliCommands(program, getCommandDefinitions(), {
-  cwd: process.cwd(),
-  controlRoot: resolveProcessHarnessDir(process.cwd()),
+  cwd: invocationCwd,
+  controlRoot: resolveProcessHarnessDir(invocationCwd),
   versions: reportSurfaceVersions,
   signal: new AbortController().signal,
   effects: {

@@ -801,7 +801,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
       expect(result.exitCode).toBe(1);
       expect((data.mcpHealth as { status: string }).status).toBe("unavailable");
       expect(data.errors).toEqual(expect.arrayContaining([
-        expect.stringContaining("no Cordis MCP launch configuration"),
+        expect.stringContaining("no mstar-mcp row"),
       ]));
       expect(data.notes).toEqual(expect.arrayContaining([
         expect.stringContaining(`${MSTAR_SPEC}: mounted`),

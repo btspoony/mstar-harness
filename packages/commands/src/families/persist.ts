@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   createFsStore,
   getArtifactStore,
+  guardInjectedStore,
   loadStoreModule,
   readCoordinatedArtifact,
   replaceCoordinatedArtifact,
@@ -52,7 +53,9 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
 }
 
 async function resolveStore(storeFlag: string | undefined, cwd: string): Promise<ArtifactStore> {
-  if (storeFlag !== undefined) return loadStoreModule(storeFlag);
+  if (storeFlag !== undefined) return guardInjectedStore(await loadStoreModule(storeFlag));
+  const envStore = process.env.MSTAR_STORE_MODULE;
+  if (envStore !== undefined) return guardInjectedStore(await loadStoreModule(envStore));
   const harnessDir = resolveProcessHarnessDir(cwd);
   return harnessDir === null ? getArtifactStore() : createFsStore(harnessDir);
 }

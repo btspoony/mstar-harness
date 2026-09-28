@@ -1,27 +1,16 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import { delimiter } from "node:path";
+import os from "node:os";
 import path from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
-import { resolveDshProfileDir } from "./dsh.js";
+import { DSH_BIN, DSH_DUMP_FLAG, DSH_HOME_ENV, DSH_PROFILE, DSH_PROFILE_FLAG, resolveDshProfileDir } from "./dsh.js";
 import { resolveOpencodePluginPackageRoot } from "./plugin-version-alignment.js";
 import { compareSemver } from "./version-compare.js";
 import type { HostTarget } from "./plugin-version-alignment.js";
 
 type RuntimeKind = "node" | "bun";
-
-type McpPackageLayout = {
-  buildInfo: string;
-  executable: string;
-  versionManifest: string;
-};
-
-const MCP_PACKAGE_LAYOUTS: Record<Exclude<HostTarget, "dsh">, McpPackageLayout> = {
-  omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
-  codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
-  kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
-  zcode: { buildInfo: "mcp/bundles/zcode/dist/mcp/build-info.json", executable: "mcp/bundles/zcode/dist/mcp/stdio.js", versionManifest: ".zcode-plugin/plugin.json" },
-};
 
 export type McpHealthStatus = "unavailable" | "mismatch" | "aligned";
 export type McpRuntime = Readonly<{ kind: RuntimeKind; version: string }>;
@@ -54,83 +43,328 @@ function actualRuntime(): McpRuntime {
     : { kind: "bun", version: process.versions.bun };
 }
 
-/** Inspect one target's packaged MCP server without starting a process or touching the artifact store. */
-export function diagnoseMcpTarget(
-  target: HostTarget,
-  packageRoot: string,
-  runtime: McpRuntime = actualRuntime(),
-): McpTargetHealth {
-  if (target === "dsh") {
+/**
+ * Each host's MCP config file path (relative to the host's config root).
+ * The doctor checks that the config exists and contains a valid mstar entry
+ * referencing `npx @mstar-harness/cli mcp`.
+ */
+const HOST_MCP_CONFIGS: Record<Exclude<HostTarget, "dsh">, { configFile: string; format: "mcpServers" | "mcp" | "toml" }> = {
+  omp: { configFile: ".omp/mcp.json", format: "mcpServers" },
+  opencode: { configFile: path.join(".config", "opencode", "opencode.json"), format: "mcp" },
+  cursor: { configFile: ".cursor/mcp.json", format: "mcpServers" },
+  codex: { configFile: ".codex/config.toml", format: "toml" },
+  kimi: { configFile: ".kimi-code/mcp.json", format: "mcpServers" },
+  zcode: { configFile: ".zcode/config.json", format: "mcpServers" },
+};
+
+/** True when a server entry launches `npx @mstar-harness/cli mcp`: the
+ * executable itself is `npx` (argv[0] — a string command or the head of a
+ * `command` array) and the argv that follows contains `@mstar-harness/cli`
+ * then the `mcp` subcommand. An `npx` buried mid-argv (a different
+ * executable's argument) does not launch the server and must not read as
+ * aligned. */
+function isNpxMstarLaunch(entry: unknown): boolean {
+  const e = record(entry);
+  if (e === null) return false;
+  const argv = [
+    ...(Array.isArray(e.command) ? e.command as string[] : typeof e.command === "string" ? [e.command] : []),
+    ...(Array.isArray(e.args) ? e.args as string[] : []),
+  ];
+  if (argv[0] !== "npx") return false;
+  const cli = argv.indexOf("@mstar-harness/cli", 1);
+  return cli !== -1 && argv.slice(cli + 1).includes("mcp");
+}
+
+/** Structured check of the Codex TOML: the `[mcp_servers.mstar]` table
+ * specifically (not any server) whose command/args launch
+ * `npx @mstar-harness/cli mcp`. Basic TOML strings may be single- or
+ * double-quoted. */
+function codexMstarServerPresent(content: string): boolean {
+  // A commented-out table (`# [mcp_servers.mstar] ...`) cannot launch
+  // anything: strip comment lines before scanning for the table body.
+  const active = content.split("\n").filter((line) => !/^\s*#/.test(line)).join("\n");
+  const table = /\[mcp_servers\.([A-Za-z0-9_-]+)\]([\s\S]*?)(?=\n\[|$)/g;
+  for (const match of active.matchAll(table)) {
+    if (match[1] !== "mstar") continue;
+    const body = stripTomlInlineComments(match[2] ?? "");
+    const command = tomlString(body, "command");
+    const args = tomlStringArray(body, "args");
+    const argv = [command ?? "", ...args];
+    if (argv[0] !== "npx") continue;
+    const cli = argv.indexOf("@mstar-harness/cli", 1);
+    if (cli !== -1 && argv.slice(cli + 1).includes("mcp")) return true;
+  }
+  return false;
+}
+
+/** One basic TOML string value (`key = "..."` or `key = '...'`). */
+function tomlString(body: string, key: string): string | null {
+  const match = new RegExp(`${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(body);
+  return match === null ? null : match[1] ?? match[2] ?? null;
+}
+
+/** A basic TOML array-of-strings value (`key = ["a", 'b']`). */
+function tomlStringArray(body: string, key: string): string[] {
+  const match = new RegExp(`${key}\\s*=\\s*\\[([^\\]]*)\\]`).exec(body);
+  if (match === null) return [];
+  return [...match[1]!.matchAll(/"([^"]*)"|'([^']*)'/g)].map((m) => m[1] ?? m[2] ?? "");
+}
+
+/** Drop each line's tail after the first `#` that sits outside a quoted
+ * string, so inline comments cannot supply `command`/`args` values. */
+function stripTomlInlineComments(body: string): string {
+  return body.split("\n").map((line) => {
+    let inString = false;
+    let cut = line.length;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i]!;
+      if (ch === '"') inString = !inString;
+      else if (ch === "#" && !inString) { cut = i; break; }
+    }
+    return line.slice(0, cut);
+  }).join("\n");
+}
+
+/** Anchor package.json files the dsh loader resolves plugins from, in
+ * `resolveBundleDir` order: the owning `@deepseek-ai/dsh` installation
+ * (found by walking up from the real `dsh` executable — no layout
+ * assumption), then the profile package itself. */
+function dshResolutionAnchors(profileDir: string): string[] {
+  const anchors: string[] = [];
+  const bin = dshBinRealPath();
+  if (bin !== null) {
+    const installAnchor = packageJsonNamed(path.dirname(bin), "@deepseek-ai/dsh");
+    if (installAnchor !== null) anchors.push(installAnchor);
+  }
+  anchors.push(path.join(profileDir, "package.json"));
+  return anchors;
+}
+
+/** The nearest ancestor package.json whose `name` matches, walking up from
+ * `startDir`. */
+function packageJsonNamed(startDir: string, name: string): string | null {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(fs.readFileSync(candidate, "utf8")) as { name?: unknown };
+      if (pkg.name === name) return candidate;
+    } catch {
+      // keep walking
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Real path of the first executable `dsh` on PATH. */
+function dshBinRealPath(): string | null {
+  for (const prefix of (process.env.PATH ?? "").split(delimiter)) {
+    if (prefix === "") continue;
+    const candidate = path.join(prefix, DSH_BIN);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // try the next PATH prefix
+    }
+  }
+  return null;
+}
+
+/** Whether `@deepseek-ai/dsh-mcp-client` is physically installed on the Node
+ * ancestor chain of one of the loader anchors: the anchor dir itself and
+ * every `node_modules` above it (this covers the package-internal layout and
+ * the hoisted sibling in the install tree, while the profile anchor covers
+ * the profile node_modules). Installation-scope entries are visible to every
+ * profile (upstream collectInstallationScopePackages + scope: 'installation'),
+ * and the inspected DSH manifest declares the bridge as an app dependency.
+ * A module-resolution probe is unusable here: Bun's resolver falls back to
+ * its global install cache, which would report a bridge that no dsh profile
+ * can actually load. pnpm/workspace layouts surface as symlinks, which
+ * existsSync follows. */
+function bridgePluginResolves(profileDir: string): boolean {
+  const segments = ["@deepseek-ai", "dsh-mcp-client"];
+  for (const anchor of dshResolutionAnchors(profileDir)) {
+    let dir = path.dirname(anchor);
+    for (;;) {
+      if (fs.existsSync(path.join(dir, "node_modules", ...segments, "package.json"))) return true;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return false;
+}
+
+/** Inspect the dsh profile's MCP configuration through dsh's OWN composer:
+ * `dsh --profile web --dump-config` prints the effective row tree AFTER
+ * bundle order, patch layering, `resolution.entries` interception and both
+ * install anchors — surfaces the doctor cannot re-implement faithfully. A
+ * mounted `@deepseek-ai/dsh-mcp-client` row in that dump is authoritative;
+ * a `disabled: true` row or no row at all reads as unavailable. */
+function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: string | null): McpTargetHealth {
+  const runtimePrefix: Pick<McpTargetHealth, "runtimeFloor"> = { runtimeFloor };
+  const withError = (errors: string[]): readonly string[] => (runtimeError === null ? errors : [...errors, runtimeError]);
+  const dshHome = path.resolve(profileDir, "..", "..");
+  let dump: string | null = null;
+  let dumpError: string | null = null;
+  try {
+    const proc = spawnSync(DSH_BIN, [DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], {
+      cwd: profileDir,
+      env: { ...process.env, [DSH_HOME_ENV]: dshHome },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    if (proc.status === 0) dump = proc.stdout;
+    else dumpError = (proc.error !== undefined && proc.error !== null ? proc.error.message : (proc.stderr ?? "").trim()) || `exited ${String(proc.status)}`;
+  } catch (error) {
+    dumpError = error instanceof Error ? error.message : String(error);
+  }
+  if (dump === null) {
     return {
-      target,
+      target: "dsh",
       status: "unavailable",
-      location: resolveDshProfileDir(),
-      runtimeFloor: MIN_BUN_VERSION,
-      errors: ["MCP client configuration unavailable for dsh; no Cordis MCP launch configuration is installed."],
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError([`MCP health for dsh could not read the effective configuration: \`dsh ${DSH_PROFILE_FLAG} ${DSH_PROFILE} ${DSH_DUMP_FLAG}\` failed (${dumpError ?? "dsh not found"}).`]),
       notes: [],
     };
   }
-  const layout = MCP_PACKAGE_LAYOUTS[target];
-  const buildInfoPath = path.join(packageRoot, layout.buildInfo);
-  const executablePath = path.join(packageRoot, layout.executable);
-  const manifestPath = path.join(packageRoot, layout.versionManifest);
-  const missing = [buildInfoPath, executablePath, manifestPath].filter((file) => !fs.existsSync(file));
+  // A dump row starts at a top-level "- " line; everything indented under it
+  // (name, config, a `disabled: true` flag) belongs to that row's block. The
+  // mstar row is the bridge entry under the `mstar` server name — another
+  // DSH MCP server reusing the client package does not satisfy health.
+  const rowBlock = dump.split(/^(?=- )/m).find((block) => block.includes("@deepseek-ai/dsh-mcp-client") && /^\s+serverName:\s*mstar\s*$/m.test(block));
+  if (rowBlock === undefined) {
+    return {
+      target: "dsh",
+      status: "unavailable",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError([`MCP client configuration unavailable for dsh; the composed configuration has no mstar-mcp row (checked via \`dsh ${DSH_DUMP_FLAG}\`).`]),
+      notes: [],
+    };
+  }
+  if (/^\s+disabled:\s*true\s*$/m.test(rowBlock)) {
+    return {
+      target: "dsh",
+      status: "unavailable",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError(["The mstar-mcp row is composed but disabled in the dsh configuration; enable it to expose the MCP server."]),
+      notes: [],
+    };
+  }
+  // The dump proves the row COMPOSES, not that the bridge plugin RESOLVES:
+  // app-boot tolerates an optional MCP entry that fails to load, so a row can
+  // sit in the tree with the bridge missing. Mirror the loader's anchor order
+  // (upstream resolveBundleDir): the owning dsh installation first, then the
+  // profile package; Node's ancestor walk inside each anchor covers the
+  // parent layers.
+  if (!bridgePluginResolves(profileDir)) {
+    return {
+      target: "dsh",
+      status: "mismatch",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError(["The mstar-mcp row is composed but @deepseek-ai/dsh-mcp-client does not resolve from the dsh installation or the profile; run `dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`."]),
+      notes: [],
+    };
+  }
+  if (runtimeError !== null) {
+    return {
+      target: "dsh",
+      status: "mismatch",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: [runtimeError],
+      notes: [],
+    };
+  }
+  return {
+    target: "dsh",
+    status: "aligned",
+    location: profileDir,
+    ...runtimePrefix,
+    errors: [],
+    notes: [`Cordis mcp-client row launches npx @mstar-harness/cli mcp for dsh (server name "mstar"; verified through \`dsh ${DSH_DUMP_FLAG}\`).`],
+  };
+}
+
+/** Inspect one target's MCP configuration without starting a process. */
+export function diagnoseMcpTarget(
+  target: HostTarget,
+  configRoot: string,
+  runtime: McpRuntime = actualRuntime(),
+): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
     ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
     : null;
 
-  if (missing.length > 0) {
+  if (target === "dsh") {
+    return diagnoseDshMcp(configRoot, runtimeFloor, runtimeError);
+  }
+
+  const { configFile: relativeConfig, format } = HOST_MCP_CONFIGS[target];
+  const configPath = path.join(configRoot, relativeConfig);
+
+  if (!fs.existsSync(configPath)) {
     return {
       target,
       status: "unavailable",
-      location: buildInfoPath,
+      location: configPath,
       runtimeFloor,
       errors: [
-        `MCP package unavailable for ${target}; missing ${missing.map((file) => path.relative(packageRoot, file)).join(", ")}.`,
+        `MCP configuration not found for ${target}; expected ${relativeConfig}.`,
         ...(runtimeError === null ? [] : [runtimeError]),
       ],
       notes: [],
     };
   }
 
-  const manifest = readJson(manifestPath);
-  const buildInfo = readJson(buildInfoPath);
-  const version = manifest?.version;
-  const protocols = buildInfo?.supportedProtocols;
-  const mismatch: string[] = [];
-  if (manifest === null || buildInfo === null) {
-    mismatch.push("package manifest or MCP build metadata is not valid JSON object data.");
-  } else {
-    if (typeof version !== "string" || version === "") mismatch.push("package manifest has no version.");
-    for (const key of ["pluginVersion", "engineVersion", "mcpVersion"] as const) {
-      if (typeof buildInfo[key] !== "string" || buildInfo[key] !== version) {
-        mismatch.push(`${key} does not match packaged version ${String(version ?? "unknown")}.`);
+  const content = fs.readFileSync(configPath, "utf8");
+  const errors: string[] = [];
+
+  if (format === "mcpServers" || format === "mcp") {
+    let parsed: Record<string, unknown> | null;
+    let parseFailed = false;
+    try {
+      parsed = record(JSON.parse(content));
+    } catch (error) {
+      parseFailed = true;
+      parsed = null;
+      errors.push(`MCP config ${relativeConfig} is not valid JSON: ${error instanceof Error ? error.message : String(error)}.`);
+    }
+    // `JSON.parse("null")` succeeds but is not a config object — a bare null,
+    // array or scalar must read as mismatch, never fall through to aligned.
+    if (!parseFailed && parsed === null) errors.push(`MCP config ${relativeConfig} is not a JSON object.`);
+    if (parsed !== null) {
+      const servers = format === "mcp" ? parsed.mcp : parsed.mcpServers;
+      const serverRecord = record(servers);
+      if (serverRecord === null) {
+        errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+      } else {
+        const hasMstar = Object.values(serverRecord).some((entry) => isNpxMstarLaunch(entry));
+        if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry launching \`npx @mstar-harness/cli mcp\`.`);
       }
     }
-    if (buildInfo.hostTarget !== target) mismatch.push(`hostTarget does not match ${target}.`);
-    if (!Array.isArray(protocols) || protocols.length === 0 || protocols.some((item) => typeof item !== "string" || item.length === 0)) {
-      mismatch.push("supportedProtocols is missing or invalid.");
-    }
+  } else if (format === "toml") {
+    if (!codexMstarServerPresent(content)) errors.push(`Codex config ${relativeConfig} has no \`[mcp_servers.mstar]\` entry launching \`npx @mstar-harness/cli mcp\`.`);
   }
-  if (runtimeError !== null) mismatch.push(runtimeError);
+
+  if (runtimeError !== null) errors.push(runtimeError);
 
   return {
     target,
-    status: mismatch.length === 0 ? "aligned" : "mismatch",
-    location: buildInfoPath,
+    status: errors.length === 0 ? "aligned" : errors.some((e) => e.includes("not found") || e.includes("unavailable")) ? "unavailable" : "mismatch",
+    location: configPath,
     runtimeFloor,
-    errors: mismatch,
-    notes: mismatch.length === 0 ? [`MCP package metadata and files aligned for ${target} (${String(version)}).`] : [],
+    errors,
+    notes: errors.length === 0 ? [`MCP config aligned for ${target}.`] : [],
   };
 }
 
-/** Resolve the installed package for cache-based hosts, not ignored checkout build outputs. */
-export function mcpTargetPackageRoot(
-  target: HostTarget,
-  repositoryRoot: string,
-  options: { opencodePackagesRoot?: string } = {},
-): string {
-  if (target === "opencode") return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
-  return target === "omp" ? path.join(repositoryRoot, "packages", "omp") : repositoryRoot;
-}
+export { resolveDshProfileDir };

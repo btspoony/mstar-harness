@@ -61,7 +61,11 @@ config:
 2. `@deepseek-ai/dsh-web-app` — the shipped web app layer (the `web` profile
    template the install targets; absent from a hand-made profile).
 3. This bundle — inserts the `mstar` plugin row (`id: mstar`,
-   `name: @mstar-harness/dsh`).
+   `name: @mstar-harness/dsh`) and the `mstar-mcp` MCP client row
+   (`id: mstar-mcp`, `name: @deepseek-ai/dsh-mcp-client`, stdio launch of
+   `npx @mstar-harness/cli mcp`; requires the bridge plugin
+   `@deepseek-ai/dsh-mcp-client` in the profile's dependencies — see the
+   patch header).
 4. The profile's own `cordis.patch.yml`, then `$DSH_HOME/cordis.patch.yml`
    (the home-level layer outranks the per-profile layer).
 

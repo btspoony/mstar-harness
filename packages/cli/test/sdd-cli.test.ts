@@ -652,11 +652,11 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
       const f = executionFixture(root);
       const noContext = runCli(["sdd", "exec"], { cwd: root });
       expect(noContext.exitCode).toBe(2);
-      expect(noContext.stderr).toContain("missing required argument 'argv'");
+      expectEnvelopeMessage(noContext, "missing required argument 'argv'");
 
       const noArgv = runCli(["sdd", "exec", "--context", f.ctxFile], { cwd: f.control });
       expect(noArgv.exitCode).toBe(2);
-      expect(noArgv.stderr).toContain("missing required argument 'argv'");
+      expectEnvelopeMessage(noArgv, "missing required argument 'argv'");
 
       const relativeCtx = runCli(["sdd", "exec", "--context", "ctx.json", "--", "true"], { cwd: f.control });
       expect(relativeCtx.exitCode).toBe(2);

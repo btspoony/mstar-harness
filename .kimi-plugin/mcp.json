@@ -1,4 +1,3 @@
-// Requires a published @mstar-harness/cli version that includes the mcp subcommand.
 {
   "mcpServers": {
     "morning-star": {

@@ -204,7 +204,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
   test("missing <assignment-file> arg → usage, exit 2", () => {
     const result = runCli(["review", "seats"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toBe("error: missing required argument 'assignmentFile'\n");
+    expect(String(jsonOf(result).message)).toContain("missing required argument 'assignmentFile'");
   });
 
   test("nonexistent assignment file → exit 1 with file error", () => {

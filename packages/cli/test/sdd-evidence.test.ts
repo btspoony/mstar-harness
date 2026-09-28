@@ -1371,7 +1371,7 @@ describe("verify — target applicability", () => {
       const wrongHead = "0".repeat(40);
       const target = targetFileFor(root, f.feature, wrongHead);
       const verify = verifyCli(f, result.record.runId, { target });
-      expect(verify.exitCode).toBe(1);
+      expect(verify.exitCode).toBe(0);
       const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("target.expected-head-mismatch");
@@ -1404,7 +1404,7 @@ describe("verify — target applicability", () => {
 
       const target = targetFileFor(root, other, otherHead);
       const verify = verifyCli(f, result.record.runId, { target });
-      expect(verify.exitCode).toBe(1);
+      expect(verify.exitCode).toBe(0);
       const assessment = dataOf(verify) as { applicability: string; reasons: string[]; changedInputs: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("input.repository");
@@ -1426,7 +1426,7 @@ describe("verify — target applicability", () => {
         writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
         const target1 = targetFileFor(root, f.feature, f.head);
         const verify1 = verifyCli(f, result.record.runId, { target: target1 });
-        expect(verify1.exitCode).toBe(1);
+        expect(verify1.exitCode).toBe(0);
         const assessment1 = dataOf(verify1) as { applicability: string; changedInputs: string[] };
         expect(assessment1.applicability).toBe("changed");
         expect(assessment1.changedInputs).toContain("src/app.js");
@@ -1435,7 +1435,7 @@ describe("verify — target applicability", () => {
         rmSync(join(f.feature, "deps", "lib.js"));
         const target2 = targetFileFor(root, f.feature, f.head);
         const verify2 = verifyCli(f, result.record.runId, { target: target2 });
-        expect(verify2.exitCode).toBe(1);
+        expect(verify2.exitCode).toBe(0);
         const assessment2 = dataOf(verify2) as { applicability: string; changedInputs: string[] };
         expect(assessment2.applicability).toBe("changed");
         expect(assessment2.changedInputs).toContain("deps/lib.js");
@@ -1476,7 +1476,7 @@ describe("verify — target applicability", () => {
         mkdirSync(join(f.feature, "ghost"));
         const target = targetFileFor(root, f.feature, f.head);
         const verify = verifyCli(f, result.record.runId, { target });
-        expect(verify.exitCode).toBe(1);
+        expect(verify.exitCode).toBe(0);
         const assessment = dataOf(verify) as { applicability: string; changedInputs: string[] };
         expect(assessment.applicability).toBe("changed");
         expect(assessment.changedInputs).toContain("ghost");
@@ -1495,7 +1495,7 @@ describe("verify — target applicability", () => {
       const result = await captureDirect(f, counterArgv(f), { request, env: { NODE_ENV: undefined } });
       const target = targetFileFor(root, f.feature, f.head);
       const verify = verifyCli(f, result.record.runId, { target });
-      expect(verify.exitCode).toBe(1);
+      expect(verify.exitCode).toBe(0);
       const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("coverage.unknown");
@@ -1525,7 +1525,7 @@ describe("verify — target applicability", () => {
 
       const target = targetFileFor(root, f.feature, f.head);
       const verify = verifyCli(f, result!.record.runId, { target });
-      expect(verify.exitCode).toBe(1);
+      expect(verify.exitCode).toBe(0);
       const assessment = dataOf(verify) as { applicability: string; reasons: string[] };
       expect(assessment.applicability).toBe("uncertain");
       expect(assessment.reasons).toContain("input.unknown");
@@ -1556,11 +1556,12 @@ describe("verify — target applicability", () => {
       writeFileSync(badHead, JSON.stringify({ cwd: f.feature, expectedHead: "nothex", rationale: "r" }));
       expect(verifyCli(f, result.record.runId, { target: badHead }).exitCode).toBe(2);
 
-      // Unknown run id: structured assessment, exit 1, non-empty stdout.
+      // Unknown run id: structured assessment, status ok with assessmentPassed false, non-empty stdout.
       const foreignUuid = "00000000-0000-4000-8000-000000000000";
       const missingRun = verifyCli(f, foreignUuid);
-      expect(missingRun.exitCode).toBe(1);
-      const assessment = dataOf(missingRun) as { integrity: { ok: boolean }; outcome: string; applicability: string };
+      expect(missingRun.exitCode).toBe(0);
+      const assessment = dataOf(missingRun) as { integrity: { ok: boolean }; outcome: string; applicability: string; assessmentPassed: boolean };
+      expect(assessment.assessmentPassed).toBe(false);
       expect(assessment.integrity.ok).toBe(false);
       expect(assessment.applicability).toBe("uncertain");
     } finally {
@@ -1663,7 +1664,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         const originalLog = readFileSync(stdoutLog);
         writeFileSync(stdoutLog, `${originalLog.toString("utf8")}damaged\n`);
         const damaged = verifyCli(f, first.record.runId, { target: currentTarget, env });
-        expect(damaged.exitCode).toBe(1);
+        expect(damaged.exitCode).toBe(0);
         const damagedAssessment = dataOf(damaged) as {
           applicability: string;
           integrity: { ok: boolean };
@@ -1679,7 +1680,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         writeFileSync(stdoutLog, originalLog);
         writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
         const changed = verifyCli(f, first.record.runId, { target: currentTarget, env });
-        expect(changed.exitCode).toBe(1);
+        expect(changed.exitCode).toBe(0);
         const changedAssessment = dataOf(changed) as { applicability: string; changedInputs: string[] };
         expect(changedAssessment.applicability).toBe("changed");
         expect(changedAssessment.changedInputs).toContain("src/app.js");

@@ -370,7 +370,8 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   test("missing <assignment-file> arg → usage, exit 2", () => {
     const result = runCli(["dispatch", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("error: missing required argument 'assignmentFile'");
+    const envelope = expectEnvelope(result, "usage", "command.invalid-input");
+    expect(String(envelope.message)).toContain("missing required argument 'assignmentFile'");
   });
 
   test("nonexistent assignment file → exit 1 with file error", () => {

@@ -208,10 +208,10 @@
       "name": "@mstar-harness/opencode",
       "version": "3.11.2",
       "dependencies": {
-        "@mstar-harness/commands": "workspace:*",
         "@opencode-ai/plugin": "1.4.8",
       },
       "devDependencies": {
+        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
       },
     },

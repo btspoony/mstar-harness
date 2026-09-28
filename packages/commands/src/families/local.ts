@@ -31,8 +31,8 @@ import {
   diagnoseOpencodeHost,
   diagnoseZcodeHost,
   formatPluginVersionDoctorNote,
-  mcpTargetPackageRoot,
   parseOmpPluginList,
+  resolveDshProfileDir,
   resolveProjectRoot,
   validateAgentPlugin,
 } from "../host-health.js";
@@ -221,7 +221,12 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
         const result = await diagnose(input.target, input.scope);
-        const mcpHealth = diagnoseMcpTarget(input.target, mcpTargetPackageRoot(input.target, harnessRepoPath));
+        // Host MCP configs live under the USER's config root (~/.cursor/mcp.json,
+        // ~/.codex/config.toml, ...), not inside the harness checkout; dsh composes
+        // its Cordis rows under the profile dir instead.
+        const mcpHealth = input.target === "dsh"
+          ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
+          : diagnoseMcpTarget(input.target, os.homedir());
         const errors = [...result.errors, ...mcpHealth.errors];
         const data = {
           ...result,

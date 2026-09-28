@@ -303,7 +303,7 @@ describe("mstar status workflow-close", () => {
     setupHarness((harness) => {
       const result = runCli(["status", "workflow-close", "--harness", harness]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("required option '--workflow <id>' not specified");
+      expect(String(envelope(result).message)).toContain("required option '--workflow <id>' not specified");
     });
   });
 
