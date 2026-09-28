@@ -6540,8 +6540,14 @@ const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
  */
 const PREPARE_APPEND_AUTHORITY_METADATA_KEYS: readonly string[] = ["catalog_pin"];
 
-/** The only `plan_parallelism` values the approved concurrency contract names. */
-const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
+/**
+ * The only `plan_parallelism` values the approved concurrency contract names.
+ *
+ * Exported because the ACTIVE DB route's `execution-policy` transition applies
+ * the SAME closed set (E08): one rule, two authority routes, no second list to
+ * drift (`execution-workflow.ts` no longer mirrors it).
+ */
+export const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
 
 function prepareAmendmentRefusal(
   reason: PrepareAmendmentReason,
@@ -7399,6 +7405,16 @@ function readIntegrationWorktreePath(
 type PreparePlanFileCorrectionDelta = Readonly<{ id: string; file: string }>;
 
 /**
+ * The resolved outcome of one correction component (§4.1/A09): either the pointer
+ * delta this call commits, or the recognition that the addressed row ALREADY
+ * holds that plan's canonical file — the same intent, satisfied, so the
+ * component is held and no second mutation is spent on it.
+ */
+type PreparePlanFileCorrectionOutcome =
+  | Readonly<{ held: true; id: string }>
+  | Readonly<{ held: false; delta: PreparePlanFileCorrectionDelta }>;
+
+/**
  * The exact repository-relative spelling of a plan file, derived from this
  * control root's **configured** plan directory and the repository root that
  * owns the harness — the malformed form rows registered before P2 still hold
@@ -7486,7 +7502,7 @@ function assertUnstartedAddressedRow(row: PlanRow, workflowId: string): void {
 function readPlanFileCorrection(
   value: unknown,
   context: { harnessRoot: string; snapshot: WorkflowSnapshot },
-): PreparePlanFileCorrectionDelta {
+): PreparePlanFileCorrectionOutcome {
   if (!isPlainObject(value)) {
     throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object", { actual: value ?? null });
   }
@@ -7548,16 +7564,6 @@ function readPlanFileCorrection(
       { plan_id: id, actual: expectedFile ?? null },
     );
   }
-  // The exact observed value, not a normalised one: a correction applies to the
-  // pointer this patch was reviewed against, so a row that moved underneath the
-  // caller refuses instead of being repointed from a stale observation.
-  if (previous !== expectedFile) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
-      { plan_id: id, expected: expectedFile, actual: previous },
-    );
-  }
   const declared = value.file;
   // Shape first, like the append path: the shared resolver names the pointer
   // form with `path.isAbsolute(file)` before its own type check.
@@ -7581,6 +7587,23 @@ function readPlanFileCorrection(
     throw error;
   }
   const planPath = resolved.planPath;
+  // §5/A09/A12 the exact already-applied correction is a CURRENT SUCCESS: the
+  // addressed row already records this plan's canonical file, so the requested
+  // effect holds and this call writes nothing for it. The caller's
+  // `expectedFile` is a semantic constraint on the read set (§4.2), never a
+  // historical-byte gate: a patch re-presented after a lost response whose row
+  // already holds the target is the same intent, satisfied.
+  if (previous === planPath) return { held: true, id };
+  // The exact observed value, not a normalised one: a correction applies to the
+  // pointer this patch was reviewed against, so a row that moved underneath the
+  // caller refuses instead of being repointed from a stale observation.
+  if (previous !== expectedFile) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
+      { plan_id: id, expected: expectedFile, actual: previous },
+    );
+  }
   // The pointer being replaced must identify THIS plan: either a form the shared
   // resolver accepts, or the exact derived repository-relative spelling of the
   // same canonical target. A same-basename file, a copied document whose header
@@ -7601,15 +7624,7 @@ function readPlanFileCorrection(
       { plan_id: id, actual: expectedFile, expected: planPath },
     );
   }
-  // A correction that would not move the pointer is not a correction.
-  if (previous === planPath) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} already records ${planPath} \u2014 the correction would not change this row's pointer`,
-      { plan_id: id, path: planPath },
-    );
-  }
-  return { id, file: planPath };
+  return { held: false, delta: { id, file: planPath } };
 }
 
 /**
@@ -7617,9 +7632,11 @@ function readPlanFileCorrection(
  * the partition surface the commit path (E08) consumes: each component names
  * the facts it read, so a patch whose components are independent still lands
  * the ones that carry no conflict, while components that share a semantic read
- * or write (an append and its plan-set authorization, an integration path and
- * its policy) stay connected and commit together. Resolving and validating
- * them is this verb's job; committing them one by one is E08's.
+ * or write — the recorded integration checkout and its policy, an appended row
+ * and the reviewed integration topology it joins — stay connected and commit
+ * together. Resolving and validating them is this verb's job; committing them
+ * is the authority-specific commit path (this verb's snapshot lock on the
+ * supported file route, the frame's own transaction on the ACTIVE DB route).
  */
 type PrepareProposal = {
   /** One new approved row per entry — the `append` component. */
@@ -7634,29 +7651,334 @@ type PrepareProposal = {
   warnings: readonly ResolutionWarning[];
   /** The declarations each normalized value was resolved from (provenance). */
   resolvedFrom: readonly ResolutionSource[];
-  /** The components this patch addresses, in stable order. */
+  /** Every component this patch ADDRESSES, in stable order (once each). */
   components: readonly string[];
 };
 
 /**
- * The patch, validated against the workflow, the plan files and the reviewed
- * compass (§ Admission and mutation steps 4–6): unknown keys, duplicate or
- * colliding ids, malformed metadata, escaping or missing references,
- * mismatched plan headers, a patch that changes nothing, an appended or
- * corrected plan the compass does not declare, and an integration branch or
- * checkout the workflow does not own all refuse here — before anything is
- * written. So does a plan-file correction that addresses no existing row (or an
- * ambiguous one), whose `expectedFile` is not the exact pointer the row holds,
- * whose old pointer names another document, or whose corrected pointer is not
- * that plan's own registered file (prerequisite contract §4.1).
- *
- * Which facts are demanded is decided per COMPONENT (§4.1, E07): the reviewed
- * compass is the APPROVAL of the ids this patch addresses, not an equality gate
- * over the whole plan set, and the integration declarations bind the components
- * that consume integration facts — a pointer-only correction reads the named
- * row, its current pointer and its canonical document, and nothing else.
+ * The stable identity of one amendment component, as BOTH authority routes
+ * report it (`recovery.applied`, `unresolved[].component`): the transports
+ * consume ONE component vocabulary whether the effect was committed on the
+ * supported file route or on the ACTIVE DB route (E08).
  */
-function readPreparePatch(
+export function prepareAmendmentComponent(
+  kind: "append" | "correct-plan-file" | "integration-worktree" | "execution-policy",
+  value: string,
+): string {
+  return kind === "append" ? `append plan ${value}` : kind === "correct-plan-file" ? `correct-plan-file ${value}` : `${kind} ${value}`;
+}
+
+/**
+ * The minimum decision one component's own refusal code asks a caller for
+ * (§1.3/§6.2): the withheld effect names what is genuinely missing, never an
+ * invented field or a re-statement of a fact the caller already supplied.
+ */
+const AMENDMENT_MINIMUM: Readonly<Record<string, string>> = {
+  "coordination.prepare-amendment.duplicate-plan": "a plan id this workflow does not already hold, or the removal of that entry from the patch",
+  "coordination.prepare-amendment.invalid-plan": "an addressed existing unstarted row named by that plan's own registered file",
+  "coordination.prepare-amendment.invalid-patch": "a patch whose addressed fields are well formed",
+  "coordination.prepare-amendment.compass-mismatch": "an addressed plan, checkout or branch the reviewed compass declares",
+  "coordination.prepare-amendment.execution-started": "the addressed fact's own execution state settled, or that entry removed from the patch",
+  "coordination.prepare-amendment.invalid-worktree": "an existing distinct checkout of this repository on branch.integration",
+  "coordination.not-in-git": "a readable main worktree of the caller's checkout, or a patch whose components read no checkout fact",
+  "coordination.scope-mismatch": "a call from the main worktree of the branch the patch declares",
+};
+
+/**
+ * One component of a patch this call WITHHOLDS (§4.1/A23/§6.2): the component
+ * keeps its own refusal code, its own field details and its own typed problem,
+ * so a patch that addresses several components reports ALL of them at once
+ * (A27) — one minimum choice per withheld component, not one failed call per
+ * component — while the components that carry no conflict still land.
+ */
+type PrepareAmendmentProblem = Readonly<{
+  /** The component's stable identity (`prepareAmendmentComponent`). */
+  component: string;
+  /** The patch field the caller repairs (`appendPlans[1]`, `integrationWorktreePath`, …). */
+  path: string;
+  /** The component's own refusal code — an existing public `coordination.*` code. */
+  code: string;
+  /** The details the single-component refusal reported, kept verbatim. */
+  details: Record<string, unknown>;
+  /** The frozen typed problem (§1.3): sources tried, current facts, minimum decision. */
+  recovery: RecoveryProblem;
+}>;
+
+/** One component resolution: its resolved value, or its own typed problem. */
+type ComponentOutcome<T> = { ok: true; value: T } | { ok: false; problem: PrepareAmendmentProblem };
+
+/**
+ * The partitioned amendment: E07's admissible delta plus the per-component
+ * verdicts that make an applied/held/unresolved split explicit (§6.2/A23).
+ */
+type PrepareAmendmentPlan = Readonly<{
+  proposal: PrepareProposal;
+  /** The components whose effect this call records, once each, in stable order. */
+  applied: readonly string[];
+  /** The components already recorded before this call (recognized, never re-applied). */
+  held: readonly string[];
+  /** The components this call withholds, each with its own typed problem. */
+  unresolved: readonly PrepareAmendmentProblem[];
+}>;
+
+/** One typed problem for a component that never reached — or failed inside — its own reader. */
+function componentProblem(input: {
+  component: string;
+  path: string;
+  code: string;
+  message: string;
+  needed: string;
+  details?: Record<string, unknown>;
+  sourcesTried?: readonly string[];
+  withheldEffect?: string;
+}): PrepareAmendmentProblem {
+  return {
+    component: input.component,
+    path: input.path,
+    code: input.code,
+    details: input.details ?? {},
+    recovery: {
+      component: input.component,
+      path: input.path,
+      code: input.code,
+      sourcesTried: [...(input.sourcesTried ?? [`${input.path} (intent.request)`])],
+      currentFacts: [input.message],
+      needed: input.needed,
+      withheldEffect: input.withheldEffect ?? `${input.component} is left exactly as it was; no part of it is half-applied`,
+      availableWork: ["the unaffected components of this same patch", "reads and unrelated amendments of this lifecycle"],
+    },
+  };
+}
+
+/**
+ * Resolve one component through its own reader, converting that reader's typed
+ * refusal into this component's problem. Only a `CoordinationError` — this
+ * surface's refusal vocabulary — is converted; anything else is a real fault
+ * and travels unchanged.
+ */
+function captureComponent<T>(component: string, path: string, run: () => T): ComponentOutcome<T> {
+  try {
+    return { ok: true, value: run() };
+  } catch (error) {
+    if (!(error instanceof CoordinationError)) throw error;
+    const target = isNonEmptyString(error.details.path) ? error.details.path : undefined;
+    return {
+      ok: false,
+      problem: componentProblem({
+        component,
+        path,
+        code: error.code,
+        message: errorMessage(error),
+        needed: AMENDMENT_MINIMUM[error.code] ?? `the ${path} entry revised so this component can be applied`,
+        details: error.details,
+        sourcesTried: [...[`${path} (intent.request)`], ...(target === undefined ? [] : [`${target} (resolved target)`])],
+      }),
+    };
+  }
+}
+
+/**
+ * The ONE refusal of a patch with withheld components (§6.2/A27): the primary
+ * component's own code and details stay the refusal's classification, and the
+ * sidecar names every withheld component with its own problem. A caller reads
+ * one result rather than N failed calls, and the receipt never claims this call
+ * was mutation-free when an independent component of the same patch landed.
+ */
+function refuseAmendment(
+  problems: readonly PrepareAmendmentProblem[],
+  input: { workflowId: string; components: readonly string[]; recovery: RecoveryDetails },
+): never {
+  const primary = problems[0]!;
+  const rest = problems.slice(1);
+  const fact = String(primary.recovery.currentFacts[0] ?? primary.code);
+  const message =
+    rest.length === 0
+      ? fact
+      : `${fact} \u2014 ${rest.length} further component(s) of this patch are withheld: ${rest.map((entry) => entry.component).join(", ")}`;
+  throw new CoordinationError(primary.code as CoordinationErrorCode, message, {
+    ...primary.details,
+    workflow_id: input.workflowId,
+    withheld_components: problems.map((entry) => entry.component),
+    components: [...input.components],
+    recovery: input.recovery,
+  });
+}
+
+/**
+ * §4.2 the same append intent: the row this patch would add is the row the
+ * workflow already holds (its id, its title, its canonical file and the
+ * metadata derived for it). A stored row that differs is a different payload —
+ * a local conflict, never a silently accepted replacement.
+ */
+function sameAppendedRow(stored: PlanRow, intended: PlanRow): boolean {
+  return (
+    (rowPlanIds(stored)[0] ?? "") === (rowPlanIds(intended)[0] ?? "") &&
+    stored.title === intended.title &&
+    stored.file === intended.file &&
+    stableJson(stored.metadata ?? null) === stableJson(intended.metadata ?? null)
+  );
+}
+
+/**
+ * The reviewed compass's `integration_worktree_path` declaration against the
+ * checkout this commit would leave in place (§4.1). The declaration binds the
+ * components that CONSUME an integration projection — an appended row, which
+ * joins the reviewed integration topology, and the recorded checkout itself; a
+ * plan-file pointer correction consumes nothing and reports the same
+ * contradiction as drift instead.
+ */
+function compassCheckoutContradiction(
+  context: { snapshot: WorkflowSnapshot; compass: PrepareCompass },
+  requestedPath: unknown,
+  recordedPath: string | undefined,
+): { message: string; details: Record<string, unknown> } | undefined {
+  if (context.compass.integrationWorktreePath === undefined) return undefined;
+  const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
+  const effectivePath = isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : recordedPath;
+  if (effectivePath === declaredPath) return undefined;
+  return {
+    message:
+      `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ` +
+      `${context.compass.path} declares ${declaredPath}`,
+    details: { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
+  };
+}
+
+/**
+ * The recorded integration checkout and its policy: ONE connected component
+ * group (§4.1 — "connected path/ownership/policy changes commit together").
+ * Either both requested members land or neither does, and each withheld member
+ * names the same group problem, so a caller never observes a half-applied pair.
+ *
+ * The checkout is VALIDATED only when it would change the recording: a
+ * re-stated recorded checkout is the effect already held (§4.2/A12), and
+ * re-validating a satisfied path would turn a stale precursor into a refusal.
+ */
+function readIntegrationGroup(input: {
+  patch: Record<string, unknown>;
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; main: MainWorktreeInfo | null; cwd: string };
+  recordedPath: string | undefined;
+  requestedPolicy: string | undefined;
+  recordedParallelism: unknown;
+  checkoutFact: { code: string; message: string; details: Record<string, unknown> } | undefined;
+}): {
+  path?: string;
+  pathHeld: boolean;
+  policy?: string;
+  policyHeld: boolean;
+  problems: PrepareAmendmentProblem[];
+  /** The checkout this patch would leave in place (the effective value). */
+  effectivePath: string | undefined;
+} {
+  const { context } = input;
+  const requestedPath = input.patch.integrationWorktreePath;
+  const pathRequested = requestedPath !== undefined;
+  const policyRequested = input.requestedPolicy !== undefined;
+  const pathIdentity = isNonEmptyString(requestedPath) ? requestedPath : String(requestedPath ?? "");
+  const pathComponent = prepareAmendmentComponent("integration-worktree", pathIdentity);
+  const policyComponent = prepareAmendmentComponent("execution-policy", input.requestedPolicy ?? "");
+  const effectivePath = isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : input.recordedPath;
+  const pathHeld = pathRequested && isNonEmptyString(requestedPath) && canonicalTarget(requestedPath) === input.recordedPath;
+  const policyHeld = policyRequested && input.requestedPolicy === input.recordedParallelism;
+  const problems: PrepareAmendmentProblem[] = [];
+  const pathChanges = pathRequested && !pathHeld;
+  const policyChanges = policyRequested && !policyHeld;
+  if (!pathChanges && !policyChanges) return { pathHeld, policyHeld, problems, effectivePath };
+  const members = [
+    ...(pathRequested ? [{ component: pathComponent, path: "integrationWorktreePath" }] : []),
+    ...(policyRequested ? [{ component: policyComponent, path: "planParallelism" }] : []),
+  ];
+  // The connected group is withheld as ONE unit: each member names the same
+  // problem, so neither of them can be observed as applied on its own.
+  const withhold = (code: string, message: string, details: Record<string, unknown>, sourcesTried?: readonly string[]): void => {
+    for (const member of members) {
+      problems.push(
+        componentProblem({
+          component: member.component,
+          path: member.path,
+          code,
+          message,
+          details,
+          needed: AMENDMENT_MINIMUM[code] ?? `the ${member.path} entry revised so this component can be applied`,
+          ...(sourcesTried === undefined ? {} : { sourcesTried }),
+        }),
+      );
+    }
+  };
+  // §4.1 the integration OWNERSHIP is in flight: neither member may rewrite a
+  // fact the merging owner is using (A06: appends and corrections are not
+  // affected — they consume no integration ownership).
+  if (context.snapshot.integration_merge_lease !== undefined) {
+    withhold(
+      "coordination.prepare-amendment.execution-started",
+      `workflow ${context.snapshot.id} carries an integration merge lease \u2014 the integration checkout/policy this patch would record cannot be rewritten while the integration owner is merging`,
+      { workflow_id: context.snapshot.id },
+    );
+  }
+  // §4.1 the reviewed branch declaration binds the integration state this group
+  // would leave recorded.
+  if (context.compass.specIntegrationBranch !== undefined) {
+    const recordedBranch = context.snapshot.branch?.integration;
+    if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
+      withhold(
+        "coordination.prepare-amendment.compass-mismatch",
+        `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ` +
+          `${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
+        { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
+      );
+    }
+  }
+  const contradiction = compassCheckoutContradiction(
+    context,
+    pathChanges ? requestedPath : undefined,
+    input.recordedPath,
+  );
+  if (contradiction !== undefined) {
+    withhold("coordination.prepare-amendment.compass-mismatch", contradiction.message, contradiction.details);
+  }
+  // A24/A25 the checkout/branch fact this pair consumes — the same partition the
+  // appended rows obey.
+  if (input.checkoutFact !== undefined && pathRequested) {
+    withhold(input.checkoutFact.code, input.checkoutFact.message, input.checkoutFact.details, [
+      "integrationWorktreePath (intent.request)",
+      `${resolve(context.cwd)} (main worktree)`,
+    ]);
+  }
+  let path: string | undefined;
+  const main = context.main;
+  if (pathChanges && problems.length === 0 && main !== null) {
+    const attempt = captureComponent(pathComponent, "integrationWorktreePath", () =>
+      readIntegrationWorktreePath(requestedPath, { harnessRoot: context.harnessRoot, snapshot: context.snapshot, main }),
+    );
+    if (attempt.ok) path = attempt.value;
+    else problems.push(attempt.problem);
+  }
+  if (problems.length > 0) return { pathHeld, policyHeld, problems, effectivePath };
+  return {
+    ...(path !== undefined ? { path } : {}),
+    pathHeld,
+    ...(policyChanges && input.requestedPolicy !== undefined ? { policy: input.requestedPolicy } : {}),
+    policyHeld,
+    problems,
+    effectivePath,
+  };
+}
+
+/**
+ * The patch, validated against the workflow, the plan files and the reviewed
+ * compass (§ Admission and mutation steps 4–6) and PARTITIONED into independent
+ * components (§4.1/E08). Each component is resolved through the facts it alone
+ * consumes, so one component's conflict withholds that component — with its own
+ * typed problem, reported together with every other withheld component (A27) —
+ * while the components that carry no conflict still land in the same call
+ * (A23). Components connected by a shared semantic read or write (the recorded
+ * integration checkout and its policy) commit together or not at all.
+ *
+ * Only facts that invalidate the patch AS A WHOLE refuse before the partition:
+ * the patch shape (aggregated, every broken field path at once), the one
+ * identity per addressed plan, and a patch that addresses nothing at all.
+ */
+function readPrepareAmendment(
   patch: unknown,
   context: {
     harnessRoot: string;
@@ -7666,165 +7988,303 @@ function readPreparePatch(
     main: MainWorktreeInfo | null;
     cwd: string;
   },
-): PrepareProposal {
+): PrepareAmendmentPlan {
   if (!isPlainObject(patch)) {
     throw prepareAmendmentRefusal("invalid-patch", "the amendment patch must be an object", { actual: patch ?? null });
   }
+  const invalidPatch = "coordination.prepare-amendment.invalid-patch";
+  const wholePatchWithheld = "the whole patch is withheld; nothing was written";
+  const shape: PrepareAmendmentProblem[] = [];
   const unexpected = Object.keys(patch).filter((key) => !PREPARE_PATCH_KEYS.includes(key));
   if (unexpected.length > 0) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `the amendment patch accepts only ${PREPARE_PATCH_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
-      { allowed: [...PREPARE_PATCH_KEYS], unexpected },
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "patch",
+        code: invalidPatch,
+        message: `the amendment patch accepts only ${PREPARE_PATCH_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+        needed: AMENDMENT_MINIMUM[invalidPatch]!,
+        details: { allowed: [...PREPARE_PATCH_KEYS], unexpected },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  const mainWorktreeBranch = patch.mainWorktreeBranch;
-  if (!isNonEmptyString(mainWorktreeBranch)) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `the amendment patch requires mainWorktreeBranch as a non-empty string \u2014 got ${JSON.stringify(mainWorktreeBranch ?? null)}`,
-      { actual: mainWorktreeBranch ?? null },
+  const branchValue = patch.mainWorktreeBranch;
+  if (!isNonEmptyString(branchValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "mainWorktreeBranch",
+        code: invalidPatch,
+        message: `the amendment patch requires mainWorktreeBranch as a non-empty string \u2014 got ${JSON.stringify(branchValue ?? null)}`,
+        needed: "the branch the caller's main worktree is on",
+        details: { actual: branchValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  const rawAppends = patch.appendPlans;
-  if (!Array.isArray(rawAppends)) {
-    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires appendPlans as an array", {
-      actual: rawAppends ?? null,
+  const appendsValue = patch.appendPlans;
+  if (!Array.isArray(appendsValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "appendPlans",
+        code: invalidPatch,
+        message: "the amendment patch requires appendPlans as an array",
+        needed: "the approved plan rows this patch appends (an empty array is a correction-only call)",
+        details: { actual: appendsValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
+    );
+  }
+  const correctionsValue = patch.correctPlanFiles;
+  if (correctionsValue !== undefined && !Array.isArray(correctionsValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "correctPlanFiles",
+        code: invalidPatch,
+        message: "the amendment patch requires correctPlanFiles as an array",
+        needed: "the addressed rows' pointer corrections (an empty array is an append-only call)",
+        details: { actual: correctionsValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
+    );
+  }
+  const parallelismValue = patch.planParallelism;
+  if (parallelismValue !== undefined && !(isNonEmptyString(parallelismValue) && PLAN_PARALLELISM_VALUES.includes(parallelismValue))) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "planParallelism",
+        code: invalidPatch,
+        message: `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(parallelismValue ?? null)}`,
+        needed: `one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`,
+        details: { allowed: [...PLAN_PARALLELISM_VALUES], actual: parallelismValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
+    );
+  }
+  // §6.2/A27: one refusal naming every broken patch-level field, not the first.
+  if (shape.length > 0) {
+    refuseAmendment(shape, {
+      workflowId: context.snapshot.id,
+      components: [],
+      recovery: unresolvedRecovery({
+        target: { workflowId: context.snapshot.id },
+        unresolved: shape.map((entry) => entry.recovery),
+      }),
     });
   }
-  const rawCorrections = patch.correctPlanFiles;
-  if (rawCorrections !== undefined && !Array.isArray(rawCorrections)) {
-    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires correctPlanFiles as an array", {
-      actual: rawCorrections ?? null,
-    });
-  }
-  const requestedCorrections = rawCorrections ?? [];
-  // What this patch ADDRESSES decides which facts it consumes: a correction
-  // repairs one row's pointer and reads nothing else, so every integration
-  // declaration below is the concern of the components that actually consume an
-  // integration fact — never a gate over the whole document (design §4.1).
-  const correctionOnly = rawAppends.length === 0 && requestedCorrections.length > 0;
+  const mainWorktreeBranch = isNonEmptyString(branchValue) ? branchValue : "";
+  const appends: readonly unknown[] = Array.isArray(appendsValue) ? appendsValue : [];
+  const correctionsIn: readonly unknown[] = Array.isArray(correctionsValue) ? correctionsValue : [];
+  const requestedPolicy = isNonEmptyString(parallelismValue) ? parallelismValue : undefined;
+  const requestedPath = patch.integrationWorktreePath;
   const warnings: ResolutionWarning[] = [];
-  const resolvedFrom: ResolutionSource[] = [];
   // The caller's checkout identity. A component that CONSUMES an owned
   // checkout/branch fact — an appended row's plan-document anchor, the recorded
   // integration checkout — genuinely needs the Git-derived main worktree to be
-  // on the declared branch, and an unreadable Git fact refuses THAT component as
-  // an unavailable prerequisite (A25). A local repair consumes neither, so it
-  // proceeds on its trusted envelope root and reports the unreadable Git fact as
-  // a warning (R12/A24): an environment outage is never promoted into a global
-  // gate over work that does not depend on it. The SAME partition governs the
-  // branch the worktree actually answers: a differing branch refuses only the
-  // components that anchor to it, and is drift beside a local repair.
-  const consumesCheckoutFacts = rawAppends.length > 0 || patch.integrationWorktreePath !== undefined;
+  // on the declared branch, and an unreadable/differing Git fact withholds THAT
+  // component as an unavailable prerequisite (A25). A local repair consumes
+  // neither, so it proceeds on its trusted envelope root and reports the same
+  // fact as a warning (R12/A24): an environment outage is never promoted into a
+  // gate over work that does not depend on it. §4.1/E08 the fact is now
+  // component-scoped, so a patch that carries both a repair and an append lands
+  // the repair and withholds the append with its own typed problem.
+  const consumesCheckoutFacts = appends.length > 0 || requestedPath !== undefined;
+  let checkoutFact: { code: string; message: string; details: Record<string, unknown> } | undefined;
   if (context.main === null) {
     if (consumesCheckoutFacts) {
-      throw new CoordinationError(
-        "coordination.not-in-git",
-        `this amendment records branch ${mainWorktreeBranch} on an appended plan row or an integration checkout, but ${resolve(context.cwd)} ` +
+      checkoutFact = {
+        code: "coordination.not-in-git",
+        message:
+          `this amendment records branch ${mainWorktreeBranch} on an appended plan row or an integration checkout, but ${resolve(context.cwd)} ` +
           "has no readable main worktree to verify it against",
-        { cwd: resolve(context.cwd) },
-      );
+        details: { cwd: resolve(context.cwd) },
+      };
+    } else {
+      warnings.push({
+        code: "coordination.git-unavailable",
+        path: "cwd",
+        message:
+          `the main worktree of ${resolve(context.cwd)} could not be read; this amendment repairs registration facts that need no Git fact, so it ` +
+          "proceeds on the trusted envelope root and the declared branch is not verified",
+      });
     }
-    warnings.push({
-      code: "coordination.git-unavailable",
-      path: "cwd",
-      message:
-        `the main worktree of ${resolve(context.cwd)} could not be read; this amendment repairs registration facts that need no Git fact, so it ` +
-        "proceeds on the trusted envelope root and the declared branch is not verified",
-    });
   } else if (context.main.branch !== mainWorktreeBranch) {
     // `branch.base` is a recorded anchor, not residency, so it is never the
-    // expectation here. The branch fact is consumed by the components that
-    // anchor a checkout to it — an appended row's recorded branch, the recorded
-    // integration checkout — and refuses those exactly as the unreadable-Git
-    // case above refuses them (A25). A local pointer repair consumes no branch
-    // fact, so the same differing branch is reported as drift beside the repair
-    // instead of being promoted into a gate over work that does not read it
-    // (A24/R12), keeping this component's verdict identical whether Git is
-    // unreadable or readable-but-different.
+    // expectation here.
     const on = context.main.branch === "" ? "a detached HEAD" : context.main.branch;
     if (consumesCheckoutFacts) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}`,
-        { expected: mainWorktreeBranch, actual: context.main.branch },
-      );
+      checkoutFact = {
+        code: "coordination.scope-mismatch",
+        message: `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}`,
+        details: { expected: mainWorktreeBranch, actual: context.main.branch },
+      };
+    } else {
+      warnings.push({
+        code: "coordination.main-branch-drift",
+        path: "cwd",
+        message:
+          `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}; this amendment repairs registration ` +
+          "facts that no checkout fact binds, so it proceeds on the trusted envelope root and the declared branch is not enforced",
+      });
     }
-    warnings.push({
-      code: "coordination.main-branch-drift",
-      path: "cwd",
-      message:
-        `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}; this amendment repairs registration ` +
-        "facts that no checkout fact binds, so it proceeds on the trusted envelope root and the declared branch is not enforced",
-    });
   }
-  const requestedParallelism = patch.planParallelism;
-  if (
-    requestedParallelism !== undefined &&
-    !(isNonEmptyString(requestedParallelism) && PLAN_PARALLELISM_VALUES.includes(requestedParallelism))
-  ) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(requestedParallelism ?? null)}`,
-      { allowed: [...PLAN_PARALLELISM_VALUES], actual: requestedParallelism ?? null },
-    );
-  }
-  const planParallelism: string | undefined = isNonEmptyString(requestedParallelism) ? requestedParallelism : undefined;
-  // The integration component consumes the integration OWNERSHIP, so a merge
-  // already in flight refuses that component alone (design §4.1: an integration
-  // path correction checks the integration ownership it will affect). Recording a
-  // different integration checkout or policy while the integration owner is
-  // merging would rewrite the fact under the merge; appends and plan-file
-  // corrections consume neither, so a sibling merge never blocks them (A06).
-  if (
-    (patch.integrationWorktreePath !== undefined || planParallelism !== undefined) &&
-    context.snapshot.integration_merge_lease !== undefined
-  ) {
-    throw prepareAmendmentRefusal(
-      "execution-started",
-      `workflow ${context.snapshot.id} carries an integration merge lease \u2014 the integration checkout/policy this patch would record cannot be rewritten while the integration owner is merging`,
-      { workflow_id: context.snapshot.id },
-    );
-  }
-
-  // Duplicate ids are refused as their own reason: an id already registered in
-  // the workflow (old rows are preserved by value, never replaced) or the same
-  // id twice in one patch.
-  const existingIds = new Set(context.snapshot.plans.flatMap((row) => rowPlanIds(row)));
+  // §4.1 one identity per addressed plan: an id is either new (appended) or
+  // existing (corrected), never both, and never twice in one patch.
   const declaredIds = new Set<string>();
-  for (const entry of rawAppends) {
+  for (const entry of appends) {
     const id = isPlainObject(entry) ? entry.id : undefined;
-    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
-    if (existingIds.has(id)) {
-      throw prepareAmendmentRefusal(
-        "duplicate-plan",
-        `plan ${id} is already a row of workflow ${context.snapshot.id} \u2014 the amendment appends new rows and never replaces existing ones`,
-        { plan_id: id, workflow_id: context.snapshot.id },
-      );
-    }
+    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
     if (declaredIds.has(id)) {
       throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in one patch`, { plan_id: id });
     }
     declaredIds.add(id);
   }
 
-  const rows = rawAppends.map((entry) =>
-    readPlanAppend(entry, {
-      harnessRoot: context.harnessRoot,
-      snapshot: context.snapshot,
-      compass: context.compass,
-      mainWorktreeBranch,
-      warnings,
-    }),
-  );
-  // Plan-file corrections address existing rows and obey the append's own
-  // plan-file rules. An id is either new (appended) or existing (corrected),
-  // never both, and never twice in one patch.
+  // A patch that addresses NOTHING is not an amendment. (§5 a patch whose
+  // components all ALREADY hold their effect is not this case: its effect is
+  // current, so it is the success below, never an artificial no-op write.)
+  if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && requestedPolicy === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-patch",
+      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
+      { workflow_id: context.snapshot.id },
+    );
+  }
+
+  const applied: string[] = [];
+  const held: string[] = [];
+  const unresolved: PrepareAmendmentProblem[] = [];
+  const components: string[] = [];
+  const resolvedIds: string[] = [];
+  const rows: PlanRow[] = [];
+  const corrections: PreparePlanFileCorrectionDelta[] = [];
+  const recordedPath = isNonEmptyString(context.snapshot.integration_worktree_path)
+    ? canonicalTarget(context.snapshot.integration_worktree_path)
+    : undefined;
+  const recordedParallelism = isPlainObject(context.snapshot.execution_policy)
+    ? context.snapshot.execution_policy.plan_parallelism
+    : undefined;
+
+  // (1) Appends — one independent component per entry. An appended row reads its
+  // own plan document, the reviewed compass approval of its id and the reviewed
+  // integration topology it joins, and nothing about its siblings (A06).
+  for (const [index, entry] of appends.entries()) {
+    const id = isPlainObject(entry) && isNonEmptyString(entry.id) ? entry.id : undefined;
+    const component = prepareAmendmentComponent("append", id ?? "(unnamed)");
+    const path = `appendPlans[${index}]`;
+    components.push(component);
+    if (checkoutFact !== undefined) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: checkoutFact.code,
+          message: checkoutFact.message,
+          needed: AMENDMENT_MINIMUM[checkoutFact.code] ?? `a readable checkout fact for ${path}`,
+          details: checkoutFact.details,
+          sourcesTried: [`${path} (intent.request)`, `${resolve(context.cwd)} (main worktree)`],
+        }),
+      );
+      continue;
+    }
+    const attempt = captureComponent(component, path, () =>
+      readPlanAppend(entry, {
+        harnessRoot: context.harnessRoot,
+        snapshot: context.snapshot,
+        compass: context.compass,
+        mainWorktreeBranch,
+        warnings,
+      }),
+    );
+    if (!attempt.ok) {
+      unresolved.push(attempt.problem);
+      continue;
+    }
+    const row = attempt.value;
+    const rowId = rowPlanIds(row)[0] ?? "";
+    // §4.1 the reviewed compass is the APPROVAL of the ids this patch addresses.
+    if (!context.compass.planIds.includes(rowId)) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: `the reviewed compass ${context.compass.path} does not declare plan ${rowId} \u2014 an append or a correction applies only to approved work`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: { expected: [...context.compass.planIds], undeclared: [rowId] },
+        }),
+      );
+      continue;
+    }
+    const contradiction = compassCheckoutContradiction(context, requestedPath, recordedPath);
+    if (contradiction !== undefined) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: contradiction.message,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: contradiction.details,
+        }),
+      );
+      continue;
+    }
+    const existing = context.snapshot.plans.filter((candidate) => rowPlanIds(candidate).includes(rowId));
+    if (existing.length > 1) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.duplicate-plan",
+          message: `plan ${rowId} is addressed by ${existing.length} rows of workflow ${context.snapshot.id} \u2014 the appended row would be ambiguous`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+          details: { plan_id: rowId, workflow_id: context.snapshot.id, rows: existing.length },
+        }),
+      );
+      continue;
+    }
+    if (existing.length === 1) {
+      // §4.2/A09/A12 the SAME append intent is already current: the workflow
+      // holds exactly the row this patch would add, so the component is
+      // recognized as held — no second row, no second creation timestamp, no
+      // revision churn. A stored row that differs is a different payload and
+      // stays a local conflict.
+      if (sameAppendedRow(existing[0]!, row)) {
+        // `held` is deliberately NOT an `applied` entry: this call applied
+        // nothing for that component, so a replay can never double-count it —
+        // the receipt names it in `warnings` and spends no mutation on it.
+        held.push(component);
+        resolvedIds.push(rowId);
+        continue;
+      }
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.duplicate-plan",
+          message: `plan ${rowId} is already a row of workflow ${context.snapshot.id} \u2014 the amendment appends new rows and never replaces existing ones`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+          details: { plan_id: rowId, workflow_id: context.snapshot.id },
+        }),
+      );
+      continue;
+    }
+    rows.push(row);
+    applied.push(component);
+    resolvedIds.push(rowId);
+  }
+
+  // (2) Plan-file corrections — one independent component per entry: the
+  // addressed row, the pointer it holds and that plan's canonical document.
   const correctionIds = new Set<string>();
-  for (const entry of requestedCorrections) {
+  for (const entry of correctionsIn) {
     const id = isPlainObject(entry) ? entry.id : undefined;
-    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
+    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
     if (declaredIds.has(id)) {
       throw prepareAmendmentRefusal(
         "duplicate-plan",
@@ -7837,43 +8297,73 @@ function readPreparePatch(
     }
     correctionIds.add(id);
   }
-  const corrections = requestedCorrections.map((entry) => readPlanFileCorrection(entry, context));
-  const integrationWorktreePath =
-    patch.integrationWorktreePath === undefined
-      ? undefined
-      : readIntegrationWorktreePath(patch.integrationWorktreePath, context);
+  for (const [index, entry] of correctionsIn.entries()) {
+    const id = isPlainObject(entry) && isNonEmptyString(entry.id) ? entry.id : undefined;
+    const component = prepareAmendmentComponent("correct-plan-file", id ?? "(unnamed)");
+    const path = `correctPlanFiles[${index}]`;
+    components.push(component);
+    const attempt = captureComponent(component, path, () => readPlanFileCorrection(entry, context));
+    if (!attempt.ok) {
+      unresolved.push(attempt.problem);
+      continue;
+    }
+    const outcome = attempt.value;
+    const addressedId = outcome.held ? outcome.id : outcome.delta.id;
+    if (!context.compass.planIds.includes(addressedId)) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: `the reviewed compass ${context.compass.path} does not declare plan ${addressedId} \u2014 an append or a correction applies only to approved work`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: { expected: [...context.compass.planIds], undeclared: [addressedId] },
+        }),
+      );
+      continue;
+    }
+    resolvedIds.push(addressedId);
+    if (outcome.held) held.push(component);
+    else {
+      applied.push(component);
+      corrections.push(outcome.delta);
+    }
+  }
 
-  const recordedPath = isNonEmptyString(context.snapshot.integration_worktree_path)
-    ? canonicalTarget(context.snapshot.integration_worktree_path)
-    : undefined;
-  const recordedParallelism = isPlainObject(context.snapshot.execution_policy)
-    ? context.snapshot.execution_policy.plan_parallelism
-    : undefined;
-  const changesPath = integrationWorktreePath !== undefined && integrationWorktreePath !== recordedPath;
-  const changesPolicy = planParallelism !== undefined && planParallelism !== recordedParallelism;
-  if (rows.length === 0 && corrections.length === 0 && !changesPath && !changesPolicy) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
-      { workflow_id: context.snapshot.id },
-    );
+  // (3) The recorded integration checkout and its policy: ONE connected group.
+  // Either both requested members land or neither does, and a withheld member
+  // carries the same group problem as its partner — never a half-applied pair.
+  const group = readIntegrationGroup({ patch, context, recordedPath, requestedPolicy, recordedParallelism, checkoutFact });
+  const pathComponent =
+    requestedPath === undefined
+      ? undefined
+      : prepareAmendmentComponent("integration-worktree", isNonEmptyString(requestedPath) ? requestedPath : String(requestedPath));
+  const policyComponent =
+    requestedPolicy === undefined ? undefined : prepareAmendmentComponent("execution-policy", requestedPolicy);
+  if (pathComponent !== undefined) components.push(pathComponent);
+  if (policyComponent !== undefined) components.push(policyComponent);
+  if (group.problems.length > 0) {
+    unresolved.push(...group.problems);
+  } else {
+    // Each held member is recognized instead of re-applied: `applied` names only
+    // what this call actually recorded (§4.2/A09 — a replay of the pair spends
+    // no second mutation and reports `already-satisfied`).
+    if (pathComponent !== undefined) {
+      if (group.pathHeld) held.push(pathComponent);
+      else if (group.path !== undefined) applied.push(pathComponent);
+    }
+    if (policyComponent !== undefined) {
+      if (group.policyHeld) held.push(policyComponent);
+      else if (group.policy !== undefined) applied.push(policyComponent);
+    }
   }
+
   // The reviewed compass is the APPROVAL of the ids this patch addresses
-  // (§4.1): an appended or corrected plan it does not declare is not approved
-  // work and refuses. The compass plan SET is not an equality gate — a
-  // declaration with no registered row is missing registration that this or a
-  // later ordinary append repairs, and a row the compass does not declare is
-  // isolated drift. Both are reported as warnings and neither is ever
-  // "repaired" by deleting a row to make the sets equal (A06).
-  const addressedIds = [...rows.map((row) => rowPlanIds(row)[0] ?? ""), ...corrections.map((entry) => entry.id)];
-  const undeclaredAddressed = addressedIds.filter((id) => !context.compass.planIds.includes(id));
-  if (undeclaredAddressed.length > 0) {
-    throw prepareAmendmentRefusal(
-      "compass-mismatch",
-      `the reviewed compass ${context.compass.path} does not declare plan ${undeclaredAddressed.join(", ")} \u2014 an append or a correction applies only to approved work`,
-      { expected: [...context.compass.planIds], undeclared: undeclaredAddressed },
-    );
-  }
+  // (§4.1): the compass plan SET is not an equality gate — a declaration with no
+  // registered row is missing registration that this or a later ordinary append
+  // repairs, and a row the compass does not declare is isolated drift. Both are
+  // reported as warnings and neither is ever "repaired" by deleting a row to
+  // make the sets equal (A06).
   const proposedIds = [
     ...context.snapshot.plans.flatMap((row) => rowPlanIds(row)),
     ...rows.map((row) => rowPlanIds(row)[0] ?? ""),
@@ -7898,81 +8388,49 @@ function readPreparePatch(
         "is isolated drift and is preserved by value, never deleted to make the sets equal",
     });
   }
-  // The reviewed integration declarations bind the components that CONSUME an
-  // integration fact: an appended row's recorded branch projections and the
-  // checkout/policy this commit would leave in place. A correction-only patch
-  // consumes neither (design §4.1: those checks do not apply to a plan-file
-  // pointer correction), so a lifecycle whose recorded integration facts
-  // contradict its compass is reported as unrelated drift instead of blocking
-  // the pointer repair.
-  if (!correctionOnly) {
-    // The reviewed declaration binds the workflow's own recorded integration
-    // branch too, and no amendment edits that anchor — so the comparison belongs
-    // to every patch that records or preserves an integration projection, not
-    // only to the per-append path.
-    if (context.compass.specIntegrationBranch !== undefined) {
-      const recordedBranch = context.snapshot.branch?.integration;
-      if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
-        throw prepareAmendmentRefusal(
-          "compass-mismatch",
-          `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
-          { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
-        );
-      }
-    }
-    // The reviewed declaration binds the checkout this commit would leave in
-    // place — the patch's own validated path when it names one, otherwise the
-    // recorded path the spread preserves. Comparing the *effective* path is what
-    // makes both a retained conflict (patch omits the field) and a still
-    // unrecorded declaration refuse, while an explicit correction that names the
-    // reviewed checkout in the same call stays lawful.
-    if (context.compass.integrationWorktreePath !== undefined) {
-      const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
-      const effectivePath = integrationWorktreePath ?? recordedPath;
-      if (effectivePath !== declaredPath) {
-        throw prepareAmendmentRefusal(
-          "compass-mismatch",
-          `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ${context.compass.path} declares ${declaredPath}`,
-          { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
-        );
-      }
-    }
-  } else if (context.compass.specIntegrationBranch !== undefined || context.compass.integrationWorktreePath !== undefined) {
+  // A patch that addresses only plan-file pointers consumes no integration fact
+  // (design §4.1: those checks do not apply to a plan-file pointer correction),
+  // so a lifecycle whose recorded integration facts contradict its compass is
+  // reported as unrelated drift instead of blocking the repair. A patch that
+  // does address the checkout/policy carries the same contradiction as that
+  // group's own problem (above), never as a silent warning.
+  const correctionOnly =
+    appends.length === 0 && correctionsIn.length > 0 && requestedPath === undefined && requestedPolicy === undefined;
+  if (correctionOnly) {
     const recordedBranch = context.snapshot.branch?.integration;
-    const effectivePath = integrationWorktreePath ?? recordedPath;
-    const declaredPath = context.compass.integrationWorktreePath === undefined ? undefined : canonicalTarget(context.compass.integrationWorktreePath);
+    const declaredPath =
+      context.compass.integrationWorktreePath === undefined ? undefined : canonicalTarget(context.compass.integrationWorktreePath);
     if (
       (context.compass.specIntegrationBranch !== undefined && recordedBranch !== context.compass.specIntegrationBranch) ||
-      (declaredPath !== undefined && effectivePath !== declaredPath)
+      (declaredPath !== undefined && group.effectivePath !== declaredPath)
     ) {
       warnings.push({
         code: "coordination.compass-integration-drift",
         path: context.compass.path,
         message:
           `workflow ${context.snapshot.id}'s recorded integration facts (branch ${JSON.stringify(recordedBranch ?? null)}, checkout ` +
-          `${effectivePath ?? "(none)"}) do not match the reviewed compass ${context.compass.path} \u2014 this patch repairs a plan-file pointer and ` +
+          `${group.effectivePath ?? "(none)"}) do not match the reviewed compass ${context.compass.path} \u2014 this patch repairs a plan-file pointer and ` +
           "consumes no integration fact, so the drift is reported and left for the call that records one",
       });
     }
   }
-  const components = [
-    ...(rows.length > 0 ? ["append"] : []),
-    ...(corrections.length > 0 ? ["correct-plan-file"] : []),
-    ...(changesPath ? ["integration-worktree"] : []),
-    ...(changesPolicy ? ["execution-policy"] : []),
-  ];
-  resolvedFrom.push(
-    ...addressedIds.map((id) => ({ path: `plans.${id}`, source: "reviewed compass declaration" })),
-    ...(corrections.length > 0 ? [{ path: "correctPlanFiles", source: "addressed row's own pointer" }] : []),
-  );
+
   return {
-    rows,
-    corrections,
-    ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
-    ...(planParallelism !== undefined ? { planParallelism } : {}),
-    warnings,
-    resolvedFrom,
-    components,
+    proposal: {
+      rows,
+      corrections,
+      ...(group.path !== undefined ? { integrationWorktreePath: group.path } : {}),
+      ...(group.policy !== undefined ? { planParallelism: group.policy } : {}),
+      warnings,
+      resolvedFrom: [
+        ...resolvedIds.map((id) => ({ path: `plans.${id}`, source: "reviewed compass declaration" })),
+        ...(corrections.length > 0 ? [{ path: "correctPlanFiles", source: "addressed row's own pointer" }] : []),
+      ],
+      components,
+    },
+    applied,
+    held,
+    unresolved,
   };
 }
 
@@ -8048,11 +8506,21 @@ export async function showPrepareWorkflow(
 /**
  * Apply one approved Prepare structural amendment (spec § Admission and
  * mutation). The CAS read, both version comparisons, the admission, the whole
- * patch validation, the compass recheck and the single atomic write all run
+ * patch resolution, the compass recheck and the single atomic write all run
  * under the canonical snapshot write lock, so two callers presenting the same
  * tokens cannot both succeed: the loser inspects the winner's bytes and
- * refuses as `stale`. Every refusal happens before any write — the protected
- * snapshot, root register, other workflows and the compass stay byte-identical.
+ * refuses as `stale`.
+ *
+ * §4.1/E08 the patch is partitioned into independent components: the components
+ * that carry no conflict land in this one locked write, while a conflicting
+ * component is withheld with its own typed problem. A refusal therefore reports
+ * every withheld component (`details.recovery.unresolved`) and does NOT claim
+ * this call was mutation-free when an independent component of the same patch
+ * landed (`details.recovery.commitState === "partial"`); a patch whose
+ * components ALL already hold their effect is the current success (§4.2/A09/
+ * A12) and writes nothing at all. Every refusal that withholds the WHOLE patch
+ * (shape, admission, tokens) still leaves the protected snapshot, root
+ * register, other workflows and the compass byte-identical.
  *
  * A lock that cannot be acquired refuses explicitly (the shared
  * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
@@ -8089,10 +8557,11 @@ export async function amendPrepareWorkflow(
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
     // The Git-derived main worktree is READ here, but it only gates the
     // components that consume an owned checkout/branch fact: an unreadable Git
-    // fact is reported by `readPreparePatch` for a local repair instead of
-    // refusing a call that needs nothing from Git (R12/A24). When Git answers,
-    // the coordinator's residency in the main or recorded integration worktree
-    // is enforced for every component.
+    // fact becomes those components' own problem inside `readPrepareAmendment`,
+    // reported as `coordination.git-unavailable` drift beside a local repair that
+    // needs nothing from Git (R12/A24). When Git answers, the coordinator's
+    // residency in the main or recorded integration worktree is enforced for
+    // every component.
     const main = readMainWorktree(cwd);
     if (main !== null) assertCoordinatorCheckoutResidency(main, cwd, snapshot);
     // Both byte versions are compared against the bytes inspected inside this
@@ -8114,97 +8583,144 @@ export async function amendPrepareWorkflow(
     }
     const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
-    const proposal = readPreparePatch(input.patch, {
+    const plan = readPrepareAmendment(input.patch, {
       harnessRoot: scope.harnessRoot,
       snapshot,
       compass,
       main,
       cwd,
     });
-    // Recovery-first adoption (R3 / I-000243): the reader may have DERIVED the
-    // absent phase from the lifecycle facts, and the reviewed compass may carry
-    // an absolute-but-in-root pointer. This locked write is the ordinary intent
-    // that adopts both — together with the requested patch and `updated_at` —
-    // so one normal call repairs and applies. Old rows and unknown fields are
-    // taken from disk by value — only the new
-    // rows, the corrected row pointers, the requested whitelist projections and
-    // `updated_at` are new. The policy copy carries the stored object's own
-    // keys, so keys this verb may not edit survive it.
-    const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
-    if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
-    // A corrected row is rebuilt by spread, so every field but `file` survives
-    // by value and by position (prerequisite contract §4.1).
-    const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
-    const plans = [
-      ...snapshot.plans.map((row) => {
-        const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
-        return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
-      }),
-      ...proposal.rows,
-    ];
-    const derivedFields = compass.canonicalCompassRef === undefined ? [] : ["compass_ref"];
-    const next: WorkflowSnapshot = {
-      ...snapshot,
-      updated_at: nowIso(),
-      ...(phaseDerived ? { phase: PREPARE_PHASE } : {}),
-      ...(compass.canonicalCompassRef !== undefined ? { compass_ref: compass.canonicalCompassRef } : {}),
-      plans,
-      ...(proposal.integrationWorktreePath !== undefined
-        ? { integration_worktree_path: proposal.integrationWorktreePath }
-        : {}),
-      ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
+    const proposal = plan.proposal;
+    const writing =
+      proposal.rows.length > 0 ||
+      proposal.corrections.length > 0 ||
+      proposal.integrationWorktreePath !== undefined ||
+      proposal.planParallelism !== undefined;
+    // §6.2/§4.1 the ONE receipt of this call (§6.2 common outcome contract): the
+    // components it applied — once each, in stable order — the components it
+    // recognized as already current, the components it withheld with their own
+    // typed problem, the declarations it resolved from and the commit boundary a
+    // caller can rely on. The same object shape travels on the refusal below
+    // under `error.details.recovery`, so one contract covers both paths.
+    const recovery: RecoveryDetails = {
+      outcome: plan.unresolved.length > 0 ? (plan.applied.length > 0 ? "partial" : "unresolved") : writing ? "applied" : "already-satisfied",
+      target: { workflowId: scope.workflowId },
+      applied: [...plan.applied],
+      unresolved: plan.unresolved.map((entry) => entry.recovery),
+      resolvedFrom: [{ path: "patch", source: "intent.request" }, ...proposal.resolvedFrom],
+      warnings: [
+        ...proposal.warnings,
+        ...plan.held.map((component) => ({
+          code: "coordination.prepare-amendment.held",
+          path: component,
+          message:
+            `${component} is already recorded on workflow ${scope.workflowId} \u2014 this call recognized the current effect and wrote nothing for it`,
+        })),
+      ],
+      commitState: plan.unresolved.length > 0 ? (writing ? "partial" : "none") : writing ? "committed" : "none",
     };
-    // The reviewed declaration must still be the bytes this call inspected when
-    // the amendment lands (spec § Admission and mutation step 7).
-    const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
-    if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: compass.path, expected: compass.version, actual: rechecked.version },
-      );
+    // §4.1/A23 the admissible components of this patch commit FIRST, in this one
+    // locked write — the withheld components reported below never undo them. §6.2
+    // the resulting refusal therefore carries a receipt whose `commitState` is
+    // `partial` (or `none` when nothing was admissible), never a claim that a
+    // call which landed another component was mutation-free.
+    let snapshotVersion: string;
+    let planIds: string[];
+    let phase = snapshot.phase;
+    let derived: string[] = [];
+    if (writing) {
+      // Recovery-first adoption (R3 / I-000243): the reader may have DERIVED the
+      // absent phase from the lifecycle facts, and the reviewed compass may carry
+      // an absolute-but-in-root pointer. This locked write is the ordinary intent
+      // that adopts both — together with the requested patch and `updated_at` —
+      // so one normal call repairs and applies. Old rows and unknown fields are
+      // taken from disk by value — only the new
+      // rows, the corrected row pointers, the requested whitelist projections and
+      // `updated_at` are new. The policy copy carries the stored object's own
+      // keys, so keys this verb may not edit survive it.
+      const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
+      if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
+      // A corrected row is rebuilt by spread, so every field but `file` survives
+      // by value and by position (prerequisite contract §4.1).
+      const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
+      const plans = [
+        ...snapshot.plans.map((row) => {
+          const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
+          return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
+        }),
+        ...proposal.rows,
+      ];
+      const derivedFields = compass.canonicalCompassRef === undefined ? [] : ["compass_ref"];
+      const next: WorkflowSnapshot = {
+        ...snapshot,
+        updated_at: nowIso(),
+        ...(phaseDerived ? { phase: PREPARE_PHASE } : {}),
+        ...(compass.canonicalCompassRef !== undefined ? { compass_ref: compass.canonicalCompassRef } : {}),
+        plans,
+        ...(proposal.integrationWorktreePath !== undefined
+          ? { integration_worktree_path: proposal.integrationWorktreePath }
+          : {}),
+        ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
+      };
+      // The reviewed declaration must still be the bytes this call inspected when
+      // the amendment lands (spec § Admission and mutation step 7).
+      const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
+      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
+        throw prepareAmendmentRefusal(
+          "stale",
+          `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
+          { path: compass.path, expected: compass.version, actual: rechecked.version },
+        );
+      }
+      await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
+      // The returned CAS token is read from the bytes this call just wrote,
+      // inside the critical section: a version read after the lock is released
+      // could name a competing commit that landed in between, while the reported
+      // plan ids and compass version would still be this call's.
+      const written = readArtifactBytes(scope.snapshotPath);
+      if (written === undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
+          { path: scope.snapshotPath },
+        );
+      }
+      snapshotVersion = written.version;
+      planIds = next.plans.map((row) => rowPlanIds(row)[0] ?? "");
+      phase = next.phase;
+      derived = derivedFields;
+    } else {
+      // §4.2/A09/A12 every addressed component already holds its effect, so the
+      // current snapshot IS the success: no byte moves and no revision is spent.
+      // The derived phase/compass_ref repairs stay with the next ordinary write,
+      // exactly as the read-only view reports them (I-000243: the reader never
+      // writes).
+      const current = readArtifactBytes(scope.snapshotPath);
+      if (current === undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `snapshot ${scope.snapshotPath} is unreadable after this call inspected it`,
+          { path: scope.snapshotPath },
+        );
+      }
+      snapshotVersion = current.version;
+      planIds = snapshot.plans.map((row) => rowPlanIds(row)[0] ?? "");
     }
-    await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
-    // The returned CAS token is read from the bytes this call just wrote,
-    // inside the critical section: a version read after the lock is released
-    // could name a competing commit that landed in between, while the reported
-    // plan ids and compass version would still be this call's.
-    const written = readArtifactBytes(scope.snapshotPath);
-    if (written === undefined) {
-      throw new CoordinationError(
-        "coordination.store",
-        `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
-        { path: scope.snapshotPath },
-      );
+    // §6.2/A27 ONE refusal naming every withheld component and its own minimum
+    // choice — raised only after the admissible components of the same patch
+    // committed (A23), so the successes stand and the caller reads one result.
+    if (plan.unresolved.length > 0) {
+      refuseAmendment(plan.unresolved, { workflowId: scope.workflowId, components: proposal.components, recovery });
     }
     return {
-      planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
+      outcome: writing ? ("amended" as const) : ("already-satisfied" as const),
+      planIds,
       compassVersion: compass.version,
-      snapshotVersion: written.version,
-      derived: derivedFields,
-      phase: next.phase,
+      snapshotVersion,
+      derived,
+      phase,
       phaseDerived,
-      // §6.2/§4.1 the component receipt: what this call applied, the declarations
-      // each normalized value came from, and the unrelated drift it deliberately
-      // did NOT consume. E08 continues from this shape — one applied entry per
-      // component, so a later call can report an applied/unresolved split
-      // without re-deriving what this one did.
-      recovery: {
-        outcome: "applied" as const,
-        target: { workflowId: scope.workflowId },
-        applied: [
-          ...proposal.rows.map((row) => `append plan ${rowPlanIds(row)[0] ?? ""}`),
-          ...proposal.corrections.map((entry) => `correct-plan-file ${entry.id}`),
-          ...(proposal.integrationWorktreePath !== undefined
-            ? [`integration-worktree ${proposal.integrationWorktreePath}`]
-            : []),
-          ...(proposal.planParallelism !== undefined ? [`execution-policy ${proposal.planParallelism}`] : []),
-        ],
-        unresolved: [],
-        resolvedFrom: [{ path: "patch", source: "intent.request" }, ...proposal.resolvedFrom],
-        warnings: [...proposal.warnings],
-        commitState: "committed" as const,
-      },
+      recovery,
     };
   });
   return {
@@ -8212,7 +8728,7 @@ export async function amendPrepareWorkflow(
     operation: "amend-prepare",
     session: scope.session,
     session_file: scope.sessionPath,
-    outcome: "amended",
+    outcome: committed.outcome,
     recovery: committed.recovery,
     // The delta only appends admissible Todo rows, corrects the addressed rows'
     // plan-file pointers and records the requested path/policy, so the workflow

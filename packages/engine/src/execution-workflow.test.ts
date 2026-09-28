@@ -55,6 +55,7 @@ import {
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
+import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
@@ -1514,5 +1515,129 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       attestation: attestation([COORDINATOR_ID]),
     });
     expect(leaseRows(fixture.context)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * E08 — the Prepare amendment's components on the ACTIVE DB route
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The compound Prepare amendment is the FILE route's patch surface
+ * (`amendPrepareWorkflow`). Two of its components also exist as ACTIVE-route
+ * operations — `execution-policy` and `integration-worktree` — and the contract
+ * the two authority routes share is what these cases pin: the ONE closed
+ * `plan_parallelism` set (exported by `coordination.ts`, not mirrored here), the
+ * ONE `recovery.applied` component vocabulary, one connected effect per accepted
+ * operation (one revision + one receipt), and a replayed component that spends
+ * no second mutation. Every fixture is a real Git control harness in its own
+ * temporary directory; no test reads or writes this checkout's `store.db`.
+ */
+describe("execution-workflow: the Prepare amendment's components on the ACTIVE route (E08)", () => {
+  /** One amendment component identity, as the FILE route emits it. */
+  function fileRouteEntry(kind: "integration-worktree" | "execution-policy", value: string): string {
+    return prepareAmendmentComponent(kind, value);
+  }
+
+  test("connected amendment — the active route applies ONE shared execution-policy rule and reports ONE component identity (A23)", async () => {
+    const fixture = await workflowFixture("amendment-shared-rule");
+    // The closed vocabulary is one rule for both routes: the active route accepts
+    // exactly the values the file route's amendment accepts, and its receipt
+    // names the component in the SAME vocabulary that amendment emits.
+    for (const value of ["parallel", "serial"]) {
+      const receipt = await workflowMutation(fixture, `op-amendment-policy-${value}`, {
+        kind: "execution-policy",
+        policy: { plan_parallelism: value, worktree_mode: "required" },
+      });
+      expect((receipt.data.workflows[0]!.state as unknown as Record<string, unknown>).execution_policy).toEqual({
+        plan_parallelism: value,
+        worktree_mode: "required",
+      });
+      expect(receipt.recovery?.applied).toEqual([fileRouteEntry("execution-policy", value)]);
+      expect(receipt.recovery?.outcome).toBe("applied");
+      expect(receipt.recovery?.commitState).toBe("committed");
+    }
+    const outsideTheSet = await refusalOf(() =>
+      workflowMutation(fixture, "op-amendment-policy-outside", {
+        kind: "execution-policy",
+        policy: { plan_parallelism: "sequential" },
+      }),
+    );
+    expect(outsideTheSet.code).toBe("coordination.invalid-input");
+
+    // The integration-checkout component reports the same identity form, built
+    // from the canonical checkout this operation records.
+    const fresh = join(fixture.repoRoot, "wt-amendment-shared");
+    runGit(["worktree", "add", "-q", "-b", `${INTEGRATION_BRANCH}-shared`, fresh], fixture.repoRoot);
+    runGit(["checkout", "--ignore-other-worktrees", "-q", INTEGRATION_BRANCH], fresh);
+    const moved = await workflowMutation(fixture, "op-amendment-worktree", {
+      kind: "integration-worktree",
+      path: fresh,
+    });
+    expect(moved.recovery?.applied).toEqual([fileRouteEntry("integration-worktree", realpathSync(fresh))]);
+    expect((moved.data.workflows[0]!.state as unknown as Record<string, unknown>).integration_worktree_path).toBe(
+      realpathSync(fresh),
+    );
+  });
+
+  test("partial replay — the amendment's components commit once each on the active route and a retry duplicates nothing (A09/A28)", async () => {
+    const fixture = await workflowFixture("amendment-components");
+    const policy = { plan_parallelism: "parallel", worktree_mode: "required" };
+
+    // Component 1: the policy — one accepted operation, one connected effect.
+    const policyReceipt = await workflowMutation(fixture, "op-amendment-policy", { kind: "execution-policy", policy });
+    expect(policyReceipt.replayed).toBe(false);
+    expect(policyReceipt.recovery?.outcome).toBe("applied");
+    expect(policyReceipt.recovery?.applied).toEqual([fileRouteEntry("execution-policy", "parallel")]);
+    const afterPolicy = await workflowFootprint(fixture.context);
+
+    // Component 2: the integration checkout. On this route each component is its
+    // own transaction, so the second lands on top of the first and touches
+    // neither its receipt nor its revision history.
+    const fresh = join(fixture.repoRoot, "wt-amendment-2");
+    runGit(["worktree", "add", "-q", "-b", `${INTEGRATION_BRANCH}-2`, fresh], fixture.repoRoot);
+    runGit(["checkout", "--ignore-other-worktrees", "-q", INTEGRATION_BRANCH], fresh);
+    const pathReceipt = await workflowMutation(fixture, "op-amendment-worktree", {
+      kind: "integration-worktree",
+      path: fresh,
+    });
+    expect(pathReceipt.replayed).toBe(false);
+    expect(pathReceipt.recovery?.applied).toEqual([fileRouteEntry("integration-worktree", realpathSync(fresh))]);
+    const afterBoth = await workflowFootprint(fixture.context);
+    // Exactly ONE revision of the workflow and the store per applied component.
+    expect(Number(afterBoth.workflow_revision)).toBe(Number(afterPolicy.workflow_revision) + 1);
+    expect(Number(afterBoth.store_revision)).toBe(Number(afterPolicy.store_revision) + 1);
+    expect(Number(afterBoth.operations)).toBe(Number(afterPolicy.operations) + 1);
+
+    // A lost-response retry of the FIRST component — same operation id, the
+    // tokens re-read — is the recorded receipt: no second mutation, no revision,
+    // and NO applied component reported twice (the later component's commit does
+    // not disturb the earlier one's receipt).
+    const retry = await workflowMutation(fixture, "op-amendment-policy", { kind: "execution-policy", policy });
+    expect(retry.replayed).toBe(true);
+    expect(retry.token).toBe(policyReceipt.token);
+    expect(retry.recovery?.outcome).toBe("already-satisfied");
+    expect(retry.recovery?.applied).toEqual([]);
+    expect(await workflowFootprint(fixture.context)).toEqual(afterBoth);
+    const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.execution_policy).toEqual(policy);
+    expect(state.integration_worktree_path).toBe(realpathSync(fresh));
+
+    // Independence (A23): a component the route refuses writes nothing and never
+    // rolls back the components that already committed.
+    const otherRepo = realpathSync(mkdtempSync(join(ROOT, "amendment-foreign-")));
+    runGit(["init", "-q", "-b", "main"], otherRepo);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], otherRepo);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-amendment-foreign", { kind: "integration-worktree", path: otherRepo }),
+    );
+    expect(refused.code).toBe("coordination.scope-mismatch");
+    const refusalRecovery = recoveryOf(refused.details);
+    expect(refusalRecovery.commitState).toBe("none");
+    expect(problemsOf(refusalRecovery).length).toBeGreaterThan(0);
+    expect(await workflowFootprint(fixture.context)).toEqual(afterBoth);
+    const settled = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(settled.execution_policy).toEqual(policy);
+    expect(settled.integration_worktree_path).toBe(realpathSync(fresh));
   });
 });

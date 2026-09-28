@@ -79,8 +79,10 @@ import {
   sha256Bytes,
 } from "./coordination-write.js";
 import {
+  PLAN_PARALLELISM_VALUES,
   gitRead,
   pinGitRefWitness,
+  prepareAmendmentComponent,
   revalidateGitRefWitness,
   type GitRefWitness,
 } from "./coordination.js";
@@ -875,6 +877,32 @@ export function setWorkflowWitnessGapForTest(callback: (() => void) | undefined)
 }
 
 /**
+ * §4.1/E08 the SHARED amendment-component identity of one transition: the
+ * `execution-policy` and `integration-worktree` transitions are the two
+ * components of the compound Prepare amendment this route performs, so their
+ * `recovery.applied` entry is the SAME identity the file route's
+ * `amendPrepareWorkflow` emits for the same component value (`execution-policy
+ * parallel`, `integration-worktree <checkout>`). A transport therefore consumes
+ * one component vocabulary without caring which authority committed the effect.
+ *
+ * `undefined` for the transitions the file route does not carry (phase,
+ * lifecycle, delivery): those keep the lifecycle-scoped entry below, because
+ * they are not amendment components and have no counterpart to be identical to.
+ */
+function amendmentComponentOf(operation: WorkflowExecutionOperation): string | undefined {
+  if (operation.kind === "integration-worktree") {
+    return prepareAmendmentComponent("integration-worktree", canonicalTarget(operation.path));
+  }
+  if (operation.kind === "execution-policy") {
+    const parallelism = isPlainObject(operation.policy) ? operation.policy.plan_parallelism : undefined;
+    return typeof parallelism === "string" && parallelism !== ""
+      ? prepareAmendmentComponent("execution-policy", parallelism)
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
  * §3 the workflow-level transition surface of the DB authority: one coordinator
  * call carrying the §3.1 mutation envelope (operation id, coordinator session
  * reference, workflow token) and the operation itself, whose member of the closed
@@ -1035,7 +1063,7 @@ export async function mutateExecutionWorkflow(
       recovery: workflowRecovery({
         workflowId,
         outcome: "applied",
-        applied: [`${operation.kind} on workflow ${workflowId}`],
+        applied: [amendmentComponentOf(operation) ?? `${operation.kind} on workflow ${workflowId}`],
         commitState: "committed",
         resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
         warnings,
@@ -1256,10 +1284,12 @@ function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
 /**
  * §3 the `execution-policy` transition: the closed policy object the snapshot
  * schema defines. `plan_parallelism` is the ONE key the approved concurrency
- * contract names values for (`coordination.ts`'s Prepare-amendment rule — the
- * same closed set, `serial | parallel`); `worktree_mode` / `push_policy` stay
- * the accepted-but-opaque keys the snapshot validator declares them to be, and
- * an unknown key is refused instead of stored.
+ * contract names values for — the SAME closed set `coordination.ts` exports
+ * (`PLAN_PARALLELISM_VALUES`) and the file route's Prepare amendment applies, so
+ * the two authority routes share one rule instead of two lists that can drift
+ * (E08); `worktree_mode` / `push_policy` stay the accepted-but-opaque keys the
+ * snapshot validator declares them to be, and an unknown key is refused instead
+ * of stored.
  *
  * The operation REPLACES the block: the union member is the whole policy, so a
  * key the payload omits is removed rather than retained. There is no partial
@@ -1278,17 +1308,6 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
   }
   return { ...policy };
 }
-
-/**
- * The only `plan_parallelism` values the approved concurrency contract names.
- *
- * simplify: this two-value set is mirrored from `coordination.ts`
- * (`PLAN_PARALLELISM_VALUES`, the Prepare-amendment rule) because that module is
- * not this task's to edit; the upgrade path is to export the set from a shared
- * module once the file route is retired. The mirror is small, closed and named
- * here so a drift would be found by reading the one comment.
- */
-const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
 
 /**
  * §3 the `delivery` transition: the same evidence rules the file route's
