@@ -16,7 +16,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
 import {
@@ -34,7 +34,7 @@ import {
 import { createFsStore, setArtifactStore, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { validateStatus } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "./workflow.js";
+import { PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, deriveLifecyclePhase, readWorkflowSnapshot, validateWorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-registration-test-"));
 
@@ -78,6 +78,19 @@ function failingStore(harnessDir: string, kind: "snapshot" | "status", times = 1
 }
 
 const PLAN_ID = "20260918-registration-fixture";
+const PLAN_TITLE = "State projection plan";
+
+/**
+ * The registered plan document a fixture registers. Registration proves the
+ * selected document (§4/R1) — the pointer, the location and the document's own
+ * `plan_id` must agree — so a fixture that registers a plan writes the document
+ * it registers, with the heading that is the title authority.
+ */
+function writePlanDocument(harnessDir: string, planId: string, title: string): void {
+  const file = join(harnessDir, "plans", `${planId}.md`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+}
 
 function planRequest(options: {
   harnessDir: string;
@@ -86,12 +99,19 @@ function planRequest(options: {
   workflowId?: string;
   planId?: string;
   title?: string;
+  /** The §4 pointer spelling (harness-relative by default). */
   file?: string;
+  /** A different registration identity that leaves the plan metadata intact. */
+  project?: string;
 }): CatalogExecutionRequest {
   const workflowId = options.workflowId ?? "wf-plan-1";
   const planId = options.planId ?? PLAN_ID;
-  const title = options.title ?? "State projection plan";
-  const file = options.file ?? `${planId}.md`;
+  const title = options.title ?? PLAN_TITLE;
+  const file = options.file ?? `plans/${planId}.md`;
+  // The registry of this fixture: the document the reviewed request registers
+  // exists, so the registration can prove it (R1). The catalog entity states the
+  // same document plans-root-relative, which is the catalog's location form.
+  writePlanDocument(options.harnessDir, planId, title);
   return {
     operationId: options.operationId,
     actor: "project-manager",
@@ -105,12 +125,12 @@ function planRequest(options: {
         deliveryKind: "development",
         branchSource: "feature/20260918-state-projection",
         branchTarget: "main",
-        project: "harness",
+        project: options.project ?? "harness",
         startedAt: "2026-09-18T00:00:00.000Z",
       },
     },
     delta: {
-      entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: file }],
+      entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: basename(file) }],
       binding: { catalogKind: "plan", catalogId: planId },
     },
   };
@@ -204,7 +224,7 @@ describe("catalog execution registration \u2014 the ordered join", () => {
 });
 
 describe("catalog execution registration \u2014 failure boundaries", () => {
-  test("a snapshot-write failure leaves a resumable pending state; reconcile finishes exactly its own writes", async () => {
+  test("interrupted registration \u2014 a snapshot-write failure leaves a resumable pending state; reconcile finishes exactly its own writes", async () => {
     const { harnessDir, context } = await fixture("snapshot-failure-");
     setArtifactStore(failingStore(harnessDir, "snapshot"));
 
@@ -250,7 +270,7 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(rootBytes);
   });
 
-  test("a root-register failure rolls the snapshot back, stays pending, and never publishes catalog metadata", async () => {
+  test("interrupted registration \u2014 a root-register failure rolls the snapshot back, stays pending, and never publishes catalog metadata", async () => {
     const { harnessDir, context } = await fixture("root-failure-");
     setArtifactStore(failingStore(harnessDir, "status"));
 
@@ -275,7 +295,7 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect((await catalogPlan(context, PLAN_ID)).rootKind).toBe("plans");
   });
 
-  test("a catalog-write refusal is a clean refusal: root-visible pending refuses dispatch, and reconcile never deletes data", async () => {
+  test("interrupted registration \u2014 a catalog-write refusal is a clean refusal: root-visible pending refuses dispatch, and reconcile never deletes data", async () => {
     const { harnessDir, context } = await fixture("catalog-failure-");
     // Another writer registered this plan id at a different location after the
     // reviewed delta was prepared: the publish refuses, exactly as a real
@@ -324,7 +344,7 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     });
   });
 
-  test("a changed orphan refuses at reconcile and is never deleted or adopted", async () => {
+  test("interrupted registration \u2014 a changed orphan refuses at reconcile and is never deleted or adopted", async () => {
     const { harnessDir, context } = await fixture("orphan-");
     setArtifactStore(failingStore(harnessDir, "snapshot"));
     await expect(
@@ -376,9 +396,11 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect(readFileSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotBytes);
     expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
 
-    // Same operation id, different request → conflict, nothing changed.
+    // Same operation id, different request → conflict, nothing changed. The
+    // difference is a different registration identity (another project) with
+    // the SAME selected document, so it stays a genuine request conflict.
     await expect(
-      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay", expectedCatalogRevision: 0, title: "Another title" })),
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay", expectedCatalogRevision: 0, project: "another-project" })),
     ).rejects.toMatchObject({ code: "store.operation-conflict" });
     // A committed registration is not re-registered (create-only), even under
     // a fresh operation id.
@@ -396,14 +418,14 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     await expect(
       registerCatalogExecution(
         context,
-        planRequest({ harnessDir, operationId: "op-replay-3", expectedCatalogRevision: 1, title: "Another title" }),
+        planRequest({ harnessDir, operationId: "op-replay-3", expectedCatalogRevision: 1, project: "another-project" }),
       ),
     ).rejects.toMatchObject({ code: "catalog.registration-conflict" });
     expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
     expect((await listCatalog(context, {})).total).toBe(1);
   });
 
-  test("recovers a crash after the catalog publish: the pending marker is finished without republishing", async () => {
+  test("interrupted registration \u2014 recovers a crash after the catalog publish: the pending marker is finished without republishing", async () => {
     const { harnessDir, context } = await fixture("post-publish-crash-");
     const request = planRequest({ harnessDir, operationId: "op-crash", expectedCatalogRevision: 0 });
     await registerCatalogExecution(context, request);
@@ -497,7 +519,7 @@ describe("catalog execution registration \u2014 interrupted registration restart
     await expect(
       registerCatalogExecution(
         context,
-        planRequest({ harnessDir, operationId: "op-second", expectedCatalogRevision: 0, title: "A different plan title" }),
+        planRequest({ harnessDir, operationId: "op-second", expectedCatalogRevision: 0, project: "another-project" }),
       ),
     ).rejects.toMatchObject({ code: "catalog.registration-pending" });
     expect(existsSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
@@ -515,6 +537,48 @@ describe("catalog execution registration \u2014 interrupted registration restart
     );
     expect(resumed).toEqual({ operationId: "op-first", workflowId: "wf-plan-1", catalogRevision: 1, recovered: true });
     expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
+  test("interrupted registration \u2014 a fresh operation with the SAME identity but a different reviewed delta is never adopted", async () => {
+    const { harnessDir, context } = await fixture("interrupted-delta-");
+    setArtifactStore(failingStore(harnessDir, "snapshot"));
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-delta", expectedCatalogRevision: 0 })),
+    ).rejects.toThrow(/injected snapshot write failure/);
+    setArtifactStore(createFsStore(harnessDir));
+
+    // The SAME workflow and registration identity (the same selected document,
+    // branches, project and delivery kind) reviewed with a DIFFERENT catalog
+    // delta: the plan entity is asked for at another catalog location. The
+    // reviewed delta is part of the semantic request fingerprint, so this is not
+    // a retry of the pending operation — adopting the row would publish ITS
+    // delta under this intent.
+    const other = planRequest({ harnessDir, operationId: "op-delta-2", expectedCatalogRevision: 0 });
+    const otherPlanEntity = other.delta.entities[0];
+    if (otherPlanEntity === undefined) throw new Error("the fixture plan request states one catalog entity");
+    otherPlanEntity.relativePath = "elsewhere.md";
+    await expect(registerCatalogExecution(context, other)).rejects.toMatchObject({
+      code: "catalog.registration-pending",
+    });
+
+    // Nothing of the refused request landed: no execution bytes, no catalog row,
+    // and the pending operation is untouched.
+    expect(existsSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+    expect((await listCatalog(context, {})).total).toBe(0);
+    const pending = await listPendingCatalogRegistrations(context);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ operationId: "op-delta", phase: "prepared", rootVisible: false });
+
+    // …and the pending operation's OWN reviewed delta is what gets published
+    // when a fresh operation id retries it with that same delta.
+    const resumed = await registerCatalogExecution(
+      context,
+      planRequest({ harnessDir, operationId: "op-delta-3", expectedCatalogRevision: 0 }),
+    );
+    expect(resumed).toEqual({ operationId: "op-delta", workflowId: "wf-plan-1", catalogRevision: 1, recovered: true });
+    expect((await catalogPlan(context, PLAN_ID)).relativePath).toBe(`${PLAN_ID}.md`);
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
@@ -594,6 +658,50 @@ describe("catalog execution registration \u2014 interrupted registration restart
     expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
   });
 
+  test("registration recovery \u2014 explicit metadata with a canonical absolute pointer still proves the selected document", async () => {
+    const { harnessDir, context } = await fixture("explicit-plan-");
+    const planId = "20260918-explicit-plan";
+    const title = "Explicit registration plan";
+    writePlanDocument(harnessDir, planId, title);
+    const canonical = realpathSync(join(harnessDir, "plans", `${planId}.md`));
+
+    // The FULLY explicit form (id AND title) naming the SAME registered document
+    // in its canonical absolute spelling: the §4 resolver still runs, so the
+    // shipped route derives the catalog location from the RESOLVED document —
+    // the absolute pointer the caller passed is never used as the entity's
+    // `relativePath` (which the delta location gate refuses as an absolute
+    // spelling).
+    const receipt = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: {
+        kind: "plan",
+        workflowId: "wf-explicit-1",
+        options: {
+          harnessDir,
+          plan: { id: planId, title, file: canonical },
+          deliveryKind: "development",
+          branchSource: `feature/${planId}`,
+          branchTarget: "main",
+          startedAt: "2026-09-18T00:00:00.000Z",
+        },
+      },
+    });
+    expect(receipt).toEqual({
+      operationId: expect.any(String),
+      workflowId: "wf-explicit-1",
+      catalogRevision: 1,
+      recovered: false,
+    });
+
+    const snapshot = JSON.parse(
+      readFileSync(join(harnessDir, "workflows", "wf-explicit-1", WORKFLOW_SNAPSHOT_FILE), "utf8"),
+    ) as { plans: Array<Record<string, unknown>> };
+    expect(snapshot.plans).toEqual([{ id: planId, title, file: canonical, status: "Todo" }]);
+    const entity = await catalogPlan(context, planId);
+    expect(entity.title).toBe(title);
+    expect(entity.relativePath).toBe(`${planId}.md`);
+  });
+
   test("registration recovery \u2014 a registration that already fully holds is a successful no-op (A09)", async () => {
     const { harnessDir, context } = await fixture("repeat-noop-");
     const request = planRequest({ harnessDir, operationId: "op-repeat", expectedCatalogRevision: 0 });
@@ -626,7 +734,7 @@ describe("catalog execution registration \u2014 interrupted registration restart
 });
 
 describe("catalog execution registration \u2014 the other two producers", () => {
-  test("registers an iteration (with its relation) through the same journal", async () => {
+  test("registration recovery \u2014 registers an iteration (with its relation) through the same journal at its derived initial phase", async () => {
     const { harnessDir, context } = await fixture("iteration-");
     const iterationId = "20260918-registration-iteration";
     // §4: the row pointer is the registered plan file under the configured
@@ -674,9 +782,18 @@ describe("catalog execution registration \u2014 the other two producers", () => 
 
     const snapshot = JSON.parse(readFileSync(join(harnessDir, "workflows", iterationId, WORKFLOW_SNAPSHOT_FILE), "utf8")) as {
       type: string;
+      phase?: string;
       plans: Array<Record<string, unknown>>;
     };
     expect(snapshot.type).toBe("iteration");
+    // R3/A04 — the initial phase registration proves for an iteration that was
+    // never started: the producer declares `phase-1-prepare` at creation, and the
+    // read-time derivation of the SAME unstarted facts agrees with it (a
+    // registered-but-unstarted lifecycle is never read as "no declared phase").
+    expect(snapshot.phase).toBe(PREPARE_PHASE);
+    expect(deriveLifecyclePhase(readWorkflowSnapshot(join(harnessDir, "workflows", iterationId)).snapshot).phase).toBe(
+      PREPARE_PHASE,
+    );
     // The registered pointer is the canonical absolute plan file, not the
     // `plans/<id>.md` spelling the reviewer passed in.
     expect(snapshot.plans).toEqual([expect.objectContaining({ id: PLAN_ID, file: canonicalPlanFile, status: "Todo" })]);

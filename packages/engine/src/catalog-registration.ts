@@ -1231,7 +1231,8 @@ export function writeBinding(
  * R2/A05/A09/A28 — an interrupted registration link is FINISHED by the
  * ordinary intent, not by a repair call: retrying the same registration (the
  * same operation id with the same request, or a fresh operation id whose
- * resolved registration identity matches the pending operation's) resumes that
+ * resolved registration identity AND reviewed catalog delta match the pending
+ * operation's) resumes that
  * pending operation through the ONE reconcile implementation and returns its
  * receipt. The pending operation's own reviewed delta, expectation and files
  * are used — the retry neither restarts nor duplicates anything, and the
@@ -1242,8 +1243,8 @@ export function writeBinding(
  * workflow, the same registration identity and the same reviewed catalog
  * delta, already committed) returns its recorded receipt: current success, no
  * duplicate row, no timestamp or revision churn. A repeat whose registration
- * identity differs is a genuinely different registration and keeps the
- * create-only refusal.
+ * identity — or whose reviewed catalog delta — differs is a genuinely different
+ * registration and keeps the create-only refusal.
  *
  * Refusals: `catalog.registration-invalid` (request/delta shape, before any
  * write), `store.not-active` / `store.not-initialized` / the store-runtime
@@ -1251,8 +1252,8 @@ export function writeBinding(
  * expectation), `catalog.registration-conflict` (the execution side is already
  * registered, or belongs to another request), `catalog.registration-pending`
  * (a DIFFERENT registration is in flight for this workflow — a genuine
- * identity conflict, not a retry), `catalog.registration-aborted` (that
- * operation id is spent), `store.operation-conflict` (the operation id was
+ * identity-or-reviewed-delta conflict, not a retry), `catalog.registration-aborted`
+ * (that operation id is spent), `store.operation-conflict` (the operation id was
  * reused with a different request), plus the producers' own refusals, the
  * reconcile verdict of a resumed operation, and the catalog domain verbs'
  * refusals at publish. An iteration row whose plan pointer the registered-plan
@@ -1336,16 +1337,21 @@ export async function registerCatalogExecution(
     const inFlight = pendingRows(db).find((row) => parseJournalWorkflowId(row) === plan.workflowId);
     if (inFlight !== undefined) {
       // A fresh operation id for the SAME registration is a retry: prove it by
-      // the identity the pending operation was prepared against (its own
-      // registration identity, never a re-derived guess). A damaged/unreadable
-      // delta proves nothing, so the refusal below stands.
-      if (journalView(inFlight).identity === plan.identity) {
+      // BOTH facts the pending operation was prepared against — the identity it
+      // resolved and the reviewed catalog delta it was reviewed with (the delta
+      // is part of the semantic request fingerprint, `requestHash`). Adopting a
+      // row whose delta differs would publish THAT registration's catalog writes
+      // under this request, so an identity match alone is not enough. A
+      // damaged/unreadable delta proves nothing, so the refusal below stands.
+      const view = journalView(inFlight);
+      if (view.identity === plan.identity && stableJson(view.catalog) === stableJson(validated.delta)) {
         return { kind: "resume" as const, operationId: inFlight.operation_id };
       }
       throw new CatalogRegistrationError(
         "catalog.registration-pending",
         `workflow ${JSON.stringify(plan.workflowId)} has a pending registration operation ${JSON.stringify(inFlight.operation_id)} ` +
-          `(${inFlight.phase}) for a DIFFERENT registration identity; a half-registered workflow is never re-registered \u2014 ` +
+          `(${inFlight.phase}) for a DIFFERENT registration: its registration identity or its reviewed catalog delta does not ` +
+          `match this request. A half-registered workflow is never re-registered under another intent \u2014 ` +
           `run "mstar catalog reconcile --operation-id ${inFlight.operation_id}", or abandon it explicitly ` +
           '("mstar catalog reconcile --abort").',
       );

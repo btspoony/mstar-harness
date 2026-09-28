@@ -1777,10 +1777,15 @@ export async function declareWorkflowDeliveryKind(
  * - `catalogRelativePath`: the same document stated plans-root-relative, which
  *   is the catalog entity location (`catalog-registration.ts`).
  *
- * A fully explicit declaration (`id` AND `title` supplied) is the caller's
- * reviewed input and is returned verbatim without reading anything — the
- * create-only producer keeps preserving what its caller declared. Supplying
- * one of the two derives only the other.
+ * EVERY form proves the selected document, the fully explicit one included: the
+ * §4 resolver runs for every call, so the pointer, the location and the
+ * document's own `plan_id` header must agree before any of these values is
+ * used, and `catalogRelativePath` is always the plans-root-relative form of the
+ * resolved document — never the caller's pointer spelling (an absolute pointer
+ * is not a catalog location and is refused as one). A supplied `id`/`title` is
+ * a CONSTRAINT on the proven document, not a replacement for it: an id that
+ * names a different registered plan and a title that contradicts the document's
+ * heading refuse; an omitted one is derived from the document.
  */
 export type DerivedPlanRegistration = Readonly<{
   plan: Readonly<{ id: string; title: string; file: string }>;
@@ -1798,13 +1803,6 @@ export function derivePlanRegistration(input: {
   const declaredId = typeof input.plan.id === "string" && input.plan.id.trim() !== "" ? input.plan.id : undefined;
   const declaredTitle =
     typeof input.plan.title === "string" && input.plan.title.trim() !== "" ? input.plan.title : undefined;
-  if (declaredId !== undefined && declaredTitle !== undefined) {
-    return {
-      plan: { id: declaredId, title: declaredTitle, file },
-      catalogRelativePath: file,
-      resolvedFrom: [],
-    };
-  }
   if (typeof file !== "string" || file.trim() === "") {
     throw new Error(
       "derivePlanRegistration: the selected plan document is required — supply plan.file as the registered plan pointer " +
@@ -1812,18 +1810,34 @@ export function derivePlanRegistration(input: {
     );
   }
   const harnessRoot = resolve(input.harnessDir);
-  // The plan id a pointer names is its file name without the `.md`; the §4
-  // resolver below then proves that id, that location and the document's own
-  // `plan_id` header are the same registration identity.
+  // The plan id a pointer names is its file name without the `.md`; a supplied
+  // `id` is the CONSTRAINT instead — the §4 resolver below then proves that id,
+  // that location and the document's own `plan_id` header are the same
+  // registration identity, for the explicit form exactly as for the sparse one.
   const planId = declaredId ?? basename(file).replace(/\.md$/, "");
   const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
   // The body is the title authority (the first level-1 heading); a document
   // that declares no heading proves no title, so the plan id is the honest
   // fallback rather than a refusal.
   const heading = /^# (.+)$/m.exec(readFileSync(resolved.planPath, "utf8"))?.[1]?.trim();
-  const title = declaredTitle ?? (heading === undefined || heading === "" ? planId : heading);
+  const documentTitle = heading === undefined || heading === "" ? undefined : heading;
+  // A supplied title is a constraint against the document, never a replacement
+  // for it: a title that contradicts the heading the selected document states
+  // refuses. A document with no heading states no title to contradict, so there
+  // the declaration stands (the same reason it is not refused when derived).
+  if (declaredTitle !== undefined && documentTitle !== undefined && declaredTitle.trim() !== documentTitle) {
+    throw new Error(
+      `derivePlanRegistration: plan ${JSON.stringify(planId)} was declared with title ${JSON.stringify(declaredTitle)}, but the ` +
+        `selected document ${resolved.planPath} states ${JSON.stringify(documentTitle)} — the selected plan document is the ` +
+        "registration authority (R1/§4), so a supplied title is a constraint against it, never an override",
+    );
+  }
+  const title = documentTitle ?? declaredTitle ?? planId;
   // The catalog entity location is plans-root-relative while the row keeps the
-  // §4 canonical pointer: one document, two declared location forms.
+  // §4 canonical pointer: one document, two declared location forms. The
+  // relative form is derived from the RESOLVED document for every input form —
+  // the caller's pointer spelling (which may be absolute) is never a catalog
+  // location.
   const catalogRelativePath = relative(canonicalizeNearestExisting(resolvePlanDir(harnessRoot)), resolved.planPath)
     .split(sep)
     .join("/");
@@ -1850,9 +1864,11 @@ export type RegisterPlanWorkflowOptions = {
   harnessDir: string;
   /**
    * The owned plan (contract §2: one independently owned plan per workflow on
-   * the new normal route). `file` is the selected plan document; `id` and
-   * `title` are DERIVED from it when omitted (R1) — a supplied value is used
-   * exactly as declared.
+   * the new normal route). `file` is the selected plan document — the §4
+   * registered-plan pointer, the one authority every form proves; `id` and
+   * `title` are DERIVED from it when omitted (R1), and a supplied value is a
+   * CONSTRAINT on the proven document (an id or title the document does not
+   * state refuses) rather than a replacement for reading it.
    */
   plan: { file: string; id?: string; title?: string };
   /** Delivery kind declared at registration (contract §1). Required — never inferred. */
@@ -1927,9 +1943,10 @@ export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): st
  * the comparison.
  *
  * The row is derived from the selected plan document (`derivePlanRegistration`,
- * R1): an omitted `id`/`title` is resolved from the document here, so the
- * direct producer and the catalog journal derive the identical row from the
- * identical inputs rather than each copying the caller's fields.
+ * R1): an omitted `id`/`title` is resolved from the document here and a
+ * supplied one is proven against it, so the direct producer and the catalog
+ * journal derive the identical row from the identical inputs rather than each
+ * copying the caller's fields.
  */
 export function planWorkflowSnapshot(
   workflowId: string,
@@ -2029,9 +2046,11 @@ export async function registerPlanWorkflow(
     );
   }
   // `id`/`title` are OPTIONAL intent inputs: an omitted one is derived from
-  // the selected document by `planWorkflowSnapshot` (R1). A supplied value is
-  // still validated — an empty declaration is malformed input, not an
-  // omission.
+  // the selected document by `planWorkflowSnapshot` (R1), and a supplied one is
+  // a CONSTRAINT the derivation proves against that document (a value the
+  // document does not state refuses; it never replaces reading it). A supplied
+  // value is still validated here too — an empty declaration is malformed
+  // input, not an omission.
   for (const field of ["id", "title"] as const) {
     const value = plan[field];
     if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {

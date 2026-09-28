@@ -1493,6 +1493,11 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
     const root = tmpRoot("workflow-register-");
     roots.push(root);
     setArtifactStore(createFsStore(root));
+    // Registration proves the SELECTED plan document (§4/R1), so the fixture
+    // writes the registered plan the default options select: the heading is the
+    // title authority and the declared `plan_id` is the identity authority.
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "20260916-plan-example.md"), "# Example plan\n\n**plan_id:** 20260916-plan-example\n");
     return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
   }
 
@@ -1533,7 +1538,11 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
     // protected base anchor cleanup Rule 2 / L1 consume) stays unset.
     expect(snapshot.branch).toEqual({ source: "feature/20260916-plan-example", target: "main" });
     // One owned plan row, Todo — registration does not authorize implementation.
-    expect(snapshot.plans).toEqual([{ id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" }]);
+    // The pointer is the §4 canonical absolute plan file, the form the resolver
+    // returns (a supplied relative spelling is proven, never copied verbatim).
+    expect(snapshot.plans).toEqual([
+      { id: "20260916-plan-example", title: "Example plan", file: realpathSync(join(root, "plans", "20260916-plan-example.md")), status: "Todo" },
+    ]);
 
     const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
     expect(rootDoc.workflows).toEqual([{ id, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${id}` }]);
@@ -1838,9 +1847,12 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     const planRoot = tmpRoot("iteration-register-plan-isolation-");
     roots.push(planRoot);
     setArtifactStore(createFsStore(planRoot));
+    // The selected plan document the producer registers (§4/R1).
+    mkdirSync(join(planRoot, "plans"), { recursive: true });
+    writeFileSync(join(planRoot, "plans", "p-1.md"), "# P\n\n**plan_id:** p-1\n");
     const r2 = await registerPlanWorkflow(id, {
       harnessDir: planRoot,
-      plan: { id: "p-1", title: "P", file: "plans/p.md" },
+      plan: { id: "p-1", title: "P", file: "plans/p-1.md" },
       deliveryKind: "development",
       branchSource: "feature/p",
       branchTarget: "main",
@@ -2544,7 +2556,19 @@ describe("catalog registration — the journal joins this producer to the catalo
     };
   }
 
+  /**
+   * The registered plan document the reviewed request selects (§4/R1):
+   * registration proves it, so the fixture writes it — its `plan_id` header is
+   * the identity authority and its first heading the title authority.
+   */
+  function registeredPlan(root: string, planId: string, title: string): void {
+    const file = join(root, "plans", `${planId}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+  }
+
   function planRequest(root: string, operationId: string, workflowId: string, planId: string, title: string, expected: number): CatalogExecutionRequest {
+    registeredPlan(root, planId, title);
     return {
       operationId,
       actor: "project-manager",
@@ -3050,6 +3074,82 @@ describe("registerPlanWorkflow — the selected plan document is the registratio
         branchTarget: "main",
       }),
     ).rejects.toThrow(/plan_id/);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
+
+  test("registration recovery \u2014 the explicit full-input form proves the same document: canonical pointer, relative catalog location", async () => {
+    const root = tmpRoot("plan-register-explicit-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const planId = "20260918-explicit-registration";
+    selectedPlan(root, planId, "Explicit registration title");
+    const canonical = realpathSync(join(root, "plans", `${planId}.md`));
+
+    // The fully explicit form (id AND title) names the SAME registered document
+    // in its canonical absolute spelling. The §4 resolver still runs, so the row
+    // keeps the canonical pointer while the catalog location is the
+    // plans-root-relative form \u2014 never the absolute pointer the caller passed
+    // (which the catalog's location gate refuses as a `relativePath`).
+    const derived = derivePlanRegistration({
+      harnessDir: root,
+      plan: { id: planId, title: "Explicit registration title", file: canonical },
+    });
+    expect(derived.plan).toEqual({ id: planId, title: "Explicit registration title", file: canonical });
+    expect(derived.catalogRelativePath).toBe(`${planId}.md`);
+    expect(derived.resolvedFrom.map((entry) => entry.path)).toEqual(["plan.file"]);
+
+    const workflowId = "20260918-explicit-registration-wf";
+    const result = await registerPlanWorkflow(workflowId, {
+      harnessDir: root,
+      plan: { id: planId, title: "Explicit registration title", file: canonical },
+      deliveryKind: "development",
+      branchSource: "feature/20260918-explicit-registration",
+      branchTarget: "main",
+      startedAt: "2026-09-18T00:00:00.000Z",
+    });
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(join(root, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE), "utf8")) as {
+      plans: unknown;
+    };
+    expect(snapshot.plans).toEqual([
+      { id: planId, title: "Explicit registration title", file: canonical, status: "Todo" },
+    ]);
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+  });
+
+  test("registration recovery \u2014 explicit metadata the selected document does not state refuses before any write", async () => {
+    const root = tmpRoot("plan-register-explicit-mismatch-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const planId = "20260918-explicit-mismatch";
+    const pointer = selectedPlan(root, planId, "The document's stated title");
+
+    // A title the document does not state is a constraint violation, never an
+    // override: the selected document is the registration authority (R1/§4).
+    expect(() =>
+      derivePlanRegistration({ harnessDir: root, plan: { id: planId, title: "A declared title", file: pointer } }),
+    ).toThrow(/states "The document's stated title"/);
+
+    // An id that names a different registered plan is refused by the §4 resolver
+    // itself: the pointer no longer resolves to the plan it claims to be.
+    expect(() =>
+      derivePlanRegistration({
+        harnessDir: root,
+        plan: { id: "20260918-another-plan", title: "The document's stated title", file: pointer },
+      }),
+    ).toThrow(PlanPathError);
+
+    // The producer refuses identically \u2014 and before any byte is written.
+    await expect(
+      registerPlanWorkflow("20260918-explicit-mismatch-wf", {
+        harnessDir: root,
+        plan: { id: planId, title: "A declared title", file: pointer },
+        deliveryKind: "development",
+        branchSource: "feature/20260918-explicit-mismatch",
+        branchTarget: "main",
+      }),
+    ).rejects.toThrow(/states "The document's stated title"/);
     expect(existsSync(join(root, "workflows"))).toBe(false);
     expect(existsSync(join(root, "status.json"))).toBe(false);
   });
