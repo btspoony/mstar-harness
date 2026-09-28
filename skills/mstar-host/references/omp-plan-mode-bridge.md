@@ -18,7 +18,7 @@ Bootstrap before treating a plan as ready for Execute (read `mstar-conventions` 
 
 ## `mstar-iteration` Phase 1 in Plan mode
 
-When formal iteration Phase 1 runs under omp Plan UX, the shared gate → core: single SSOT draft plan path (no silent second plan file); feedback-driven in-place edits; **do not** run Review & Edit chain, commit, or create integration branch until the user leaves Plan mode / approves implementation (Build-equivalent). Recommended branch policy still applies — no silent work on `main`/`master` (`mstar-iteration` §1.2).
+When formal iteration Phase 1 runs under omp Plan UX, the shared gate → core: single SSOT draft plan path (no silent second plan file); feedback-driven in-place edits; **do not** run Review & Edit chain or create integration branch until the user leaves Plan mode / approves implementation (Build-equivalent). Recommended branch policy still applies — no silent work on `main`/`master` (`mstar-iteration` §1.2).
 
 ## Clarify vs plan approval
 
