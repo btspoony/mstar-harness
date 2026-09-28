@@ -783,6 +783,12 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (mstar
  // the existing bytes.
     setArtifactStore(createFsStore(root));
     try {
+      // The SELECTED plan document the registration proves (§4/R1): its `plan_id`
+      // header is the identity authority and its heading the title authority, so
+      // the refusal under test is the create-only identity one — not a pointer
+      // refusal.
+      mkdirSync(join(root, "plans"), { recursive: true });
+      writeFileSync(join(root, "plans", "plan-a.md"), "# Plan A\n\n**plan_id:** plan-a\n");
       let refusal = "";
       try {
         await registerPlanWorkflow("wf-plan-1", {

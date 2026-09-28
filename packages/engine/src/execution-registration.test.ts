@@ -140,6 +140,17 @@ async function legacyFixture(label: string): Promise<{ workspace: string; harnes
   return { workspace, harnessRoot, context };
 }
 
+/**
+ * The §4 registered plan document a reviewed registration selects: its
+ * `plan_id` header is the identity authority the resolver proves, and its first
+ * heading is the title authority the declared title must state.
+ */
+function writePlanDocument(harnessDir: string, planId: string, title: string): void {
+  const file = join(harnessDir, "plans", `${planId}.md`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+}
+
 /** One plan registration request, exactly as a reviewed caller supplies it. */
 function planRequest(options: {
   context: StoreContext;
@@ -160,8 +171,13 @@ function planRequest(options: {
   const workflowId = options.workflowId ?? WORKFLOW_ID;
   const planId = options.planId ?? PLAN_ID;
   const title = options.title ?? PLAN_TITLE;
-  const file = options.file ?? `${planId}.md`;
+  // The catalog entity's location is plans-root-relative; the SELECTED document
+  // is the harness-relative registered plan pointer the §4 resolver proves. One
+  // document, two declared forms — so the fixture writes the document its
+  // reviewed request registers.
+  const relativePath = options.file ?? `${planId}.md`;
   const bindingId = options.bindingId ?? planId;
+  writePlanDocument(options.context.harnessDir, planId, title);
   return {
     operationId: options.operationId,
     actor: "project-manager",
@@ -171,7 +187,7 @@ function planRequest(options: {
       workflowId,
       options: {
         harnessDir: options.context.harnessDir,
-        plan: { id: planId, title, file },
+        plan: { id: planId, title, file: `plans/${relativePath}` },
         deliveryKind: "development",
         branchSource: `feature/${workflowId}`,
         branchTarget: "main",
@@ -180,7 +196,7 @@ function planRequest(options: {
       },
     },
     delta: {
-      entities: options.entities ?? [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: file }],
+      entities: options.entities ?? [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath }],
       ...(options.links === undefined ? {} : { links: options.links }),
       binding: { catalogKind: "plan", catalogId: bindingId },
     },

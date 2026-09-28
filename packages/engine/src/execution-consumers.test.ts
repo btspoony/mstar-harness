@@ -449,6 +449,21 @@ async function registeredStore(label: string): Promise<StoreContext> {
   const handle = await initializeStore(context);
   handle.close();
   const initialized = await initializeExecutionAuthority(context);
+  // The SELECTED plan document the registration proves (§4/R1): its `plan_id`
+  // header is the identity authority the pointer resolves against, and its
+  // heading is the title authority the declared title must state. It lives in
+  // the plan root this fixture DECLARES (`.mstarc plan_dir`): a `plans/`
+  // directory directly under the control root would be read as a harness marker
+  // by the harness-root probe and re-point the store.
+  const planTitle = "Cross-domain accepted plan";
+  const planDir = "plan-docs";
+  const planFile = `${planDir}/${CROSS_PLAN}.md`;
+  writeFileSync(join(context.harnessDir, ".mstarc"), `[config]\nplan_dir=${planDir}\n`);
+  mkdirSync(join(context.harnessDir, planDir), { recursive: true });
+  writeFileSync(
+    join(context.harnessDir, planDir, `${CROSS_PLAN}.md`),
+    `# ${planTitle}\n\n**plan_id:** ${CROSS_PLAN}\n`,
+  );
   await commitExecutionRegistration(
     { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) },
     {
@@ -460,7 +475,7 @@ async function registeredStore(label: string): Promise<StoreContext> {
         workflowId: CROSS_WORKFLOW,
         options: {
           harnessDir: context.harnessDir,
-          plan: { id: CROSS_PLAN, title: "Cross-domain accepted plan", file: `plans/${CROSS_PLAN}.md` },
+          plan: { id: CROSS_PLAN, title: planTitle, file: planFile },
           deliveryKind: "development",
           branchSource: `feature/${CROSS_WORKFLOW}`,
           branchTarget: "main",
