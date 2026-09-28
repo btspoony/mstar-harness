@@ -7713,7 +7713,9 @@ function readPreparePatch(
   // an unavailable prerequisite (A25). A local repair consumes neither, so it
   // proceeds on its trusted envelope root and reports the unreadable Git fact as
   // a warning (R12/A24): an environment outage is never promoted into a global
-  // gate over work that does not depend on it.
+  // gate over work that does not depend on it. The SAME partition governs the
+  // branch the worktree actually answers: a differing branch refuses only the
+  // components that anchor to it, and is drift beside a local repair.
   const consumesCheckoutFacts = rawAppends.length > 0 || patch.integrationWorktreePath !== undefined;
   if (context.main === null) {
     if (consumesCheckoutFacts) {
@@ -7733,12 +7735,29 @@ function readPreparePatch(
     });
   } else if (context.main.branch !== mainWorktreeBranch) {
     // `branch.base` is a recorded anchor, not residency, so it is never the
-    // expectation here.
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `the main worktree ${context.main.root} is on ${context.main.branch === "" ? "a detached HEAD" : context.main.branch}, but this amendment declares ${mainWorktreeBranch}`,
-      { expected: mainWorktreeBranch, actual: context.main.branch },
-    );
+    // expectation here. The branch fact is consumed by the components that
+    // anchor a checkout to it — an appended row's recorded branch, the recorded
+    // integration checkout — and refuses those exactly as the unreadable-Git
+    // case above refuses them (A25). A local pointer repair consumes no branch
+    // fact, so the same differing branch is reported as drift beside the repair
+    // instead of being promoted into a gate over work that does not read it
+    // (A24/R12), keeping this component's verdict identical whether Git is
+    // unreadable or readable-but-different.
+    const on = context.main.branch === "" ? "a detached HEAD" : context.main.branch;
+    if (consumesCheckoutFacts) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}`,
+        { expected: mainWorktreeBranch, actual: context.main.branch },
+      );
+    }
+    warnings.push({
+      code: "coordination.main-branch-drift",
+      path: "cwd",
+      message:
+        `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}; this amendment repairs registration ` +
+        "facts that no checkout fact binds, so it proceeds on the trusted envelope root and the declared branch is not enforced",
+    });
   }
   const requestedParallelism = patch.planParallelism;
   if (

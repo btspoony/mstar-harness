@@ -5067,6 +5067,66 @@ describe("Prepare workflow amendment", () => {
     );
     expect(appendRefusal.code).toBe("coordination.not-in-git");
   }, 30000);
+
+  test("a local pointer correction proceeds when Git answers on a different branch (pointer correction — A24)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // Git genuinely ANSWERS here — a readable main worktree on its own branch —
+    // so this is the available-yet-different case, not the unreadable one.
+    const onBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: fixture.root, encoding: "utf8" }).trim();
+    expect(onBranch).toBe("main");
+
+    const view = await prepareViewOf(fixture);
+    const correction = {
+      appendPlans: [],
+      mainWorktreeBranch: "release",
+      correctPlanFiles: [
+        {
+          id: PREPARE_ROW,
+          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+        },
+      ],
+    };
+    const amended = await amendWith(fixture, correction, {
+      snapshotVersion: view.view.snapshotVersion,
+      compassVersion: view.view.compassVersion,
+    });
+
+    expect(amended.recovery?.outcome).toBe("applied");
+    // The differing branch is drift beside the repair this call needs no branch
+    // fact for — the same verdict the unreadable-Git case gives, never a gate.
+    expect(amended.recovery?.warnings.map((entry) => entry.code)).toContain("coordination.main-branch-drift");
+    expect(prepareSnapshotOf(fixture).plans[0]!.file).toBe(join(fixture.planDir, `${PREPARE_ROW}.md`));
+
+    // The same available-yet-different branch still refuses the components that
+    // anchor a checkout/branch fact to it (A25): an append, and an integration
+    // checkout. Neither refusal writes anything.
+    const afterCorrection = protectedBytes(fixture);
+    const appendRefusal = await prepareRefusalOf(() =>
+      amendWith(fixture, preparePatchOf(fixture, { mainWorktreeBranch: "release" }), {
+        snapshotVersion: amended.view.snapshotVersion,
+        compassVersion: amended.view.compassVersion,
+      }),
+    );
+    expect(appendRefusal.code).toBe("coordination.scope-mismatch");
+    expect(appendRefusal.details.expected).toBe("release");
+    expect(appendRefusal.details.actual).toBe("main");
+
+    const integrationRefusal = await prepareRefusalOf(() =>
+      amendWith(
+        fixture,
+        preparePatchOf(fixture, {
+          mainWorktreeBranch: "release",
+          appendPlans: [],
+          integrationWorktreePath: fixture.integrationPath,
+        }),
+        { snapshotVersion: amended.view.snapshotVersion, compassVersion: amended.view.compassVersion },
+      ),
+    );
+    expect(integrationRefusal.code).toBe("coordination.scope-mismatch");
+    expect(protectedBytes(fixture)).toEqual(afterCorrection);
+  }, 30000);
 });
 
 /* ------------------------------------------------------------------------ *
