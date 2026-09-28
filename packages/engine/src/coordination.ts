@@ -55,6 +55,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
+  COORDINATION_ERROR_CODES,
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
@@ -68,6 +69,7 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
+  type CoordinationErrorCode,
   type HandoffIntegration,
   type PlanHandoff,
   type PlanProgress,
@@ -76,6 +78,15 @@ import {
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
+import {
+  unresolvedRecovery,
+  type IntentContext,
+  type RecoveryProblem,
+  type ResolutionSource,
+  type ResolutionWarning,
+  type RootResolution,
+  type TargetResolution,
+} from "./recovery-intent.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
@@ -563,6 +574,252 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
 }
 
 /* ------------------------------------------------------------------------ *
+ * § Intent resolution (S2): trusted root, associated target
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The process-root probe WITHOUT the hard Git verdict. `resolveProcessHarnessDir`
+ * keeps refusing for callers that bring no root of their own; an engine
+ * operation that already holds a trusted root must not be invalidated by a
+ * Git fact it does not need (design R12/A24), so an unreadable main worktree is
+ * reported as `unavailable` here instead of becoming a refusal.
+ */
+function probeProcessRoot(cwd: string): { root: string | null; unavailable: string | null } {
+  try {
+    return { root: resolveProcessHarnessDir(cwd), unavailable: null };
+  } catch (error) {
+    if (error instanceof CoordinationError && error.code === "coordination.not-in-git") {
+      return { root: null, unavailable: error.message };
+    }
+    throw error;
+  }
+}
+
+/** The durable root association an entry already holds: the control harness root
+ * its own session envelope (or catalog binding) recorded. */
+export type RootAssociation = Readonly<{ root: string; source: string }>;
+
+/**
+ * Resolve the TRUSTED control root of one sparse intent, in source order:
+ *
+ * 1. `context.controlRoot` — a root the caller explicitly holds. It is
+ *    authoritative: it is never re-derived from Git, so a Git outage cannot
+ *    invalidate it and no nested harness is guessed (R12/A24).
+ * 2. `association` — the root the caller's identity already holds (its session
+ *    envelope). Also Git-independent, but cross-checked against the process
+ *    root when that probe answers: two durable statements that disagree are an
+ *    unresolved conflict, never a silent pick (§3.3).
+ * 3. The process probe from `context.cwd` — the only Git-dependent source, and
+ *    the only one that can answer "no root".
+ *
+ * A root is never guessed and no candidate list is used to choose one. A Git
+ * fact that cannot be read is a warning beside a resolved root, and an
+ * unresolved component (with every source tried) when no root was established.
+ */
+export function resolveIntentRoot(context: IntentContext, association?: RootAssociation): RootResolution {
+  const resolvedFrom: ResolutionSource[] = [];
+  const warnings: ResolutionWarning[] = [];
+  const cwd = resolve(context.cwd);
+  if (isNonEmptyString(context.controlRoot)) {
+    resolvedFrom.push({ path: "controlRoot", source: "intent.explicit" });
+    return {
+      ok: true,
+      root: canonicalizeNearestExisting(resolve(cwd, context.controlRoot)),
+      resolvedFrom,
+      warnings,
+    };
+  }
+  const associated =
+    association === undefined
+      ? null
+      : { root: canonicalizeNearestExisting(association.root), source: association.source };
+  if (associated !== null) resolvedFrom.push({ path: "controlRoot", source: associated.source });
+
+  const probe = probeProcessRoot(cwd);
+  if (probe.root !== null) {
+    const probed = canonicalizeNearestExisting(probe.root);
+    resolvedFrom.push({ path: "cwd", source: "harness.probe" });
+    if (associated === null) return { ok: true, root: probed, resolvedFrom, warnings };
+    if (probed !== associated.root) {
+      return {
+        ok: false,
+        resolvedFrom,
+        problem: {
+          component: "root",
+          path: "controlRoot",
+          code: "coordination.scope-mismatch",
+          sourcesTried: resolvedFrom.map((entry) => `${entry.path} (${entry.source})`),
+          currentFacts: [
+            `the durable association ${associated.source} names ${associated.root}`,
+            `the process root of ${cwd} is ${probed}`,
+          ],
+          needed: "which control root this intent belongs to",
+          withheldEffect:
+            "the addressed lifecycle effect - two durable root statements disagree, so nothing was read or written",
+          availableWork: [
+            "run the call from inside the recorded control root (or a checkout of it)",
+            "pass the trusted root explicitly (IntentContext.controlRoot) when the association is the intended one",
+          ],
+        },
+      };
+    }
+    return { ok: true, root: associated.root, resolvedFrom, warnings };
+  }
+  if (associated !== null) {
+    // The trusted root stands; an unreadable Git fact about the process
+    // association is reported, not promoted to a refusal (R12/A24). A probe
+    // that simply found no harness beside the association is not a warning —
+    // there is nothing to compare, exactly as before.
+    if (probe.unavailable !== null) {
+      warnings.push({
+        code: "coordination.git-unavailable",
+        path: "cwd",
+        message:
+          `the process root of ${cwd} could not be established (${probe.unavailable}); this call proceeds on the ` +
+          `trusted root ${associated.root} recorded by ${associated.source}`,
+      });
+    }
+    resolvedFrom.push({
+      path: "cwd",
+      source: probe.unavailable === null ? "harness.probe.absent" : "harness.probe.unavailable",
+    });
+    return { ok: true, root: associated.root, resolvedFrom, warnings };
+  }
+  const problem: RecoveryProblem = {
+    component: "root",
+    path: "controlRoot",
+    code: "coordination.harness-not-found",
+    sourcesTried: [...resolvedFrom.map((entry) => `${entry.path} (${entry.source})`), "cwd (harness probe)"],
+    currentFacts: [
+      probe.unavailable ?? `${cwd} holds no resolvable control harness`,
+      `${cwd} holds no durable root association for this call`,
+    ],
+    needed: "the control harness root this intent belongs to",
+    withheldEffect: "the addressed lifecycle effect - resolution stopped before any root, workflow or store was read",
+    availableWork: [
+      "pass the trusted control root explicitly (IntentContext.controlRoot)",
+      "run the call from inside the control harness's own main worktree",
+    ],
+  };
+  return { ok: false, resolvedFrom, problem };
+}
+
+/** One target selection: what the caller stated, or what its identity already holds. */
+export type TargetSelection = Readonly<{ workflowId?: string; planId?: string }>;
+
+/**
+ * The workflow ids the TRUSTED root holds, in stable order — one listing of the
+ * root's own workflow directory plus a snapshot existence check per entry. This
+ * bounded read is the whole candidate set: no repository-wide scan and no
+ * "most recent" ordering, so resolution can only ever list what it read.
+ */
+function workflowIdsAt(root: string): string[] {
+  const dir = resolveWorkflowDir(root, { harnessDir: root });
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, SNAPSHOT_FILE)))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * Resolve the ADDRESSED TARGET of one sparse intent against a trusted root, in
+ * source order: the explicit `selection`, then the durable `association` the
+ * caller's identity already holds (its session envelope or catalog link).
+ * Resolution reads only the addressed workflow's snapshot.
+ *
+ * Without either source no target is chosen, even when the root holds exactly
+ * one workflow: the candidate identities are LISTED for the caller to select
+ * (contract § One resolver path "never select the sole/most-recent workflow
+ * without an association", A22). A selector that the root does not hold — or a
+ * `planId` that is not a row of the addressed workflow — is the same kind of
+ * unresolved component, not a silent fallback.
+ */
+export function resolveIntentTarget(input: {
+  root: string;
+  selection?: TargetSelection;
+  association?: TargetSelection;
+}): TargetResolution {
+  const root = canonicalizeNearestExisting(input.root);
+  const candidates = workflowIdsAt(root);
+  const listed: ResolutionSource = { path: "workflowId", source: "workflows.dir" };
+  const facts =
+    candidates.length === 0
+      ? [`${root} holds no workflow`]
+      : candidates.map((id) => `workflow ${id} exists at ${root}`);
+  const unavailable = (code: RecoveryProblem["code"], needed: string, tried: ResolutionSource[]): TargetResolution => ({
+    ok: false,
+    resolvedFrom: tried,
+    problem: {
+      component: "target",
+      path: "workflowId",
+      code,
+      sourcesTried: tried.map((entry) => `${entry.path} (${entry.source})`),
+      currentFacts: facts,
+      needed,
+      withheldEffect:
+        "the addressed lifecycle effect - no target was guessed, so no workflow row, document or store was read for it",
+      availableWork: [
+        ...(candidates.length === 0 ? ["register or select the work this intent addresses"] : []),
+        ...candidates.map((id) => `address workflow ${id} explicitly`),
+      ],
+    },
+  });
+
+  const explicit = isNonEmptyString(input.selection?.workflowId) ? input.selection.workflowId : undefined;
+  const associated = isNonEmptyString(input.association?.workflowId) ? input.association.workflowId : undefined;
+  const workflowId = explicit ?? associated;
+  if (workflowId === undefined) {
+    return unavailable("coordination.invalid-input", "which workflow this intent addresses", [listed]);
+  }
+  const source: ResolutionSource =
+    explicit !== undefined
+      ? { path: "workflowId", source: "intent.explicit" }
+      : { path: "workflowId", source: "target.association" };
+  const id = safePlanId(workflowId, "workflowId");
+  if (!candidates.includes(id)) {
+    return unavailable("coordination.workflow-not-found", `the addressed workflow ${id}`, [source, listed]);
+  }
+
+  const resolvedFrom: ResolutionSource[] = [source];
+  const explicitPlan = isNonEmptyString(input.selection?.planId) ? input.selection.planId : undefined;
+  const associatedPlan = isNonEmptyString(input.association?.planId) ? input.association.planId : undefined;
+  const planId = explicitPlan ?? associatedPlan;
+  if (planId === undefined) return { ok: true, workflowId: id, resolvedFrom };
+  const plan = safePlanId(planId, "planId");
+  resolvedFrom.push({ path: "planId", source: explicitPlan !== undefined ? "intent.explicit" : "target.association" });
+  // The addressed workflow's own row set is the bounded fact read that confirms
+  // the plan id: one snapshot, never a scan of other workflows.
+  const snapshot = readSnapshot(dirname(snapshotPathOf(root, id)));
+  if (!snapshot.plans.some((row) => rowPlanIds(row).includes(plan))) {
+    return unavailable("coordination.plan-not-found", `the addressed plan ${plan} of workflow ${id}`, resolvedFrom);
+  }
+  return { ok: true, workflowId: id, planId: plan, resolvedFrom };
+}
+
+/**
+ * The refusal of an unresolved resolution, in the frozen coordination
+ * vocabulary: the problem's `needed` is the actionable message, the problem
+ * itself is the caller's question, and the contract's sidecar travels under
+ * `details.recovery` so the refusal prose is never the whole report.
+ */
+function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly ResolutionSource[]): never {
+  const code = (COORDINATION_ERROR_CODES as readonly string[]).includes(problem.code)
+    ? (problem.code as CoordinationErrorCode)
+    : "coordination.invalid-input";
+  // The message names the unresolved fact AND the facts currently true, so a
+  // consumer that renders only prose still sees the conflict it must decide.
+  throw new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: {}, unresolved: [problem], resolvedFrom }),
+  });
+}
+
+/* ------------------------------------------------------------------------ *
  * § Assignment headers
  * ------------------------------------------------------------------------ */
 
@@ -766,6 +1023,12 @@ function readSnapshot(dir: string): WorkflowSnapshot {
   try {
     return readWorkflowSnapshot(dir).snapshot;
   } catch (error) {
+    // The authority verdict is the store's own typed refusal — an ACTIVE
+    // execution authority retires this file reader, and an unreadable store
+    // cannot be re-read. Relabelling it `coordination.store` would drop the
+    // actual cause (contract: a capability failure reports its own code), so it
+    // is re-thrown verbatim; only a genuinely unusable document is wrapped.
+    if (error instanceof StoreError) throw error;
     throw new CoordinationError(
       "coordination.store",
       `workflow snapshot is unreadable or invalid at ${snapshotPath}: ${errorMessage(error)}`,
@@ -1368,15 +1631,14 @@ export async function readPlanCoordination(
     targetPlanId = own;
   }
 
-  const harnessRoot = anchor.harnessRoot;
-  const processRoot = resolveProcessHarnessDir(cwd);
-  if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `session ${session.session_id} belongs to harness root ${harnessRoot}, but this process resolves ${canonicalTarget(processRoot)}`,
-      { expected: harnessRoot, actual: canonicalTarget(processRoot) },
-    );
-  }
+  // The session envelope is this call's durable root association: the intent
+  // resolution keeps that trusted root for a Git-independent read, reports an
+  // unreadable process probe as a warning (R12/A24: a Git outage cannot
+  // invalidate an established root), and keeps a process root that answers and
+  // disagrees a conflict — now with the contract's recovery sidecar.
+  const rootResolution = resolveIntentRoot({ cwd }, { root: anchor.harnessRoot, source: "session.envelope" });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
+  const harnessRoot = rootResolution.root;
   localStore(harnessRoot);
   const snapshotPath = snapshotPathOf(harnessRoot, session.workflow_id);
   assertSnapshotPath(harnessRoot, session.workflow_id, snapshotPath);
@@ -5639,14 +5901,10 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
   }
   const harnessRoot = canonicalizeNearestExisting(session.harness_root);
   localStore(harnessRoot);
-  const processRoot = resolveProcessHarnessDir(cwd);
-  if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `session ${session.session_id} belongs to harness root ${harnessRoot}, but this process resolves ${canonicalTarget(processRoot)}`,
-      { expected: harnessRoot, actual: canonicalTarget(processRoot) },
-    );
-  }
+  // Same trusted-root rule as `readPlanCoordination`: the envelope's root is the
+  // association, so a Git outage in the caller's process cannot invalidate it.
+  const rootResolution = resolveIntentRoot({ cwd }, { root: harnessRoot, source: "session.envelope" });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
   const workflowId = safePlanId(session.workflow_id, "workflow_id");
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
   return { session, sessionPath: canonicalTarget(sessionPath), harnessRoot, workflowId, snapshotPath };

@@ -45,9 +45,13 @@ import {
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
+  readSessionEnvelope,
   recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
+  resolveIntentRoot,
+  resolveIntentTarget,
   resolvePlanScope,
+  resolveProcessHarnessDir,
   setCompleteStandaloneMutateGapForTest,
   setPrepareRecoveryEnvelopeGapForTest,
   showPrepareCoordinatorRecovery,
@@ -62,6 +66,7 @@ import {
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
+import { resolveCurrentAuthority } from "../src/store-read.js";
 import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
@@ -5688,4 +5693,304 @@ describe("catalog registration gate — prepare/bind/selection refuse a pending 
     const bound = await bindPlan(fixture, PLAN_ID);
     expect(bound.outcome).toBe("claimed");
   });
+});
+
+
+/* ------------------------------------------------------------------------ *
+ * Intent resolution — trusted root, associated target, current authority
+ * (S2/E02). Design authority: §3.1 step 2 (resolve context and target before
+ * reading facts), §3.3 (authority and facts), §9 "Root/target/authority/
+ * session", R12, and scenarios A02/A22/A24/A25/A26.
+ *
+ * Every case runs against a real temporary Git workspace and the real engine:
+ * the "Git outage" case is a real `.git` FILE whose Git fact answers non-zero
+ * (an unreadable main worktree, not a mock), and the "authority change" case
+ * flips the recorded execution authority while a real file-route call is held
+ * in flight by a second holder of the snapshot write lock.
+ * ------------------------------------------------------------------------ */
+describe("intent resolution — trusted root, associated target, authority change (S2/E02)", () => {
+  /**
+   * A directory that looks like a linked checkout (its `.git` is a FILE) whose
+   * Git fact cannot be read: `git` answers non-zero for it, so the process root
+   * is genuinely unavailable there — the R12/A24 situation, not a stub.
+   */
+  function unreadableLinkedCheckout(fixture: Fixture): string {
+    const linked = join(fixture.root, "linked-checkout");
+    writeText(join(linked, ".git"), `gitdir: ${join(fixture.root, "no-such-main", ".git", "worktrees", "linked")}\n`);
+    return linked;
+  }
+
+  /** Flip the recorded execution authority state; the store keeps its data. */
+  async function setExecutionAuthority(harness: string, state: "legacy" | "active"): Promise<void> {
+    const handle = await openStore({ harnessDir: harness }, "write");
+    try {
+      handle.db.prepare("update execution_meta set authority_state = ? where id = 1").run(state);
+    } finally {
+      handle.close();
+    }
+  }
+
+  test("an associated target resolves the root and addressed workflow from durable facts (A02)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    // The plan session's envelope is the durable association: it records both the
+    // workflow and the plan row, so the intent needs no selector at all.
+    const bound = await bindPlan(fixture, PLAN_ID);
+    const session = readSessionEnvelope(bound.session_file);
+    expect(session.plan_id).toBe(PLAN_ID);
+
+    // Every derivable selector is omitted: the durable association supplies the
+    // root, and each resolved fact names the source that supplied it.
+    const root = resolveIntentRoot(
+      { cwd: join(fixture.root, "unrelated") },
+      { root: session.harness_root, source: "session.envelope" },
+    );
+    expect(root.ok).toBe(true);
+    if (!root.ok) throw new Error("a recorded session root must resolve");
+    expect(root.root).toBe(fixture.harness);
+    expect(root.resolvedFrom).toEqual([
+      { path: "controlRoot", source: "session.envelope" },
+      { path: "cwd", source: "harness.probe.absent" },
+    ]);
+    expect(root.warnings).toEqual([]);
+
+    const target = resolveIntentTarget({
+      root: fixture.harness,
+      association: { workflowId: session.workflow_id, planId: session.plan_id },
+    });
+    expect(target.ok).toBe(true);
+    if (!target.ok) throw new Error("the session association must resolve its own plan row");
+    expect(target.workflowId).toBe(WORKFLOW_ID);
+    expect(target.planId).toBe(PLAN_ID);
+    expect(target.resolvedFrom).toEqual([
+      { path: "workflowId", source: "target.association" },
+      { path: "planId", source: "target.association" },
+    ]);
+
+    // An explicit selection wins over the association, with its own provenance,
+    // and the addressed workflow's own row set is the only fact read for it.
+    const explicit = resolveIntentTarget({
+      root: fixture.harness,
+      selection: { workflowId: WORKFLOW_ID, planId: PEER_PLAN_ID },
+      association: { workflowId: "wf-somewhere-else" },
+    });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) throw new Error("the explicit selection must resolve the peer row");
+    expect(explicit.planId).toBe(PEER_PLAN_ID);
+    expect(explicit.resolvedFrom).toEqual([
+      { path: "workflowId", source: "intent.explicit" },
+      { path: "planId", source: "intent.explicit" },
+    ]);
+  });
+
+  test("an unassociated target lists its candidates instead of picking one (A22)", async () => {
+    const fixture = makeFixture();
+    const peerWorkflow = "wf-planb";
+    writeJson(join(fixture.harness, "workflows", peerWorkflow, "snapshot.json"), {
+      ...readJson(fixture.snapshotPath),
+      id: peerWorkflow,
+    });
+
+    const ambiguous = resolveIntentTarget({ root: fixture.harness });
+    expect(ambiguous.ok).toBe(false);
+    if (ambiguous.ok) throw new Error("an unassociated root must not select a workflow");
+    expect(ambiguous.problem.code).toBe("coordination.invalid-input");
+    expect(ambiguous.problem.needed).toBe("which workflow this intent addresses");
+    expect(ambiguous.problem.currentFacts).toEqual([
+      `workflow ${WORKFLOW_ID} exists at ${fixture.harness}`,
+      `workflow ${peerWorkflow} exists at ${fixture.harness}`,
+    ]);
+    expect(ambiguous.problem.availableWork).toEqual([
+      `address workflow ${WORKFLOW_ID} explicitly`,
+      `address workflow ${peerWorkflow} explicitly`,
+    ]);
+
+    // A sole candidate is still only a LISTED candidate: the contract forbids
+    // selecting the single root-visible workflow without an association.
+    rmSync(join(fixture.harness, "workflows", peerWorkflow), { recursive: true, force: true });
+    const sole = resolveIntentTarget({ root: fixture.harness });
+    expect(sole.ok).toBe(false);
+    if (sole.ok) throw new Error("a sole candidate is not a selection");
+    expect(sole.problem.currentFacts).toEqual([`workflow ${WORKFLOW_ID} exists at ${fixture.harness}`]);
+    expect(sole.problem.availableWork).toEqual([`address workflow ${WORKFLOW_ID} explicitly`]);
+
+    // A selector the root does not hold is refused against the same list — never
+    // substituted with the one workflow that happens to exist.
+    const missing = resolveIntentTarget({ root: fixture.harness, selection: { workflowId: "wf-absent" } });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("an absent selector must not be substituted");
+    expect(missing.problem.code).toBe("coordination.workflow-not-found");
+    expect(missing.problem.currentFacts).toEqual([`workflow ${WORKFLOW_ID} exists at ${fixture.harness}`]);
+
+    // A plan id that is not a row of the addressed workflow is refused too.
+    const wrongPlan = resolveIntentTarget({
+      root: fixture.harness,
+      selection: { workflowId: WORKFLOW_ID, planId: "plan-absent" },
+    });
+    expect(wrongPlan.ok).toBe(false);
+    if (wrongPlan.ok) throw new Error("an absent plan row must not be substituted");
+    expect(wrongPlan.problem.code).toBe("coordination.plan-not-found");
+  });
+
+  test("a trusted root survives a Git fact the process probe cannot read (A24)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    const linked = unreadableLinkedCheckout(fixture);
+
+    // The Git fact about this process is genuinely unreadable — the source the
+    // established call must NOT be blocked by...
+    expect(await errorCodeOf(async () => resolveProcessHarnessDir(linked))).toBe("coordination.not-in-git");
+
+    // ...so the uniquely established read proceeds on the session's trusted root.
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, linked);
+    expect(view.session.workflow_id).toBe(WORKFLOW_ID);
+    expect(view.scope?.planId).toBe(PLAN_ID);
+
+    const resolved = resolveIntentRoot({ cwd: linked }, { root: fixture.harness, source: "session.envelope" });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) throw new Error("the trusted root must survive an unreadable Git probe");
+    expect(resolved.root).toBe(fixture.harness);
+    expect(resolved.resolvedFrom).toEqual([
+      { path: "controlRoot", source: "session.envelope" },
+      { path: "cwd", source: "harness.probe.unavailable" },
+    ]);
+    expect(resolved.warnings.map((entry) => entry.code)).toEqual(["coordination.git-unavailable"]);
+    expect(resolved.warnings[0]?.message).toContain(fixture.harness);
+  });
+
+  test("an unresolvable trusted root is a typed report, never a guessed root (A25)", async () => {
+    const fixture = makeFixture();
+    const linked = unreadableLinkedCheckout(fixture);
+    const bare = realpathSync(mkdtempSync(join(tmpdir(), "mstar-no-root-")));
+    roots.push(bare);
+
+    // No root can be established and the only source left cannot answer: every
+    // source tried is named and no root is invented.
+    const unreadable = resolveIntentRoot({ cwd: linked });
+    expect(unreadable.ok).toBe(false);
+    if (unreadable.ok) throw new Error("an unreadable probe must not produce a root");
+    expect(unreadable.problem.code).toBe("coordination.harness-not-found");
+    expect(unreadable.problem.sourcesTried).toEqual(["cwd (harness probe)"]);
+    expect(unreadable.problem.currentFacts[0]).toContain("linked checkout");
+    expect(unreadable.problem.availableWork).toEqual([
+      "pass the trusted control root explicitly (IntentContext.controlRoot)",
+      "run the call from inside the control harness's own main worktree",
+    ]);
+
+    // A workspace with no harness at all is the same kind of report.
+    const absent = resolveIntentRoot({ cwd: bare });
+    expect(absent.ok).toBe(false);
+    if (absent.ok) throw new Error("a harness-less cwd must not produce a root");
+    expect(absent.problem.code).toBe("coordination.harness-not-found");
+    expect(absent.problem.currentFacts[0]).toBe(`${bare} holds no resolvable control harness`);
+    expect(absent.resolvedFrom).toEqual([]);
+
+    // The root the caller states is authoritative in exactly that case, and no
+    // Git probe is consulted for it.
+    const explicit = resolveIntentRoot({ cwd: linked, controlRoot: fixture.harness });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) throw new Error("an explicit trusted root is authoritative");
+    expect(explicit.resolvedFrom).toEqual([{ path: "controlRoot", source: "intent.explicit" }]);
+    expect(explicit.warnings).toEqual([]);
+
+    // A store that exists and cannot be read is its own capability failure —
+    // never a file-route answer (primary spec §2.1/§5).
+    writeText(join(fixture.harness, "store.db"), "this is not a sqlite database\n");
+    expect(await errorCodeOf(() => resolveCurrentAuthority({ harnessDir: fixture.harness }))).toBe("store.corrupt");
+  });
+
+  test("a process root that answers and disagrees with the trusted root is a listed conflict (A25)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    // A second REAL control root (its own Git repository and its own `.mstar`),
+    // so the process probe answers and names a different root.
+    const other = makeFixture();
+    const before = readFileSync(fixture.snapshotPath);
+
+    const refusal = (await failureOf(() => readPlanCoordination(fixture.coordinatorSession, PLAN_ID, other.root))) as CoordinationError;
+    expect(refusal.code).toBe("coordination.scope-mismatch");
+    // The refusal carries both durable statements, what is missing and what still
+    // works — and the contract's sidecar, so prose alone is never the report.
+    expect(refusal.details.current_facts).toEqual([
+      `the durable association session.envelope names ${fixture.harness}`,
+      `the process root of ${other.root} is ${other.harness}`,
+    ]);
+    const recovery = refusal.details.recovery as { outcome?: string; unresolved?: Array<{ component?: string }> } | undefined;
+    expect(recovery?.outcome).toBe("unresolved");
+    expect(recovery?.unresolved?.[0]?.component).toBe("root");
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+  });
+
+  test("an authority change during a locked plan-row call reports its own cause (A26)", async () => {
+    const fixture = makeFixture();
+    await storeBacked(fixture, [PLAN_ID]);
+    const sessionPath = await ensureCoordinator(fixture);
+    const view = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
+    const before = readFileSync(fixture.snapshotPath);
+
+    // The call resolves under the supported pre-activation route: a store that
+    // records a legacy execution authority is not a reason to switch.
+    expect(await resolveCurrentAuthority({ harnessDir: fixture.harness })).toEqual({ route: "files", handle: null });
+
+    // The snapshot write lock holds the call in flight while another writer
+    // activates the execution authority, so the change lands strictly between
+    // this call's resolution and the facts it reads under its own lock.
+    const release = Promise.withResolvers<void>();
+    const held = withStatusWriteLock(fixture.snapshotPath, async () => {
+      await release.promise;
+    });
+    const pending = mutatePlanCoordination({
+      sessionPath,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    await setExecutionAuthority(fixture.harness, "active");
+    release.resolve();
+    await held;
+
+    // The retired file reader reports its OWN authority verdict — the actual
+    // cause, not a relabelled unreadable coordination document.
+    expect(await errorCodeOf(() => pending)).toBe("execution.consumer-not-ready");
+    // The refusal is non-advancing: no stale snapshot, no prepared block.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    // The current verdict now names the ACTIVE generation, so a caller
+    // re-resolves the authority instead of replaying the route it was admitted
+    // under (the epoch a DB-route caller re-asserts before committing).
+    const active = await resolveCurrentAuthority({ harnessDir: fixture.harness });
+    expect(active.route).toBe("execution");
+    expect(typeof active.handle?.storeId).toBe("string");
+    expect(active.handle?.epoch).toBeGreaterThan(0);
+  }, 30000);
+
+  test("an authority change during a file-route amendment leaves no stale-file write (A26)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // A real store that still answers the file route (execution `legacy`): the
+    // amendment's own commit is the boundary under test.
+    const store = await initializeStore({ harnessDir: fixture.harness });
+    store.close();
+    const view = await prepareViewOf(fixture);
+    const before = protectedBytes(fixture);
+
+    const release = Promise.withResolvers<void>();
+    const held = withStatusWriteLock(fixture.snapshotPath, async () => {
+      await release.promise;
+    });
+    const pending = amendWith(fixture, preparePatchOf(fixture, { integrationWorktreePath: fixture.integrationPath }), {
+      snapshotVersion: view.view.snapshotVersion,
+      compassVersion: view.view.compassVersion,
+    });
+    await setExecutionAuthority(fixture.harness, "active");
+    release.resolve();
+    await held;
+
+    // The amendment read its own inputs before the change, so the refusal comes
+    // from the authority facts it re-reads under its own lock: file persistence
+    // is retired, and not one protected byte moved.
+    expect(await errorCodeOf(() => pending)).toBe("execution.consumer-not-ready");
+    expect(protectedBytes(fixture)).toEqual(before);
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBeUndefined();
+  }, 30000);
 });

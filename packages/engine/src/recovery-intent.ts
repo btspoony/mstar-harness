@@ -38,6 +38,10 @@ import type { ExecutionIdentity } from "./session-identity.js";
  * the engine's resolution path; the caller supplies only what cannot be
  * derived. The identity is acquired by the caller (adapter) and independently
  * validated — it is never inferred from the request.
+ *
+ * `controlRoot` is the TRUSTED root when the caller holds one: a caller-supplied
+ * root is authoritative and is never re-derived from Git (contract § One
+ * resolver path, design R12/A24).
  */
 export type IntentContext = Readonly<{
   cwd: string;
@@ -169,4 +173,96 @@ function readPath(envelope: unknown, path: string): unknown {
     current = current[key];
   }
   return current;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Resolution: sparse intent → trusted root, associated target, current
+ * authority (S2). Types and pure builders only — the probes that read Git,
+ * files or the store live in the frames that own them (`coordination.ts` root
+ * and target, `store-read.ts` authority), so this module keeps E01's
+ * import discipline and stays reachable from any engine frame.
+ * ------------------------------------------------------------------------- */
+
+/** One resolved fact and the source that supplied it (`RecoveryDetails.resolvedFrom`). */
+export type ResolutionSource = Readonly<{ path: string; source: string }>;
+
+/** One non-fatal fact a resolution had to work around (`RecoveryDetails.warnings`). */
+export type ResolutionWarning = Readonly<{ code: string; path?: string; message: string }>;
+
+/**
+ * The persistence route one resolved intent takes: the ACTIVE execution DB
+ * authority, or the supported pre-activation file route. There is no third
+ * answer and no fallback between them (contract § One resolver path).
+ */
+export type AuthorityRoute = "execution" | "files";
+
+/**
+ * The current authority verdict of one trusted control root.
+ *
+ * `handle` is the durable authority generation (`store_meta.store_id` +
+ * `authority_epoch`) of an ACTIVE execution authority — the value a caller
+ * re-asserts before an effect commits, so a generation that advanced mid-call
+ * is refused instead of replayed blindly. It stays `null` on the file route,
+ * which has no generation of its own: the only authority change that matters
+ * there is that an ACTIVE authority appeared, and the route itself carries it.
+ */
+export type AuthorityVerdict = Readonly<{
+  route: AuthorityRoute;
+  handle: Readonly<{ storeId: string; epoch: number }> | null;
+}>;
+
+/**
+ * Trusted control-root resolution of one sparse intent. `ok: false` is the
+ * unresolved component: no root could be established (or two durable
+ * statements disagree), with the sources tried and the facts currently true.
+ * A root is never guessed and a Git outage never invalidates an established
+ * one — an unreadable Git fact only becomes a warning next to a resolved root.
+ */
+export type RootResolution =
+  | Readonly<{
+      ok: true;
+      root: string;
+      resolvedFrom: readonly ResolutionSource[];
+      warnings: readonly ResolutionWarning[];
+    }>
+  | Readonly<{ ok: false; problem: RecoveryProblem; resolvedFrom: readonly ResolutionSource[] }>;
+
+/**
+ * Addressed-target resolution of one sparse intent: the workflow (and plan)
+ * the intent acts on. `ok: false` is the unresolved component — a selector
+ * that does not exist at the trusted root, a root that holds no workflow, or
+ * an unassociated root that holds one or more candidates, which are LISTED
+ * rather than picked (contract § One resolver path: never select the sole or
+ * most-recent workflow without an association).
+ */
+export type TargetResolution =
+  | Readonly<{
+      ok: true;
+      workflowId: string;
+      planId?: string;
+      resolvedFrom: readonly ResolutionSource[];
+    }>
+  | Readonly<{ ok: false; problem: RecoveryProblem; resolvedFrom: readonly ResolutionSource[] }>;
+
+/**
+ * The recovery sidecar of a resolution that withheld its effect, in the frozen
+ * `RecoveryDetails` shape: a refusal carries this object under
+ * `error.details.recovery`, and it names every unresolved component, the facts
+ * that were resolved instead, and that nothing was committed.
+ */
+export function unresolvedRecovery(input: {
+  target: RecoveryDetails["target"];
+  unresolved: readonly RecoveryProblem[];
+  resolvedFrom?: readonly ResolutionSource[];
+  warnings?: readonly ResolutionWarning[];
+}): RecoveryDetails {
+  return {
+    outcome: "unresolved",
+    target: input.target,
+    applied: [],
+    unresolved: [...input.unresolved],
+    resolvedFrom: [...(input.resolvedFrom ?? [])],
+    warnings: [...(input.warnings ?? [])],
+    commitState: "none",
+  };
 }

@@ -36,6 +36,7 @@ import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import type { AuthorityVerdict } from "./recovery-intent.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
 export type StoreReadErrorCode = "store.not-active";
@@ -482,24 +483,53 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
 export type ExecutionReadRoute = "execution" | "files";
 
 /**
+ * §5 the CURRENT authority verdict of one control root: the route plus the
+ * durable authority generation it was read at. This is the ONE place a
+ * consumer decides between the two authorities (`resolveExecutionReadRoute` is
+ * its route-only view), and the value a commit boundary re-resolves before an
+ * effect lands (A26: authority activation/epoch changed during the call).
+ *
+ * The verdict set is the whole discrimination of §2.1/§5:
+ *
+ * - `execution` — the store records an ACTIVE execution authority; the handle
+ *   names the store id and ``epoch`` that answered.
+ * - `files` — no store file at all, a store that predates migration 4, or a
+ *   `legacy`/`staged` authority: those keep the supported pre-activation route,
+ *   and absence stays an explicit non-verdict rather than a fresh-workspace
+ *   guess.
+ *
+ * A store that exists and cannot be read (corrupt, drifted, busy, unsupported
+ * runtime) REFUSES through its own frozen `store.*` code instead of answering
+ * `files`: serving leftover JSON because the authority could not be
+ * established is the fallback §5 forbids, and an unreadable store is a typed
+ * capability report, not a missing caller field.
+ */
+export async function resolveCurrentAuthority(context: StoreContext): Promise<AuthorityVerdict> {
+  let handle: StoreHandle;
+  try {
+    handle = await openStore(context, "read");
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "store.not-initialized") return { route: "files", handle: null };
+    throw error;
+  }
+  try {
+    const active = handle.execution !== null && handle.execution.authorityState === "active";
+    return active
+      ? { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } }
+      : { route: "files", handle: null };
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * §5 resolve the route of one execution-source read. Opening the store is the
  * whole probe: the execution metadata is read with the schema and identity the
  * same reader `readExecutionAuthority` uses, so no consumer re-implements a
  * floor, a schema check or an authority-state rule.
  */
 export async function resolveExecutionReadRoute(context: StoreContext): Promise<ExecutionReadRoute> {
-  let handle: StoreHandle;
-  try {
-    handle = await openStore(context, "read");
-  } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") return "files";
-    throw error;
-  }
-  try {
-    return handle.execution !== null && handle.execution.authorityState === "active" ? "execution" : "files";
-  } finally {
-    handle.close();
-  }
+  return (await resolveCurrentAuthority(context)).route;
 }
 
 /**
