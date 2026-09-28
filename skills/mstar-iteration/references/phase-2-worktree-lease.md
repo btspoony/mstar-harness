@@ -116,9 +116,14 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
    - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
 7. **Phase 1 route — push the branch.** Push the newly created
    `spec_integration_branch` (`git push -u origin <branch>` — upstream setup
-   only; **no commit is made**: the reviewed compass / plans / specs /
-   `<iteration-id>/` package are default-gitignored `{HARNESS_DIR}` process
-   artifacts and are **never** transferred, committed or pushed). The branch
+   only; **no Phase 1 commit is made**: compass / plans / the
+   `<iteration-id>/` package and other `{HARNESS_DIR}` process artifacts are
+   default-gitignored and are **never** transferred, committed or pushed, and
+   `{SPECS_DIR}` reviewed edits are equally **not committed in Phase 1** —
+   when `{SPECS_DIR}` resolves to a tracked path (`mstar-conventions` git
+   tracking policy) they join the integration branch later via the Phase 3
+   close commit's tracked-subtree recipe (`phase-3-iteration-close.md`
+   §3.5)). The branch
    tip stays at the recorded base, so the pushed remote tip equals the live
    integration HEAD — the readiness fact the `phase-1-lock` anchor below
    re-checks. The primary checkout keeps its uncommitted Phase 1 docs, never
@@ -146,7 +151,7 @@ control **`Plan Path`** / **`SDD dir`** in Assignments
 <!-- host-hook: phase-1-lock -->
 > Execute the active host reference's `## Host hooks` declaration for `phase-1-lock`; this file defines no host action.
 >
-> **`phase-1-lock` 恰好触发一次**：只在 **Phase 1 路线**、且在 checklist **step 7 的 branch push**（`git push -u` 新建的 `spec_integration_branch`；不 commit 任何 harness 产物）之后 —— 该 anchor 的就绪合取要求已 push 的 remote tip 等于 live integration HEAD，因此**不得**在 step 7 之前执行。此后任何**再次走过 §2.3 的路线**（Phase 2 entry 首次 execute 或 resume，包括 auto-continue 进入的第一次 Phase 2 entry）都**不**触发它：那时 binding 已 terminal，也**不**需要重新调用（精确的重复调用语义与拒绝码 → active host reference）。
+> **`phase-1-lock` 恰好触发一次**：只在 **Phase 1 路线**、且在 checklist **step 7 的 branch push**（`git push -u` 新建的 `spec_integration_branch`；Phase 1 无 commit——进程产物永不 commit，tracked `{SPECS_DIR}` 已审编辑随 Phase 3 close commit 进入）之后 —— 该 anchor 的就绪合取要求已 push 的 remote tip 等于 live integration HEAD，因此**不得**在 step 7 之前执行。此后任何**再次走过 §2.3 的路线**（Phase 2 entry 首次 execute 或 resume，包括 auto-continue 进入的第一次 Phase 2 entry）都**不**触发它：那时 binding 已 terminal，也**不**需要重新调用（精确的重复调用语义与拒绝码 → active host reference）。
 
 ### Same-host exclusive write lock
 

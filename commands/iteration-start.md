@@ -110,7 +110,7 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— 本轮 review 的 compass / plans / specs 是默认 gitignored 的本地 `.mstar/` 工件，**不** commit、**不** push；never the primary checkout
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— compass / plans / iteration package 是默认 gitignored 的本地 `.mstar/` 工件，**不** commit、**不** push；tracked `{SPECS_DIR}` 的已审编辑同样**不在 Phase 1 commit**（随 Phase 3 close commit 进入）；never the primary checkout
 
 ## 6. Integration Branch
 
