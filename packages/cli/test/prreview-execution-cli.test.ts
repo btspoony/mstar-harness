@@ -1140,7 +1140,10 @@ describe("mstar pr-review post", () => {
       writeFileSync(findings, JSON.stringify([{ path: "src/x.ts", line: 3, body: "off-by-one" }]));
       const noGhProc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "pr-review", "post", "--pr", "42", "--body-file", body, "--findings", findings], {
         cwd: CLI_ROOT,
-        env: { ...cliEnv(), PATH: "/nonexistent-path-for-gh-isolation" }, // never contains gh on any platform
+        // System dirs only: git stays reachable (harness probing needs it),
+        // while gh (installed to a package-manager prefix on every CI OS)
+        // does not exist here.
+        env: { ...cliEnv(), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
         stdout: "pipe",
         stderr: "pipe",
       });

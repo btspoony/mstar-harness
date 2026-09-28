@@ -492,7 +492,7 @@ export {
 export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
-export { assertFsStorePath, createFsStore, getArtifactStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
+export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
 export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type ActiveLifecycleScan } from "./lifecycle-branches.js";
 

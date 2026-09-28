@@ -411,7 +411,7 @@ function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write")
  * store by construction; the engine-created FsStore is served unwrapped and
  * keeps its own root.
  */
-function guardedInjectedStore(store: ArtifactStore): ArtifactStore {
+export function guardInjectedStore(store: ArtifactStore): ArtifactStore {
   const guarded: ArtifactStore = {
     async put(doc: ArtifactDoc): Promise<void> {
       assertInjectedAccessAllowed(doc, "write");
@@ -439,9 +439,9 @@ function guardedInjectedStore(store: ArtifactStore): ArtifactStore {
 /** Inject the active store. An `FsStore` guards its own protected targets from
  * its own root and keeps the root capability consumers verify against, so it is
  * served as it is; any other store is wrapped in the canonical control-target
- * guard and keeps no root claim (see `guardedInjectedStore`). */
+ * guard and keeps no root claim (see `guardInjectedStore`). */
 export function setArtifactStore(store: ArtifactStore | undefined): void {
-  injectedStore = store === undefined || fsStoreInstances.has(store) ? store : guardedInjectedStore(store);
+  injectedStore = store === undefined || fsStoreInstances.has(store) ? store : guardInjectedStore(store);
 }
 
 /** The active store: the injected one when set, otherwise a lazily

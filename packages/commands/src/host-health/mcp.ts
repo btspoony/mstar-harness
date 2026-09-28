@@ -112,8 +112,11 @@ export function diagnoseMcpTarget(
         const hasMstar = Object.values(serverRecord).some((entry) => {
           const e = record(entry);
           if (e === null) return false;
-          const cmd = Array.isArray(e.command) ? (e.command as string[]).join(" ") : String(e.command ?? "");
-          return cmd.includes("mcp") || cmd.includes("@mstar-harness/cli");
+          const segments = [
+            ...(Array.isArray(e.command) ? e.command as string[] : [String(e.command ?? "")]),
+            ...(Array.isArray(e.args) ? e.args as string[] : []),
+          ];
+          return segments.includes("@mstar-harness/cli") && segments.includes("mcp");
         });
         if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry.`);
       }
@@ -136,7 +139,7 @@ export function diagnoseMcpTarget(
   };
 }
 
-export function mcpTargetPackageRoot(target: HostTarget, checkout: string, options: { opencodePackagesRoot?: string }): string {
+export function mcpTargetPackageRoot(target: HostTarget, checkout: string, options: { opencodePackagesRoot?: string } = {}): string {
   if (target === "opencode") {
     const opencodePackagesRoot = options.opencodePackagesRoot ?? path.join(checkout, "node_modules", "@mstar-harness");
     return path.join(opencodePackagesRoot, "opencode");

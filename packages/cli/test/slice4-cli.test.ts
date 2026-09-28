@@ -454,7 +454,7 @@ Check result: exit 0; changed scope line found.
   test("missing <target> arg → usage, exit 2", () => {
     const result = runCli(["lint"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("missing required argument 'target'");
+    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'target'");
   });
 
   test("existing unclassifiable file → usage, exit 2", () => {
@@ -564,7 +564,7 @@ describe("mstar lint --type provenance", () => {
   test("--type provenance without a target → usage, exit 2", () => {
     const result = runCli(["lint", "--type", "provenance"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("missing required argument 'target'");
+    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'target'");
   });
 });
 
@@ -618,7 +618,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
   test("missing <dir> arg → usage, exit 2", () => {
     const result = runCli(["design-md", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("missing required argument 'dir'");
+    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'dir'");
   });
 });
 
@@ -2304,7 +2304,7 @@ describe("mstar lease verify-integration — snapshot top-level integration_merg
   test("missing --workflow is a usage error (exit 2)", () => {
     const result = runCli(["lease", "verify-integration"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("error: required option '--workflow <id>' not specified");
+    expect(String(cliEnvelope(result, "usage").message)).toContain("required option '--workflow <id>' not specified");
   });
 });
 
@@ -2384,7 +2384,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
   test("no assignment files is a usage error (exit 2)", () => {
     const result = runCli(["worktree", "qc-alignment"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("error: missing required argument 'files'");
+    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'files'");
   });
 });
 

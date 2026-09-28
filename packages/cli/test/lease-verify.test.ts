@@ -201,7 +201,7 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
       { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
     );
     expect(proc.exitCode).toBe(2);
-    expect(proc.stderr.toString()).toBe("error: required option '--workflow <id>' not specified\n");
+    expect(String(jsonOf(proc.stdout.toString()).message)).toContain("required option '--workflow <id>' not specified");
   });
 
   test("hostile workflow id (path traversal) is rejected, exit 1", () => {

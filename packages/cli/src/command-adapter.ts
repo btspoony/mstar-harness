@@ -220,6 +220,7 @@ export function registerCliCommands(
   baseContext: InvocationContext,
 ): void {
   program.exitOverride();
+  program.configureOutput({ writeErr: () => {} });
   for (const definition of definitions) {
     const command = ensureCommand(program, definition.cli.path);
     configureLeaf(command, definition);

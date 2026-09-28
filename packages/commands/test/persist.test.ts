@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFsStore, setArtifactStore } from "@mstar-harness/engine";
+import { createFsStore, initializeExecutionAuthority, initializeStore, setArtifactStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, InvocationContext } from "../src/types.js";
 
@@ -48,7 +48,7 @@ const STATUS = { version: 2, updated_at: "2026-09-26", workflows: [] };
 
 describe("persist command family", () => {
   test("registers default write under the stable persist.write tool identity", () => {
-    expect(definition("persist.write").cli.path).toEqual(["persist"]);
+    expect(definition("persist.write").cli.path).toEqual(["persist", "write"]);
     expect(definition("persist.write").id.replace(/[.-]/g, "_")).toBe("persist_write");
   });
 
@@ -87,6 +87,42 @@ describe("persist command family", () => {
     expect(listing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     const retired = await definition("persist.write").execute({ kind: "residuals", key: "legacy", input: "{}" }, context);
     expect(retired).toMatchObject({ status: "refused", code: "persist.kind-retired", exitCode: 1 });
+  });
+
+  test("wraps --store module injection in the engine control-target guard", async () => {
+    const { root, context } = setup();
+    // A REAL active execution authority: the injected-store guard only vetoes
+    // control targets while the canonical control root (process.cwd()'s
+    // harness) has an active authority, so the fixture needs one on disk.
+    const activeRoot = realpathSync(mkdtempSync(join(tmpdir(), "commands-persist-active-")));
+    roots.push(activeRoot);
+    const harness = join(activeRoot, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const handle = await initializeStore({ harnessDir: harness });
+    handle.close();
+    await initializeExecutionAuthority({ harnessDir: harness });
+    const previousCwd = process.cwd();
+    process.chdir(activeRoot);
+    try {
+      const storeModule = join(import.meta.dir, "fixtures", "memory-store.mjs");
+      const { seed } = await import(storeModule);
+      seed("status", "root", { version: 2, updated_at: "2026-09-26", workflows: [] });
+      seed("json", join(root, "plain.json"), { answer: 42 });
+
+      const flag = { store: storeModule };
+      const getStatus = await definition("persist.get").execute({ kind: "status", key: "root", ...flag }, context);
+      expect(getStatus.status).toBe("refused");
+      expect(getStatus.message).toContain("ACTIVE");
+
+      const deleteStatus = await definition("persist.delete").execute({ kind: "status", key: "root", ...flag }, context);
+      expect(deleteStatus.status).toBe("refused");
+      expect(deleteStatus.message).toContain("ACTIVE");
+
+      const plain = await definition("persist.get").execute({ kind: "json", key: join(root, "plain.json"), ...flag }, context);
+      expect(plain).toMatchObject({ status: "ok", data: { payload: { answer: 42 } } });
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 
   test("get, list, and delete preserve store behavior", async () => {

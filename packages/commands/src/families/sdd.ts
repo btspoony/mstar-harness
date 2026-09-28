@@ -101,18 +101,10 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
         ...(input.target !== undefined ? { targetPath: input.target } : {}),
       });
       const assessment = result as { integrity?: { ok?: boolean }; applicability?: string };
-      if (assessment.integrity?.ok === false || assessment.applicability === "uncertain" || assessment.applicability === "changed") {
-        return {
-          version: 1,
-          command: id,
-          status: "refused",
-          code: "sdd.evidence.assessment-failed",
-          exitCode: 1,
-          message: "SDD evidence assessment did not pass",
-          details: result as Record<string, unknown>,
-        };
-      }
-      return ok(id, result);
+      const assessmentPassed = assessment.integrity?.ok !== false
+        && assessment.applicability !== "uncertain"
+        && assessment.applicability !== "changed";
+      return ok(id, { ...result as Record<string, unknown>, assessmentPassed });
     }
     throw new SddScriptError(`unsupported SDD command: ${id}`, 2);
   } catch (error) {
