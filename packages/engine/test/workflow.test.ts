@@ -29,6 +29,8 @@
  *   snapshot), no harness-root pollution; `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -58,6 +60,7 @@ import {
 import { evaluatePostMergeClose } from "../src/iteration.js";
 import { PlanPathError } from "../src/plan-path.js";
 import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
+import { closeFileWorkflow, setFileCloseGapForTest } from "../src/coordination.js";
 import { getCatalog, listCatalog } from "../src/catalog.js";
 import {
   listPendingCatalogRegistrations,
@@ -966,13 +969,23 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     });
   });
 
-  test("refuses delivery-tail evidence when any owned plan row is not Done (write-time gate, §3)", async () => {
+  test("captures delivery-tail evidence while a plan row is not Done — the close is the ordering boundary (A19)", async () => {
     const { dir, path } = fixture({ plans: [legacyRow({ status: "Todo", done_at: undefined })] });
-    const before = readFileSync(path, "utf8");
-    await expect(
-      recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "created" } }, at: "2026-09-12T01:00:00Z" }),
-    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
-    expect(readFileSync(path, "utf8")).toBe(before);
+    // §R5/A19 external evidence arrives when it arrives: recording it early is
+    // legal, and it is NOT a completion — the row stays Todo and the recording
+    // is a plain capture.
+    const captured = await recordWorkflowDelivery(id, dir, {
+      evidence: { compound: { outcome: "created" } },
+      at: "2026-09-12T01:00:00Z",
+    });
+    expect(captured.written).toBe(true);
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    expect(stored.delivery).toEqual({ compound: { outcome: "created" } });
+    expect((stored.plans as Array<Record<string, unknown>>)[0]!.status).toBe("Todo");
+    // The semantic boundary is the CLOSE, which still needs every owned row Done
+    // (and the declared kind's complete evidence) — the ordering is bookkeeping,
+    // never a caller ceremony.
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/every plan row must be Done/);
   });
 
   test("records delivery-tail evidence once every owned plan row is Done", async () => {
@@ -1057,12 +1070,17 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     const again = await recordWorkflowDelivery(id, dir, { evidence: registeredDelivery.delivery, at: "2026-09-13T01:00:00Z" });
     expect(again.written).toBe(false);
     expect(readFileSync(path, "utf8")).toBe(before);
-    await expect(
-      recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "updated" } } }),
-    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
-    expect(readFileSync(path, "utf8")).toBe(before);
+    // §R5/A19 a corrected disposition is evidence ARRIVING, not a completion: it
+    // is recorded while the row is not Done (the close is the boundary).
+    const corrected = await recordWorkflowDelivery(id, dir, { evidence: { compound: { outcome: "updated" } } });
+    expect(corrected.written).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual({
+      compound: { outcome: "updated" },
+      pr: registeredDelivery.delivery.pr,
+      merge: registeredDelivery.delivery.merge,
+    });
     await expect(closeWorkflow(id, dir, { endedAt: "2026-09-12" })).rejects.toThrow(/every plan row must be Done/);
-    const onDisk = JSON.parse(before) as Record<string, unknown>;
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     const gate = evaluatePostMergeClose(
       { ...onDisk, status: "completed", ended_at: "2026-09-12" },
       { version: 2, updated_at: "2026-09-12", workflows: [] },
@@ -3144,7 +3162,7 @@ describe("registerPlanWorkflow — the selected plan document is the registratio
     await expect(
       registerPlanWorkflow("20260918-explicit-mismatch-wf", {
         harnessDir: root,
-        plan: { id: planId, title: "A declared title", file: pointer },
+        plan: { id: "20260918-explicit-mismatch", title: "A declared title", file: pointer },
         deliveryKind: "development",
         branchSource: "feature/20260918-explicit-mismatch",
         branchTarget: "main",
@@ -3153,4 +3171,592 @@ describe("registerPlanWorkflow — the selected plan document is the registratio
     expect(existsSync(join(root, "workflows"))).toBe(false);
     expect(existsSync(join(root, "status.json"))).toBe(false);
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * E11 — the file-authority close (`closeFileWorkflow`; A17–A20/A28, #270)
+ *
+ * The same completion intent the DB route composes (E10), in the file route's
+ * ordered resumable steps: fulfilment → row Done → terminal → unregister. The
+ * fixtures are the STATE (a coordinated snapshot, a bound envelope, a pinned
+ * Assignment whose seal cites real files with real digests, an ACTIVE issue
+ * store), so each rule the close runs reads the same facts a live harness
+ * would.
+ * ------------------------------------------------------------------------ */
+
+describe("closeFileWorkflow — the file-authority close (A17-A20/A28)", () => {
+  const id = "00000110-file-close-fixture";
+  const planId = "20260928-file-close-fixture";
+  const peerPlan = "20260928-file-close-peer";
+  const coordinatorId = "coordinator-00000110";
+  const planSessionId = "plan-pm-00000110";
+  const endedAt = "2026-09-15T03:00:00Z";
+  const sourceBranch = "feature/file-close-fixture";
+  const roots: string[] = [];
+
+  afterEach(() => {
+    setFileCloseGapForTest(undefined);
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  const digest = (text: string | Buffer): string => createHash("sha256").update(text).digest("hex");
+
+  function harnessRoot(prefix: string): string {
+    const root = realpathSync(tmpRoot(prefix));
+    roots.push(root);
+    return root;
+  }
+
+  function git(args: string[], cwd: string): void {
+    execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  }
+
+  function headOf(cwd: string): string {
+    return execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  }
+
+  /** The registered ACTIVE workflow ids of a harness root. */
+  function registeredIds(root: string): string[] {
+    const doc = JSON.parse(readFileSync(join(root, "status.json"), "utf8")) as { workflows?: Array<{ id?: string }> };
+    return (doc.workflows ?? []).map((entry) => String(entry.id));
+  }
+
+  function storedSnapshot(snapshotPath: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  }
+
+  function storedRow(snapshot: Record<string, unknown>): Record<string, unknown> {
+    return (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+  }
+
+  function coordinationOf(row: Record<string, unknown>): Record<string, unknown> {
+    return row.coordination as Record<string, unknown>;
+  }
+
+  async function refusalOf(run: () => Promise<unknown>): Promise<CoordinationError> {
+    try {
+      await run();
+    } catch (error) {
+      if (error instanceof CoordinationError) return error;
+      throw error;
+    }
+    throw new Error("expected the call to be refused");
+  }
+
+  function recoveryOf(error: CoordinationError): Record<string, unknown> {
+    const recovery = error.details.recovery;
+    if (recovery === undefined || recovery === null || typeof recovery !== "object") {
+      throw new Error(`the refusal carries no recovery sidecar: ${JSON.stringify(error.details)}`);
+    }
+    return recovery as Record<string, unknown>;
+  }
+
+  /** The pinned Assignment (C1 header block) a row's seal was prepared from. */
+  function assignmentFor(root: string, options: { planId: string; worktreePath: string; workingBranch: string }): string {
+    return [
+      "**Execution scope**: plan",
+      "**Execute as**: project-manager",
+      "**Delegation**: allowed (plan-local task implementers and reviewers only)",
+      `**Control harness root**: ${root}`,
+      `**Workflow id**: ${id}`,
+      `**Plan id**: ${options.planId}`,
+      `**Plan Path**: ${join(root, "plans", `${options.planId}.md`)}`,
+      `**Worktree path**: ${options.worktreePath}`,
+      `**Working branch**: ${options.workingBranch}`,
+      `**SDD dir**: ${join(root, "sdd", options.planId)}`,
+      "**QA gate**: mandatory",
+      "**Findings cleanup**: zero-residual",
+      "**Prepare gate**: go",
+      "",
+    ].join("\n");
+  }
+
+  /**
+   * One coordinated row whose seal cites real files: the pinned Assignment (and
+   * its digest), the plan document, the accepted QC report (verdict `Approve`)
+   * and the QA report (decision `pass`) the acceptance was sealed against.
+   */
+  function coordinatedRow(
+    root: string,
+    options: {
+      planId?: string;
+      status?: string;
+      handoff?: "accepted" | "submitted" | "completed" | "none";
+      lease?: boolean;
+      worktreePath: string;
+      workingBranch: string;
+      sourceSha?: string;
+      reviewBase?: string;
+      /** The report body the QA reference pins (the fulfilment evidence). */
+      qaText?: string;
+    },
+  ): { row: Record<string, unknown>; assignmentPath: string; qaReport: string } {
+    const rowPlan = options.planId ?? planId;
+    const planDir = join(root, "plans", `${rowPlan}.md`);
+    mkdirSync(dirname(planDir), { recursive: true });
+    writeFileSync(planDir, `# plan: ${rowPlan}\n`);
+    const sdd = join(root, "sdd", rowPlan);
+    mkdirSync(sdd, { recursive: true });
+    const assignmentPath = join(root, `assignment-${rowPlan}.md`);
+    const assignment = assignmentFor(root, {
+      planId: rowPlan,
+      worktreePath: options.worktreePath,
+      workingBranch: options.workingBranch,
+    });
+    writeFileSync(assignmentPath, assignment);
+    const qcText = "# QC: Approved\n";
+    const qaText = options.qaText ?? "# acceptance report\n";
+    const qcReport = join(sdd, "task-1-review.md");
+    const qaReport = join(sdd, "acceptance-report.md");
+    writeFileSync(qcReport, qcText);
+    writeFileSync(qaReport, qaText);
+    const sourceSha = options.sourceSha ?? "a".repeat(40);
+    const coordination: Record<string, unknown> = {
+      revision: 3,
+      prepared: {
+        assignment_path: assignmentPath,
+        assignment_sha256: digest(assignment),
+        plan_sha256: digest(readFileSync(planDir, "utf8")),
+        qa_gate: "mandatory",
+        findings_cleanup: "zero-residual",
+        prepared_by: coordinatorId,
+        prepared_at: "2026-09-15T00:30:00Z",
+      },
+      session: {
+        session_id: planSessionId,
+        session_file: join(root, "workflows", id, "sessions", `${planSessionId}.json`),
+        bound_at: "2026-09-15T00:40:00Z",
+      },
+    };
+    const state = options.handoff ?? "accepted";
+    if (state !== "none") {
+      const handoff: Record<string, unknown> = {
+        id: "handoff-1",
+        attempt: 1,
+        state,
+        submitted_by: planSessionId,
+        submitted_at: "2026-09-15T01:30:00Z",
+        source_branch: options.workingBranch,
+        source_sha: sourceSha,
+        worktree_path: options.worktreePath,
+        review_base: options.reviewBase ?? "b".repeat(40),
+        review_head: sourceSha,
+        qc: {
+          decision: "Approve",
+          reports: [{ path: qcReport, sha256: digest(qcText) }],
+          consolidated: { path: qcReport, sha256: digest(qcText) },
+        },
+        qa: { gate: "mandatory", decision: "pass", report: { path: qaReport, sha256: digest(qaText) } },
+      };
+      if (state !== "submitted") {
+        handoff.accepted_by = coordinatorId;
+        handoff.accepted_at = "2026-09-15T01:45:00Z";
+      }
+      if (state === "completed") handoff.completed_at = "2026-09-15T02:30:00Z";
+      coordination.handoff = handoff;
+    }
+    const row: Record<string, unknown> = {
+      id: rowPlan,
+      plan_id: rowPlan,
+      file: `plans/${rowPlan}.md`,
+      title: `file close fixture ${rowPlan}`,
+      status: options.status ?? "InReview",
+      owner: "@fullstack-dev",
+      created_at: "2026-09-15",
+      updated_at: "2026-09-15",
+      metadata: { working_branch: options.workingBranch, worktree_path: options.worktreePath },
+      coordination,
+    };
+    if (options.lease !== false) {
+      row.execution_lease = {
+        holder: coordinatorId,
+        claimed_at: "2026-09-15T01:00:00Z",
+        worktree_path: options.worktreePath,
+        working_branch: options.workingBranch,
+      };
+    }
+    return { row, assignmentPath, qaReport };
+  }
+
+  /**
+   * The workflow harness itself: the bound coordinator envelope, `status.json`
+   * registering the ACTIVE lifecycle, the snapshot and an initialized (ACTIVE)
+   * issue store — the findings authority `closeRowDecision` consults.
+   */
+  async function harness(
+    root: string,
+    options: {
+      plans: Array<Record<string, unknown>>;
+      snapshot?: Record<string, unknown>;
+      /** `false` leaves the root WITHOUT the workflow entry (a settled lifecycle). */
+      register?: boolean;
+      /** `false` leaves the issue store absent (the fail-closed findings case). */
+      store?: boolean;
+    },
+  ): Promise<{ workflowDir: string; snapshotPath: string; coordinatorSession: string }> {
+    const workflowDir = join(root, "workflows", id);
+    const sessionsDir = join(workflowDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const coordinatorSession = join(sessionsDir, `coordinator-${coordinatorId}.json`);
+    writeFileSync(
+      coordinatorSession,
+      JSON.stringify(
+        { schema_version: 1, role: "coordinator", session_id: coordinatorId, workflow_id: id, harness_root: root },
+        null,
+        2,
+      ) + "\n",
+    );
+    if (options.register !== false) {
+      writeFileSync(
+        join(root, "status.json"),
+        JSON.stringify(
+          {
+            version: 2,
+            updated_at: "2026-09-15",
+            workflows: [
+              { id, status: "running", type: "plan", started_at: "2026-09-15T00:00:00Z", dir: `workflows/${id}` },
+            ],
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+    }
+    const snapshot = {
+      schema_version: 1,
+      id,
+      type: "plan",
+      delivery_kind: "verification/report-only",
+      status: "running",
+      started_at: "2026-09-15T00:00:00Z",
+      updated_at: "2026-09-15T00:00:00Z",
+      completion_policy: "acceptance report",
+      coordination: {
+        coordinator: { session_id: coordinatorId, session_file: coordinatorSession, bound_at: "2026-09-15T00:10:00Z" },
+      },
+      plans: options.plans,
+      ...options.snapshot,
+    };
+    const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + "\n");
+    setArtifactStore(createFsStore(root));
+    if (options.store !== false) await initializeStore({ harnessDir: root });
+    return { workflowDir, snapshotPath, coordinatorSession };
+  }
+
+  test("report.only recovery: ONE close records the fulfilment, completes the row and unregisters (A17/#270, no Git)", async () => {
+    const root = harnessRoot("file-close-a17-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row, qaReport } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+    expect(storedSnapshot(snapshotPath).delivery).toBeUndefined();
+
+    // ONE ordinary close intent. The route owns no branch, no integration
+    // checkout and no PR identity, and the close demands none of them.
+    const closed = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt,
+      sessionPath: coordinatorSession,
+    });
+
+    expect(closed.outcome).toBe("completed");
+    expect(closed.composed).toEqual([planId]);
+    expect(closed.unregistered).toBe(true);
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.status).toBe("completed");
+    expect(stored.ended_at).toBe(endedAt);
+    // The fulfilment names the REGISTERED policy and the accepted report the
+    // decision was sealed against — resolved from the row's own record.
+    expect(stored.delivery).toEqual({ completion: { policy: "acceptance report", evidence: qaReport } });
+    // The row is Done with its completed handoff, its ownership released and the
+    // cleanup-authorizing metadata retained.
+    const done = storedRow(stored);
+    expect(done.status).toBe("Done");
+    expect(done.execution_lease).toBeUndefined();
+    expect(coordinationOf(done).handoff).toMatchObject({ id: "handoff-1", state: "completed" });
+    expect(done.metadata).toMatchObject({ working_branch: sourceBranch, worktree_path: worktreePath });
+    // No report-only Git/integration prerequisite was ever needed.
+    expect(stored.branch).toBeUndefined();
+    expect(stored.integration_worktree_path).toBeUndefined();
+    expect(stored.integration_merge_lease).toBeUndefined();
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("report.only recovery: a Done row whose fulfilment was never recorded gets the projection repaired, never rewritten (A17/A20)", async () => {
+    const root = harnessRoot("file-close-projection-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row, qaReport } = coordinatedRow(root, {
+      status: "Done",
+      handoff: "completed",
+      lease: false,
+      worktreePath,
+      workingBranch: sourceBranch,
+    });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+    const rowBefore = JSON.stringify(storedRow(storedSnapshot(snapshotPath)));
+
+    const closed = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt,
+      sessionPath: coordinatorSession,
+    });
+
+    expect(closed.composed).toEqual([planId]);
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.delivery).toEqual({ completion: { policy: "acceptance report", evidence: qaReport } });
+    expect(stored.status).toBe("completed");
+    // The completed row was NOT rewritten: its own bytes are exactly what they
+    // were — no revision advance, no second `completed_at`.
+    expect(JSON.stringify(storedRow(stored))).toBe(rowBefore);
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("report.only recovery: a genuinely absent acceptance keeps the work and names only that decision (A18)", async () => {
+    const root = harnessRoot("file-close-a18-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    // The report exists but nobody accepted it: the ONE decision the close
+    // cannot supply is the acceptance, not a route's fields.
+    const { row } = coordinatedRow(root, { handoff: "submitted", worktreePath, workingBranch: sourceBranch });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+    const before = readFileSync(snapshotPath, "utf8");
+
+    const refused = await refusalOf(() =>
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    const recovery = recoveryOf(refused);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    expect(recovery.applied).toEqual([]);
+    const unresolved = recovery.unresolved as Array<Record<string, unknown>>;
+    const problem = unresolved[0]!;
+    expect(problem.component).toBe("plan-handoff");
+    expect(problem.path).toBe("handoff.state");
+    expect(String(problem.needed)).toContain("accepted");
+    expect(String(problem.needed)).toContain(`plan ${planId}`);
+    // Nothing was composed and nothing was unregistered: the work already
+    // present stays exactly as it was, and the lifecycle stays resumable.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(registeredIds(root)).toEqual([id]);
+  }, 30000);
+
+  test("interrupted close: a multi-row close stops at the owed row whose decision is missing (A18)", async () => {
+    const root = harnessRoot("file-close-multirow-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    // A lifecycle with two owned rows: the first is Done and settled (no
+    // coordination block at all), the second owes a completion it has no
+    // recorded evidence for.
+    const settledId = "20260928-file-close-settled";
+    const settled = legacyRow({ id: settledId, plan_id: settledId, file: `plans/${settledId}.md`, status: "Done" });
+    const { row } = coordinatedRow(root, { planId: peerPlan, handoff: "none", worktreePath, workingBranch: sourceBranch });
+    const owed = { ...row, status: "InReview" };
+    const { snapshotPath, coordinatorSession } = await harness(root, {
+      plans: [settled, owed],
+      snapshot: { delivery_kind: "development", completion_policy: undefined, branch: { source: sourceBranch, target: "main" } },
+    });
+    const before = readFileSync(snapshotPath, "utf8");
+
+    const refused = await refusalOf(() =>
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    const unresolved = recoveryOf(refused).unresolved as Array<Record<string, unknown>>;
+    expect(unresolved[0]!.component).toBe("plan-handoff");
+    expect(unresolved[0]!.path).toBe("handoff");
+    expect(String(unresolved[0]!.needed)).toContain(`plan ${peerPlan}`);
+    // The settled row was skipped and the owed row wrote nothing.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(registeredIds(root)).toEqual([id]);
+  }, 30000);
+
+  test("evidence before Done: development delivery evidence captured early is used by the close (A19)", async () => {
+    const root = harnessRoot("file-close-a19-");
+    // A real repository: the feature checkout the handoff pins, on the
+    // registered delivery source, at the pinned commit.
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+    git(["init", "-q", "-b", "main"], repo);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"], repo);
+    const reviewBase = headOf(repo);
+    const worktreePath = join(root, "wt-feature");
+    git(["worktree", "add", "-q", "-b", sourceBranch, worktreePath], repo);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "feat: fixture"], worktreePath);
+    const sourceSha = headOf(worktreePath);
+    const { row } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch, sourceSha, reviewBase });
+    const { workflowDir, snapshotPath, coordinatorSession } = await harness(root, {
+      plans: [row],
+      snapshot: {
+        delivery_kind: "development",
+        completion_policy: undefined,
+        branch: { source: sourceBranch, target: "main" },
+      },
+    });
+
+    // The external evidence (compound disposition, PR identity, verified-merge
+    // record) arrives BEFORE the row's `Done` projection: capturing it is legal
+    // and is not a completion, so the row stays InReview.
+    const captured = await recordWorkflowDelivery(id, workflowDir, {
+      sessionPath: coordinatorSession,
+      evidence: {
+        compound: { outcome: "created" },
+        pr: { repo: "btspoony/mstar-harness", head: sourceBranch, target: "main" },
+        merge: { provider: "github", evidence: "PR #255 verified merged" },
+      },
+      at: "2026-09-15T02:00:00Z",
+    });
+    expect(captured.written).toBe(true);
+    expect(storedRow(storedSnapshot(snapshotPath)).status).toBe("InReview");
+
+    const closed = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt,
+      sessionPath: coordinatorSession,
+    });
+
+    expect(closed.outcome).toBe("completed");
+    expect(closed.composed).toEqual([planId]);
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.status).toBe("completed");
+    expect(stored.delivery).toMatchObject({ merge: { evidence: "PR #255 verified merged" } });
+    const done = storedRow(stored);
+    expect(done.status).toBe("Done");
+    expect(done.execution_lease).toBeUndefined();
+    expect(coordinationOf(done).handoff).toMatchObject({ id: "handoff-1", state: "completed" });
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("terminal cleanup: a terminal snapshot whose root entry remains is repaired, preserving its outcome (A20)", async () => {
+    const root = harnessRoot("file-close-a20-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row } = coordinatedRow(root, {
+      status: "Done",
+      handoff: "completed",
+      lease: false,
+      worktreePath,
+      workingBranch: sourceBranch,
+    });
+    // The residue: the completion committed, the root register entry did not go.
+    const terminalAt = "2026-09-10T00:00:00Z";
+    const { snapshotPath, coordinatorSession } = await harness(root, {
+      plans: [row],
+      snapshot: {
+        status: "completed",
+        ended_at: terminalAt,
+        delivery: { completion: { policy: "acceptance report", evidence: "sdd/acceptance-report.md" } },
+      },
+    });
+    const before = readFileSync(snapshotPath, "utf8");
+    expect(registeredIds(root)).toEqual([id]);
+
+    const closed = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt,
+      sessionPath: coordinatorSession,
+    });
+
+    expect(closed.outcome).toBe("already-terminal");
+    expect(closed.composed).toEqual([]);
+    expect(closed.unregistered).toBe(true);
+    expect(closed.snapshot.status).toBe("completed");
+    // The FIRST ended_at and the recorded outcome are preserved — a retry never
+    // rewrites a committed terminal fact.
+    expect(closed.snapshot.ended_at).toBe(terminalAt);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("interrupted close: a crash after the row completion converges without replaying it (A28)", async () => {
+    const root = harnessRoot("file-close-a28-row-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+
+    setFileCloseGapForTest((stage) => {
+      if (stage === "completion") throw new Error("simulated crash after the row completion");
+    });
+    await expect(
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    ).rejects.toThrow(/simulated crash after the row completion/);
+    setFileCloseGapForTest(undefined);
+
+    // The completion is committed; the workflow is still running and the root
+    // entry stands — the crash boundary a retry must resume from.
+    const crashed = storedSnapshot(snapshotPath);
+    expect(crashed.status).toBe("running");
+    const completedRow = storedRow(crashed);
+    expect(completedRow.status).toBe("Done");
+    const revision = coordinationOf(completedRow).revision;
+    const handoff = coordinationOf(completedRow).handoff as Record<string, unknown>;
+    expect(handoff.state).toBe("completed");
+    expect(crashed.delivery).toMatchObject({ completion: { policy: "acceptance report" } });
+    expect(registeredIds(root)).toEqual([id]);
+
+    const retried = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt,
+      sessionPath: coordinatorSession,
+    });
+
+    expect(retried.outcome).toBe("completed");
+    // Nothing was owed any more: the committed completion is recognised, never
+    // replayed as work.
+    expect(retried.composed).toEqual([]);
+    expect(retried.unregistered).toBe(true);
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.status).toBe("completed");
+    expect(coordinationOf(storedRow(stored)).revision).toBe(revision);
+    expect((coordinationOf(storedRow(stored)).handoff as Record<string, unknown>).completed_at).toBe(handoff.completed_at);
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("interrupted close: a crash after the terminal write converges without resetting ended_at or replaying work (A28)", async () => {
+    const root = harnessRoot("file-close-a28-cleanup-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+
+    setFileCloseGapForTest((stage) => {
+      if (stage === "cleanup") throw new Error("simulated crash after the terminal write");
+    });
+    await expect(
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    ).rejects.toThrow(/simulated crash after the terminal write/);
+    setFileCloseGapForTest(undefined);
+
+    // The terminal snapshot is a durable completion fact; only the root cleanup
+    // is outstanding.
+    const crashed = storedSnapshot(snapshotPath);
+    expect(crashed.status).toBe("completed");
+    expect(crashed.ended_at).toBe(endedAt);
+    expect(registeredIds(root)).toEqual([id]);
+    const rowBytes = JSON.stringify(storedRow(crashed));
+
+    // The retry asks for a DIFFERENT timestamp: the committed one is the fact.
+    const retried = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt: "2027-01-01T00:00:00Z",
+      sessionPath: coordinatorSession,
+    });
+
+    expect(retried.outcome).toBe("already-terminal");
+    expect(retried.composed).toEqual([]);
+    expect(retried.unregistered).toBe(true);
+    expect(retried.snapshot.ended_at).toBe(endedAt);
+    expect(JSON.stringify(storedRow(storedSnapshot(snapshotPath)))).toBe(rowBytes);
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
 });

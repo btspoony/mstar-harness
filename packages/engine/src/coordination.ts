@@ -110,6 +110,7 @@ import {
   integrationDiverged,
   integrationUnresolved,
   mergeLeaseOfAttempt,
+  missingDecision,
   readHandoffEvidence,
   requireExecutionLease,
   requireHandoffState,
@@ -146,7 +147,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
@@ -169,9 +170,12 @@ import {
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   DERIVED_PHASE_CODE,
+  closeWorkflow,
   deriveLifecyclePhase,
+  isCloseTimestamp,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
+  isTerminalSnapshot,
   rowValidationRoute,
   consultDeliveryEvidence,
   readWorkflowSnapshot,
@@ -181,6 +185,7 @@ import {
   WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
+  type WorkflowDeliveryEvidence,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
@@ -5672,34 +5677,45 @@ function completeStandaloneRow(context: RowContext, scope: ResolvedPlanScope, ha
   return { row: nextRow, coordination: nextCoordination };
 }
 
+/**
+ * §E the stored invariants of an already completed standalone row (spec §E): a
+ * completed handoff on a `Done` row with no lease and no merge lease, whose
+ * sealed evidence is unchanged. `what` names the transition in the refusal (the
+ * reconcile replay by default); `fulfilment: "pending"` is the ONE caller that
+ * does not require the recorded report-only fulfilment — a CLOSE repairing that
+ * very projection, which records it in the same commit instead of being refused
+ * by the state it repairs (the DB close's `assertCompletedReplayInvariants`).
+ */
 function assertStandaloneCompletedReplay(
   context: RowContext,
   scope: ResolvedPlanScope,
   handoff: PlanHandoff,
+  options: { what?: string; fulfilment?: "required" | "pending" } = {},
 ): void {
-  assertStandaloneRoute(context.snapshot, scope.planId, "reconcile");
+  const what = options.what ?? "reconcile";
+  assertStandaloneRoute(context.snapshot, scope.planId, what);
   if (rowStatusOf(context.row) !== "Done") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires ${scope.planId} to be Done for a standalone completed replay`,
+      `${what} requires ${scope.planId} to be Done for a standalone completed replay`,
       { plan_id: scope.planId, status: context.row.status },
     );
   }
   if (context.row.execution_lease !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires no execution lease on ${scope.planId} for a standalone completed replay`,
+      `${what} requires no execution lease on ${scope.planId} for a standalone completed replay`,
       { plan_id: scope.planId },
     );
   }
   if (context.snapshot.integration_merge_lease !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires no integration merge lease for a standalone completed replay of ${scope.planId}`,
+      `${what} requires no integration merge lease for a standalone completed replay of ${scope.planId}`,
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "reconcile" });
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what });
   const storedHandoffViolations = validatePlanHandoff(
     handoff,
     `plan ${scope.planId} coordination.handoff`,
@@ -5714,15 +5730,15 @@ function assertStandaloneCompletedReplay(
     );
   }
   if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
-    assertReportOnlyCompletionEvidence(context, scope.planId, "reconcile");
+    if (options.fulfilment !== "pending") assertReportOnlyCompletionEvidence(context, scope.planId, what);
     return;
   }
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
-  assertStandaloneBranchIdentity(context, scope, handoff, anchors, "reconcile", false);
+  assertStandaloneBranchIdentity(context, scope, handoff, anchors, what, false);
   const repository = proofRepository([handoff.worktree_path, scope.worktreePath, scope.harnessRoot]);
   if (repository !== undefined && !gitObjectExists(repository, handoff.source_sha)) {
     throw gitProof(
-      `reconcile cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${scope.planId}`,
+      `${what} cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${scope.planId}`,
       { plan_id: scope.planId, source_sha: handoff.source_sha },
     );
   }
@@ -6051,6 +6067,456 @@ async function mutateReconcile(
       sessionPath,
     ),
   };
+}
+
+/* ------------------------------------------------------------------------ *
+ * §R5/§R10 the file-authority close — the same completion intent the DB route
+ * serves, on the file route's own ordered resumable steps
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R5/§R10 one file-authority close: `fulfilment → row Done → terminal →
+ * unregister` on the same facts the DB close composes from
+ * (`readEntailedRowCompletion` — E10 is this mirror's source).
+ *
+ * The steps are ORDERED and RESUMABLE, because a multi-file lifecycle
+ * completion is not one filesystem transaction (contract §4.3):
+ *
+ * 1. every owned row this close OWES is completed through the file route's own
+ *    completion rules, with the report-only fulfilment recorded in the SAME
+ *    write (contract §1: the fulfilment is recorded before the row is marked
+ *    `Done` — there it authorizes that `Done`). One atomic commit per owed row,
+ *    in row order; a row that already records its completion owes nothing and
+ *    is never rewritten.
+ * 2. the terminal snapshot is written with the requested `endedAt` by
+ *    `closeWorkflow`, the ONE terminal writer, which also re-consults the
+ *    declared kind's complete delivery evidence against the rows this call just
+ *    completed and never rewrites a committed terminal state.
+ * 3. the workflow's ACTIVE root entry is removed (`unregisterWorkflow`,
+ *    idempotent).
+ *
+ * A terminal snapshot committed before the root cleanup stays a durable
+ * completion fact: a retry reads it, writes nothing to it — the FIRST
+ * `ended_at` and the recorded outcome are preserved and no row completion is
+ * replayed as work — and only continues the cleanup the crash left. Nothing
+ * here holds a lock across the steps or calls another public operation from
+ * inside a lock, so a retry converges instead of meeting this module's own
+ * non-reentrant write locks.
+ */
+export type FileWorkflowCloseInput = Readonly<{
+  /** The control harness root holding `status.json` and the workflow directory. */
+  harnessRoot: string;
+  /** The ACTIVE lifecycle being closed. */
+  workflowId: string;
+  /** The terminal timestamp of the FIRST close; a retry never rewrites a committed one. */
+  endedAt: string;
+  /** The bound coordinator envelope (absolute) the composed completions run under. */
+  sessionPath?: string;
+}>;
+
+export type FileWorkflowCloseResult = Readonly<{
+  /** The stored snapshot after the close: terminal, or the committed one the retry found. */
+  snapshot: WorkflowSnapshot;
+  /** The rows this call completed or whose report-only projection it recorded, in row order. */
+  composed: readonly string[];
+  /** `true` when this call removed the workflow's ACTIVE root register entry. */
+  unregistered: boolean;
+  /**
+   * `completed` when this call wrote the terminal state; `already-terminal`
+   * when it finished a state already committed (the residue repair). The stored
+   * `status` is what says WHICH terminal outcome was recorded — a `failed` or
+   * `stopped` lifecycle is returned as that outcome, never relabelled.
+   */
+  outcome: "completed" | "already-terminal";
+}>;
+
+/** §R5/§R10 what one close reads from an owned row (the file route's `EntailedRowCompletion`). */
+type FileCloseDecision =
+  | { kind: "satisfied" }
+  | { kind: "projection"; fulfilment: { policy: string; evidence: string } }
+  | { kind: "standalone"; handoffId: string; fulfilment: { policy: string; evidence: string } | null }
+  | { kind: "integration"; handoffId: string; resultSha: string };
+
+/** Test-only hook observing the ordered boundaries of one composed close (a crash/retry seam). */
+let fileCloseGapForTest: ((stage: "completion" | "cleanup") => void) | undefined;
+
+/**
+ * Register (or clear) the observation point a regression uses to move the
+ * process state between two committed steps of one close: `completion` fires
+ * after a row's completion committed, `cleanup` after the terminal snapshot
+ * committed and before the root register is cleaned up. Throwing from it
+ * simulates the crash whose retry must converge.
+ */
+export function setFileCloseGapForTest(callback: ((stage: "completion" | "cleanup") => void) | undefined): void {
+  fileCloseGapForTest = callback;
+}
+
+/**
+ * §1/§R10 whether a report-only workflow still OWES the fulfilment of its
+ * registered completion policy — the file route's mirror of the DB close's
+ * `reportOnlyFulfilmentOutstanding`: true when nothing is recorded, false when
+ * the recorded fulfilment names that policy, and a recorded fulfilment of a
+ * DIFFERENT policy is refused here rather than accepted as the basis of a
+ * `Done` (a re-pointed completion is exactly the state the post-`Done` freeze
+ * refuses).
+ */
+function fileFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
+  const policy = snapshot.completion_policy;
+  const recorded = isPlainObject(snapshot.delivery) ? snapshot.delivery.completion : undefined;
+  if (recorded === undefined) return true;
+  if (!isNonEmptyString(policy) || recorded.policy !== policy) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
+        `while the lifecycle registers ${JSON.stringify(policy ?? null)} \u2014 a re-pointed completion is never the basis of a Done`,
+      { plan_id: planId, recorded: recorded.policy, registered: policy ?? null },
+    );
+  }
+  return false;
+}
+
+/**
+ * §R5/§R10 the fulfilment of a report-only completion policy, RESOLVED from the
+ * facts the workflow already records: the policy it registered at registration
+ * (contract §1) and the acceptance report its accepted decision was recorded
+ * against (the handoff's own QA report reference, sealed with its digest).
+ * Nothing is invented — a workflow that registered no policy is refused with
+ * that ONE missing decision (A18), never with a route's fields.
+ */
+function entailedFileFulfilment(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+  what: string,
+): { policy: string; evidence: string } | null {
+  if (!fileFulfilmentOutstanding(snapshot, planId)) return null;
+  const policy = snapshot.completion_policy;
+  if (!isNonEmptyString(policy)) {
+    throw missingDecision({
+      planId,
+      what,
+      component: "workflow-delivery",
+      path: "completion_policy",
+      currentFacts: [
+        `workflow ${String(snapshot.id)} declares delivery_kind verification/report-only`,
+        "no completion_policy is recorded and no fulfilment is recorded",
+      ],
+      needed:
+        `${what} records report-only plan ${planId}'s fulfilment of the policy the lifecycle declared at registration, and this ` +
+        "workflow records no completion_policy \u2014 declare the policy the report is accepted against, then retry",
+      availableWork: [
+        `read plan ${planId} and its recorded accepted report`,
+        "independent operations on other rows, plans and workflows continue",
+      ],
+    });
+  }
+  return { policy, evidence: handoff.qa.report.path };
+}
+
+/** §1 the delivery block one close records: the fulfilment merged into the stored evidence. */
+function deliveryWithFulfilment(
+  snapshot: WorkflowSnapshot,
+  fulfilment: { policy: string; evidence: string },
+): WorkflowDeliveryEvidence {
+  const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
+  return { ...stored, completion: fulfilment } as WorkflowDeliveryEvidence;
+}
+
+/**
+ * §R5/§R10 whether this close OWES one owned row anything at all — a pure
+ * snapshot read with NO external I/O, so the loop below never resolves a scope
+ * or touches Git for a workflow it has nothing to compose. A `Done` row owes
+ * nothing except the report-only workflow's own outstanding fulfilment
+ * projection (§R10).
+ */
+function closeOwesRow(snapshot: WorkflowSnapshot, row: PlanRow): boolean {
+  if (rowStatusOf(row) !== "Done") return true;
+  return rowValidationRoute(snapshot, row) === "standalone-report-only" && fileFulfilmentOutstanding(snapshot, String(row.id));
+}
+
+/**
+ * §R5/§R10 the decision one close reads from an owed row, INSIDE the row's own
+ * lock: the completion its recorded evidence entails, or the ONE decision it
+ * cannot supply. Mirrors the DB close's `readEntailedRowCompletion` on the file
+ * route's own facts, and runs the file route's own completion rules —
+ * `assertStandaloneCompletionPrecheck` / `assertIterationCompletionPrecheck`
+ * verbatim, and for the report-only route the same chain minus the one rule
+ * this call is about to satisfy (the recorded fulfilment).
+ */
+async function closeRowDecision(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  what: string,
+): Promise<FileCloseDecision> {
+  const planId = scope.planId;
+  const handoff = context.coordination?.handoff;
+  const done = rowStatusOf(context.row) === "Done";
+  const route = rowValidationRoute(context.snapshot, context.row);
+  if (handoff === undefined) {
+    // A Done row that records no handoff is a legitimate closed shape (the
+    // snapshot validator's completed-coherence rule accepts it), so this close
+    // has nothing to compose for it; a row that still owes a completion, and a
+    // report-only row whose fulfilment is outstanding, ask for that decision
+    // instead of inventing a completion.
+    const owesFulfilment = route === "standalone-report-only" && fileFulfilmentOutstanding(context.snapshot, planId);
+    if (done && !owesFulfilment) return { kind: "satisfied" };
+    throw missingDecision({
+      planId,
+      what,
+      component: "plan-handoff",
+      path: "handoff",
+      currentFacts: [
+        `plan ${planId} records no handoff`,
+        `its row status is ${rowStatusOf(context.row) || "unstatused"}`,
+        `the lifecycle declares the ${route} delivery route`,
+      ],
+      needed:
+        `${what} composes plan ${planId}'s completion from its recorded accepted report/development evidence, and this row records ` +
+        "no handoff at all \u2014 obtain the reviewed evidence (the submission, the accepted QC verdict and the passing QA decision), then retry",
+    });
+  }
+  if (route === "standalone-report-only") {
+    assertNoIntegrationContamination({ snapshot: context.snapshot, planId, handoff, what });
+    assertEvidenceDigests(handoff);
+    const fulfilment = entailedFileFulfilment(context.snapshot, planId, handoff, what);
+    if (done) {
+      // §R10 the row already records its completion: only the workflow's own
+      // fulfilment projection is outstanding. Nothing is written to the row, so
+      // the completed shape, its sealed evidence and the absence of ownership
+      // are asserted rather than composed.
+      assertStandaloneCompletedReplay(context, scope, handoff, { what, fulfilment: "pending" });
+      assertEvidenceDigests(handoff);
+      if (fulfilment === null) return { kind: "satisfied" };
+      return { kind: "projection", fulfilment };
+    }
+    const prepared = context.coordination?.prepared;
+    if (prepared === undefined) {
+      throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared in this workflow`, {
+        plan_id: planId,
+      });
+    }
+    requireHandoffState(handoff, ["accepted"], planId, what);
+    requireRowStatus(context.row, "InReview", planId, what, { still: true });
+    assertAcceptedReviewDecision(handoff, planId, what);
+    if (handoff.qa.gate !== prepared.qa_gate) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `${what} qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+        { plan_id: planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+      );
+    }
+    await assertFindingsClosed(scope, prepared, what);
+    assertExecutionHolder(context.row, session.session_id, planId, what);
+    return { kind: "standalone", handoffId: handoff.id, fulfilment };
+  }
+  if (route === "standalone-development") {
+    if (done) return { kind: "satisfied" };
+    requireHandoffState(handoff, ["accepted"], planId, what);
+    await assertStandaloneCompletionPrecheck(context, scope, session, handoff);
+    return { kind: "standalone", handoffId: handoff.id, fulfilment: null };
+  }
+  if (done) return { kind: "satisfied" };
+  requireHandoffState(handoff, ["merged"], planId, what);
+  await assertIterationCompletionPrecheck(context, scope, session, handoff);
+  // §E a PROVEN merge is reused, never re-run: the recorded result is re-read
+  // against the observed integration HEAD (the same proof `complete` applies).
+  const anchors = integrationAnchors(context.snapshot, planId);
+  const attempt = requireIntegration(handoff, planId);
+  const resultSha = assertRecordedResult(
+    anchors.worktreePath,
+    planId,
+    attempt,
+    handoff.source_sha,
+    assertIntegrationCheckout(anchors, planId).head,
+  );
+  return { kind: "integration", handoffId: handoff.id, resultSha };
+}
+
+/**
+ * §R5/§R10 one owed row's completion, applied inside its own locked commit from
+ * the decision the admission read: the file route's own completion delta
+ * (`completeStandaloneRow` / `completeRow`) plus the report-only fulfilment
+ * this close records in the SAME write. A projection-only repair rewrites no
+ * row byte: the terminal identity the lifecycle records stays exactly as it was.
+ */
+async function commitCloseRow(input: {
+  scope: ResolvedPlanScope;
+  session: CoordinationSession;
+  sessionPath: string;
+  expectedRevision: number;
+  what: string;
+}): Promise<boolean> {
+  const { scope, session, sessionPath, expectedRevision, what } = input;
+  let decision: FileCloseDecision = { kind: "satisfied" };
+  const result = await withRowCommit(scope, {
+    kind: "close",
+    expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      decision = await closeRowDecision(context, scope, session, what);
+      // §4.2 a sibling that completed the row between the read and this lock is
+      // current success with no byte churn — the close never replays work.
+      if (decision.kind === "satisfied") return { field: "coordination.handoff", source: "stored plan row" };
+    },
+    mutate: (context) => {
+      const current = decision;
+      switch (current.kind) {
+        case "satisfied":
+          return null;
+        case "projection":
+          return {
+            row: context.row,
+            coordination: context.coordination ?? { revision: 0 },
+            topLevel: { delivery: deliveryWithFulfilment(context.snapshot, current.fulfilment) },
+          };
+        case "integration":
+          return completeRow(context, scope, requirePlanHandoff(context.coordination, scope.planId, current.handoffId), current.resultSha);
+        case "standalone": {
+          const completed = completeStandaloneRow(
+            context,
+            scope,
+            requirePlanHandoff(context.coordination, scope.planId, current.handoffId),
+          );
+          return current.fulfilment === null
+            ? completed
+            : { ...completed, topLevel: { delivery: deliveryWithFulfilment(context.snapshot, current.fulfilment) } };
+        }
+      }
+    },
+  });
+  return result.applied;
+}
+
+/**
+ * §4.1 the refusal of a composed close that had ALREADY committed rows: the
+ * steps are ordered and resumable, so the boundary that stands is reported as
+ * `partial` instead of the "nothing moved" an atomic effect earns. The
+ * terminal step's own refusal is preserved verbatim (its code, message and
+ * details); the applied prefix is added to its recovery sidecar.
+ */
+function discloseFileClosePrefix(error: unknown, applied: readonly string[], workflowId: string): unknown {
+  if (applied.length === 0) return error;
+  const committed = applied.map((planId) => `close on plan ${planId}`);
+  const declared =
+    error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
+  const report =
+    isPlainObject(declared) && isPlainObject(declared.recovery)
+      ? (declared.recovery as RecoveryDetails)
+      : undefined;
+  const message = errorMessage(error);
+  const base =
+    report ??
+    unresolvedRecovery({
+      target: { workflowId, planId: applied[0] },
+      unresolved: [
+        {
+          component: "workflow-lifecycle",
+          path: "status",
+          code: errorCode(error) ?? "coordination.invalid-transition",
+          sourcesTried: [
+            `${workflowId} as this close wrote it`,
+            "the terminal step's own admission rules",
+          ],
+          currentFacts: [
+            message,
+            `plan(s) ${applied.join(", ")} were already completed by this close and are not rolled back`,
+          ],
+          needed: `${message} \u2014 resolve that fact, then retry the close`,
+          withheldEffect: `the terminal state of workflow ${workflowId}: the completed row(s) stand and are not replayed`,
+          availableWork: [
+            "retry this close once the named fact is resolved: the completed rows are recognised and not replayed",
+            "independent operations on other rows, plans and workflows continue",
+          ],
+        },
+      ],
+    });
+  return withRowRecoveryDetails(error, {
+    workflow_id: workflowId,
+    plans_completed: [...applied],
+    recovery: partlyAppliedRecovery(base, committed),
+  });
+}
+
+/**
+ * §R5/§R10 the file authority's close: the composition the DB route performs in
+ * one transaction, in the file route's ordered resumable steps. See the type
+ * docs above for the contract.
+ */
+export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<FileWorkflowCloseResult> {
+  // Canonical authority discrimination precedes every payload check (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
+  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId must be a non-empty string");
+  if (!isCloseTimestamp(input.endedAt)) {
+    throw invalidInput(`endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp \u2014 got ${JSON.stringify(input.endedAt)}`);
+  }
+  const harnessRoot = resolve(input.harnessRoot);
+  const workflowDir = join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), input.workflowId);
+  const statusPath = join(harnessRoot, "status.json");
+  const what = "close";
+  let snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+  if (snapshot.id !== input.workflowId) {
+    throw new CoordinationError(
+      "coordination.workflow-not-found",
+      `workflow snapshot identity mismatch: expected ${input.workflowId}, got ${snapshot.id}`,
+      { expected: input.workflowId, actual: snapshot.id },
+    );
+  }
+  const alreadyTerminal = isTerminalSnapshot(snapshot);
+  const composed: string[] = [];
+  if (!alreadyTerminal) {
+    const session = input.sessionPath === undefined ? undefined : readSessionEnvelope(input.sessionPath);
+    for (const row of snapshot.plans) {
+      const planId = String(row.id);
+      if (!closeOwesRow(snapshot, row)) continue;
+      if (session === undefined || input.sessionPath === undefined) {
+        throw new CoordinationError(
+          "coordination.session-mismatch",
+          `close owes plan ${planId}'s completion and workflow ${input.workflowId} is composed only by its bound coordinator \u2014 ` +
+            "present the coordinator session envelope, or complete the row through the plan's own coordination route first",
+          { workflow_id: input.workflowId, plan_id: planId },
+        );
+      }
+      const scope = await resolvePlanScope(
+        { workflowId: input.workflowId, planId, harnessDir: harnessRoot },
+        harnessRoot,
+      );
+      try {
+        if (await commitCloseRow({ scope, session, sessionPath: input.sessionPath, expectedRevision: rowRevisionOf(row), what })) {
+          composed.push(planId);
+        }
+      } catch (error) {
+        throw discloseFileClosePrefix(error, composed, input.workflowId);
+      }
+      fileCloseGapForTest?.("completion");
+      snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+    }
+    try {
+      snapshot = await closeWorkflow(input.workflowId, workflowDir, {
+        endedAt: input.endedAt,
+        ...(input.sessionPath === undefined ? {} : { sessionPath: input.sessionPath }),
+      });
+    } catch (error) {
+      throw discloseFileClosePrefix(error, composed, input.workflowId);
+    }
+    fileCloseGapForTest?.("cleanup");
+  }
+  // §R10 the root cleanup is the residue a crash between the boundaries leaves:
+  // idempotent, and the ONLY step a committed terminal snapshot still owes.
+  const hadEntry = findRegisteredWorkflow(harnessRoot, input.workflowId) !== undefined;
+  if (hadEntry) await unregisterWorkflow(statusPath, input.workflowId);
+  return {
+    snapshot,
+    composed,
+    unregistered: hadEntry,
+    outcome: alreadyTerminal ? "already-terminal" : "completed",
+  };
+}
+
+/** The row revision a composed close passes as transport freshness (never intent). */
+function rowRevisionOf(row: PlanRow): number {
+  const coordination = rowCoordinationOf(row);
+  return coordination?.revision ?? 0;
 }
 
 /* ------------------------------------------------------------------------ *

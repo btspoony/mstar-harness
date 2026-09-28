@@ -1349,7 +1349,13 @@ export type CloseWorkflowOptions = {
   sessionPath?: string;
 };
 
-function isCloseTimestamp(value: string): boolean {
+/**
+ * The timestamp form a lifecycle close accepts (`YYYY-MM-DD` or RFC3339 with a
+ * time), exported for the composed file-authority close, which validates the
+ * requested terminal timestamp BEFORE it composes anything (a malformed
+ * `endedAt` must refuse before a row is completed, not after).
+ */
+export function isCloseTimestamp(value: string): boolean {
   if (typeof value !== "string") return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(value);
   if (!match) return false;
@@ -1469,21 +1475,26 @@ export type RecordWorkflowDeliveryResult = {
  * - a rewrite of the recorded PR identity (§4d records it once at submission:
  *   an identical re-record is idempotent, a different pair is refused);
  * - an empty patch or a malformed member: nothing is silently dropped;
- * - compound / PR identity / verified-merge record while any owned plan row
- *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` — contract §3: the delivery
- *   tail runs after every row is Done; write-time only, see below);
  * - a `completion` fulfilment that would CHANGE once an owned plan row is
  *   `Done` (`coordination.invalid-transition` — contract §1 the mirror rule:
  *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
  *   and the same stable code refuses the same state on the DB route's
  *   `applyDeliveryEvidence`).
  *
- * Grandfathering: the row-Done gate is write-time only. Snapshots that
- * already carry delivery evidence while rows are not `Done` are never
- * retro-invalidated; idempotent re-records return without consulting row
- * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged. The same
- * grandfathering covers the completion freeze: an identical re-record is the
- * idempotent return above, never a refusal.
+ * §R5/A19 the delivery tail (compound | PR identity | verified-merge record) is
+ * EXTERNAL evidence that arrives when it arrives: it is captured whenever it is
+ * observed, and the row's `Done` projection is never its ordering
+ * prerequisite — the close composes that projection from the same evidence
+ * (`closeFileWorkflow`), exactly as the DB close composes it there. The
+ * semantic boundary is the CLOSE, which still requires the declared kind's
+ * complete evidence against rows it has completed (`consultDeliveryEvidence`),
+ * so the ordering is bookkeeping rather than a caller ceremony. The DB route
+ * enforces the same rule in `applyDeliveryEvidence`.
+ *
+ * Grandfathering: the completion freeze is a write-time rule only. A snapshot
+ * that already carries delivery evidence while rows are not `Done` is never
+ * retro-invalidated; an idempotent re-record returns without consulting row
+ * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1575,40 +1586,26 @@ export async function recordWorkflowDelivery(
     if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
       return { snapshot, written: false };
     }
-    // Write-time ordering gate (contract §3): compound / PR / merge are
-    // recorded after every owned plan row is Done. Grandfathering: this check
-    // runs only when the call would mutate `delivery`; snapshots that already
-    // carry evidence while rows are not Done are never retro-invalidated on
-    // read or close — idempotent re-records above return without consulting
-    // row state, and `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
-    const tailMembers = members.filter((member) => member === "compound" || member === "pr" || member === "merge");
-    if (tailMembers.length > 0) {
-      const notDone = snapshot.plans.filter((row) => row.status !== "Done");
-      if (notDone.length > 0) {
-        const rowDetail = notDone.map((row) => `${row.id} (${JSON.stringify(row.status)})`).join(", ");
-        const detail = violation(
-          "high",
-          "PHASE6_PLAN_ROW_NOT_DONE",
-          `owned plan row(s) ${rowDetail} are not Done - every plan row must be Done before the delivery tail (${tailMembers.join(", ")}) is recorded (mstar-artifacts/references/plan-workflow-lifecycle-contract.md section 3: row Done -> compound disposition -> PR identity -> verified-merge record)`,
-          `Bring every owned plan row to Done, then record delivery evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>'`,
-        );
-        throw new Error(
-          `refusing to record delivery evidence: ${detail.code}: ${detail.message}${detail.fix !== undefined ? ` (fix: ${detail.fix})` : ""}`,
-        );
-      }
-    }
-    // Post-Done immutability of the completion fulfilment (contract §1: for a
-    // `verification/report-only` kind "the fulfilment is recorded before the
-    // row is marked Done"). The tail gate above orders compound / PR / merge
-    // AFTER every owned row is Done; `completion` is its mirror — the ONE
-    // member recorded BEFORE — so once an owned row is Done the recorded
-    // fulfilment is FROZEN: it is the basis that row's `Done` was authorized
-    // against (§4d freezes the PR identity the same way), and re-pointing it
-    // afterwards would leave the `Done` fact standing on evidence it was never
-    // accepted with. An identical re-record never reaches this point (the
-    // idempotent return above), so a retried recording stays a no-op; the
-    // refusal carries the same stable code the DB route's `applyDeliveryEvidence`
-    // uses for the same state (`coordination.invalid-transition`).
+    // §R5/A19 the delivery tail (compound / PR identity / verified-merge
+    // record) is captured whenever it is observed: the row's `Done` projection
+    // is not its ordering prerequisite, because the close composes that
+    // projection from the same evidence. There is deliberately NO write-time
+    // row-Done gate here — the semantic boundary is the close, which consults
+    // the declared kind's complete evidence (`consultDeliveryEvidence`) against
+    // the rows it has completed. The DB route's `applyDeliveryEvidence` states
+    // the same rule.
+    //
+    // The mirror rule for the ONE member recorded BEFORE the row is Done
+    // (contract §1: a report-only row "completes from an accepted handoff plus a
+    // recorded fulfilment of that policy — the fulfilment is recorded before the
+    // row is marked `Done`"). Once an owned row is Done the recorded fulfilment
+    // is FROZEN: it is the basis that row's `Done` was authorized against, so
+    // re-pointing it afterwards would leave the `Done` fact standing on evidence
+    // it was never accepted with (§4d freezes the PR identity the same way). An
+    // identical re-record never reaches this point (the idempotent return
+    // above), so a retried recording stays a no-op; the refusal carries the same
+    // stable code the DB route's `applyDeliveryEvidence` uses for the same state
+    // (`coordination.invalid-transition`).
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
         "coordination.invalid-transition",
