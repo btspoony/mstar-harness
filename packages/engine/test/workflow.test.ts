@@ -126,7 +126,7 @@ function validSnapshot(overrides: Record<string, unknown> = {}): Record<string, 
     plans: [legacyRow()],
     execution_policy: { plan_parallelism: "serial", worktree_mode: "feature-worktree", push_policy: "manual" },
     branch: { base: "main", integration: "spec_integration_branch", target: "main" },
-    integration_worktree_path: "/Users/bibi/workspace/ai/mstar-harness",
+    integration_worktree_path: "/tmp/mstar-fixture/harness",
     legacy_metadata: { program_roadmap: "roadmap.md" },
     compass_ref: "iterations/00000819-workflow-engine-core/delivery-compass.md",
     ...overrides,
@@ -167,7 +167,7 @@ describe("validateWorkflowSnapshot — schema basics", () => {
           execution_lease: {
             holder: "P1T2Implement",
             claimed_at: "2026-08-19T00:00:00Z",
-            worktree_path: "/Users/bibi/workspace/ai/mstar-harness/.worktrees/00000819-workflow-engine-core",
+            worktree_path: "/tmp/mstar-fixture/harness/.worktrees/00000819-workflow-engine-core",
             working_branch: "feature/00000819-workflow-engine-core",
           },
         }),
@@ -312,7 +312,7 @@ describe("validateWorkflowSnapshot — integration worktree path (canonical memb
 
   test("legacy-only control_worktree_path is a failing gate carrying the medium migration diagnostic", () => {
     const { integration_worktree_path: _canonical, ...legacyOnly } = validSnapshot();
-    const legacy = { ...legacyOnly, control_worktree_path: "/Users/bibi/workspace/ai/mstar-harness" };
+    const legacy = { ...legacyOnly, control_worktree_path: "/tmp/mstar-fixture/harness" };
     const result = validateWorkflowSnapshot(legacy);
     expect(result.ok).toBe(false);
     expect(violationsOf(result)).toEqual(["workflow.snapshot.legacy-control-worktree-path"]);
@@ -329,7 +329,7 @@ describe("validateWorkflowSnapshot — integration worktree path (canonical memb
   });
 
   test("both fields present is refused as conflicting — even when the values are equal", () => {
-    const both = validSnapshot({ control_worktree_path: "/Users/bibi/workspace/ai/mstar-harness" });
+    const both = validSnapshot({ control_worktree_path: "/tmp/mstar-fixture/harness" });
     const result = validateWorkflowSnapshot(both);
     expect(result.ok).toBe(false);
     expect(violationsOf(result)).toContain("workflow.snapshot.conflicting-worktree-paths");
@@ -357,13 +357,13 @@ describe("readWorkflowSnapshot — canonical reader with the v1 read alias (no m
     mkdirSync(dir, { recursive: true });
     const legacy = validSnapshot();
     delete (legacy as Record<string, unknown>).integration_worktree_path;
-    (legacy as Record<string, unknown>).control_worktree_path = "/Users/bibi/workspace/ai/mstar-harness";
+    (legacy as Record<string, unknown>).control_worktree_path = "/tmp/mstar-fixture/harness";
     const raw = `${JSON.stringify(legacy, null, 2)}\n`;
     const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
     writeFileSync(snapshotPath, raw, "utf8");
 
     const read = readWorkflowSnapshot(dir);
-    expect(read.snapshot.integration_worktree_path).toBe("/Users/bibi/workspace/ai/mstar-harness");
+    expect(read.snapshot.integration_worktree_path).toBe("/tmp/mstar-fixture/harness");
     expect("control_worktree_path" in read.snapshot).toBe(false);
     expect(read.diagnostics).toHaveLength(1);
     expect(read.diagnostics[0]!.code).toBe("workflow.snapshot.legacy-control-worktree-path");
@@ -465,7 +465,7 @@ describe("validateWorkflowSnapshot — terminal invariants (no dangling leases, 
             execution_lease: {
               holder: "P1T2Implement",
               claimed_at: "2026-08-19T00:00:00Z",
-              worktree_path: "/Users/bibi/workspace/ai/mstar-harness/.worktrees/00000819-workflow-engine-core",
+              worktree_path: "/tmp/mstar-fixture/harness/.worktrees/00000819-workflow-engine-core",
               working_branch: "feature/00000819-workflow-engine-core",
             },
           }),
