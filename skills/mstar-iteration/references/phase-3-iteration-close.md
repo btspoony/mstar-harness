@@ -47,7 +47,7 @@ PM 批量触发后须：
 
 1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
 2. **盘点** `{ITERATION_DIR}/<iteration-id>/**` package（`guides/`、`specs/`；默认排除 `delivery-compass.md`）— **`mstar-compound`**「Iteration package promotion」；提升值得保留者进 `{KNOWLEDGE_DIR}/`
-3. **specs 提升**：满足 `{SPECS_DIR}` 准入条件的已审 package specs（锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威——`iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）由 PM 在 **integration worktree** 中写入全局 `{SPECS_DIR}/`（compound 结构化重写，非整文件复制）；该写入随 §3.5 的 close commit 进入 integration 分支。提升同时完成既有登记面：`{SPECS_DIR}/README.md` 索引行（若存在）、package `README.md` 的 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用指向提升后的权威路径，以及 catalog 登记（`mstar catalog register` / `mstar catalog link`——文档归属与 project/iteration 关系，contract §1/§4）
+3. **specs 提升**：满足 `{SPECS_DIR}` 准入条件的已审 package specs（锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威——`iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）由 PM 以 compound 结构化重写（非整文件复制）写入**主 checkout 的 `{SPECS_DIR}/`**（未提交状态，与 `{KNOWLEDGE_DIR}` 提升同模式）；§3.5 的 tracked 子树配方把它带入 integration worktree 的 close commit、进入 integration 分支。提升同时完成既有登记面：package `README.md` 的 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用指向提升后的权威路径，以及 catalog 登记（`mstar catalog register` / `mstar catalog link`——文档归属与 project/iteration 关系，contract §1/§4；登记时主 checkout 上已存在该文件，catalog 路径可解析）
 4. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
 5. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
 6. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
