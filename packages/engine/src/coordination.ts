@@ -157,6 +157,7 @@ import {
   readWorkflowSnapshot,
   stableJson,
   validateWorkflowSnapshot,
+  PREPARE_PHASE,
   WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
@@ -5534,6 +5535,14 @@ export type PrepareWorkflowView = Readonly<{
   allowed: boolean;
   /** One `<reason>: <message>` line per admission blocker; empty when allowed. */
   blockers: readonly string[];
+  /**
+   * Recovery-first derivations this call resolved from pristine Prepare facts
+   * (R3/I-000243): `"phase"` when the lifecycle label was absent, and
+   * `"compass_ref"` when the stored pointer was absolute-but-in-root. A read
+   * view only reports them; the next ordinary amendment adopts them in its
+   * own locked write.
+   */
+  derived?: readonly string[];
 }>;
 
 /** Success shape of the verb: the existing envelope with a workflow view. */
@@ -5553,8 +5562,7 @@ type PrepareAmendmentReason =
 /** One `coordination.prepare-amendment.<reason>` code (`coordination-write.ts`). */
 type PrepareAmendmentCode = `coordination.prepare-amendment.${PrepareAmendmentReason}`;
 
-/** Prepare stage the amendment requires; every other phase refuses. */
-const PREPARE_PHASE = "phase-1-prepare";
+/** Prepare stage label — SSOT is the exported `PREPARE_PHASE` in workflow.ts. */
 
 /**
  * Patch keys the amendment accepts. Any other key is an arbitrary-field
@@ -5670,6 +5678,14 @@ type PrepareCompass = {
   version: string;
   /** `plans:` frontmatter ids, validated as declared (non-empty, unique). */
   planIds: readonly string[];
+  /**
+   * The harness-relative form of `snapshot.compass_ref`, present only when
+   * the stored spelling was absolute-but-in-root: the identical reviewed
+   * document under the stored contract form. The next ordinary amendment
+   * adopts it in its own locked write (I-000243 disposition (b)-adjacent
+   * derivation — the reader never writes).
+   */
+  canonicalCompassRef?: string;
   specIntegrationBranch?: string;
   integrationWorktreePath?: string;
 };
@@ -5715,7 +5731,7 @@ function prepareCompassDeclaration(
  */
 function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): PrepareCompass {
   const ref = snapshot.compass_ref;
-  if (!isNonEmptyString(ref) || isAbsolute(ref)) {
+  if (!isNonEmptyString(ref)) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
       `workflow ${snapshot.id} declares no usable compass_ref \u2014 the amendment requires the reviewed iteration compass`,
@@ -5723,13 +5739,34 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     );
   }
   const root = canonicalizeNearestExisting(harnessRoot);
-  const path = canonicalTarget(join(harnessRoot, ref));
-  if (!isWithin(root, path)) {
-    throw prepareAmendmentRefusal(
-      "compass-mismatch",
-      `workflow ${snapshot.id} compass_ref ${JSON.stringify(ref)} resolves outside the harness root ${root}`,
-      { workflow_id: snapshot.id, path, expected: ref },
-    );
+  // Recovery-first pointer derivation (I-000243): an absolute spelling of a
+  // document inside this harness root names the identical reviewed compass as
+  // its relative form. Resolve it, compute the stored contract form, and let
+  // the next ordinary amendment adopt it — the reader itself never writes.
+  // A pointer outside the root (or one that escapes it relatively) is a real
+  // mismatch and refuses below.
+  let canonicalCompassRef: string | undefined;
+  let path: string;
+  if (isAbsolute(ref)) {
+    const resolved = canonicalizeNearestExisting(ref);
+    if (!isWithin(root, resolved)) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${snapshot.id} compass_ref resolves outside the harness root ${root}`,
+        { workflow_id: snapshot.id, path: resolved, expected: "a compass document inside the harness root" },
+      );
+    }
+    path = resolved;
+    canonicalCompassRef = relative(root, resolved).split(sep).join("/");
+  } else {
+    path = canonicalTarget(join(harnessRoot, ref));
+    if (!isWithin(root, path)) {
+      throw prepareAmendmentRefusal(
+        "compass-mismatch",
+        `workflow ${snapshot.id} compass_ref ${JSON.stringify(ref)} resolves outside the harness root ${root}`,
+        { workflow_id: snapshot.id, path, expected: ref },
+      );
+    }
   }
   let bytes: Buffer;
   try {
@@ -5803,6 +5840,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     path,
     version: `sha256:${sha256Bytes(bytes)}`,
     planIds,
+    ...(canonicalCompassRef !== undefined ? { canonicalCompassRef } : {}),
     ...(specIntegrationBranch !== undefined ? { specIntegrationBranch } : {}),
     ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
   };
@@ -5810,7 +5848,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
 
 /** Admitted, or the reason an amendment must not run. */
 type PrepareAdmission =
-  | { ok: true }
+  | { ok: true; /** `true` when the Prepare phase was ABSENT and is derivable (R3) — the caller's locked write adopts it. */ derivesPhase?: boolean }
   | { ok: false; reason: PrepareAmendmentReason; message: string; details: Record<string, unknown> };
 
 /**
@@ -5823,7 +5861,12 @@ type PrepareAdmission =
  * carries evidence refuses here; resetting it to Todo would erase nothing and
  * is exactly what this verb must not do.
  */
-function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: WorkflowSnapshot): PrepareAdmission {
+function prepareAdmission(
+  harnessRoot: string,
+  workflowId: string,
+  snapshot: WorkflowSnapshot,
+  opts: { derivePhase?: boolean } = {},
+): PrepareAdmission {
   const entry = assertRootRegisterEntry(harnessRoot, workflowId);
   if (isNonEmptyString(entry.status) && entry.status !== "running") {
     return {
@@ -5839,14 +5882,6 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
       reason: "not-prepare",
       message: `workflow ${workflowId} is ${snapshot.status} \u2014 the amendment is available only in Prepare`,
       details: { workflow_id: workflowId, status: snapshot.status },
-    };
-  }
-  if (snapshot.phase !== PREPARE_PHASE) {
-    return {
-      ok: false,
-      reason: "not-prepare",
-      message: `workflow ${workflowId} is in ${snapshot.phase ?? "no declared phase"}, not ${PREPARE_PHASE}`,
-      details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: snapshot.phase ?? null },
     };
   }
   if (snapshot.integration_merge_lease !== undefined) {
@@ -5892,6 +5927,33 @@ function prepareAdmission(harnessRoot: string, workflowId: string, snapshot: Wor
         details: { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
       };
     }
+  }
+  // Recovery-first phase derivation (#293 / R3): the lifecycle is running,
+  // every row is pristine (checked above) and no execution ownership exists —
+  // but the registration producer declared no phase at all. ONLY an ABSENT
+  // phase is derivable, and ONLY for the callers that opt in
+  // (`show-prepare` reports it read-only; `amend-prepare` adopts it in its
+  // own locked write). The coordinator recovery keeps the strict gate: its
+  // write does not adopt the label, so it must not newly admit what it will
+  // not repair. A present phase is a lifecycle fact — the exact Prepare label
+  // admits unchanged, and any other value refuses without ever being
+  // rewritten.
+  if (snapshot.phase === undefined) {
+    if (opts.derivePhase === true) return { ok: true, derivesPhase: true };
+    return {
+      ok: false,
+      reason: "not-prepare",
+      message: `workflow ${workflowId} is in no declared phase, not ${PREPARE_PHASE}`,
+      details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: null },
+    };
+  }
+  if (snapshot.phase !== PREPARE_PHASE) {
+    return {
+      ok: false,
+      reason: "not-prepare",
+      message: `workflow ${workflowId} is in ${snapshot.phase}, not ${PREPARE_PHASE}`,
+      details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: snapshot.phase },
+    };
   }
   return { ok: true };
 }
@@ -6677,7 +6739,11 @@ export async function showPrepareWorkflow(
   const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
-  const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
+  const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot, { derivePhase: true });
+  const derived = [
+    admission.ok && admission.derivesPhase ? "phase" : null,
+    compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
+  ].filter((entry): entry is string => entry !== null);
   return {
     ok: true,
     operation: "show-prepare",
@@ -6690,6 +6756,7 @@ export async function showPrepareWorkflow(
       planIds: snapshot.plans.map((row) => rowPlanIds(row)[0] ?? ""),
       allowed: admission.ok,
       blockers: admission.ok ? [] : [`${admission.reason}: ${admission.message}`],
+      derived: derived.length > 0 ? derived : undefined,
     },
   };
 }
@@ -6754,10 +6821,15 @@ export async function amendPrepareWorkflow(
         { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
       );
     }
-    const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
+    const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot, { derivePhase: true });
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
     const proposal = readPreparePatch(input.patch, { harnessRoot: scope.harnessRoot, snapshot, compass, main });
-    // Old rows and unknown fields are taken from disk by value — only the new
+    // Recovery-first adoption (R3 / I-000243): the admission may have derived
+    // the absent Prepare phase, and the reviewed compass may carry an
+    // absolute-but-in-root pointer. This locked write is the ordinary intent
+    // that adopts both — together with the requested patch and `updated_at` —
+    // so one normal call repairs and applies. Old rows and unknown fields are
+    // taken from disk by value — only the new
     // rows, the corrected row pointers, the requested whitelist projections and
     // `updated_at` are new. The policy copy carries the stored object's own
     // keys, so keys this verb may not edit survive it.
@@ -6773,9 +6845,15 @@ export async function amendPrepareWorkflow(
       }),
       ...proposal.rows,
     ];
+    const derivedFields = [
+      snapshot.phase === undefined ? "phase" : null,
+      compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
+    ].filter((entry): entry is string => entry !== null);
     const next: WorkflowSnapshot = {
       ...snapshot,
       updated_at: nowIso(),
+      ...(snapshot.phase === undefined ? { phase: PREPARE_PHASE } : {}),
+      ...(compass.canonicalCompassRef !== undefined ? { compass_ref: compass.canonicalCompassRef } : {}),
       plans,
       ...(proposal.integrationWorktreePath !== undefined
         ? { integration_worktree_path: proposal.integrationWorktreePath }
@@ -6809,6 +6887,7 @@ export async function amendPrepareWorkflow(
       planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
       compassVersion: compass.version,
       snapshotVersion: written.version,
+      derived: derivedFields,
     };
   });
   return {
@@ -6827,6 +6906,7 @@ export async function amendPrepareWorkflow(
       planIds: committed.planIds,
       allowed: true,
       blockers: [],
+      derived: committed.derived !== undefined && committed.derived.length > 0 ? committed.derived : undefined,
     },
   };
 }
