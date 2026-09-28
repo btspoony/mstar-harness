@@ -317,6 +317,40 @@ export type PlanHandoff = {
   completed_at?: string;
 };
 
+/**
+ * The C1 header block one sealed Assignment declares, as the stored semantic
+ * projection (`AssignmentIntent`). The order is the parser's own field order
+ * (`parseAssignmentFile`), so a projection and the document it describes can
+ * never enumerate different semantics.
+ */
+export const ASSIGNMENT_INTENT_FIELDS = [
+  "execution_scope",
+  "execute_as",
+  "delegation",
+  "control_harness_root",
+  "workflow_id",
+  "plan_id",
+  "plan_path",
+  "worktree_path",
+  "working_branch",
+  "sdd_dir",
+  "qa_gate",
+  "findings_cleanup",
+  "prepare_gate",
+] as const;
+
+/**
+ * §4.2 the SEMANTIC projection of one sealed Assignment: the values
+ * `parseAssignmentFile` reads out of the document's header block, in the stored
+ * snake_case shape. A seal records it so a later re-read compares the reviewed
+ * input's MEANING — a formatting, prose, ordering or duplicate-marker change
+ * leaves the projection untouched — while a scope or approval change is
+ * disclosed with the exact header(s) that moved (A29). The document's bytes are
+ * never the projection: a whole-document hash cannot tell a reflowed paragraph
+ * from a changed `QA gate`.
+ */
+export type AssignmentIntent = Readonly<Record<(typeof ASSIGNMENT_INTENT_FIELDS)[number], string>>;
+
 /** Coordinator-recorded preparation of one plan (spec §D `prepare`). */
 export type PreparedCoordination = {
   assignment_path: string;
@@ -324,6 +358,13 @@ export type PreparedCoordination = {
   plan_sha256: string;
   qa_gate: string;
   findings_cleanup: string;
+  /**
+   * The sealed Assignment's semantic projection. Optional on the stored block
+   * because the projection is written by the route that seals the row: the file
+   * route's `prepare` always records it, and a seal that does not (the DB
+   * transport's own receipt) is compared by the whole-byte rule instead.
+   */
+  assignment_intent?: AssignmentIntent;
   prepared_by: string;
   prepared_at: string;
 };
@@ -660,6 +701,7 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     "plan_sha256",
     "qa_gate",
     "findings_cleanup",
+    "assignment_intent",
     "prepared_by",
     "prepared_at",
   ];
@@ -669,8 +711,30 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
+    // The semantic projection is optional (see `PreparedCoordination`); every
+    // other field of the seal is required at its stored shape.
+    if (key === "assignment_intent") continue;
     if (!isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.assignment_intent !== undefined) {
+    const intent = value.assignment_intent;
+    if (!isPlainObject(intent)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
+    } else {
+      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
+      const unknown = Object.keys(intent).filter((key) => !(ASSIGNMENT_INTENT_FIELDS as readonly string[]).includes(key));
+      if (missing.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`),
+        );
+      }
+      if (unknown.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`),
+        );
+      }
     }
   }
   if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {

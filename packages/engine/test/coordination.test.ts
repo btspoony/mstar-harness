@@ -9,12 +9,18 @@
  * - Spec §B — `resolvePlanScope`: both address forms (pinned Assignment path,
  *   workflow/plan pair read through the row's `prepared` block) resolve to the
  *   same `ResolvedPlanScope`.
- * - Spec §C — prepared Assignment is hash-pinned (`assignment_sha256`); a
- *   mutated Assignment invalidates the row (`coordination.assignment-stale`).
- * - Spec §C — row `coordination.revision` is the snapshot CAS; the project
- *   register is compare-and-swapped on its **byte version** under the
- *   root→snapshot→register lock order, so a cross-process writer can never
- *   produce a lost update.
+ * - Spec §C — prepared Assignment is pinned by its SEMANTIC projection plus its
+ *   byte witness (`assignment_sha256`), so an unrelated formatting change leaves
+ *   the row fresh while a scope/approval change invalidates it
+ *   (`coordination.assignment-stale`, A29).
+ * - Spec §B/§D — row `coordination.revision` is transport freshness for a
+ *   semantic intent: a drifted token is provenance (`coordination.token-drifted`)
+ *   and the operation's own record decides relevance, so an already-satisfied
+ *   effect is current success without byte churn and another writer's record is
+ *   disclosed instead of overwritten (R6/R7, A10–A13).
+ * - Spec §C — the project register is compare-and-swapped on its **byte
+ *   version** under the root→snapshot→register lock order, so a cross-process
+ *   writer can never produce a lost update there.
  * - Spec §D — residual writes are scoped to `entries[<plan-id>]`: the engine
  *   generates provenance (`source_plan` / `lifecycle_id` / `registered_at`)
  *   and never touches a sibling plan's bucket.
@@ -1077,7 +1083,7 @@ describe("scope-and-revisions", () => {
     expect(await errorCodeOf(() => resolvePlanScope({ assignmentPath: unscoped }, fixture.root))).toBe("coordination.assignment-invalid");
   });
 
-  test("prepare pins the Assignment hash; a mutated Assignment invalidates the row", async () => {
+  test("prepare pins the Assignment with its semantic projection, not a byte gate", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
@@ -1089,25 +1095,27 @@ describe("scope-and-revisions", () => {
     expect(view.prepared?.assignment_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(view.revision).toBe(2); // prepare bumped it to 1, the fresh bind to 2
     expect(view.scope?.planPath).toBe(fixture.planPath);
-
-    // The Assignment is the row's pin: editing it invalidates every later call.
-    writeText(
-      fixture.assignmentPath,
-      `${readFileSync(fixture.assignmentPath, "utf8")}\nRewritten after prepare.\n`,
-    );
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [] }},
-    }),
-      ),
-    ).toBe("coordination.assignment-stale");
+    // The seal records the reviewed Assignment's MEANING as well as its bytes:
+    // the projection is what every later re-authentication compares (A29 — the
+    // `sealed input` case below covers the formatting-vs-semantic boundary).
+    expect(view.prepared?.assignment_intent).toEqual({
+      execution_scope: "plan",
+      execute_as: "project-manager",
+      delegation: "allowed (plan-local subagents only)",
+      control_harness_root: fixture.harness,
+      workflow_id: WORKFLOW_ID,
+      plan_id: PLAN_ID,
+      plan_path: fixture.planPath,
+      worktree_path: fixture.worktreePath,
+      working_branch: "feature/plan-a",
+      sdd_dir: fixture.sddDir,
+      qa_gate: "mandatory",
+      findings_cleanup: "zero-residual",
+      prepare_gate: "go",
+    });
   });
 
-  test("progress is revision-guarded, evidence-scoped and transition-checked", async () => {
+  test("progress is admission-checked: evidence-scoped and transition-guarded", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
@@ -1117,18 +1125,6 @@ describe("scope-and-revisions", () => {
     const outside = join(fixture.root, "outside.txt");
     writeText(outside, "not mine\n");
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-
-    // Stale revision: the row moved to revision 1 during prepare.
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: 0,
-      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [evidence] }},
-    }),
-      ),
-    ).toBe("coordination.version-conflict");
 
     // Evidence outside the plan's own plan/SDD area is refused.
     expect(
@@ -2213,22 +2209,7 @@ describe("legacy-delivery-source-repair", () => {
     expect(readFileSync(prConflict.snapshotPath).equals(beforeConflict)).toBe(true);
   }, 30000);
 
-  test("stale revision, dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
-    const fixture = await wrongSourceAcceptedFixture(false);
-    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    const before = readFileSync(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: fixture.coordinatorSession,
-          planId: PLAN_ID,
-          expectedRevision: view.revision - 1,
-          operation: { kind: "repair-delivery-source", handoffId: view.row?.coordination?.handoff?.id ?? "missing" },
-        }),
-      ),
-    ).toBe("coordination.version-conflict");
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
-
+  test("dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
     const dirty = await wrongSourceAcceptedFixture(false);
     writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
     const beforeDirty = readFileSync(dirty.snapshotPath);
@@ -6039,4 +6020,314 @@ describe("intent resolution — trusted root, associated target, authority chang
       "store.stale-epoch",
     );
   }, 30000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * File-route frames — semantic freshness, locked reconciliation and the sealed
+ * input (S2/E05). Design authority: §4.2 (semantic freshness and automatic
+ * retries: transport revision vs entity generation vs the fields an effect
+ * depends on vs already performed effects), §4.3 (projections: authoritative
+ * commit success with a non-fatal disclosure), R6/R7/R12 and scenarios
+ * A10–A13/A25/A29.
+ *
+ * Every case runs against a real temporary harness and the real engine: the
+ * "unrelated drift" is a real claim of the same row by another step, the
+ * "formatting change" is a real rewrite of the pinned Assignment, and the
+ * "unavailable prerequisite" is a real missing issue authority, not a stub.
+ * ------------------------------------------------------------------------ */
+describe("file-route frames — semantic replay, unrelated revision, sealed input (S2/E05)", () => {
+  /** One plan prepared, bound and reported InProgress: the state each case reads its first token from. */
+  async function reportedFixture(): Promise<{ fixture: Fixture; evidence: string; revision: number }> {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const evidence = join(fixture.sddDir, "evidence.txt");
+    writeText(evidence, "proof\n");
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const report = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [evidence] } },
+    });
+    if (report.outcome !== "progressed" || report.view === undefined) {
+      throw new Error(`the fixture report did not land: ${String(report.outcome)}`);
+    }
+    return { fixture, evidence, revision: report.view.revision };
+  }
+
+  test("semantic replay: an already-satisfied report is current success with no byte churn (A09/A12)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const evidence = join(fixture.sddDir, "evidence.txt");
+    writeText(evidence, "proof\n");
+    const report = {
+      kind: "progress" as const,
+      progress: { status: "InProgress" as const, summary: "start", evidence_paths: [evidence] },
+    };
+    const read = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+
+    const applied = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: read.revision,
+      operation: report,
+    });
+    expect(applied.outcome).toBe("progressed");
+    expect(applied.recovery?.outcome).toBe("applied");
+    expect(applied.recovery?.commitState).toBe("committed");
+    expect(applied.recovery?.target).toEqual({ workflowId: WORKFLOW_ID, planId: PLAN_ID });
+    const settled = readFileSync(fixture.snapshotPath);
+    const settledRevision = applied.view?.revision;
+
+    // The SAME report presented with the token read BEFORE its own commit: the
+    // record is already held, so this call is current success — no revision, no
+    // timestamp, no byte — and the drift is provenance, never a refusal (A12).
+    const retried = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: read.revision,
+      operation: report,
+    });
+    expect(retried.outcome).toBe("already-satisfied");
+    expect(retried.recovery?.outcome).toBe("already-satisfied");
+    expect(retried.recovery?.commitState).toBe("none");
+    expect(retried.recovery?.applied).toEqual([]);
+    expect(retried.recovery?.resolvedFrom).toEqual([{ path: "coordination.progress", source: "stored plan row" }]);
+    expect(retried.recovery?.warnings[0]?.code).toBe("coordination.token-drifted");
+    expect(retried.view?.revision).toBe(settledRevision);
+    expect(readFileSync(fixture.snapshotPath).equals(settled)).toBe(true);
+
+    // A token re-read AFTER the commit: no drift at all, the same satisfied answer.
+    const settledRead = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const again = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: settledRead.revision,
+      operation: report,
+    });
+    expect(again.outcome).toBe("already-satisfied");
+    expect(again.recovery?.warnings).toEqual([]);
+    expect(readFileSync(fixture.snapshotPath).equals(settled)).toBe(true);
+
+    // The precursor file's CONTENT is not part of the recorded effect: rewriting
+    // the report's own evidence does not turn a satisfied report into a conflict
+    // (A12 — success from current state, not from historical receipt freshness).
+    writeText(evidence, "proof, rewritten after the report\n");
+    const afterRewrite = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: settledRead.revision,
+      operation: report,
+    });
+    expect(afterRewrite.outcome).toBe("already-satisfied");
+    expect(readFileSync(fixture.snapshotPath).equals(settled)).toBe(true);
+  });
+
+  test("unrelated revision: a drifted token is recomputed and the sibling's record is retained (A10)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    // The token a caller reads right after `prepare`, BEFORE the plan session
+    // claims the row: that revision then belongs to the seal alone.
+    const sealed = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const claimed = await bindPlan(fixture, PLAN_ID);
+    expect(claimed.outcome).toBe("claimed");
+    const claimHolder = leaseHolder(planRowOf(fixture, PLAN_ID));
+    const claimSession = claimed.view?.row.coordination?.session?.session_id;
+    expect(claimSession).toBeDefined();
+    expect((await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root)).revision).toBe(sealed.revision + 1);
+
+    const evidence = join(fixture.sddDir, "evidence.txt");
+    writeText(evidence, "proof\n");
+
+    // The drift touched the session binding and the lease — never this report's
+    // own record — so the intent is recomputed against the row this call reads,
+    // the claim the caller never saw is retained, and the drift is reported as
+    // provenance instead of blocking a legitimate action (A10).
+    const progressed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: sealed.revision,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [evidence] } },
+    });
+    expect(progressed.outcome).toBe("progressed");
+    expect(progressed.recovery?.outcome).toBe("applied");
+    expect(progressed.recovery?.commitState).toBe("committed");
+    expect(progressed.recovery?.warnings[0]?.code).toBe("coordination.token-drifted");
+    expect(progressed.recovery?.warnings[0]?.path).toBe("expectedRevision");
+    expect(progressed.recovery?.warnings[0]?.message).toContain(String(sealed.revision));
+
+    const after = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    expect(after.revision).toBe(sealed.revision + 2); // the claim, then exactly one advance for this effect
+    expect(after.row.status).toBe("InProgress");
+    expect(after.row.coordination?.progress?.summary).toBe("start");
+    expect(after.row.coordination?.session?.session_id).toBe(claimSession);
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(claimHolder);
+  });
+
+  test("semantic replay: a superseded report is disclosed with both values, never overwritten (A11/A13)", async () => {
+    const { fixture, evidence, revision } = await reportedFixture();
+    const before = readFileSync(fixture.snapshotPath);
+
+    // A token read BEFORE the recorded report, asking for a DIFFERENT report:
+    // another writer's report IS the record this operation writes, so it is
+    // refused with the exact current and requested values and the one decision
+    // left — the recorded report is never overwritten (A11/A13).
+    const refusal = (await failureOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: revision - 1,
+        operation: {
+          kind: "progress",
+          progress: { status: "InReview", summary: "slice A implemented", evidence_paths: [evidence] },
+        },
+      }),
+    )) as CoordinationError;
+    expect(refusal.code).toBe("coordination.version-conflict");
+    expect(refusal.details.path).toBe("coordination.progress");
+    expect(String(refusal.details.current_value)).toContain("start");
+    expect(String(refusal.details.requested_value)).toContain("slice A implemented");
+
+    const recovery = refusal.details.recovery as
+      | { outcome?: string; commitState?: string; warnings?: Array<{ code?: string }>; unresolved?: Array<Record<string, unknown>> }
+      | undefined;
+    expect(recovery?.outcome).toBe("unresolved");
+    expect(recovery?.commitState).toBe("none");
+    expect(recovery?.warnings?.[0]?.code).toBe("coordination.token-drifted");
+    const problem = recovery?.unresolved?.[0];
+    expect(problem?.component).toBe("plan-row");
+    expect(problem?.path).toBe("coordination.progress");
+    expect(problem?.code).toBe("coordination.version-conflict");
+    expect((problem?.currentFacts as unknown[] | undefined)?.map(String).join("; ")).toContain("InProgress");
+    expect(String(problem?.needed)).toContain("not overwritten");
+    expect(String(problem?.withheldEffect)).toContain("exactly as they were");
+    expect((problem?.availableWork as unknown[] | undefined)?.map(String).join("; ")).toContain("independent operations");
+
+    // Nothing moved, and the recorded report still stands.
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    const after = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    expect(after.revision).toBe(revision);
+    expect(after.row.coordination?.progress?.summary).toBe("start");
+  });
+
+  test("sealed input: an irrelevant formatting change stays fresh, a semantic change invalidates (A29)", async () => {
+    const { fixture, evidence, revision } = await reportedFixture();
+    const sealed = (await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root)).prepared;
+    expect(sealed?.assignment_intent?.qa_gate).toBe("mandatory");
+
+    // A REFORMATTED Assignment: the emphasis markers, the prose and the line
+    // layout move while every header value stays exactly as it was.
+    const original = readFileSync(fixture.assignmentPath, "utf8");
+    const reformatted = [
+      "# Assignment — plan-a slice A",
+      "",
+      "A paragraph of reviewer prose that was not here when the row was sealed.",
+      "",
+      ...original.split("\n").map((line) => line.replace(/^\*\*([^*]+)\*\*:/, "$1:")),
+      "",
+    ].join("\n");
+    writeText(fixture.assignmentPath, reformatted);
+    // The BYTES moved (the whole-document witness is stale)…
+    expect(sha256OfFile(fixture.assignmentPath)).not.toBe(sealed?.assignment_sha256);
+
+    // …and the row is still fresh, because the sealed projection did not move:
+    // an unaffected operation proceeds with no question (A29).
+    const progressed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: revision,
+      operation: { kind: "progress", progress: { status: "InReview", summary: "slice A implemented", evidence_paths: [evidence] } },
+    });
+    expect(progressed.outcome).toBe("progressed");
+
+    // A SEMANTIC change — the approval the row's dependent proof rests on — is
+    // not formatting: the row is invalidated, the changed header is named, and
+    // the seal, the plan document and every revision stay as they were.
+    const before = readFileSync(fixture.snapshotPath);
+    writeText(fixture.assignmentPath, reformatted.replace("QA gate: mandatory", "QA gate: pm-acceptance"));
+    const refusal = (await failureOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: progressed.view?.revision,
+        operation: { kind: "progress", progress: { status: "Blocked", summary: "waiting on QC", evidence_paths: [evidence] } },
+      }),
+    )) as CoordinationError;
+    expect(refusal.code).toBe("coordination.assignment-stale");
+    expect(refusal.details.changed).toEqual(["qa_gate"]);
+    expect(refusal.details.expected).toEqual(["mandatory"]);
+    expect(refusal.details.actual).toEqual(["pm-acceptance"]);
+    const recovery = refusal.details.recovery as
+      | { outcome?: string; commitState?: string; unresolved?: Array<Record<string, unknown>> }
+      | undefined;
+    expect(recovery?.outcome).toBe("unresolved");
+    expect(recovery?.commitState).toBe("none");
+    expect(recovery?.unresolved?.[0]?.component).toBe("assignment-seal");
+    expect((recovery?.unresolved?.[0]?.currentFacts as unknown[] | undefined)?.map(String).join("; ")).toContain("qa_gate");
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(recordField(recordField(planRowOf(fixture, PLAN_ID), "coordination"), "prepared")).toEqual(sealed);
+
+    // A SCOPE header the row's execution depends on is the same verdict: the
+    // corrected projection invalidates the dependent proof and the exact header
+    // that moved is named.
+    writeText(fixture.assignmentPath, reformatted.replace(`Worktree Path: ${fixture.worktreePath}`, `Worktree Path: ${join(fixture.root, "wt-elsewhere")}`));
+    const moved = (await failureOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: progressed.view?.revision,
+        operation: { kind: "progress", progress: { status: "Blocked", summary: "waiting on QC", evidence_paths: [evidence] } },
+      }),
+    )) as CoordinationError;
+    expect(moved.code).toBe("coordination.assignment-stale");
+    expect(moved.details.changed).toEqual(["worktree_path"]);
+    expect((moved.details.recovery as { unresolved?: Array<Record<string, unknown>> } | undefined)?.unresolved?.[0]?.path).toBe(
+      "worktree_path",
+    );
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+  });
+
+  test("projection warning: an unavailable prerequisite is a typed report and the row is untouched (A25)", async () => {
+    const { fixture, evidence, revision } = await reportedFixture();
+    const before = readFileSync(fixture.snapshotPath);
+
+    // The issue authority this operation genuinely needs does not exist in this
+    // workspace: the refusal keeps its own code and reports the capability, the
+    // commit boundary (nothing) and the work that remains possible — never a
+    // missing caller field and never a fabricated substitute fact.
+    const refusal = (await failureOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: revision,
+        operation: { kind: "residual-add", entries: [finding("r-capability")] as never },
+      }),
+    )) as CoordinationError;
+    expect(refusal.code).toBe("store.not-initialized");
+    expect(refusal.details.component).toBe("operation-prerequisite");
+    expect(refusal.details.current_revision).toBe(revision);
+    const recovery = refusal.details.recovery as
+      | { outcome?: string; commitState?: string; unresolved?: Array<Record<string, unknown>> }
+      | undefined;
+    expect(recovery?.outcome).toBe("unresolved");
+    expect(recovery?.commitState).toBe("none");
+    const problem = recovery?.unresolved?.[0];
+    expect(problem?.component).toBe("operation-prerequisite");
+    expect(problem?.code).toBe("store.not-initialized");
+    expect(String(problem?.withheldEffect)).toContain("prerequisite");
+    expect((problem?.availableWork as unknown[] | undefined)?.map(String).join("; ")).toContain("continue");
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    // Independent work remains possible on the very same row: the report this
+    // call carried no issue for is still reachable.
+    const progressed = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: revision,
+      operation: { kind: "progress", progress: { status: "InReview", summary: "slice A implemented", evidence_paths: [evidence] } },
+    });
+    expect(progressed.outcome).toBe("progressed");
+  });
 });

@@ -55,6 +55,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
+  ASSIGNMENT_INTENT_FIELDS,
   COORDINATION_ERROR_CODES,
   CoordinationError,
   assertExactKeys,
@@ -69,6 +70,7 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
+  type AssignmentIntent,
   type CoordinationErrorCode,
   type HandoffIntegration,
   type PlanHandoff,
@@ -79,8 +81,10 @@ import {
   type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
 import {
+  selectSemanticFields,
   unresolvedRecovery,
   type IntentContext,
+  type RecoveryDetails,
   type RecoveryProblem,
   type ResolutionSource,
   type ResolutionWarning,
@@ -299,9 +303,16 @@ export type CoordinationResult = {
   operation: string;
   session: CoordinationSession;
   session_file: string;
-  /** `claimed` / `resumed` / `prepared` / `progressed` / `residual-added` / `residual-closed`. */
+  /** `claimed` / `resumed` / `prepared` / `progressed` / `already-satisfied` / `residual-added` / `residual-closed`. */
   outcome?: string;
   view?: PlanCoordinationView;
+  /**
+   * §4.1 the recovery sidecar of this call: what it did with the intent, the
+   * row it addressed, the facts it reconciled and the commit boundary the
+   * caller can rely on. The same object shape a refusal carries under
+   * `error.details.recovery`, so one contract covers both paths.
+   */
+  recovery?: RecoveryDetails;
   /**
    * The issues a scoped issue operation captured or closed, in call order
    * (G2a). The IDs are DB-allocated, so the caller learns them here instead of
@@ -393,7 +404,13 @@ export type CoordinationRequest = {
   sessionPath: string;
   /** Required for a coordinator session; never another plan for a plan session. */
   planId?: string;
-  /** The selected row's `coordination.revision` from `show` (absent row = 0). */
+  /**
+   * The selected row's `coordination.revision` from `show` (absent row = 0).
+   * §4.2 this is transport FRESHNESS, not the intent: a token whose revision
+   * moved is reported as provenance (`recovery.warnings`) and the operation's
+   * own record, read under the lock, decides whether the intent is already
+   * satisfied, still applicable, or in conflict with another writer's work.
+   */
   expectedRevision: number;
   operation: PlanCoordinationOperation;
 };
@@ -1434,26 +1451,209 @@ type RowContext = {
 };
 
 /**
- * The single locked read-check-mutate-write path for one plan row.
+ * §4.2 the effect one file-route operation's read-only admission RECOGNISED in
+ * the row it just read: the row already holds exactly the effect this intent
+ * asks for, so current state is the success the caller asked for (R6/A09/A12).
+ * `field` and `source` are the provenance a consumer reads to see WHERE the
+ * effect was found instead of where it was written.
+ */
+type RowSatisfied = Readonly<{ field: string; source: string }>;
+
+/**
+ * One operation's read-only admission of the row this call reads under its own
+ * lock. Returning nothing proceeds with the intent; returning `RowSatisfied`
+ * answers from current state without writing; THROWING is the operation's own
+ * relevant conflict (A11) — the frame turns it into the typed cause below.
+ */
+type RowAdmission = (context: RowContext) => void | RowSatisfied | Promise<void | RowSatisfied>;
+
+type RowFrameResult = {
+  snapshot: WorkflowSnapshot;
+  row: PlanRow;
+  /** `null` when this call applied the intent; the recognised effect otherwise. */
+  satisfied: RowSatisfied | null;
+  /** `true` when the operation's own mutation committed (its effect landed now). */
+  applied: boolean;
+  /** §4.2/§4.3 non-fatal facts beside the effect (a drifted token). */
+  warnings: readonly ResolutionWarning[];
+  recovery: RecoveryDetails;
+};
+
+/**
+ * §4.1/§4.2 the sidecar of one file-route row mutation: what this call did with
+ * the intent, the row it addressed and the commit boundary the caller can rely
+ * on. The same object shape a refusal carries under `error.details.recovery`,
+ * mirroring the DB frames' `planRecovery`.
+ *
+ * `commitState` is `committed` only when THIS call landed the effect (its own
+ * commit boundary — the row write, or the composed effect a mutation lands in
+ * another authority) and `none` when it answered an effect that was already
+ * held, because that call wrote nothing: the recorded state IS the commit.
+ */
+function rowFrameRecovery(input: {
+  scope: ResolvedPlanScope;
+  kind: string;
+  satisfied: RowSatisfied | null;
+  applied: boolean;
+  warnings: readonly ResolutionWarning[];
+}): RecoveryDetails {
+  const applied = input.satisfied === null && input.applied;
+  return {
+    outcome: applied ? "applied" : "already-satisfied",
+    target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+    applied: applied ? [`${input.kind} on plan ${input.scope.planId}`] : [],
+    unresolved: [],
+    // Where the answer came from: the request itself when this call applied it,
+    // the record the operation recognised, or — when the operation's own
+    // mutation decided nothing was left to do — that same stored row.
+    resolvedFrom: applied
+      ? [{ path: input.kind, source: "intent.request" }]
+      : input.satisfied !== null
+        ? [{ path: input.satisfied.field, source: input.satisfied.source }]
+        : [{ path: input.kind, source: "stored plan row" }],
+    warnings: [...input.warnings],
+    commitState: applied ? "committed" : "none",
+  };
+}
+
+/** §4.2 (R7/A10) the provenance fact of a token whose revision moved, never a refusal. */
+function tokenDriftedWarning(input: {
+  scope: ResolvedPlanScope;
+  kind: string;
+  readRevision: number;
+  currentRevision: number;
+}): ResolutionWarning {
+  return {
+    code: "coordination.token-drifted",
+    path: "expectedRevision",
+    message:
+      `the token carries row revision ${input.readRevision} while plan ${input.scope.planId} is at revision ` +
+      `${input.currentRevision}: the revision is transport freshness, so the ${input.kind} intent was decided against ` +
+      "the row this call read instead of being refused",
+  };
+}
+
+/**
+ * Refusal codes that name an unavailable PREREQUISITE (a capability this call
+ * genuinely needs and could not read) rather than a conflict on the row's own
+ * record: the store and the Git facts behind the operation's proofs. They keep
+ * their own code and are reported as a capability fact with the commit boundary
+ * the caller can rely on and the work that remains possible (A25).
+ */
+function isPrerequisiteRefusal(code: string): boolean {
+  return code.startsWith("store.") || code === "coordination.store" || code === "coordination.not-in-git" || code === "coordination.git-unavailable";
+}
+
+/** Attach the recovery sidecar to an existing refusal without changing its code. */
+function withRowRecoveryDetails<T>(error: T, details: Record<string, unknown>): T {
+  if (error === null || typeof error !== "object") return error;
+  // The thrown value is always one of the engine's own error classes (they all
+  // carry a mutable `details` record), and this is the same access the shared
+  // `withRecoveryDetails` performs — narrowed to a named target so the write is
+  // reachable for an error that has not been given `details` yet.
+  const target = error as { details?: Record<string, unknown> };
+  target.details = { ...(target.details ?? {}), ...details };
+  return error;
+}
+
+/**
+ * §4.1/§4.2 (A11/A13/A25) the typed cause of one refused file-route row
+ * operation: the row as this call read it, the refused operation, the commit
+ * boundary the caller can rely on (nothing moved) and the work that remains
+ * possible. The refusal keeps its own code, message and field details; the
+ * sidecar is what makes the report complete (mirrors the DB frames'
+ * conflict/prerequisite causes).
+ */
+function rowFrameRefusal(
+  error: unknown,
+  input: { scope: ResolvedPlanScope; kind: string; context: RowContext; warnings: readonly ResolutionWarning[] },
+): unknown {
+  const refusalCode = errorCode(error) ?? "coordination.invalid-input";
+  const declared = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
+  const declaredPath = isPlainObject(declared) ? declared.path : undefined;
+  const prerequisite = isPrerequisiteRefusal(refusalCode);
+  const message = errorMessage(error);
+  const problem: RecoveryProblem = {
+    component: prerequisite ? "operation-prerequisite" : "plan-row",
+    path: isNonEmptyString(declaredPath) ? declaredPath : prerequisite ? input.kind : "expectedRevision",
+    code: refusalCode,
+    sourcesTried: [
+      `${input.scope.snapshotPath} as this call reads it under its own write lock`,
+      `the ${input.kind} operation's own admission rules for the facts it depends on`,
+    ],
+    currentFacts: [
+      `plan ${input.scope.planId} is at row revision ${input.context.revision} (status ${rowStatusOf(input.context.row) || "none"})`,
+      `the refusal reports: ${message}`,
+    ],
+    needed: message,
+    withheldEffect: prerequisite
+      ? `the ${input.kind} operation: a prerequisite it genuinely needs could not be read, so plan ${input.scope.planId}, its ` +
+        "coordination block and every revision are exactly as they were"
+      : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
+        "revision are exactly as they were",
+    availableWork: [
+      `read plan ${input.scope.planId} and its current row state`,
+      `retry the ${input.kind} operation once the conflicting fact is resolved`,
+      "independent operations on other rows, plans and workflows continue",
+    ],
+  };
+  return withRowRecoveryDetails(error, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.scope.workflowId,
+    plan_id: input.scope.planId,
+    current_revision: input.context.revision,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({
+      target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+      unresolved: [problem],
+      warnings: input.warnings,
+    }),
+  });
+}
+
+/**
+ * The single locked read-reconcile-mutate-write path for one plan row.
  *
  * `expectedRevision: null` means "no revision precondition" (bind only). The
- * whole section runs under the snapshot write lock, so the read, the
- * revision/assignment checks and the write are atomic against other
- * coordinated writers.
+ * whole section runs under the snapshot write lock, so the read, the semantic
+ * checks and the write are atomic against other coordinated writers.
+ *
+ * §4.2 the frame's reconciliation, mirroring the DB frames' state intents:
+ *
+ * - the row revision is TRANSPORT freshness, never business intent. A token
+ *   whose revision moved is recorded as provenance (`coordination.token-drifted`)
+ *   and the intent is decided against the row this call reads under its own
+ *   lock, so a sibling or non-semantic change recomputes instead of blocking (A10).
+ * - the operation's own read-only admission decides relevance. A fact it
+ *   depends on having moved is its own typed refusal, disclosed with the exact
+ *   fields and the one decision left — another writer's relevant work is never
+ *   overwritten (A11/A13).
+ * - an effect the fresh row ALREADY holds is current success with no byte
+ *   churn: no revision advance, no timestamp, no write at all (R6/A09/A12).
+ * - the seal's semantic re-authentication runs before all of it (A29).
  */
 async function withRowCommit(
   scope: ResolvedPlanScope,
   opts: {
+    kind: string;
     expectedRevision: number | null;
-    /** `prepare` rewrites the pin itself, so it may not re-check the old hash. */
+    /** `prepare` rewrites the pin itself, so it may not re-check the old seal. */
     freshness?: boolean;
-    precheck: (context: RowContext) => void | Promise<void>;
+    precheck: RowAdmission;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
+    /**
+     * §4.1 a mutation whose effect lands OUTSIDE this row (the two residual verbs
+     * compose the core issue authority): it returns no row commit, yet the call
+     * did land its effect, so the sidecar reports that committed boundary.
+     */
+    effectOutsideRow?: boolean;
   },
-): Promise<{ snapshot: WorkflowSnapshot; row: PlanRow; outcome: string }> {
+): Promise<RowFrameResult> {
   localStore(scope.harnessRoot);
   assertSnapshotPath(scope.harnessRoot, scope.workflowId, scope.snapshotPath);
-  let outcome = "unchanged";
   const result = await withStatusWriteLock(scope.snapshotPath, async () => {
     const snapshot = readSnapshot(dirname(scope.snapshotPath));
     const { row, index } = findPlanRow(snapshot, scope.planId);
@@ -1466,22 +1666,37 @@ async function withRowCommit(
       coordination,
       revision: coordination?.revision ?? 0,
     };
-    // Every row mutation re-authenticates the row's pin: an Assignment edited
-    // after `prepare` invalidates the row until the coordinator re-prepares.
+    // Every row mutation re-authenticates the row's pin: the sealed Assignment
+    // is compared on its semantic projection, so an unrelated formatting change
+    // leaves the row fresh while a scope/approval change still invalidates it.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
       assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
-    await opts.precheck(context);
-    if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
-      throw new CoordinationError(
-        "coordination.version-conflict",
-        `plan ${scope.planId} is at row revision ${context.revision}, expected ${opts.expectedRevision} \u2014 re-run \`mstar plan show\` and retry`,
-        { expected: opts.expectedRevision, actual: context.revision, plan_id: scope.planId },
-      );
+    const warnings: readonly ResolutionWarning[] =
+      opts.expectedRevision !== null && context.revision !== opts.expectedRevision
+        ? [
+            tokenDriftedWarning({
+              scope,
+              kind: opts.kind,
+              readRevision: opts.expectedRevision,
+              currentRevision: context.revision,
+            }),
+          ]
+        : [];
+    let satisfied: RowSatisfied | null = null;
+    try {
+      satisfied = (await opts.precheck(context)) ?? null;
+    } catch (error) {
+      throw rowFrameRefusal(error, { scope, kind: opts.kind, context, warnings });
     }
-    const commit = await opts.mutate(context);
-    if (commit === null) return { snapshot, row, outcome };
-    outcome = "mutated";
+    if (satisfied !== null) return { snapshot, row, satisfied, applied: false, warnings };
+    let commit: RowCommit | null;
+    try {
+      commit = await opts.mutate(context);
+    } catch (error) {
+      throw rowFrameRefusal(error, { scope, kind: opts.kind, context, warnings });
+    }
+    if (commit === null) return { snapshot, row, satisfied: null, applied: false, warnings };
     const nextSnapshot: WorkflowSnapshot = {
       ...snapshot,
       ...(commit.topLevel ?? {}),
@@ -1492,15 +1707,57 @@ async function withRowCommit(
       delete (nextSnapshot as Record<string, unknown>)[key];
     }
     await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
-    return { snapshot: nextSnapshot, row: commit.row, outcome };
+    return { snapshot: nextSnapshot, row: commit.row, satisfied: null, applied: true, warnings };
   });
-  return result;
+  return {
+    ...result,
+    recovery: rowFrameRecovery({
+      scope,
+      kind: opts.kind,
+      satisfied: result.satisfied,
+      applied: result.applied || (opts.effectOutsideRow === true && result.satisfied === null),
+      warnings: result.warnings,
+    }),
+  };
 }
 
 /**
- * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
- * rule is shared with the DB transport, which re-reads the Assignment its own
- * seal records — one staleness rule for both routes, not a second tolerance.
+ * The sealed Assignment's semantic projection, in the stored shape: exactly the
+ * C1 header block `parseAssignmentFile` reads, so the seal and any later re-read
+ * compare the same semantics (A29). Exported for the DB transport, which seals
+ * the same reviewed Assignment and records the projection from this one mapping.
+ */
+export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentIntent {
+  return {
+    execution_scope: assignment.executionScope,
+    execute_as: assignment.executeAs,
+    delegation: assignment.delegation,
+    control_harness_root: assignment.controlHarnessRoot,
+    workflow_id: assignment.workflowId,
+    plan_id: assignment.planId,
+    plan_path: assignment.planPath,
+    worktree_path: assignment.worktreePath,
+    working_branch: assignment.workingBranch,
+    sdd_dir: assignment.sddDir,
+    qa_gate: assignment.qaGate,
+    findings_cleanup: assignment.findingsCleanup,
+    prepare_gate: assignment.prepareGate,
+  };
+}
+
+/**
+ * Re-verify the prepared Assignment against the row's seal. The rule is shared
+ * with the DB transport, which re-reads the Assignment its own seal records —
+ * one staleness rule for both routes, not a second tolerance.
+ *
+ * §4.2 (A29) the comparison is the Assignment's SEMANTIC projection: the
+ * document is re-parsed, so a reflowed header block, added prose, changed
+ * emphasis or reordered non-header lines leaves the row fresh, while a scope or
+ * approval change (`Worktree path`, `Working branch`, `QA gate`, …) still
+ * invalidates the dependent proof and names the exact header(s) that moved. The
+ * whole-document hash is NOT the gate for formatting: it stays the seal's byte
+ * witness, and a seal that records no projection (the DB transport's own
+ * receipt) keeps the byte comparison rather than losing the check.
  */
 export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
   if (!existsSync(assignmentPath)) {
@@ -1508,13 +1765,115 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       path: assignmentPath,
     });
   }
-  const actual = sha256Bytes(readFileSync(assignmentPath));
-  if (actual !== prepared.assignment_sha256) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-      { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-    );
+  const recorded = prepared.assignment_intent;
+  if (recorded === undefined) {
+    const actual = sha256Bytes(readFileSync(assignmentPath));
+    if (actual !== prepared.assignment_sha256) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
+        { path: assignmentPath, expected: prepared.assignment_sha256, actual },
+      );
+    }
+    return;
+  }
+  const current = currentAssignmentIntent(assignmentPath, recorded);
+  const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
+  if (changed.length === 0) return;
+  const facts = changed.map(
+    (field) => `${field}: sealed as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
+  );
+  const problem: RecoveryProblem = {
+    component: "assignment-seal",
+    path: changed[0]!,
+    code: "coordination.assignment-stale",
+    sourcesTried: [
+      `${assignmentPath} as it reads now`,
+      `the semantic projection sealed by \`prepare\` at ${prepared.prepared_at}`,
+    ],
+    currentFacts: facts,
+    needed:
+      `decide whether the changed ${changed.join(", ")} is the reviewed intent for plan ${recorded.plan_id} and re-run \`prepare\` ` +
+      "against it \u2014 the row stays sealed against the Assignment it was prepared from until then",
+    withheldEffect:
+      "the row's sealed state: neither the recorded seal, the plan document, the row's coordination block nor any revision is changed",
+    availableWork: [
+      `read plan ${recorded.plan_id} and the Assignment it was sealed against`,
+      `re-run \`prepare\` for plan ${recorded.plan_id} once the Assignment is the reviewed input again`,
+      "independent operations on other rows, plans and workflows continue",
+    ],
+  };
+  throw new CoordinationError(
+    "coordination.assignment-stale",
+    `Assignment ${assignmentPath} changed semantically after plan ${recorded.plan_id} was prepared ` +
+      `(${changed.join(", ")}) \u2014 the coordinator must re-run \`prepare\` against the reviewed input`,
+    {
+      path: assignmentPath,
+      plan_id: recorded.plan_id,
+      changed,
+      expected: changed.map((field) => recorded[field]),
+      actual: changed.map((field) => current[field] ?? null),
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
+    },
+  );
+}
+
+/**
+ * §4.2 the semantic projection of the Assignment as it reads NOW, with a
+ * document that can no longer declare the sealed header block reported as the
+ * same semantic staleness: a removed, duplicated or unparseable header IS a
+ * change of meaning, not a malformed caller input (the caller supplied no
+ * document here \u2014 the row's own seal names the path).
+ */
+function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent): AssignmentIntent {
+  try {
+    return assignmentIntentOf(parseAssignmentFile(assignmentPath));
+  } catch (error) {
+    if (error instanceof CoordinationError) {
+      const problem: RecoveryProblem = {
+        component: "assignment-seal",
+        path: "assignment",
+        code: "coordination.assignment-stale",
+        sourcesTried: [
+          `${assignmentPath} as it reads now`,
+          `the semantic projection sealed by \`prepare\` for plan ${recorded.plan_id}`,
+        ],
+        currentFacts: [`the Assignment no longer declares its sealed header block: ${error.message}`],
+        needed:
+          `restore the reviewed header block of ${assignmentPath} or decide the new intent and re-run \`prepare\` for plan ` +
+          `${recorded.plan_id}`,
+        withheldEffect:
+          "the row's sealed state: neither the recorded seal, the plan document, the row's coordination block nor any revision is changed",
+        availableWork: [
+          `read the Assignment ${assignmentPath} and plan ${recorded.plan_id}`,
+          `re-run \`prepare\` for plan ${recorded.plan_id} against the reviewed input`,
+          "independent operations on other rows, plans and workflows continue",
+        ],
+      };
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `Assignment ${assignmentPath} no longer declares the header block plan ${recorded.plan_id} was sealed against: ${error.message}`,
+        {
+          path: assignmentPath,
+          plan_id: recorded.plan_id,
+          changed: ["assignment"],
+          sources_tried: problem.sourcesTried,
+          current_facts: problem.currentFacts,
+          available_work: problem.availableWork,
+          recovery: unresolvedRecovery({
+            target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+            unresolved: [problem],
+          }),
+        },
+      );
+    }
+    throw error;
   }
 }
 
@@ -1982,6 +2341,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
   };
   let created = "";
   const result = await withRowCommit(scope, {
+    kind: "bind",
     expectedRevision: null,
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
@@ -2035,7 +2395,8 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     operation: "bind",
     session,
     session_file: created,
-    outcome: "claimed",
+    outcome: result.satisfied === null ? "claimed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(harnessRoot, workflowId, scope.projectId, scope, result.snapshot, result.row, session, created),
   };
 }
@@ -2631,6 +2992,7 @@ async function mutatePrepare(
     });
   }
   const result = await withRowCommit(scope, {
+    kind: "prepare",
     expectedRevision: request.expectedRevision,
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
     freshness: false,
@@ -2661,6 +3023,10 @@ async function mutatePrepare(
         plan_sha256: sha256Bytes(readFileSync(scope.planPath)),
         qa_gate: assignment.qaGate,
         findings_cleanup: assignment.findingsCleanup,
+        // §4.2 (A29) the seal records the reviewed Assignment's SEMANTIC
+        // projection, so every later re-authentication compares meaning: a
+        // reformatted document stays fresh, a scope/approval change does not.
+        assignment_intent: assignmentIntentOf(assignment),
         prepared_by: session.session_id,
         prepared_at: nowIso(),
       };
@@ -2689,7 +3055,8 @@ async function mutatePrepare(
     operation: "prepare",
     session,
     session_file: sessionPath,
-    outcome: "prepared",
+    outcome: result.satisfied === null ? "prepared" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -2703,6 +3070,74 @@ async function mutatePrepare(
   };
 }
 
+/**
+ * §4.2 (R6/R7/A09/A12) the record one progress report writes, as the row field
+ * it lives in and the value this intent asks that field to hold. The selection
+ * is the kind's OWN effect — the coordination progress block, the row status and
+ * (only when the report constrains them) the reported track branches — never the
+ * whole row, its siblings or a revision, so a change anywhere else leaves the
+ * effect genuinely held (A10) while the record itself being replaced is
+ * disclosed (A11/A13).
+ */
+function progressEffect(input: {
+  progress: PlanProgress;
+  row: PlanRow;
+  coordination: RowCoordination | undefined;
+}): { fields: readonly string[]; current: Record<string, unknown>; requested: Record<string, unknown> } {
+  const { progress } = input;
+  const record: PlanProgress = {
+    status: progress.status,
+    summary: progress.summary,
+    evidence_paths: [...progress.evidence_paths],
+    ...(progress.track_branches !== undefined ? { track_branches: [...progress.track_branches] } : {}),
+  };
+  return {
+    fields: ["coordination.progress", "plan.status", ...(progress.track_branches !== undefined ? ["plan.metadata.track_branches"] : [])],
+    current: { coordination: input.coordination ?? {}, plan: input.row },
+    requested: {
+      coordination: { progress: record },
+      plan: {
+        status: progress.status,
+        metadata: progress.track_branches !== undefined ? { track_branches: [...progress.track_branches] } : {},
+      },
+    },
+  };
+}
+
+/**
+ * §4.2 (R6/R7/A11/A13) the refusal of a progress report whose record moved
+ * since the token this call presents was read: another writer's report IS the
+ * record this operation writes, so it is disclosed with both values and the one
+ * decision left instead of being overwritten.
+ */
+function progressRecordConflict(input: {
+  progress: PlanProgress;
+  row: PlanRow;
+  coordination: RowCoordination | undefined;
+  planId: string;
+  readRevision: number;
+  currentRevision: number;
+}): CoordinationError {
+  const effect = progressEffect(input);
+  const field = effect.fields[0]!;
+  const current = stableJson(selectSemanticFields(effect.current, effect.fields));
+  const requested = stableJson(selectSemanticFields(effect.requested, effect.fields));
+  return new CoordinationError(
+    "coordination.version-conflict",
+    `plan ${input.planId} already holds a different ${field} ${current} than this report asks for ${requested}, written after ` +
+      `the token this call presents was read (row revision ${input.currentRevision}, token ${input.readRevision}) \u2014 the ` +
+      "recorded report is not overwritten; accept it, or re-read the row and express the report you still want",
+    {
+      plan_id: input.planId,
+      path: field,
+      expected: input.readRevision,
+      actual: input.currentRevision,
+      current_value: current,
+      requested_value: requested,
+    },
+  );
+}
+
 async function mutateProgress(
   scope: ResolvedPlanScope,
   session: CoordinationSession,
@@ -2713,9 +3148,34 @@ async function mutateProgress(
   assertViolationFree(validatePlanProgress(progress), "progress");
   assertEvidenceInsidePlan(scope, progress.evidence_paths);
   const result = await withRowCommit(scope, {
+    kind: "progress",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
+      // §4.2 (R6/A09/A12) the report is already recorded: current state is the
+      // success the caller asked for, so it is answered without a write even when
+      // the token (or a later transition) moved on.
+      const effect = progressEffect({ progress, row: context.row, coordination: context.coordination });
+      if (
+        stableJson(selectSemanticFields(effect.current, effect.fields)) ===
+        stableJson(selectSemanticFields(effect.requested, effect.fields))
+      ) {
+        return { field: "coordination.progress", source: "stored plan row" };
+      }
+      // §4.2 (R7/A11/A13) the row moved since the caller read it AND already
+      // carries a different report: another writer's work is disclosed, never
+      // overwritten. The token revision alone is transport freshness, so the
+      // record — not the revision — decides.
+      if (context.revision !== request.expectedRevision && context.coordination?.progress !== undefined) {
+        throw progressRecordConflict({
+          progress,
+          row: context.row,
+          coordination: context.coordination,
+          planId: scope.planId,
+          readRevision: request.expectedRevision,
+          currentRevision: context.revision,
+        });
+      }
       assertNoHandoffTransition(context.coordination, scope.planId);
       requireProgressStatus(context.row, progress.status, scope.planId);
       if (progress.track_branches !== undefined) {
@@ -2750,7 +3210,8 @@ async function mutateProgress(
     operation: "progress",
     session,
     session_file: sessionPath,
-    outcome: "progressed",
+    outcome: result.satisfied === null ? "progressed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -2801,7 +3262,9 @@ async function mutateResidualAdd(
   const context = planStoreContext(scope);
   const receipts: CoordinationIssueReceipt[] = [];
   const result = await withRowCommit(scope, {
+    kind: "residual-add",
     expectedRevision: request.expectedRevision ?? null,
+    effectOutsideRow: true,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
@@ -2850,7 +3313,8 @@ async function mutateResidualAdd(
     operation: "residual-add",
     session,
     session_file: sessionPath,
-    outcome: "residual-added",
+    outcome: result.satisfied === null ? "residual-added" : "already-satisfied",
+    recovery: result.recovery,
     issues: receipts,
     view: buildView(
       scope.harnessRoot,
@@ -2910,7 +3374,9 @@ async function mutateResidualClose(
   const context = planStoreContext(scope);
   let closed: CoordinationIssueReceipt | undefined;
   const result = await withRowCommit(scope, {
+    kind: "residual-close",
     expectedRevision: request.expectedRevision ?? null,
+    effectOutsideRow: true,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
@@ -2939,7 +3405,8 @@ async function mutateResidualClose(
     operation: "residual-close",
     session,
     session_file: sessionPath,
-    outcome: "residual-closed",
+    outcome: result.satisfied === null ? "residual-closed" : "already-satisfied",
+    recovery: result.recovery,
     issues: closed === undefined ? [] : [closed],
     view: buildView(
       scope.harnessRoot,
@@ -2960,10 +3427,12 @@ async function mutateResidualClose(
 
 /**
  * Run one coordinated mutation (spec §B/§D). Every call re-authenticates the
- * session from its envelope, re-checks the Assignment hash, enforces the
- * revision/register precondition under the lock, and writes through
- * `withProtectedWrite`. The operation surface is a closed discriminated union:
- * an unknown key anywhere is rejected before any state is touched.
+ * session from its envelope, re-authenticates the sealed Assignment on its
+ * semantic projection under the lock, reconciles the intent against the row it
+ * reads (§4.2: the supplied revision is freshness, the operation's own record
+ * decides relevance), and writes through `withProtectedWrite`. The operation
+ * surface is a closed discriminated union: an unknown key anywhere is rejected
+ * before any state is touched.
  *
  * Canonical authority discrimination IS the entry boundary (spec §4.3/§5):
  * `entryAnchor` reads the request's own session envelope — the anchor that
@@ -3987,6 +4456,7 @@ async function mutateHandoff(
 ): Promise<CoordinationResult> {
   const input = readHandoffEvidence(request.evidence);
   const result = await withRowCommit(scope, {
+    kind: "handoff",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
@@ -4054,7 +4524,8 @@ async function mutateHandoff(
     operation: "handoff",
     session,
     session_file: sessionPath,
-    outcome: "handed-off",
+    outcome: result.satisfied === null ? "handed-off" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -4087,6 +4558,7 @@ async function mutateAccept(
   request: AcceptRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "accept",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4126,7 +4598,8 @@ async function mutateAccept(
     operation: "accept",
     session,
     session_file: sessionPath,
-    outcome: "accepted",
+    outcome: result.satisfied === null ? "accepted" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -4140,6 +4613,7 @@ async function mutateReturn(
   request: ReturnRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "return",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4181,7 +4655,8 @@ async function mutateReturn(
     operation: "return",
     session,
     session_file: sessionPath,
-    outcome: "returned",
+    outcome: result.satisfied === null ? "returned" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -4396,6 +4871,7 @@ async function mutateIntegrationStart(
   request: IntegrationStartRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "integration-start",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4454,7 +4930,9 @@ async function mutateIntegrationStart(
     operation: "integration-start",
     session,
     session_file: sessionPath,
-    outcome: result.outcome === "mutated" ? "integrating" : "already-integrating",
+    outcome:
+      result.satisfied !== null ? "already-satisfied" : result.applied ? "integrating" : "already-integrating",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -4483,6 +4961,7 @@ async function mutateIntegrationAccept(
 ): Promise<CoordinationResult> {
   let proof: IntegrationProof = { kind: "pending" };
   const result = await withRowCommit(scope, {
+    kind: "integration-accept",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4542,7 +5021,8 @@ async function mutateIntegrationAccept(
     operation: "integration-accept",
     session,
     session_file: sessionPath,
-    outcome: "merged",
+    outcome: result.satisfied === null ? "merged" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -5045,6 +5525,7 @@ async function mutateRepairDeliverySource(
   request: RepairDeliverySourceRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "repair-delivery-source",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -5063,7 +5544,8 @@ async function mutateRepairDeliverySource(
     operation: "repair-delivery-source",
     session,
     session_file: sessionPath,
-    outcome: "delivery-source-repaired",
+    outcome: result.satisfied === null ? "delivery-source-repaired" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -5243,6 +5725,7 @@ async function mutateComplete(
   request: CompleteRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "complete",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -5286,7 +5769,8 @@ async function mutateComplete(
     operation: "complete",
     session,
     session_file: sessionPath,
-    outcome: "completed",
+    outcome: result.satisfied === null ? "completed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -5442,6 +5926,7 @@ async function mutateReconcile(
 ): Promise<CoordinationResult> {
   let plan: ReconcilePlan = { outcome: "unchanged", apply: () => null };
   const result = await withRowCommit(scope, {
+    kind: "reconcile",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -5455,7 +5940,8 @@ async function mutateReconcile(
     operation: "reconcile",
     session,
     session_file: sessionPath,
-    outcome: plan.outcome,
+    outcome: result.satisfied === null ? plan.outcome : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -7261,8 +7747,13 @@ export type PrepareCoordinatorRecoveryReceipt = Readonly<{
   recoveredAt: string;
 }>;
 
-/** The existing `CoordinationResult` envelope plus the recovery receipt (§3.3). */
-export type RecoverPrepareCoordinatorResult = CoordinationResult & {
+/**
+ * The existing `CoordinationResult` envelope plus the recovery receipt (§3.3).
+ * This verb's `recovery` member IS that domain receipt: the identity recovery is
+ * its own public shape (§3.3), not the §4.1 frame sidecar — the verb does not
+ * run the locked row frame at all.
+ */
+export type RecoverPrepareCoordinatorResult = Omit<CoordinationResult, "recovery"> & {
   recovery: PrepareCoordinatorRecoveryReceipt;
 };
 
