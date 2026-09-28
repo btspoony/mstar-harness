@@ -55,10 +55,12 @@ const DSH_PROFILE = 'web'
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
 const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`
-/** A published release on the SAME peer line as the pin (`^0.1.5-rc.2`),
- * used to materialize a version-drifted profile with a real install. Drift
- * is just `installed ≠ pin`, so this only has to be a published version that
- * is not the pinned one — 0.5.2 is the release the pin moved away from. */
+/** A published release on the fallbacks generation boundary: the pin
+ * (`dsh-llm-fallbacks@0.6.4`) rides the `^0.2.0-rc.1` peer cohort, while the
+ * PREVIOUS release (0.5.2) predates it — installing it for real materializes
+ * a version-drifted profile across the generation. Drift is just
+ * `installed ≠ pin`, so this only has to be a published version that is not
+ * the pinned one — 0.5.2 is the release the pin moved away from. */
 const PREVIOUS_FALLBACKS_VERSION = '0.5.2'
 const PREVIOUS_FALLBACKS_SPEC = `dsh-llm-fallbacks@${PREVIOUS_FALLBACKS_VERSION}`
 

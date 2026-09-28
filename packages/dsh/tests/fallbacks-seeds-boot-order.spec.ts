@@ -1,51 +1,44 @@
 /**
  * Boot-order convergence pin for the fallbacks role seeds — the REAL
- * `dsh-llm-fallbacks` devDependency, a SINGLE boot, the REAL profile row
- * order (mstar row first, fallbacks row second), and NO dispose/re-apply.
+ * `dsh-llm-fallbacks` devDependency (0.6.x), a SINGLE boot, the REAL profile
+ * row order (mstar row first, fallbacks row second), and NO dispose/re-apply.
  *
  * Why this test exists: the mstar seeds declaration fires from the
- * `ctx.inject(['llm-fallbacks'])` child the moment the service appears —
- * the same tick as the provider's own `ctx.provide('llm-fallbacks', …)`.
- * The provider's seed write channel (`writeRoles`) starts as a thrower and
- * is only swapped by the provider's own `ctx.inject(['settings'], …)` child,
- * which settles one macrotask AFTER its apply. The declaration therefore
- * LOSES that settings-binding race and rejects with
- * `llm-fallbacks: seeds: settings service is unavailable — seed roles
- * cannot be written`, and nothing retries it on a plain boot (no decision
- * point runs) — the 13 mstar role ids never reach the effective taxonomy
- * nor the persisted `fallbacks` settings namespace. The existing suites
- * cannot see this: the seeds/advisory/coexistence suites inject fake
- * services (no upstream write channel), and the installed-deployment e2e
- * models the host config-stack re-composition (dispose + re-apply + a
- * `subagent/start` decision point) BEFORE asserting — exactly the path the
- * plain single boot never gets. This spec pins the plain boot.
+ * `ctx.inject(['llm-fallbacks'])` child the moment the service appears, but
+ * under the 0.6.x loader-entry config model the service's effective
+ * readback (`getEffectiveRoles`) is driven by the COMPOSED config — the
+ * `llm-fallbacks` descriptor the settings service (`SettingsForms.describe`)
+ * reports over the row entry, refreshed by the `settings/document-updated`
+ * event. A settings seam that does not model that describe/event contract
+ * leaves the composed config empty forever: the declares land in the store
+ * and the seed registry, yet the readback stays empty and the 13 mstar role
+ * ids never become effective — the regression this spec caught when the
+ * devDep crossed the 0.5.2 → 0.6.4 generation. The existing suites cannot
+ * see this: the seeds/advisory/coexistence suites inject fake services (no
+ * upstream write channel), and the installed-deployment e2e models the host
+ * config-stack re-composition (dispose + re-apply + a `subagent/start`
+ * decision point) BEFORE asserting — exactly the path the plain single boot
+ * never gets. This spec pins the plain boot.
  *
- * Harness fidelity (how the race is reproduced here): with the fake
- * settings row mounted BEFORE the fallbacks row, the provider's binding
- * child wins and the declare SUCCEEDS on attempt 1 — not the live failure.
- * This composition opts into the realistic settings arrival instead
- * (`settingsService: 'fake-deferred'`): the fake settings row mounts AFTER
- * the `dsh-llm-fallbacks` row, so the mstar declare fires on the
- * service-provide tick with `writeRoles` still the thrower, while the
- * provider's settings children settle one tick later — the same observable
- * ordering as the live deployment. The fake settings registry itself models
- * the real `dsh-settings-file` service's consumed contract
- * (`installSection` base-layer registration + live source closure +
- * synchronous/watch change notification; patch-merge `update`), so the
- * config loop the readback depends on CLOSES one tick after the declare
- * window: the provider's preset self-declare lands through the same seam
- * and the RED readback carries only the upstream preset ids while the 13
- * mstar ids are missing — the exact live failure shape (never the
- * fake-api-absence shape: a readback of `[]` plus an `installSection is not
- * a function` provider TypeError).
+ * Harness fidelity: this composition opts into the realistic settings
+ * arrival (`settingsService: 'fake-deferred'`) — the fake settings row
+ * mounts AFTER the `dsh-llm-fallbacks` row, so the provider's settings
+ * children (`writeRoles` binding, the service provide, the preset
+ * self-declare) settle one tick after its apply, the same observable
+ * ordering as the live deployment. The fake settings registry models the
+ * real `dsh-settings-file` service's CONSUMED 0.6.x contract
+ * (`SettingsForms`: patch-merge `update` with the `settings/document-updated`
+ * notification, and `describe()` descriptors over the stored sections — the
+ * plugin merges a descriptor's value over its row entry itself), so the
+ * composed-config loop the readback depends on CLOSES within the boot.
  *
- * Falsifiability: RED on the unfixed tree — the effective readback holds
- * only the upstream preset ids, the settings namespace carries no mstar
- * row, and the boot log carries one `mstar/fallbacks-seeds` ERROR record
- * (the contained declaration failure). GREEN after the bounded-retry fix:
- * the full union (mirror-derived mstar ids ∪ the installed upstream preset
- * ids), every mstar row seeded with a non-empty persona, the 13 rows
- * persisted, and a clean boot log.
+ * Falsifiability: RED when the readback composition path is broken — the
+ * effective readback holds no expected ids at all (the declares land in the
+ * store and the seed registry, but the composed config never carries them),
+ * while the persisted namespace and the boot log stay clean. GREEN on the
+ * healthy tree: the full union (mirror-derived mstar ids ∪ the installed
+ * upstream preset ids), every mstar row seeded with a non-empty persona,
+ * the 13 rows persisted, and a clean boot log.
  *
  * Boot-log capture: cordis's `LoggerService` registers a default buffer
  * exporter at construction — `ctx.logger.buffer` — but that buffer's level
@@ -139,12 +132,13 @@ export async function waitForStableRoles(service: FallbacksServiceView, timeoutM
 }
 
 /** The narrowed `roles.list` the fallbacks seed manager persisted through
- * the settings seam (`fallbacks` namespace) — `undefined` until the first
+ * the settings seam (the `llm-fallbacks` profile-entry namespace — the
+ * 0.6.x `SettingsForms` update target), `undefined` until the first
  * successful seed write (the install-e2e readback pattern). */
 function settingsRolesList(booted: BootResult): unknown[] | undefined {
   const settings = booted.ctx.get('settings') as FakeSettingsRegistry | undefined
   if (settings === undefined) return undefined
-  const raw: unknown = settings.get('fallbacks')
+  const raw: unknown = settings.get('llm-fallbacks')
   if (typeof raw !== 'object' || raw === null || !('roles' in raw)) return undefined
   const roles: unknown = (raw as { roles: unknown }).roles
   if (typeof roles !== 'object' || roles === null || !('list' in roles)) return undefined
