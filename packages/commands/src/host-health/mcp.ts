@@ -8,21 +8,6 @@ import type { HostTarget } from "./plugin-version-alignment.js";
 
 type RuntimeKind = "node" | "bun";
 
-type McpPackageLayout = {
-  buildInfo: string;
-  executable: string;
-  versionManifest: string;
-};
-
-const MCP_PACKAGE_LAYOUTS: Record<Exclude<HostTarget, "dsh">, McpPackageLayout> = {
-  omp: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  opencode: { buildInfo: "mcp/build-info.json", executable: "mcp/stdio.js", versionManifest: "package.json" },
-  cursor: { buildInfo: "mcp/bundles/cursor/dist/mcp/build-info.json", executable: "mcp/bundles/cursor/dist/mcp/stdio.js", versionManifest: ".cursor-plugin/plugin.json" },
-  codex: { buildInfo: "mcp/bundles/codex/dist/mcp/build-info.json", executable: "mcp/bundles/codex/dist/mcp/stdio.js", versionManifest: ".codex-plugin/plugin.json" },
-  kimi: { buildInfo: "mcp/bundles/kimi/dist/mcp/build-info.json", executable: "mcp/bundles/kimi/dist/mcp/stdio.js", versionManifest: ".kimi-plugin/plugin.json" },
-  zcode: { buildInfo: "mcp/bundles/zcode/dist/mcp/build-info.json", executable: "mcp/bundles/zcode/dist/mcp/stdio.js", versionManifest: ".zcode-plugin/plugin.json" },
-};
-
 export type McpHealthStatus = "unavailable" | "mismatch" | "aligned";
 export type McpRuntime = Readonly<{ kind: RuntimeKind; version: string }>;
 export type McpTargetHealth = Readonly<{
@@ -54,83 +39,109 @@ function actualRuntime(): McpRuntime {
     : { kind: "bun", version: process.versions.bun };
 }
 
-/** Inspect one target's packaged MCP server without starting a process or touching the artifact store. */
+/**
+ * Each host's MCP config file path (relative to the host's config root).
+ * The doctor checks that the config exists and contains a valid mstar entry
+ * referencing `npx @mstar-harness/cli mcp`.
+ */
+const HOST_MCP_CONFIGS: Record<HostTarget, { configFile: string; format: "mcpServers" | "mcp" | "cordis" | "toml" }> = {
+  omp: { configFile: ".omp/mcp.json", format: "mcpServers" },
+  opencode: { configFile: "opencode.json", format: "mcp" },
+  dsh: { configFile: "cordis.yml", format: "cordis" },
+  cursor: { configFile: ".cursor/mcp.json", format: "mcpServers" },
+  codex: { configFile: ".codex/config.toml", format: "toml" },
+  kimi: { configFile: ".kimi-code/mcp.json", format: "mcpServers" },
+  zcode: { configFile: ".zcode/config.json", format: "mcpServers" },
+};
+
+/** Inspect one target's MCP configuration without starting a process. */
 export function diagnoseMcpTarget(
   target: HostTarget,
-  packageRoot: string,
+  configRoot: string,
   runtime: McpRuntime = actualRuntime(),
 ): McpTargetHealth {
-  if (target === "dsh") {
-    return {
-      target,
-      status: "unavailable",
-      location: resolveDshProfileDir(),
-      runtimeFloor: MIN_BUN_VERSION,
-      errors: ["MCP client configuration unavailable for dsh; no Cordis MCP launch configuration is installed."],
-      notes: [],
-    };
-  }
-  const layout = MCP_PACKAGE_LAYOUTS[target];
-  const buildInfoPath = path.join(packageRoot, layout.buildInfo);
-  const executablePath = path.join(packageRoot, layout.executable);
-  const manifestPath = path.join(packageRoot, layout.versionManifest);
-  const missing = [buildInfoPath, executablePath, manifestPath].filter((file) => !fs.existsSync(file));
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
     ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
     : null;
 
-  if (missing.length > 0) {
+  if (target === "dsh") {
     return {
       target,
       status: "unavailable",
-      location: buildInfoPath,
+      location: resolveDshProfileDir(),
       runtimeFloor,
       errors: [
-        `MCP package unavailable for ${target}; missing ${missing.map((file) => path.relative(packageRoot, file)).join(", ")}.`,
+        "MCP client configuration unavailable for dsh; no Cordis MCP launch configuration is installed.",
         ...(runtimeError === null ? [] : [runtimeError]),
       ],
       notes: [],
     };
   }
 
-  const manifest = readJson(manifestPath);
-  const buildInfo = readJson(buildInfoPath);
-  const version = manifest?.version;
-  const protocols = buildInfo?.supportedProtocols;
-  const mismatch: string[] = [];
-  if (manifest === null || buildInfo === null) {
-    mismatch.push("package manifest or MCP build metadata is not valid JSON object data.");
-  } else {
-    if (typeof version !== "string" || version === "") mismatch.push("package manifest has no version.");
-    for (const key of ["pluginVersion", "engineVersion", "mcpVersion"] as const) {
-      if (typeof buildInfo[key] !== "string" || buildInfo[key] !== version) {
-        mismatch.push(`${key} does not match packaged version ${String(version ?? "unknown")}.`);
+  const { configFile: relativeConfig, format } = HOST_MCP_CONFIGS[target];
+  const configPath = path.join(configRoot, relativeConfig);
+
+  if (!fs.existsSync(configPath)) {
+    return {
+      target,
+      status: "unavailable",
+      location: configPath,
+      runtimeFloor,
+      errors: [
+        `MCP configuration not found for ${target}; expected ${relativeConfig}.`,
+        ...(runtimeError === null ? [] : [runtimeError]),
+      ],
+      notes: [],
+    };
+  }
+
+  const content = fs.readFileSync(configPath, "utf8");
+  const errors: string[] = [];
+
+  if (format === "mcpServers" || format === "mcp") {
+    const parsed = record(JSON.parse(content));
+    if (parsed === null) {
+      errors.push(`MCP config ${relativeConfig} is not valid JSON.`);
+    } else {
+      const servers = format === "mcp" ? parsed.mcp : parsed.mcpServers;
+      const serverRecord = record(servers);
+      if (serverRecord === null) {
+        errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+      } else {
+        const hasMstar = Object.values(serverRecord).some((entry) => {
+          const e = record(entry);
+          if (e === null) return false;
+          const cmd = Array.isArray(e.command) ? (e.command as string[]).join(" ") : String(e.command ?? "");
+          return cmd.includes("mcp") || cmd.includes("@mstar-harness/cli");
+        });
+        if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry.`);
       }
     }
-    if (buildInfo.hostTarget !== target) mismatch.push(`hostTarget does not match ${target}.`);
-    if (!Array.isArray(protocols) || protocols.length === 0 || protocols.some((item) => typeof item !== "string" || item.length === 0)) {
-      mismatch.push("supportedProtocols is missing or invalid.");
-    }
+  } else if (format === "toml") {
+    if (!content.includes("mcp")) errors.push(`Codex config ${relativeConfig} has no mcp_servers entry.`);
+  } else if (format === "cordis") {
+    if (!content.includes("mcp")) errors.push(`DSH config ${relativeConfig} has no MCP plugin entry.`);
   }
-  if (runtimeError !== null) mismatch.push(runtimeError);
+
+  if (runtimeError !== null) errors.push(runtimeError);
 
   return {
     target,
-    status: mismatch.length === 0 ? "aligned" : "mismatch",
-    location: buildInfoPath,
+    status: errors.length === 0 ? "aligned" : errors.some((e) => e.includes("not found") || e.includes("unavailable")) ? "unavailable" : "mismatch",
+    location: configPath,
     runtimeFloor,
-    errors: mismatch,
-    notes: mismatch.length === 0 ? [`MCP package metadata and files aligned for ${target} (${String(version)}).`] : [],
+    errors,
+    notes: errors.length === 0 ? [`MCP config aligned for ${target}.`] : [],
   };
 }
 
-/** Resolve the installed package for cache-based hosts, not ignored checkout build outputs. */
-export function mcpTargetPackageRoot(
-  target: HostTarget,
-  repositoryRoot: string,
-  options: { opencodePackagesRoot?: string } = {},
-): string {
-  if (target === "opencode") return resolveOpencodePluginPackageRoot(options.opencodePackagesRoot);
-  return target === "omp" ? path.join(repositoryRoot, "packages", "omp") : repositoryRoot;
+export function mcpTargetPackageRoot(target: HostTarget, checkout: string, options: { opencodePackagesRoot?: string }): string {
+  if (target === "opencode") {
+    const opencodePackagesRoot = options.opencodePackagesRoot ?? path.join(checkout, "node_modules", "@mstar-harness");
+    return path.join(opencodePackagesRoot, "opencode");
+  }
+  return checkout;
 }
+
+export { resolveDshProfileDir };

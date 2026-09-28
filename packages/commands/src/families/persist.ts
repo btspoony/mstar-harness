@@ -53,6 +53,8 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
 
 async function resolveStore(storeFlag: string | undefined, cwd: string): Promise<ArtifactStore> {
   if (storeFlag !== undefined) return loadStoreModule(storeFlag);
+  const envStore = process.env.MSTAR_STORE_MODULE;
+  if (envStore !== undefined) return loadStoreModule(envStore);
   const harnessDir = resolveProcessHarnessDir(cwd);
   return harnessDir === null ? getArtifactStore() : createFsStore(harnessDir);
 }

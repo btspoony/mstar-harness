@@ -32,13 +32,13 @@
     "node": ">=24.18.0"
   },
   "dependencies": {
-    "@mstar-harness/commands": "workspace:*",
     "@opencode-ai/plugin": "1.4.8"
   },
   "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
-    "@mstar-harness/engine": "workspace:*"
+    "@mstar-harness/engine": "workspace:*",
+    "@mstar-harness/commands": "workspace:*"
   }
 }

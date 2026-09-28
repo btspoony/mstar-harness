@@ -190,7 +190,12 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!plan) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)", 2);
         const workflow = required(input.workflow, "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)");
         if (input.control !== undefined && input.integration !== undefined) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both", 2);
-        if (input.control !== undefined) context.effects.writeStderr?.("[mstar-harness] --control is deprecated; use --integration");
+        const warnings: string[] = [];
+        if (input.control !== undefined) {
+          const depMsg = "--control is deprecated; use --integration";
+          context.effects.writeStderr?.(`[mstar-harness] ${depMsg}`);
+          warnings.push(depMsg);
+        }
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
@@ -210,6 +215,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         for (const diagnostic of snapshotDiagnostics) {
           if (!diagnostic.ok) {
             context.effects.writeStderr?.(`[mstar-harness] ${diagnostic.code}: ${diagnostic.message}`);
+            warnings.push(`${diagnostic.code}: ${diagnostic.message}`);
           }
         }
         const rows = Array.isArray(snapshot.plans) ? snapshot.plans.filter((row: Record<string, unknown>) => row?.id === plan || row?.plan_id === plan) : [];
@@ -246,7 +252,9 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           lifecycleBranches: [...lifecycleBranches],
           leaseWorktreePath: String(lease.worktree_path ?? ""), leaseWorkingBranch: String(lease.working_branch ?? ""), planId: plan,
         });
-        return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "worktree.l1.invalid");
+        const gateResult = gateData(gate);
+        const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
+        return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
       }
       case "worktree.qc-alignment": {
         const files = input.files ?? [];
@@ -290,7 +298,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
         const isDir = statSync(abs).isDirectory();
         const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true) : collectTargets(abs);
-        const results = targets.map((file) => ({ file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true) }));
+        
+    const results = targets.map((file) => ({ file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true) }));
         return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }) : ok(id, { results });
       }
       case "design-md.validate": {
