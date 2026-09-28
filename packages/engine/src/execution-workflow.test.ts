@@ -1640,4 +1640,41 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     expect(settled.execution_policy).toEqual(policy);
     expect(settled.integration_worktree_path).toBe(realpathSync(fresh));
   });
+
+  test("connected amendment — an aliased checkout spelling reports the SAME component identity the FILE route emits (A23)", async () => {
+    const fixture = await workflowFixture("amendment-alias-identity");
+    const fresh = join(fixture.repoRoot, "wt-amendment-alias");
+    runGit(["worktree", "add", "-q", "-b", `${INTEGRATION_BRANCH}-alias`, fresh], fixture.repoRoot);
+    runGit(["checkout", "--ignore-other-worktrees", "-q", INTEGRATION_BRANCH], fresh);
+
+    // ONE checkout, spelled with a lexical ALIAS (`<path>/.`). The route
+    // canonicalizes the requested path, so the receipt names the one
+    // `integration-worktree` component the FILE route's amendment emits for the
+    // recorded value — `prepareAmendmentComponent` over the canonical path, the
+    // same rule `coordination.test.ts` pins on the file route. A transport
+    // therefore consumes ONE component vocabulary across both authorities, and a
+    // spelling never becomes a second component identity.
+    const receipt = await workflowMutation(fixture, "op-amendment-alias", {
+      kind: "integration-worktree",
+      path: `${fresh}/.`,
+    });
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.recovery?.outcome).toBe("applied");
+    expect(receipt.recovery?.applied).toEqual([fileRouteEntry("integration-worktree", realpathSync(fresh))]);
+    const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.integration_worktree_path).toBe(realpathSync(fresh));
+
+    // The CANONICAL spelling of that same checkout is the effect already held:
+    // the intent is recomputed against the state this transaction reads (A09/A12),
+    // so the second spelling spends no revision and reports no applied component.
+    const afterAlias = await workflowFootprint(fixture.context);
+    const repeat = await workflowMutation(fixture, "op-amendment-alias-repeat", {
+      kind: "integration-worktree",
+      path: fresh,
+    });
+    expect(repeat.recovery?.outcome).toBe("already-satisfied");
+    expect(repeat.recovery?.applied).toEqual([]);
+    expect(repeat.recovery?.commitState).toBe("none");
+    expect(await workflowFootprint(fixture.context)).toEqual(afterAlias);
+  });
 });

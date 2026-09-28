@@ -4281,7 +4281,13 @@ describe("Prepare workflow amendment", () => {
       { name: "unknown-key", patch: (fixture) => preparePatchOf(fixture, { replacePlans: [] }) },
       { name: "missing-main-branch", patch: (fixture) => preparePatchOf(fixture, { mainWorktreeBranch: undefined }) },
       { name: "appends-not-an-array", patch: (fixture) => preparePatchOf(fixture, { appendPlans: "plan-append" }) },
-      { name: "bad-parallelism", patch: (fixture) => preparePatchOf(fixture, { planParallelism: "maybe" }) },
+      // A malformed policy value is COMPONENT-scoped (it belongs to the connected
+      // integration/policy group), not a patch-wide shape failure: the case below
+      // addresses nothing else, so the policy component alone is withheld, the
+      // refusal keeps its `invalid-patch` code and no byte moves. The aggregation
+      // of a malformed policy beside an independent component is covered by
+      // "a malformed policy withholds only the connected group it belongs to".
+      { name: "bad-parallelism", patch: (fixture) => preparePatchOf(fixture, { appendPlans: [], planParallelism: "maybe" }) },
       { name: "empty-patch", patch: (fixture) => preparePatchOf(fixture, { appendPlans: [] }) },
     ];
 
@@ -4699,7 +4705,11 @@ describe("Prepare workflow amendment", () => {
     expect(overlapRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
     expect(protectedBytes(overlap)).toEqual(overlapBefore);
 
-    // …and never twice in one correction list.
+    // …and never twice in one correction list. The duplicate is a PER-COMPONENT
+    // problem, not a preflight throw: both entries are withheld with the
+    // aggregated vocabulary, and a patch that addresses nothing else writes
+    // nothing. (That independent components still land beside it is covered by
+    // "duplicate ids are per-component problems…" below.)
     const duplicate = makePrepareFixture();
     await ensurePrepareCoordinator(duplicate);
     const duplicateBefore = protectedBytes(duplicate);
@@ -4707,6 +4717,7 @@ describe("Prepare workflow amendment", () => {
       amendPrepare(
         duplicate,
         preparePatchOf(duplicate, {
+          appendPlans: [],
           correctPlanFiles: [
             { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
             { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
@@ -4715,6 +4726,12 @@ describe("Prepare workflow amendment", () => {
       ),
     );
     expect(duplicateRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(duplicateRefusal.details.plan_id).toBe(PREPARE_ROW);
+    const duplicateRecovery = duplicateRefusal.details.recovery as RecoveryDetails;
+    expect(duplicateRecovery.outcome).toBe("unresolved");
+    expect(duplicateRecovery.applied).toEqual([]);
+    expect(duplicateRecovery.unresolved.map((entry) => entry.path)).toEqual(["correctPlanFiles[0]", "correctPlanFiles[1]"]);
+    expect(duplicateRecovery.commitState).toBe("none");
     expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
 
     // A stale byte token refuses before any pointer moves.
@@ -5409,6 +5426,149 @@ describe("Prepare workflow amendment", () => {
     expect(shapeRecovery.unresolved.map((entry) => entry.path)).toEqual(["patch", "correctPlanFiles", "planParallelism"]);
     expect(protectedBytes(shape)).toEqual(shapeBefore);
   }, 60000);
+
+  test("a malformed policy withholds only the connected group it belongs to while an independent correction lands (independent amendment — A23/A27)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // `planParallelism` is the execution-policy member of the connected
+    // integration/policy group, so a value outside the approved set is that
+    // GROUP's own problem: it must not fail the whole amendment before the
+    // partition, because the pointer correction beside it is independent.
+    const refusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        fixture,
+        preparePatchOf(fixture, {
+          appendPlans: [],
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+          ],
+          integrationWorktreePath: fixture.integrationPath,
+          planParallelism: "maybe",
+        }),
+      ),
+    );
+
+    // The refusal keeps the malformed field's own code and details, and the ONE
+    // receipt names the whole call: the withheld connected pair, the component
+    // that landed and the commit boundary between them.
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-patch");
+    expect(refusal.details.actual).toBe("maybe");
+    expect(refusal.details.allowed).toEqual(["serial", "parallel"]);
+    expect(refusal.details.withheld_components).toEqual([
+      `integration-worktree ${fixture.integrationPath}`,
+      "execution-policy maybe",
+    ]);
+    const recovery = refusal.details.recovery as RecoveryDetails;
+    expect(recovery.outcome).toBe("partial");
+    expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
+    expect(recovery.unresolved.map((entry) => entry.component)).toEqual([
+      `integration-worktree ${fixture.integrationPath}`,
+      "execution-policy maybe",
+    ]);
+    expect(recovery.unresolved.map((entry) => entry.path)).toEqual(["integrationWorktreePath", "planParallelism"]);
+    expect(recovery.unresolved.map((entry) => entry.code)).toEqual([
+      "coordination.prepare-amendment.invalid-patch",
+      "coordination.prepare-amendment.invalid-patch",
+    ]);
+    // The policy problem names its own minimum choice and the fact it read, so the
+    // caller repairs the value instead of re-deriving the whole patch.
+    expect(recovery.unresolved[1]!.currentFacts[0]).toContain("planParallelism must be one of serial | parallel");
+    expect(recovery.unresolved[1]!.needed).toBe("one of serial | parallel");
+    expect(recovery.commitState).toBe("partial");
+
+    // The independent repair landed ONCE and the connected pair left no fact:
+    // no checkout recorded, the policy still serial.
+    const after = prepareSnapshotOf(fixture);
+    expect(after.plans).toHaveLength(1);
+    expect(after.plans[0]!.file).toBe(join(fixture.planDir, `${PREPARE_ROW}.md`));
+    expect(after.integration_worktree_path).toBeUndefined();
+    expect(after.execution_policy).toEqual({ plan_parallelism: "serial", worktree_mode: "required" });
+  }, 30000);
+
+  test("duplicate ids are per-component problems while an independent correction lands (independent amendment — A27)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // The same plan id twice in `appendPlans`: no single entry can be resolved,
+    // so BOTH are withheld with the public duplicate code and their own field
+    // path — never a preflight throw that would also block the correction.
+    const refusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        fixture,
+        preparePatchOf(fixture, {
+          appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND), prepareAppendOf(fixture, PREPARE_APPEND)],
+          correctPlanFiles: [
+            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+          ],
+        }),
+      ),
+    );
+
+    expect(refusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
+    expect(refusal.details.plan_id).toBe(PREPARE_APPEND);
+    expect(refusal.details.withheld_components).toEqual([
+      `append plan ${PREPARE_APPEND}`,
+      `append plan ${PREPARE_APPEND}`,
+    ]);
+    const recovery = refusal.details.recovery as RecoveryDetails;
+    expect(recovery.outcome).toBe("partial");
+    expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
+    expect(recovery.unresolved.map((entry) => entry.path)).toEqual(["appendPlans[0]", "appendPlans[1]"]);
+    expect(recovery.unresolved.map((entry) => entry.code)).toEqual([
+      "coordination.prepare-amendment.duplicate-plan",
+      "coordination.prepare-amendment.duplicate-plan",
+    ]);
+    for (const problem of recovery.unresolved) {
+      expect(problem.currentFacts[0]).toContain(`${PREPARE_APPEND} appears twice in one patch`);
+      expect(problem.needed).toContain("a plan id this workflow does not already hold");
+    }
+    expect(recovery.commitState).toBe("partial");
+
+    // The ambiguous appends left no row and the independent pointer moved once.
+    const after = prepareSnapshotOf(fixture);
+    expect(after.plans).toHaveLength(1);
+    expect(after.plans[0]!.file).toBe(join(fixture.planDir, `${PREPARE_ROW}.md`));
+  }, 30000);
+
+  test("an aliased checkout spelling reports the canonical component identity of the same checkout (independent amendment — canonical identity)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // ONE integration checkout spelled three ways: its canonical path, a lexical
+    // alias and a symlink. §4.1/E08 the component identity is the CANONICAL
+    // effective path — the value the proposal records, and the identity the ACTIVE
+    // route builds from `canonicalTarget(operation.path)` — so a spelling can
+    // never create a second `integration-worktree` component.
+    const lexical = `${fixture.integrationPath}/../${basename(fixture.integrationPath)}`;
+    const symlink = join(fixture.root, "wt-integration-alias");
+    symlinkSync(fixture.integrationPath, symlink, "dir");
+    const identity = `integration-worktree ${fixture.integrationPath}`;
+
+    const applied = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, { appendPlans: [], integrationWorktreePath: lexical }),
+    );
+
+    expect(applied.recovery?.applied).toEqual([identity]);
+    // The recorded fact is that same canonical path, so receipt and snapshot agree.
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBe(fixture.integrationPath);
+
+    // A DIFFERENT SPELLING of a satisfied checkout is not a second component: the
+    // symlink alias is recognized as the effect already held, so no byte moves.
+    const before = protectedBytes(fixture);
+    const replayed = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, { appendPlans: [], integrationWorktreePath: symlink }),
+    );
+
+    expect(replayed.outcome).toBe("already-satisfied");
+    expect(replayed.recovery?.outcome).toBe("already-satisfied");
+    expect(replayed.recovery?.applied).toEqual([]);
+    expect(replayed.recovery?.unresolved).toEqual([]);
+    expect(
+      replayed.recovery?.warnings.find((entry) => entry.code === "coordination.prepare-amendment.held")?.path,
+    ).toBe(identity);
+    expect(replayed.recovery?.commitState).toBe("none");
+    expect(protectedBytes(fixture)).toEqual(before);
+  }, 30000);
 });
 
 /* ------------------------------------------------------------------------ *

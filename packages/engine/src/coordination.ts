@@ -7858,10 +7858,21 @@ function readIntegrationGroup(input: {
   patch: Record<string, unknown>;
   context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; main: MainWorktreeInfo | null; cwd: string };
   recordedPath: string | undefined;
+  /** The policy value the group would record, when the patch named an approved one. */
   requestedPolicy: string | undefined;
+  /** Whether the patch addressed `planParallelism` at all — a malformed value included. */
+  policyRequested: boolean;
+  /** The identity of the policy member, naming the value the caller sent. */
+  policyIdentity: string;
+  /** A malformed `planParallelism` value: this GROUP's own problem (E08 fix round 1). */
+  policyProblem: { code: string; message: string; needed: string; details: Record<string, unknown> } | undefined;
   recordedParallelism: unknown;
   checkoutFact: { code: string; message: string; details: Record<string, unknown> } | undefined;
 }): {
+  /** The identity of the requested checkout component, built from its canonical effective path. */
+  pathComponent: string;
+  /** The identity of the requested policy component. */
+  policyComponent: string;
   path?: string;
   pathHeld: boolean;
   policy?: string;
@@ -7873,24 +7884,39 @@ function readIntegrationGroup(input: {
   const { context } = input;
   const requestedPath = input.patch.integrationWorktreePath;
   const pathRequested = requestedPath !== undefined;
-  const policyRequested = input.requestedPolicy !== undefined;
-  const pathIdentity = isNonEmptyString(requestedPath) ? requestedPath : String(requestedPath ?? "");
-  const pathComponent = prepareAmendmentComponent("integration-worktree", pathIdentity);
-  const policyComponent = prepareAmendmentComponent("execution-policy", input.requestedPolicy ?? "");
+  const policyRequested = input.policyRequested;
+  // §4.1/E08 the checkout component's identity is the CANONICAL effective path —
+  // the value this call records — so a lexical or symlink alias of one checkout
+  // can never be a second `recovery` component, and it is the same identity the
+  // ACTIVE route builds from `canonicalTarget(operation.path)`.
+  const pathComponent = prepareAmendmentComponent(
+    "integration-worktree",
+    isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : String(requestedPath),
+  );
+  const policyComponent = prepareAmendmentComponent("execution-policy", input.policyIdentity);
   const effectivePath = isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : input.recordedPath;
   const pathHeld = pathRequested && isNonEmptyString(requestedPath) && canonicalTarget(requestedPath) === input.recordedPath;
-  const policyHeld = policyRequested && input.requestedPolicy === input.recordedParallelism;
+  // A malformed value is never the effect already held: it is this group's problem.
+  const policyHeld =
+    policyRequested && input.policyProblem === undefined && input.requestedPolicy === input.recordedParallelism;
   const problems: PrepareAmendmentProblem[] = [];
   const pathChanges = pathRequested && !pathHeld;
   const policyChanges = policyRequested && !policyHeld;
-  if (!pathChanges && !policyChanges) return { pathHeld, policyHeld, problems, effectivePath };
+  if (!pathChanges && !policyChanges) {
+    return { pathComponent, policyComponent, pathHeld, policyHeld, problems, effectivePath };
+  }
   const members = [
     ...(pathRequested ? [{ component: pathComponent, path: "integrationWorktreePath" }] : []),
     ...(policyRequested ? [{ component: policyComponent, path: "planParallelism" }] : []),
   ];
   // The connected group is withheld as ONE unit: each member names the same
   // problem, so neither of them can be observed as applied on its own.
-  const withhold = (code: string, message: string, details: Record<string, unknown>, sourcesTried?: readonly string[]): void => {
+  const withhold = (
+    code: string,
+    message: string,
+    details: Record<string, unknown>,
+    options: { sourcesTried?: readonly string[]; needed?: string } = {},
+  ): void => {
     for (const member of members) {
       problems.push(
         componentProblem({
@@ -7899,12 +7925,21 @@ function readIntegrationGroup(input: {
           code,
           message,
           details,
-          needed: AMENDMENT_MINIMUM[code] ?? `the ${member.path} entry revised so this component can be applied`,
-          ...(sourcesTried === undefined ? {} : { sourcesTried }),
+          needed: options.needed ?? AMENDMENT_MINIMUM[code] ?? `the ${member.path} entry revised so this component can be applied`,
+          ...(options.sourcesTried === undefined ? {} : { sourcesTried: options.sourcesTried }),
         }),
       );
     }
   };
+  // A malformed component-scoped field withholds the GROUP it belongs to: the
+  // policy value this patch addressed cannot be recorded, so the connected
+  // checkout member cannot land without it either (E08 fix round 1) — while the
+  // appends and corrections of the same patch are unaffected (A23/A27).
+  if (input.policyProblem !== undefined) {
+    withhold(input.policyProblem.code, input.policyProblem.message, input.policyProblem.details, {
+      needed: input.policyProblem.needed,
+    });
+  }
   // §4.1 the integration OWNERSHIP is in flight: neither member may rewrite a
   // fact the merging owner is using (A06: appends and corrections are not
   // affected — they consume no integration ownership).
@@ -7939,10 +7974,12 @@ function readIntegrationGroup(input: {
   // A24/A25 the checkout/branch fact this pair consumes — the same partition the
   // appended rows obey.
   if (input.checkoutFact !== undefined && pathRequested) {
-    withhold(input.checkoutFact.code, input.checkoutFact.message, input.checkoutFact.details, [
-      "integrationWorktreePath (intent.request)",
-      `${resolve(context.cwd)} (main worktree)`,
-    ]);
+    withhold(input.checkoutFact.code, input.checkoutFact.message, input.checkoutFact.details, {
+      sourcesTried: [
+        "integrationWorktreePath (intent.request)",
+        `${resolve(context.cwd)} (main worktree)`,
+      ],
+    });
   }
   let path: string | undefined;
   const main = context.main;
@@ -7953,9 +7990,11 @@ function readIntegrationGroup(input: {
     if (attempt.ok) path = attempt.value;
     else problems.push(attempt.problem);
   }
-  if (problems.length > 0) return { pathHeld, policyHeld, problems, effectivePath };
+  if (problems.length > 0) return { pathComponent, policyComponent, pathHeld, policyHeld, problems, effectivePath };
   return {
     ...(path !== undefined ? { path } : {}),
+    pathComponent,
+    policyComponent,
     pathHeld,
     ...(policyChanges && input.requestedPolicy !== undefined ? { policy: input.requestedPolicy } : {}),
     policyHeld,
@@ -7975,8 +8014,12 @@ function readIntegrationGroup(input: {
  * integration checkout and its policy) commit together or not at all.
  *
  * Only facts that invalidate the patch AS A WHOLE refuse before the partition:
- * the patch shape (aggregated, every broken field path at once), the one
- * identity per addressed plan, and a patch that addresses nothing at all.
+ * the patch shape (aggregated, every broken field path at once — a malformed
+ * `planParallelism` is included there only when another patch-wide reason already
+ * withholds the whole patch) and a patch that addresses nothing at all. Every
+ * other malformation is COMPONENT-scoped and is recorded against the component(s)
+ * it affects — an entry whose id another entry also declares, a policy value
+ * outside the approved set — so it is reported with the components that landed.
  */
 function readPrepareAmendment(
   patch: unknown,
@@ -8051,16 +8094,32 @@ function readPrepareAmendment(
       }),
     );
   }
+  // §4.1/E08 `planParallelism` is a COMPONENT-scoped field: its value is the
+  // `execution-policy` member of the connected integration/policy group, so a
+  // malformed value withholds that GROUP inside the partition instead of failing
+  // the whole amendment before it — an independent component of the same patch
+  // still lands. A patch that IS withheld whole for a genuinely patch-wide
+  // reason additionally names it below, so one answer still lists every broken
+  // field path (A27/§6.2).
   const parallelismValue = patch.planParallelism;
-  if (parallelismValue !== undefined && !(isNonEmptyString(parallelismValue) && PLAN_PARALLELISM_VALUES.includes(parallelismValue))) {
+  const policyProblem =
+    parallelismValue === undefined || (isNonEmptyString(parallelismValue) && PLAN_PARALLELISM_VALUES.includes(parallelismValue))
+      ? undefined
+      : {
+          code: invalidPatch,
+          message: `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(parallelismValue ?? null)}`,
+          needed: `one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`,
+          details: { allowed: [...PLAN_PARALLELISM_VALUES], actual: parallelismValue ?? null },
+        };
+  if (shape.length > 0 && policyProblem !== undefined) {
     shape.push(
       componentProblem({
         component: "patch",
         path: "planParallelism",
-        code: invalidPatch,
-        message: `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(parallelismValue ?? null)}`,
-        needed: `one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`,
-        details: { allowed: [...PLAN_PARALLELISM_VALUES], actual: parallelismValue ?? null },
+        code: policyProblem.code,
+        message: policyProblem.message,
+        needed: policyProblem.needed,
+        details: policyProblem.details,
         withheldEffect: wholePatchWithheld,
       }),
     );
@@ -8080,6 +8139,11 @@ function readPrepareAmendment(
   const appends: readonly unknown[] = Array.isArray(appendsValue) ? appendsValue : [];
   const correctionsIn: readonly unknown[] = Array.isArray(correctionsValue) ? correctionsValue : [];
   const requestedPolicy = isNonEmptyString(parallelismValue) ? parallelismValue : undefined;
+  // Whether the patch ADDRESSED the policy at all, so a malformed value is a
+  // component of this patch rather than an unaddressed field. The identity names
+  // the value the caller sent, exactly as the checkout component names its path.
+  const policyRequested = parallelismValue !== undefined;
+  const policyIdentity = isNonEmptyString(parallelismValue) ? parallelismValue : String(parallelismValue);
   const requestedPath = patch.integrationWorktreePath;
   const warnings: ResolutionWarning[] = [];
   // The caller's checkout identity. A component that CONSUMES an owned
@@ -8133,21 +8197,49 @@ function readPrepareAmendment(
     }
   }
   // §4.1 one identity per addressed plan: an id is either new (appended) or
-  // existing (corrected), never both, and never twice in one patch.
-  const declaredIds = new Set<string>();
+  // existing (corrected), never both, and never twice in one patch. The rule is
+  // enforced PER ENTRY instead of as a preflight throw (E08 fix round 1): an id
+  // that more than one entry declares names no single component, so EVERY entry
+  // carrying it is withheld with its own problem — the same public code and
+  // `plan_id` the whole-patch refusal reported — while the unrelated components
+  // of the same patch still land (A23) and one receipt aggregates them (A27).
+  const appendIdCounts = new Map<string, number>();
+  const correctionIdCounts = new Map<string, number>();
   for (const entry of appends) {
     const id = isPlainObject(entry) ? entry.id : undefined;
     if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
-    if (declaredIds.has(id)) {
-      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in one patch`, { plan_id: id });
-    }
-    declaredIds.add(id);
+    appendIdCounts.set(id, (appendIdCounts.get(id) ?? 0) + 1);
   }
+  for (const entry of correctionsIn) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
+    correctionIdCounts.set(id, (correctionIdCounts.get(id) ?? 0) + 1);
+  }
+  /** The problem of one entry whose plan id no single component can name. */
+  const ambiguousIdProblem = (component: string, path: string, id: string): PrepareAmendmentProblem | undefined => {
+    const appended = appendIdCounts.get(id) ?? 0;
+    const corrected = correctionIdCounts.get(id) ?? 0;
+    if (appended + corrected <= 1) return undefined;
+    const message =
+      appended > 1 && corrected === 0
+        ? `plan ${id} appears twice in one patch`
+        : corrected > 1 && appended === 0
+          ? `plan ${id} appears twice in correctPlanFiles`
+          : `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`;
+    return componentProblem({
+      component,
+      path,
+      code: "coordination.prepare-amendment.duplicate-plan",
+      message,
+      needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+      details: { plan_id: id },
+    });
+  };
 
   // A patch that addresses NOTHING is not an amendment. (§5 a patch whose
   // components all ALREADY hold their effect is not this case: its effect is
   // current, so it is the success below, never an artificial no-op write.)
-  if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && requestedPolicy === undefined) {
+  if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && !policyRequested) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
       `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
@@ -8177,6 +8269,14 @@ function readPrepareAmendment(
     const component = prepareAmendmentComponent("append", id ?? "(unnamed)");
     const path = `appendPlans[${index}]`;
     components.push(component);
+    // §4.1/E08 an entry whose plan id another entry also declares cannot be
+    // resolved: THIS entry is withheld with its own problem while its unrelated
+    // siblings still land (A23/A27).
+    const ambiguous = id === undefined ? undefined : ambiguousIdProblem(component, path, id);
+    if (ambiguous !== undefined) {
+      unresolved.push(ambiguous);
+      continue;
+    }
     if (checkoutFact !== undefined) {
       unresolved.push(
         componentProblem({
@@ -8281,27 +8381,18 @@ function readPrepareAmendment(
 
   // (2) Plan-file corrections — one independent component per entry: the
   // addressed row, the pointer it holds and that plan's canonical document.
-  const correctionIds = new Set<string>();
-  for (const entry of correctionsIn) {
-    const id = isPlainObject(entry) ? entry.id : undefined;
-    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
-    if (declaredIds.has(id)) {
-      throw prepareAmendmentRefusal(
-        "duplicate-plan",
-        `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`,
-        { plan_id: id },
-      );
-    }
-    if (correctionIds.has(id)) {
-      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in correctPlanFiles`, { plan_id: id });
-    }
-    correctionIds.add(id);
-  }
   for (const [index, entry] of correctionsIn.entries()) {
     const id = isPlainObject(entry) && isNonEmptyString(entry.id) ? entry.id : undefined;
     const component = prepareAmendmentComponent("correct-plan-file", id ?? "(unnamed)");
     const path = `correctPlanFiles[${index}]`;
     components.push(component);
+    // §4.1/E08 the same per-entry rule as the appends: one entry of a duplicated
+    // or cross-kind id is withheld with its own problem, never a preflight throw.
+    const ambiguous = id === undefined ? undefined : ambiguousIdProblem(component, path, id);
+    if (ambiguous !== undefined) {
+      unresolved.push(ambiguous);
+      continue;
+    }
     const attempt = captureComponent(component, path, () => readPlanFileCorrection(entry, context));
     if (!attempt.ok) {
       unresolved.push(attempt.problem);
@@ -8333,28 +8424,35 @@ function readPrepareAmendment(
   // (3) The recorded integration checkout and its policy: ONE connected group.
   // Either both requested members land or neither does, and a withheld member
   // carries the same group problem as its partner — never a half-applied pair.
-  const group = readIntegrationGroup({ patch, context, recordedPath, requestedPolicy, recordedParallelism, checkoutFact });
-  const pathComponent =
-    requestedPath === undefined
-      ? undefined
-      : prepareAmendmentComponent("integration-worktree", isNonEmptyString(requestedPath) ? requestedPath : String(requestedPath));
-  const policyComponent =
-    requestedPolicy === undefined ? undefined : prepareAmendmentComponent("execution-policy", requestedPolicy);
-  if (pathComponent !== undefined) components.push(pathComponent);
-  if (policyComponent !== undefined) components.push(policyComponent);
+  const group = readIntegrationGroup({
+    patch,
+    context,
+    recordedPath,
+    requestedPolicy,
+    policyRequested,
+    policyIdentity,
+    policyProblem,
+    recordedParallelism,
+    checkoutFact,
+  });
+  // §4.1/E08 the component identities come from the group itself, built from the
+  // CANONICAL effective path, so the receipt, the recorded fact and the ACTIVE
+  // route's `canonicalTarget(operation.path)` identity are one vocabulary.
+  if (requestedPath !== undefined) components.push(group.pathComponent);
+  if (policyRequested) components.push(group.policyComponent);
   if (group.problems.length > 0) {
     unresolved.push(...group.problems);
   } else {
     // Each held member is recognized instead of re-applied: `applied` names only
     // what this call actually recorded (§4.2/A09 — a replay of the pair spends
     // no second mutation and reports `already-satisfied`).
-    if (pathComponent !== undefined) {
-      if (group.pathHeld) held.push(pathComponent);
-      else if (group.path !== undefined) applied.push(pathComponent);
+    if (requestedPath !== undefined) {
+      if (group.pathHeld) held.push(group.pathComponent);
+      else if (group.path !== undefined) applied.push(group.pathComponent);
     }
-    if (policyComponent !== undefined) {
-      if (group.policyHeld) held.push(policyComponent);
-      else if (group.policy !== undefined) applied.push(policyComponent);
+    if (policyRequested) {
+      if (group.policyHeld) held.push(group.policyComponent);
+      else if (group.policy !== undefined) applied.push(group.policyComponent);
     }
   }
 
