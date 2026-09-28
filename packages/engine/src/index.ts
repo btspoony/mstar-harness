@@ -1056,3 +1056,23 @@ export {
   previewExecutionRestore,
   restoreExecutionBackup,
 } from "./execution-recovery.js";
+// Recovery-first intent contract (S1): the sparse `IntentContext` a public
+// lifecycle operation accepts, the `RecoveryProblem`/`RecoveryDetails`
+// sidecar it reports (`recovery` on success, `error.details.recovery` on a
+// refusal) and the shared per-operation semantic selections
+// (`PLAN_OPERATION_SEMANTICS` / `WORKFLOW_OPERATION_SEMANTICS`,
+// `selectSemanticFields`) the freshness/replay frames compare instead of
+// whole-document hashes. Types and the selection table land here before any
+// caller widens; ADDITIVE export — the engine package's exports map is the
+// only reachable surface for consumers.
+export type {
+  IntentContext,
+  RecoveryDetails,
+  RecoveryProblem,
+  SemanticSelection,
+} from "./recovery-intent.js";
+export {
+  PLAN_OPERATION_SEMANTICS,
+  selectSemanticFields,
+  WORKFLOW_OPERATION_SEMANTICS,
+} from "./recovery-intent.js";
