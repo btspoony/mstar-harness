@@ -18,7 +18,7 @@ iteration-start / execute
                          ──►  compass + plans                 迭代过程产物（gitignored）
                          ✗   {KNOWLEDGE_DIR}/                 不直接新增
 
-iteration-close (§3.2 + specs 提升)
+iteration-close (§3.2 + specs 提升，写入 integration worktree)
   specs 提升流程        ──►  {SPECS_DIR}/                    已锁定的仓库级规格
   mstar-compound       ──►  读 plan 素材 + {ITERATION_DIR}/<id>/**
                          ──►  {KNOWLEDGE_DIR}/                提升值得保留的实施知识
@@ -74,8 +74,9 @@ iteration-close (§3.2 + specs 提升)
 
 ## Knowledge 与 compound 提升
 
-- **`{KNOWLEDGE_DIR}/` 新增**：默认仅在 **iteration-close** §3.2 **`mstar-compound`**。
-- **提升来源（iteration-close）**：除 plan 实现/debug/review 素材外，**必须盘点** `{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平文件；**默认排除** `delivery-compass.md` 除非 PM 显式纳入）。值得跨迭代复用的内容 → 按 compound 双轨模板**重写**进 `{KNOWLEDGE_DIR}/`（非整文件复制）；细则 → **`mstar-compound`**「Iteration package promotion」。
+- **`{KNOWLEDGE_DIR}/` 新增**：默认仅在 **iteration-close** §3.2 **`mstar-compound`**；写入发生在 **integration worktree** 中 tracked 的 `{KNOWLEDGE_DIR}/`，随 close commit 进入 integration 分支。
+- **`{SPECS_DIR}/` 提升（iteration-close）**：满足准入的已审 package specs 由 §3.2 的 specs 提升流程写入 integration worktree 中 tracked 的 `{SPECS_DIR}/`。
+- **提升来源（iteration-close）**：除 plan 实现/debug/review 素材外，**必须盘点** `{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平文件；**默认排除** `delivery-compass.md` 除非 PM 显式纳入）。值得跨迭代复用的内容 → 按 compound 双轨模板**重写**进 integration worktree 中 tracked 的 `{KNOWLEDGE_DIR}/`（非整文件复制）；细则 → **`mstar-compound`**「Iteration package promotion」。
 - **提升后**：在源文件顶部或 package `README.md` 标注 `Promoted to: {KNOWLEDGE_DIR}/...`；源文件**保留**为迭代历史（或迁入 `<iteration-id>/archived/` 若团队约定）。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 

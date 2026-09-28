@@ -47,9 +47,9 @@ PM 批量触发后须：
 
 1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
 2. **盘点** `{ITERATION_DIR}/<iteration-id>/**` package（`guides/`、`specs/`；默认排除 `delivery-compass.md`）— **`mstar-compound`**「Iteration package promotion」；提升值得保留者进 `{KNOWLEDGE_DIR}/`
-3. **specs 提升**：满足 `{SPECS_DIR}` 准入条件的已审 package specs（锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威——`iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）由 PM 以 compound 结构化重写（非整文件复制）写入**主 checkout 的 `{SPECS_DIR}/`**（未提交状态，与 `{KNOWLEDGE_DIR}` 提升同模式）；§3.5 的 tracked 子树配方把它带入 integration worktree 的 close commit、进入 integration 分支。提升同时完成既有登记面：package `README.md` 的 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用指向提升后的权威路径，以及 catalog 登记（`mstar catalog register` / `mstar catalog link`——文档归属与 project/iteration 关系，contract §1/§4；登记时主 checkout 上已存在该文件，catalog 路径可解析）
+3. **specs 提升**：满足 `{SPECS_DIR}` 准入条件的已审 package specs（锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威——`iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）由 PM 以 compound 结构化重写（非整文件复制）**直接写入 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）中 tracked 的 `{SPECS_DIR}/`**——主 checkout（control root）只承载 gitignored 进程产物；该写入随 §3.5 的 close commit 进入 integration 分支。提升同时完成既有登记面：package `README.md` 的 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用指向提升后的权威路径，以及 catalog 登记（`mstar catalog register` / `mstar catalog link`——文档归属与 project/iteration 关系，contract §1/§4；登记指向提升后的 `{SPECS_DIR}` 权威路径，该文件在 close 与 PR review 期间位于 integration worktree 同路径，合并后随 integration 分支出现在各 checkout）
 4. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
-5. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
+5. 在 integration worktree 中写入或更新 tracked 的 `{KNOWLEDGE_DIR}/<category>/<slug>.md`（主 checkout 只承载 gitignored 进程产物；写入随 §3.5 的 close commit 进入 integration 分支）；新领域词更新同处的 `CONCEPTS.md`
 6. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
 
 若无结晶且无 package 提升，仍在 `## Compound Round Summary` 写明 `无可结晶知识` / package 盘点结论及原因。
@@ -83,7 +83,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 
 1. 解析 `<spec_integration_branch>`：snapshot `branch.integration`（workflows/<id>/snapshot.json）→ 缺失时 compass frontmatter `spec_integration_branch`；仍缺 → STOP 补齐，不得默认 `main`。
 2. **先验后提交**（在执行 commit 的检出处）：`git branch --show-current` === `<spec_integration_branch>`。§3.2–§3.4 产生的 tracked close 产物本就应处于未提交状态等待本 commit，**不要求**此处工作树干净。engine 可用 → 在 add/commit **前**运行 `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch <current> --integration <spec_integration_branch> --target <target_branch>` 并确认 exit 无 `EXIT_BRANCH_MISMATCH` / `EXIT_PR_BASE_MISMATCH`（Phase-3 窗口预期的其它 exit-1 除外，见 Phase transition gates 注）。
-3. **mismatch 时**：不产生任何提交。tracked 子树（`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md`、迭代 package 中 tracked 部分）在 **integration worktree**（检出 `<spec_integration_branch>` 的专用检出）重新写入或在 commit 前恢复（它们默认 tracked、随 Git 分支走；进程产物 plans/iterations/status/sdd 经 control root 绝对路径不受影响）。然后重跑本 checklist。
+3. **mismatch 时**：不产生任何提交。tracked 子树（`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md`、迭代 package 中 tracked 部分）的写入本就落在 **integration worktree**（检出 `<spec_integration_branch>` 的专用检出，§3.2 直写）；mismatch 时在正确检出的 integration worktree 重做这些写入，然后重跑本 checklist（进程产物 plans/iterations/status/sdd 为 gitignored 本地工件，经 control root 绝对路径读写，不受影响）。
 
 **在 integration worktree（`integration_worktree_path`，检出 `<spec_integration_branch>`）中执行 —— never the primary checkout**：
 
