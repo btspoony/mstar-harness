@@ -1,25 +1,27 @@
 # iteration-start 产物边界（specs · iterations · knowledge）
 
-> **When**: Phase 1 — PM 初稿落盘、§1.6 Review & Edit chain；Phase 2 迭代执行期可继续写入 iteration package；Phase 3 iteration-close 经 **`mstar-compound`** 提升。
+> **When**: Phase 1 — PM 初稿落盘、§1.6 Review & Edit chain，规格写入 **`<iteration-id>/specs/`**；Phase 2 迭代执行期可继续写入 iteration package；Phase 3 iteration-close 提升 `{SPECS_DIR}` 与 knowledge。
 > **Conflict**: 与 `mstar-artifacts/references/knowledge-and-designs.md` 一致；冲突以 **`mstar-harness-core`** 为准。
 
 ## 三棵树分工（HARD）
 
 | 树 | 路径 | 长期价值 | 谁写（何时） | 典型内容 |
 |----|------|----------|--------------|----------|
-| **Specs（仓库级）** | `{SPECS_DIR}/` | **是** — 跨迭代规范性权威 | product / architect @ **iteration-start** | 已锁定产品/API 规格、ADR、契约 |
+| **Specs（仓库级）** | `{SPECS_DIR}/` | **是** — 跨迭代规范性权威 | **Phase 3 iteration-close** specs 提升流程 | 已锁定产品/API 规格、ADR、契约 |
 | **Iterations** | `{ITERATION_DIR}/` | **迭代级** — 历史快照；可提升 | product / architect / PM @ start & execute | **`<iteration-id>/` package**（compass + specs/guides） |
 | **Knowledge** | `{KNOWLEDGE_DIR}/` | **是** — 可复用实施 SSOT | **`mstar-compound`** @ **iteration-close**（含 package 提升） | 结晶、提升后的长期实施知识 |
 
 ```text
 iteration-start / execute
-  product / architect  ──►  {SPECS_DIR}/                    已锁定的长期规格
-                         ──►  {ITERATION_DIR}/<id>/         迭代 package（compass + specs + guides）
-                         ✗   {KNOWLEDGE_DIR}/                不直接新增
+  product / architect  ──►  {ITERATION_DIR}/<id>/specs/       迭代级规格（gitignored）
+                         ──►  {ITERATION_DIR}/<id>/guides/    过程指南
+                         ──►  compass + plans                 迭代过程产物（gitignored）
+                         ✗   {KNOWLEDGE_DIR}/                 不直接新增
 
-iteration-close (§3.2)
+iteration-close (§3.2 + specs 提升)
+  specs 提升流程        ──►  {SPECS_DIR}/                    已锁定的仓库级规格
   mstar-compound       ──►  读 plan 素材 + {ITERATION_DIR}/<id>/**
-                         ──►  {KNOWLEDGE_DIR}/                提升值得保留的 specs/guides
+                         ──►  {KNOWLEDGE_DIR}/                提升值得保留的实施知识
 ```
 
 ## `{ITERATION_DIR}/<iteration-id>/` 迭代 package（目录优先）
@@ -41,7 +43,7 @@ iteration-close (§3.2)
 |--------|--------|----------|
 | **`delivery-compass.md`** | 范围、plans 表、验收、分支策略、close 摘要 | 长文探索正文（链到 `guides/` / `specs/`） |
 | **`guides/`** | 候选方案、调研、会议记录、实施过程说明 | 已锁定的仓库级规范 |
-| **`specs/`** | 本迭代演进中的规格、迭代内契约草稿 | 已锁定、跨迭代 `{SPECS_DIR}/` 级权威（应升格或已在 `{SPECS_DIR}/`） |
+| **`specs/`** | 本迭代演进中的规格、迭代内契约草稿 | 已锁定、跨迭代的仓库级权威（Phase 3 提升时写入 `{SPECS_DIR}/`） |
 | **`README.md`** | 散文导览（可选；可留 package 说明、`Promoted to:` 标注） | 作为 documents 登记表（归属登记在 catalog，见下） |
 
 **登记（DB 权威，contract §1/§4）**：
@@ -58,15 +60,15 @@ iteration-close (§3.2)
 
 ## `{SPECS_DIR}/` 准入（仓库级长期）
 
-写入 `{SPECS_DIR}/` 前须满足 **至少一条**（与 iteration package 区分）：
+**Phase 1 角色写入 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入。** 进入 `{SPECS_DIR}/` 的内容须满足**至少一条**：
 
 - 决策**已锁定**，变更需显式评审
 - 跨 plan、跨迭代仍成立
 - 本迭代及后续 plan 的 **`primary_spec` / `spec_refs`** 权威来源
 
-**不应**进 `{SPECS_DIR}/`：
+**迭代期产物的去向**（均落在 `<iteration-id>/` package）：
 
-- 仍在迭代内演进的草案 → **`<iteration-id>/specs/`**
+- 迭代内演进的规格草案 → **`<iteration-id>/specs/`**
 - 探索 scratch → **`<iteration-id>/guides/`**
 - 实施踩坑（未整理）→ 留 package 或 plan 素材，**close 时 compound 提升**
 
@@ -81,9 +83,9 @@ iteration-close (§3.2)
 
 | 角色 | 必须编辑 | 禁止 | Draft markers it must clear |
 |------|----------|------|------------------------------|
-| **product-manager** | compass、plans、`{SPECS_DIR}/`、`{ITERATION_DIR}/<iteration-id>/`（guides/specs） | `{KNOWLEDGE_DIR}/` **新增**；迭代草案写入 `{SPECS_DIR}/` | 产品范围 / 优先级 / 验收类 marker |
-| **architect** | 同上 + package `specs/` 技术向 | 同上；在 `{SPECS_DIR}/` 堆实施踩坑 | 架构 / 契约 / 技术设计类 marker |
-| **writing-specialist** | 当轮文档 + `{SPECS_DIR}/` corpus hygiene + 既有 knowledge 卫生 | 代替 compound **提升**；跳过 specs 全库审查 | 行文与 corpus hygiene 类 marker，外加收口「无 marker 残留」核对 |
+| **product-manager** | compass、plans、`{ITERATION_DIR}/<iteration-id>/`（guides/**specs**） | `{KNOWLEDGE_DIR}/` **新增** | 产品范围 / 优先级 / 验收类 marker |
+| **architect** | 同上，`specs/` 以技术向为主 | `{KNOWLEDGE_DIR}/` **新增** | 架构 / 契约 / 技术设计类 marker |
+| **writing-specialist** | 当轮文档 + iteration package corpus hygiene + 既有 knowledge 卫生 | 代替 compound **提升** | 行文与 corpus hygiene 类 marker，外加收口「无 marker 残留」核对 |
 
 > 新增列是**清除义务**（marker 语法与 owner 词汇 → **`phase-1-prepare.md`** §1.3；义务正文 → §1.6），**不**改变上方「必须编辑」的写入范围。
 

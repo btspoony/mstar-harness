@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→6 (execute → close → PR → merge-ready → post-merge close) unless `pause` arg given."
+description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain ({ITERATION_DIR}/<id>/ package; global {SPECS_DIR} is written at Phase 3 iteration-close promotion), PM lock, integration branch; then auto-continue Phase 2→6 (execute → close → PR → merge-ready → post-merge close) unless `pause` arg given."
 agent: project-manager
 input: "[direction] [pause]"
 ---
@@ -107,10 +107,10 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
 - [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
 - [ ] Draft compass + plans + `status.json` registered
-- [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
+- [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / **`<iteration-id>/` package（specs/guides）**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— compass / plans / iteration package 是默认 gitignored 的本地 `.mstar/` 工件，**不** commit、**不** push；tracked `{SPECS_DIR}` 的已审编辑同样**不在 Phase 1 commit**（随 Phase 3 close commit 进入）；never the primary checkout
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入；never the primary checkout
 
 ## 6. Integration Branch
 

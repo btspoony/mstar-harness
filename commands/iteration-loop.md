@@ -81,11 +81,11 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**：`product-man
 - [ ] product-manager / architect / writing-specialist invokes completed（**未**向 `{KNOWLEDGE_DIR}/` 新增）
 - [ ] PM final lock：compass `status: locked` + Prepare gates pass
 - [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
-- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— compass / plans / iteration package 是默认 gitignored 的本地 `.mstar/` 工件，**不** commit、**不** push；tracked `{SPECS_DIR}` 的已审编辑同样**不在 Phase 1 commit**（随 Phase 3 close commit 进入）
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入
 
 ### 6. Integration Branch
 
-Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**（create from `iteration_base_branch`；register branch fields；push the new branch —— **Phase 1 不 commit**：compass / plans / iteration package 等进程产物永不进 Git，tracked `{SPECS_DIR}` 已审编辑随 Phase 3 close commit 进入）。**STOP** if base/target missing。**Immediately** print `## Phase 2: Autonomous Execute` → continue（勾掉 `phase-1-autonomous-start`）。
+Per **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**（create from `iteration_base_branch`；register branch fields；push the new branch —— Phase 1 的全部写入目标均为默认 gitignored 的本地工件，全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入）。**STOP** if base/target missing。**Immediately** print `## Phase 2: Autonomous Execute` → continue（勾掉 `phase-1-autonomous-start`）。
 
 ---
 

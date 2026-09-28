@@ -170,11 +170,11 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 | 树 | Phase 1（start）主责 | 说明 |
 |----|---------------------|------|
-| **`{SPECS_DIR}/`** | product-manager、architect | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
+| **`{SPECS_DIR}/`** | **Phase 3 iteration-close** specs 提升流程 | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
 | **`{ITERATION_DIR}/`** | product-manager、architect、PM | **`<iteration-id>/` package**（`delivery-compass.md` + 迭代级 specs & guides） |
 | **`{KNOWLEDGE_DIR}/`** | **非** start/execute 直写；**`mstar-compound`** @ iteration-close（含 package **提升**） | 可复用实施 SSOT |
 
-**禁止**：product/architect 在 §1.6 向 `{KNOWLEDGE_DIR}/` **新增**；把迭代级草案写入 `{SPECS_DIR}/`（应进 `<iteration-id>/specs/` 或 guides）。
+**写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-compound`** @ iteration-close 写入。
 
 ## 1.6 Review & Edit chain（integration 分支前强制）
 
@@ -182,20 +182,20 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 **Assignment preflight（每次角色 invoke 前，HARD）**：自然语言 / skill 直接触发（非 command 路径）时，本 skill 不依赖 command 层 preflight——**每个** Phase 1 角色派发前，PM 必须运行 assignment preflight（`references/command-shared-invariants.md` 的 warn-only / `enforcement: hard` fail-fast 片段；`enforcement: hard` 时校验失败即阻断派发）。Command 层（`/iteration-start`）走其自身 preflight；本行确保 skill 触发路径门禁不缺失。
 
-派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**创建 integration worktree 或 push `spec_integration_branch`（compass / plans / iteration package 等进程产物默认 gitignored，**从不** commit / push；tracked `{SPECS_DIR}` 的已审编辑同样**不在 Phase 1 commit**，随 Phase 3 close commit 的 tracked 子树配方进入 integration 分支），直到：
+派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**创建 integration worktree 或 push `spec_integration_branch`（Phase 1 的全部写入目标——compass / plans / `<iteration-id>/` package——均为默认 gitignored 的本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入并随 close commit 进入 integration 分支。因此 §1.6 完成后的 §6 仅**新建并 push** integration 分支），直到：
 
-1. **product-manager** → **architect** → **writing-specialist** 已按序 invoke 编辑 compass、plans、`{SPECS_DIR}/` 与 **`{ITERATION_DIR}/<iteration-id>/`** package（guides/specs，按需）；**不得**在 start 链向 `{KNOWLEDGE_DIR}/` 新增
-2. **writing-specialist** 完成 **corpus hygiene**：仅本轮修改的 `{SPECS_DIR}/` / iteration package 与直接相关 knowledge 引用；错放迁回 **`<iteration-id>/`** package；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
+1. **product-manager** → **architect** → **writing-specialist** 已按序 invoke 编辑 compass、plans 与 **`{ITERATION_DIR}/<iteration-id>/`** package（guides/**specs**——Phase 1 规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入）；**不得**在 start 链向 `{KNOWLEDGE_DIR}/` 新增
+2. **writing-specialist** 完成 **corpus hygiene**：仅本轮修改的 iteration package（specs/guides）与直接相关 knowledge 引用；错放迁回 **`<iteration-id>/`** package；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
 3. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
 
 **Marker 清除义务（§1.3，每个被派发角色）**：角色在自己这一轮编辑中**必须**清除 owner 指向自己的 marker，无法清除的在完成前**重新归属给 `PM`** 并写明理由；两种情况都在 Completion Report 中报出**清除计数**（已清 N / 已重新归属 M）。**writing-specialist** 额外承担**收口核对**：除显式重新归属给 `PM` 的 marker 外，**无** marker 残留（语法的唯一 home 是 §1.3；本行不重述其形态）—— 该核对是 PM 置 `status: locked` 的前置。
 
-**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
+**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、package 卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
 
-**完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ catalog 登记（store.db）与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
+**完成证据** = 磁盘上的 compass / plans / iteration 文档修订（specs 在 `<iteration-id>/specs/`）+ iteration package 卫生（与既有 knowledge 引用核对，如有）+ catalog 登记（store.db）与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
-**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / specs / `<iteration-id>/` package）以**未提交**状态留在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。compass / plans / iteration package 是默认 gitignored 的 `{HARNESS_DIR}` 进程产物：**不**搬运、**不** commit、**不** push；tracked `{SPECS_DIR}` 的已审编辑同样**不在 Phase 1 commit**（用户裁决）——Phase 1 结束时仍留在主 checkout 未提交，Phase 3 close 时按 `phase-3-iteration-close.md` §3.5 tracked 子树配方在 integration worktree 重新写入后随 close commit 进入 integration 分支。该例外**不以 commit 收尾**。§6 的 integration-worktree 步骤（**`phase-2-worktree-lease.md` §2.3 checklist step 7**）只新建并 push `spec_integration_branch` 分支本身；**禁止**把主 checkout 上的任何文档或既有用户改动带进 integration worktree。
+**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / `<iteration-id>/` package）以**未提交**状态留在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。Phase 1 的全部写入目标均为默认 gitignored 的 `{HARNESS_DIR}` 本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入并随 close commit 进入 integration 分支。§6 的 integration-worktree 步骤（**`phase-2-worktree-lease.md` §2.3 checklist step 7**）新建并 push `spec_integration_branch` 分支本身；**禁止**把主 checkout 上的任何文档或既有用户改动带进 integration worktree。
 
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。
 
-**Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、新建的 `spec_integration_branch` 已 push（仅 branch push；Phase 1 无 commit——进程产物永不 commit，tracked `{SPECS_DIR}` 编辑随 Phase 3 close commit 进入）之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` §6 走到该 checklist）。
+**Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、新建的 `spec_integration_branch` 已 push（branch push；Phase 1 的写入目标均为 gitignored 本地工件，全局 `{SPECS_DIR}` 在 Phase 3 提升时写入）之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` §6 走到该 checklist）。
