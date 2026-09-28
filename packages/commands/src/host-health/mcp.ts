@@ -82,15 +82,31 @@ function codexMstarServerPresent(content: string): boolean {
   const table = /\[mcp_servers\.([A-Za-z0-9_-]+)\]([\s\S]*?)(?=\n\[|$)/g;
   for (const match of active.matchAll(table)) {
     if (match[1] !== "mstar") continue;
-    const body = match[2] ?? "";
-    const command = /command\s*=\s*"([^"]+)"/.exec(body)?.[1];
-    const args = [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    const body = stripTomlInlineComments(match[2] ?? "");
+    const command = /command\s*=\s*"([^"]*)"/.exec(body)?.[1];
+    const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(body);
+    const args = argsMatch === null ? [] : [...argsMatch[1]!.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
     const argv = [command ?? "", ...args];
     if (argv[0] !== "npx") continue;
     const cli = argv.indexOf("@mstar-harness/cli", 1);
     if (cli !== -1 && argv.slice(cli + 1).includes("mcp")) return true;
   }
   return false;
+}
+
+/** Drop each line's tail after the first `#` that sits outside a quoted
+ * string, so inline comments cannot supply `command`/`args` values. */
+function stripTomlInlineComments(body: string): string {
+  return body.split("\n").map((line) => {
+    let inString = false;
+    let cut = line.length;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i]!;
+      if (ch === '"') inString = !inString;
+      else if (ch === "#" && !inString) { cut = i; break; }
+    }
+    return line.slice(0, cut);
+  }).join("\n");
 }
 
 /** The Cordis YAML config files a dsh profile composes its rows from: the

@@ -113,6 +113,11 @@ describe("MCP doctor health", () => {
     // stripped before the table scan.
     writeFileSync(path.join(root, ".codex", "config.toml"), "# [mcp_servers.mstar]\n# command = \"npx\"\n# args = [\"-y\", \"@mstar-harness/cli\", \"mcp\"]\n", "utf8");
     expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
+
+    // An inline comment cannot supply the argv either: empty args plus a
+    // comment mentioning the launcher stays a mismatch.
+    writeFileSync(path.join(root, ".codex", "config.toml"), "[mcp_servers.mstar]\ncommand = \"npx\" # run args = [\"@mstar-harness/cli\", \"mcp\"]\nargs = [] # from \"@mstar-harness/cli\"\n", "utf8");
+    expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
   });
 
   test("dsh reads the Cordis sources under its profile", () => {
