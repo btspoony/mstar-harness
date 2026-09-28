@@ -1,5 +1,5 @@
 /**
- * Iteration Prepare recovery (R3 / I-000243 / #293) — engine-level targeted
+ * Iteration Prepare recovery (R3 / I-000243 / #293) - engine-level targeted
  * tests for the ordinary-intent derivation contract:
  *
  * - the registration producer declares `phase-1-prepare` and stores a
@@ -135,7 +135,7 @@ function bindCoordinator(fixture: Fixture): string {
   return fixture.envelopePath;
 }
 
-describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-000243)", () => {
+describe("iteration Prepare recovery - ordinary-intent derivation (R3 / I-000243)", () => {
   test("registration declares the Prepare phase and stores the harness-relative compass_ref from an absolute-in-root spelling", async () => {
     const fixture = makeFixture("iter-abs-compass");
     await register(fixture, absoluteCompassRef(fixture));
@@ -160,6 +160,42 @@ describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-0002
     roots.push(outside);
     writeFileSync(path.join(outside, "delivery-compass.md"), "# outside\n");
     await expect(register(fixture, path.join(outside, "delivery-compass.md"))).rejects.toThrow(/outside the harness root/);
+  });
+
+  test("an in-root document reached through an EXTERNAL symlink refuses: the stored relative form would escape", async () => {
+    const fixture = makeFixture("iter-symlink-through-external");
+    const outside = mkdtempSync(path.join(os.tmpdir(), "prepare-through-external-"));
+    roots.push(outside);
+    const inRootCompass = path.join(fixture.harnessDir, "iterations", fixture.workflowId, "delivery-compass.md");
+    const externalLink = path.join(outside, "compass-link");
+    symlinkSync(inRootCompass, externalLink);
+    // The canonical target is inside the root, so containment passes — but
+    // the lexical relative form of the external link escapes it, and a later
+    // removal of the external link would strand the pointer. Refuses at
+    // registration instead (Greptile #301 issue 3).
+    await expect(register(fixture, externalLink)).rejects.toThrow(/stays resolvable/);
+  });
+
+  test("orphan recovery tolerates the pre-normalization compassRef spelling and preserves existing bytes", async () => {
+    const fixture = makeFixture("iter-orphan-legacy-spelling");
+    const absoluteRef = absoluteCompassRef(fixture);
+    // Simulate the pre-change producer: register (which now normalizes),
+    // then rewrite the snapshot's pointer back to the absolute spelling and
+    // drop the root entry — the exact crash/orphan state issue 2 describes.
+    await register(fixture, absoluteRef);
+    const statusPath = path.join(fixture.harnessDir, "status.json");
+    const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: unknown[] };
+    status.workflows = [];
+    writeFileSync(statusPath, `${JSON.stringify(status, null, 2)}\n`);
+    const snapshot = readSnapshot(fixture) as Record<string, unknown>;
+    snapshot.compass_ref = absoluteRef;
+    writeSnapshot(fixture, snapshot);
+    // The retry with the same caller input must recover the orphan (original
+    // bytes preserved verbatim), not refuse on the spelling delta.
+    await register(fixture, absoluteRef);
+    const status2 = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<{ id: string }> };
+    expect(status2.workflows.some((entry) => entry.id === fixture.workflowId)).toBe(true);
+    expect((readSnapshot(fixture) as Record<string, unknown>).compass_ref).toBe(absoluteRef);
   });
 
   test("an in-root symlink whose target lies outside the harness refuses registration", async () => {
@@ -209,7 +245,7 @@ describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-0002
     setArtifactStore(createFsStore(fixture.harnessDir));
     const shown = await showPrepareWorkflow({ sessionPath: envelopePath, cwd: fixture.root });
     // The recorded integration checkout must be a REAL checkout of this
-    // repository (the patch validator proves it) — mirror §2.3's step 3.
+    // repository (the patch validator proves it) - mirror §2.3's step 3.
     const integrationPath = path.join(fixture.root, ".worktrees", "int");
     execFileSync("git", ["-C", fixture.root, "worktree", "add", "-b", `iteration/${fixture.workflowId}`, integrationPath, "main"], { stdio: "pipe" });
     setArtifactStore(createFsStore(fixture.harnessDir));
@@ -238,6 +274,10 @@ describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-0002
     await register(fixture, absoluteCompassRef(fixture));
     const snapshot = readSnapshot(fixture) as Record<string, any>;
     snapshot.phase = "phase-2-execute";
+    // Issue 4: the absolute pointer is still unadopted here, but a BLOCKED
+    // admission must not advertise derivations the refused amendment cannot
+    // apply.
+    snapshot.compass_ref = absoluteCompassRef(fixture);
     writeSnapshot(fixture, snapshot);
     const envelopePath = bindCoordinator(fixture);
     setArtifactStore(createFsStore(fixture.harnessDir));

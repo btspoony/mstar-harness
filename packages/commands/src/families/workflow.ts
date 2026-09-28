@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
   commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
-  executionContextFor, mutateExecutionWorkflow, readCatalogRevisions, readSessionEnvelope,
+  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
@@ -223,7 +223,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       }
       const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
       if (harnessDir === null) return usage("iteration.register", "harness dir not found; supply harness");
-      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef: input.compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+      // Normalize BEFORE the registration workflow/catalog plan is composed:
+      // the catalog identity is derived from this same value, so the caller's
+      // absolute-in-root spelling must reach every consumer in the stored
+      // (harness-relative) contract form — otherwise the producer's own
+      // normalization would disagree with the catalog plan and the post-write
+      // identity check would refuse an otherwise-successful registration
+      // (Greptile #301 issue 1).
+      const compassRef = normalizeIterationCompassRef(input.compassRef, harnessDir, (detail) => new WorkflowInputError(detail));
+      const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       setArtifactStore(createFsStore(harnessDir));
       if (input.expect !== undefined || input.operation !== undefined) {
         if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("iteration.register", "active registration requires main session identity, expect and operation");
