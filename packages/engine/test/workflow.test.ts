@@ -3759,4 +3759,156 @@ describe("closeFileWorkflow — the file-authority close (A17-A20/A28)", () => {
     expect(JSON.stringify(storedRow(storedSnapshot(snapshotPath)))).toBe(rowBytes);
     expect(registeredIds(root)).toEqual([]);
   }, 30000);
+
+  /* ---------------------------------------------------------------------- *
+   * Fix round 1 (L2): the report-only completion admission and the partial
+   * prefix every post-first-row refusal discloses.
+   * ---------------------------------------------------------------------- */
+
+  test("report.only recovery: a paused workflow refuses the owed row before any completion (A17 precondition)", async () => {
+    const root = harnessRoot("file-close-paused-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch });
+    // `paused` is a valid NONTERMINAL status: the route's own report-only
+    // completion refuses it, so a close that composes that same completion must
+    // refuse it too — an accepted InReview row is not advanced underneath a
+    // lifecycle the route leaves alone.
+    const { snapshotPath, coordinatorSession } = await harness(root, {
+      plans: [row],
+      snapshot: { status: "paused" },
+    });
+    const before = readFileSync(snapshotPath, "utf8");
+
+    const refused = await refusalOf(() =>
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    );
+
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain("to still be running");
+    expect(refused.details).toMatchObject({ workflow_id: id, status: "paused" });
+    // Nothing moved: not one committed row, not the terminal write, not the
+    // root cleanup — the refusal is the route's own precondition.
+    const recovery = recoveryOf(refused);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    expect(recovery.applied).toEqual([]);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(storedRow(storedSnapshot(snapshotPath)).status).toBe("InReview");
+    expect(registeredIds(root)).toEqual([id]);
+  }, 30000);
+
+  test("interrupted close: a later row's scope resolution refuses and discloses the applied prefix (A28)", async () => {
+    const root = harnessRoot("file-close-scope-prefix-");
+    const integrationBranch = `integration/${planId}`;
+    // A real repository: the pinned feature commit and the merge attempt the
+    // first row's recorded completion is re-proved against.
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+    git(["init", "-q", "-b", "main"], repo);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"], repo);
+    const baseSha = headOf(repo);
+    const worktreePath = join(root, "wt-feature");
+    git(["worktree", "add", "-q", "-b", sourceBranch, worktreePath], repo);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "feat: fixture"], worktreePath);
+    const sourceSha = headOf(worktreePath);
+    const integrationPath = join(root, "wt-integration");
+    git(["worktree", "add", "-q", "-b", integrationBranch, integrationPath], repo);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", sourceSha, "-m", "Merge fixture"], integrationPath);
+    const resultSha = headOf(integrationPath);
+
+    // The first row's completion is the INTEGRATION route: a two-row workflow is
+    // never standalone, so its owed row is completed from the recorded merge.
+    const { row } = coordinatedRow(root, {
+      worktreePath,
+      workingBranch: sourceBranch,
+      sourceSha,
+      reviewBase: baseSha,
+    });
+    const handoff = coordinationOf(row).handoff as Record<string, unknown>;
+    handoff.state = "merged";
+    handoff.integration = {
+      target_branch: integrationBranch,
+      worktree_path: integrationPath,
+      base_sha: baseSha,
+      started_at: "2026-09-15T01:50:00Z",
+      result_sha: resultSha,
+      verified_at: "2026-09-15T02:00:00Z",
+    };
+    // A second owed row whose pinned Assignment is gone: its own scope
+    // resolution refuses — AFTER the first row of the same close committed.
+    const { row: broken } = coordinatedRow(root, { planId: peerPlan, worktreePath, workingBranch: sourceBranch });
+    rmSync(join(root, `assignment-${peerPlan}.md`), { force: true });
+    const { snapshotPath, coordinatorSession } = await harness(root, {
+      plans: [row, broken],
+      snapshot: {
+        delivery_kind: "development",
+        completion_policy: undefined,
+        branch: { source: sourceBranch, target: "main", integration: integrationBranch },
+        integration_worktree_path: integrationPath,
+      },
+    });
+
+    const refused = await refusalOf(() =>
+      closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession }),
+    );
+
+    // The later step's own refusal keeps its code and message, and declares the
+    // boundary this close already committed instead of claiming nothing moved.
+    expect(refused.code).toBe("coordination.assignment-invalid");
+    expect(refused.message).toContain("Assignment not found");
+    expect(refused.details).toMatchObject({ workflow_id: id, plans_completed: [planId] });
+    const recovery = recoveryOf(refused);
+    expect(recovery.outcome).toBe("partial");
+    expect(recovery.commitState).toBe("partial");
+    expect(recovery.applied).toEqual([`close on plan ${planId}`]);
+    // The prefix stands and is resumable: the first row is Done with its
+    // completed handoff, the second is untouched, the lifecycle is still
+    // running and still registered.
+    const stored = storedSnapshot(snapshotPath);
+    const rows = stored.plans as Array<Record<string, unknown>>;
+    expect(rows[0]!.status).toBe("Done");
+    expect(coordinationOf(rows[0]!).handoff).toMatchObject({ id: "handoff-1", state: "completed" });
+    expect(rows[1]!.status).toBe("InReview");
+    expect(stored.status).toBe("running");
+    expect(registeredIds(root)).toEqual([id]);
+  }, 30000);
+
+  test("interrupted close: a root-cleanup refusal after the terminal commit discloses the applied prefix (A28)", async () => {
+    const root = harnessRoot("file-close-cleanup-prefix-");
+    const worktreePath = join(root, "wt-feature");
+    mkdirSync(worktreePath, { recursive: true });
+    const { row } = coordinatedRow(root, { worktreePath, workingBranch: sourceBranch });
+    const { snapshotPath, coordinatorSession } = await harness(root, { plans: [row] });
+
+    // The row completion AND the terminal write commit; the root register is
+    // then unreadable, so the cleanup step refuses on the last boundary.
+    setFileCloseGapForTest((stage) => {
+      if (stage === "cleanup") writeFileSync(join(root, "status.json"), "{ unreadable root\n");
+    });
+    const refusal = await (async () => {
+      try {
+        await closeFileWorkflow({ harnessRoot: root, workflowId: id, endedAt, sessionPath: coordinatorSession });
+      } catch (error) {
+        return error as Error & { details?: Record<string, unknown> };
+      }
+      throw new Error("expected the close to refuse at the root cleanup");
+    })();
+    setFileCloseGapForTest(undefined);
+
+    // The cleanup boundary's own refusal (the root register's unreadable
+    // document) is reported with the prefix this close already committed.
+    expect(refusal.message).toMatch(/Invalid JSON/);
+    const recovery = refusal.details?.recovery as Record<string, unknown> | undefined;
+    expect(recovery?.outcome).toBe("partial");
+    expect(recovery?.commitState).toBe("partial");
+    expect(recovery?.applied).toEqual([`close on plan ${planId}`]);
+    expect(refusal.details?.plans_completed).toEqual([planId]);
+    // Both committed steps stand: the row is Done and the terminal snapshot is
+    // the durable completion fact the retry resumes from.
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.status).toBe("completed");
+    expect(stored.ended_at).toBe(endedAt);
+    expect(storedRow(stored).status).toBe("Done");
+  }, 30000);
 });

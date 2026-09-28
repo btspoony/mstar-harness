@@ -5267,6 +5267,25 @@ export function assertStandaloneSourceGitProof(
   }
 }
 
+/**
+ * The ONE lifecycle precondition every file-route completion admission shares:
+ * a row may only be COMPLETED while its workflow is still `running`. `paused`
+ * is a valid nonterminal status, so completing a row from any other status
+ * would advance a lifecycle its own route refuses to advance. Every entry that
+ * composes a completion — the route's own `complete` (standalone and
+ * report-only) and the composed close that mirrors it — admits the row through
+ * this same function.
+ */
+function assertCompletionRunningStatus(context: RowContext, what: string): void {
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+}
+
 async function assertStandaloneCompletionPrecheck(
   context: RowContext,
   scope: ResolvedPlanScope,
@@ -5274,13 +5293,7 @@ async function assertStandaloneCompletionPrecheck(
   handoff: PlanHandoff,
 ): Promise<void> {
   assertStandaloneRoute(context.snapshot, scope.planId, "complete");
-  if (context.snapshot.status !== "running") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
-      { workflow_id: context.snapshot.id, status: context.snapshot.status },
-    );
-  }
+  assertCompletionRunningStatus(context, "complete");
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
@@ -5345,13 +5358,7 @@ async function assertStandaloneReportOnlyCompletionPrecheck(
       { plan_id: scope.planId },
     );
   }
-  if (context.snapshot.status !== "running") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
-      { workflow_id: context.snapshot.id, status: context.snapshot.status },
-    );
-  }
+  assertCompletionRunningStatus(context, "complete");
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
@@ -6241,7 +6248,8 @@ function closeOwesRow(snapshot: WorkflowSnapshot, row: PlanRow): boolean {
  * route's own facts, and runs the file route's own completion rules —
  * `assertStandaloneCompletionPrecheck` / `assertIterationCompletionPrecheck`
  * verbatim, and for the report-only route the same chain minus the one rule
- * this call is about to satisfy (the recorded fulfilment).
+ * this call is about to satisfy (the recorded fulfilment) — including the
+ * shared running-status precondition every completion admission enforces.
  */
 async function closeRowDecision(
   context: RowContext,
@@ -6290,6 +6298,13 @@ async function closeRowDecision(
       if (fulfilment === null) return { kind: "satisfied" };
       return { kind: "projection", fulfilment };
     }
+    // §4.1 the row is about to be COMPLETED, so it passes the same lifecycle
+    // precondition the route's own report-only completion enforces
+    // (`assertStandaloneReportOnlyCompletionPrecheck`): a `paused` workflow,
+    // whose rows the ordinary route leaves alone, is never advanced by the
+    // close. The projection-only repair above rewrites no row byte and stays
+    // the replay `reconcile` performs, so it is not gated here.
+    assertCompletionRunningStatus(context, what);
     const prepared = context.coordination?.prepared;
     if (prepared === undefined) {
       throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared in this workflow`, {
@@ -6477,19 +6492,23 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
           { workflow_id: input.workflowId, plan_id: planId },
         );
       }
-      const scope = await resolvePlanScope(
-        { workflowId: input.workflowId, planId, harnessDir: harnessRoot },
-        harnessRoot,
-      );
+      // §4.1 every step one owed row takes here — its own scope resolution, the
+      // completion it composes and the read-back of the state the next row is
+      // admitted on — is a step of THIS composed close: a refusal anywhere in it
+      // discloses the prefix already committed instead of escaping undeclared.
       try {
+        const scope = await resolvePlanScope(
+          { workflowId: input.workflowId, planId, harnessDir: harnessRoot },
+          harnessRoot,
+        );
         if (await commitCloseRow({ scope, session, sessionPath: input.sessionPath, expectedRevision: rowRevisionOf(row), what })) {
           composed.push(planId);
         }
+        snapshot = readWorkflowSnapshot(workflowDir).snapshot;
       } catch (error) {
         throw discloseFileClosePrefix(error, composed, input.workflowId);
       }
       fileCloseGapForTest?.("completion");
-      snapshot = readWorkflowSnapshot(workflowDir).snapshot;
     }
     try {
       snapshot = await closeWorkflow(input.workflowId, workflowDir, {
@@ -6502,9 +6521,16 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
     fileCloseGapForTest?.("cleanup");
   }
   // §R10 the root cleanup is the residue a crash between the boundaries leaves:
-  // idempotent, and the ONLY step a committed terminal snapshot still owes.
-  const hadEntry = findRegisteredWorkflow(harnessRoot, input.workflowId) !== undefined;
-  if (hadEntry) await unregisterWorkflow(statusPath, input.workflowId);
+  // idempotent, and the ONLY step a committed terminal snapshot still owes. Its
+  // own refusal is a step of the same composed close, so the applied prefix it
+  // left behind is disclosed with it.
+  let hadEntry = false;
+  try {
+    hadEntry = findRegisteredWorkflow(harnessRoot, input.workflowId) !== undefined;
+    if (hadEntry) await unregisterWorkflow(statusPath, input.workflowId);
+  } catch (error) {
+    throw discloseFileClosePrefix(error, composed, input.workflowId);
+  }
   return {
     snapshot,
     composed,
