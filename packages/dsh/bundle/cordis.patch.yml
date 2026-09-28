@@ -1,17 +1,33 @@
-# The mstar profile-bundle patch: ONE insert of the mstar plugin row over the
-# dsh-base layer (profile `dsh.profile.bundles` order — dsh-base first, this
-# bundle after the web-app layer; later layers win per row).
+# The mstar profile-bundle patch: inserts the mstar plugin row AND the mstar
+# MCP client row over the dsh-base layer (profile `dsh.profile.bundles` order —
+# dsh-base first, this bundle after the web-app layer; later layers win per
+# row).
 #
 # A patch replaces the targeted row's whole `config` rather than merging into
 # it, so a user-level override must restate every field it keeps (see
-# bundle/README.md). The row ships only neutral defaults: deployment-owned
+# bundle/README.md). The rows ship only neutral defaults: deployment-owned
 # fields (harnessDir, enforcement, dispatchTools, dispatchBinding, skillRoots,
 # bundledSkillDir) stay unset — the plugin resolves its OWN packaged
 # `harness-skills/` mirror (synced by `bundle-assets`) package-relative, so no
 # cwd-anchored default is needed. An absolute `bundledSkillDir` override in
 # the profile layer still wins when a deployment wants a different mirror.
+#
+# The `mstar-mcp` row launches the host-neutral MCP server
+# (`npx @mstar-harness/cli mcp`, stdio) through Cordis's `mcp-client` bridge.
+# It requires the `@deepseek-ai/dsh-mcp-client` plugin in the profile's
+# dependencies (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`);
+# app-boot tolerates the row failing to load without the plugin, in which case
+# no mstar MCP tools appear and `mstar-harness doctor --target dsh` reports
+# the mismatch.
 
 - insert:
     - id: mstar
       name: '@mstar-harness/dsh'
       config: {}
+    - id: mstar-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: mstar
+        transport: stdio
+        command: npx
+        args: ['-y', '@mstar-harness/cli', 'mcp']

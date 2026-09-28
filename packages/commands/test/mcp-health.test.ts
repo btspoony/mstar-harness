@@ -83,4 +83,66 @@ describe("MCP doctor health", () => {
     expect(result.status).toBe("mismatch");
     expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
   });
+
+  test("malformed and non-launching configs are mismatches, never aligned", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-invalid-"));
+    roots.push(root);
+    mkdirSync(path.join(root, ".cursor"), { recursive: true });
+    const cursorConfig = path.join(root, ".cursor", "mcp.json");
+
+    // Bare `null` parses as JSON but is not a config object.
+    writeFileSync(cursorConfig, "null", "utf8");
+    expect(diagnoseMcpTarget("cursor", root, currentRuntime).status).toBe("mismatch");
+
+    // A syntax error reports the parse failure.
+    writeFileSync(cursorConfig, "{not json", "utf8");
+    const broken = diagnoseMcpTarget("cursor", root, currentRuntime);
+    expect(broken.status).toBe("mismatch");
+    expect(broken.errors.join(" ")).toContain("not valid JSON");
+
+    // `npx` buried mid-argv under another executable is not an mstar launch.
+    writeFileSync(cursorConfig, JSON.stringify({ mcpServers: { mstar: { command: "node", args: ["npx", "@mstar-harness/cli", "mcp"] } } }), "utf8");
+    expect(diagnoseMcpTarget("cursor", root, currentRuntime).status).toBe("mismatch");
+
+    // A foreign codex table (not `[mcp_servers.mstar]`) launching the server does not count.
+    mkdirSync(path.join(root, ".codex"), { recursive: true });
+    writeFileSync(path.join(root, ".codex", "config.toml"), "[mcp_servers.other]\ncommand = \"npx\"\nargs = [\"-y\", \"@mstar-harness/cli\", \"mcp\"]\n", "utf8");
+    expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
+  });
+
+  test("dsh reads the Cordis sources under its profile", () => {
+    const dshHome = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-"));
+    roots.push(dshHome);
+    const profileDir = path.join(dshHome, "profiles", "web");
+    mkdirSync(path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client"), { recursive: true });
+    const bundlePatch = path.join(profileDir, "node_modules", "@mstar-harness", "dsh", "bundle", "cordis.patch.yml");
+    mkdirSync(path.dirname(bundlePatch), { recursive: true });
+    writeFileSync(bundlePatch, [
+      "- insert:",
+      "    - id: mstar-mcp",
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      "      config:",
+      "        serverName: mstar",
+      "        transport: stdio",
+        "        command: npx",
+      "        args: ['-y', '@mstar-harness/cli', 'mcp']",
+    ].join("\n"), "utf8");
+    const patched = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+    expect(patched.status).toBe("aligned");
+    expect(patched.notes.join(" ")).toContain("mcp-client");
+
+    // A comment mentioning the row is not a row: comment-only sources stay unavailable.
+    const bareHome = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-bare-"));
+    roots.push(bareHome);
+    const bareProfile = path.join(bareHome, "profiles", "web");
+    mkdirSync(path.join(bareProfile, "node_modules", "@mstar-harness", "dsh", "bundle"), { recursive: true });
+    writeFileSync(path.join(bareProfile, "node_modules", "@mstar-harness", "dsh", "bundle", "cordis.patch.yml"), "# mcp-client @mstar-harness/cli mcp mentioned in prose\n[]\n", "utf8");
+    expect(diagnoseMcpTarget("dsh", bareProfile, currentRuntime).status).toBe("unavailable");
+
+    // A configured row without the bridge plugin installed is a mismatch.
+    const bare = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+    rmSync(path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client"), { recursive: true, force: true });
+    expect(diagnoseMcpTarget("dsh", profileDir, currentRuntime).status).toBe("mismatch");
+    expect(bare.status).toBe("aligned");
+  });
 });

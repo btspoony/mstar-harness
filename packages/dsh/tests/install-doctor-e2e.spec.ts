@@ -36,7 +36,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { FakeSubagentProvider, bootApp, startViaNativeChannel, type BootResult, type FakeLoaderRegistry } from './harness.ts'
 import { FALLBACKS_ENTRY_NAME, fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
@@ -352,7 +352,26 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
 
     // --- CELL 3: both rows mounted (patch reverted) ---
     {
-      await writeFile(join(profileDir(dshHome), 'cordis.patch.yml'), '[]')
+      await writeFile(join(profileDir(dshHome), 'cordis.patch.yml'), [
+        // The pinned registry copy of @mstar-harness/dsh predates the shipped
+        // `mstar-mcp` row, so the mounted deployment declares it at the
+        // profile layer (the operator path until the pinned spec advances).
+        '- insert:',
+        "    - id: mstar-mcp",
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        '      config:',
+        '        serverName: mstar',
+        '        transport: stdio',
+        '        command: npx',
+        "        args: ['-y', '@mstar-harness/cli', 'mcp']",
+        '',
+      ].join('\n'))
+      // doctor reports healthy only with the Cordis bridge plugin installed,
+      // so the mounted deployment stubs it in (the operator path is
+      // `dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
+      const bridgePackage = join(profileDir(dshHome), 'node_modules', '@deepseek-ai', 'dsh-mcp-client')
+      await mkdir(bridgePackage, { recursive: true })
+      await writeFile(join(bridgePackage, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-mcp-client', version: '0.0.0-e2e' }), 'utf8')
       const dump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
       expect(dump).toContain(`name: '${MSTAR_SPEC}'`)
       expect(dump).toContain('name: dsh-llm-fallbacks')

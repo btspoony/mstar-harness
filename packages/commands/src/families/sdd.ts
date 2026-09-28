@@ -100,8 +100,12 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
         runId: required(input.run, "--run"),
         ...(input.target !== undefined ? { targetPath: input.target } : {}),
       });
-      const assessment = result as { integrity?: { ok?: boolean }; applicability?: string };
-      const assessmentPassed = assessment.integrity?.ok !== false
+      const assessment = result as { integrity?: { ok?: boolean }; applicability?: string; outcome?: string };
+      // "passed" requires the recorded run outcome itself (exit 0, not
+      // running/spawn-error), not just intact bytes and a usable target: a
+      // failed run with no target reads as applicability "not-assessed".
+      const assessmentPassed = assessment.outcome === "passed"
+        && assessment.integrity?.ok !== false
         && assessment.applicability !== "uncertain"
         && assessment.applicability !== "changed";
       return ok(id, { ...result as Record<string, unknown>, assessmentPassed });
