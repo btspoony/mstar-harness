@@ -91,6 +91,7 @@ import { findRegisteredWorkflow, registerWorkflowEntryLocked, validateWorkflowEn
 import {
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
+  derivePlanRegistration,
   iterationWorkflowRegistrationIdentity,
   iterationWorkflowSnapshot,
   planWorkflowRegistrationIdentity,
@@ -413,9 +414,14 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
       const options = workflow.options;
       if (!isPlainObject(options)) invalid("request.workflow.options (RegisterPlanWorkflowOptions) is required");
       requireAbsoluteDir(options.harnessDir, "request.workflow.options.harnessDir");
-      if (!isPlainObject(options.plan)) invalid("request.workflow.options.plan is required (id, title, file)");
-      for (const field of ["id", "title", "file"] as const) {
-        requireText((options.plan as Record<string, unknown>)[field], `request.workflow.options.plan.${field}`);
+      if (!isPlainObject(options.plan)) invalid("request.workflow.options.plan is required (the selected plan document)");
+      // `file` is the selected document; an omitted `id`/`title` is derived
+      // from it (R1) — the resolved producer call still demands both, so the
+      // sparse intent never reaches the snapshot definition undefined.
+      requireText((options.plan as Record<string, unknown>).file, "request.workflow.options.plan.file");
+      for (const field of ["id", "title"] as const) {
+        const value = (options.plan as Record<string, unknown>)[field];
+        if (value !== undefined) requireText(value, `request.workflow.options.plan.${field}`);
       }
       assertDeliveryRegistrationFor(options, "plan", "request.workflow");
       validated = { kind: "plan", workflowId: requireText(workflow.workflowId, "request.workflow.workflowId"), options: options as unknown as RegisterPlanWorkflowOptions };
@@ -739,6 +745,17 @@ function nowRfc3339(): string {
   return new Date().toISOString();
 }
 
+/**
+ * The SEMANTIC identity of one reviewed registration request: the mutation, the
+ * operation id, the actor and the reviewed producer call + catalog delta — and
+ * deliberately NOT `expectedCatalogRevision`. The catalog expectation is a
+ * freshness token, not business intent (design §4.2): a repeat of the same
+ * registration after the catalog has moved is the SAME intent and must replay
+ * or resume, while a changed target, producer payload or reviewed delta stays a
+ * genuine operation conflict. The stored journal delta still carries the
+ * expectation the delta was reviewed against, and `reconcileCatalogExecution`
+ * enforces it, so nothing loses its comparison basis.
+ */
 function requestHash(request: CatalogExecutionRequest): string {
   return createHash("sha256")
     .update(
@@ -746,7 +763,6 @@ function requestHash(request: CatalogExecutionRequest): string {
         mutation: "registerCatalogExecution",
         operationId: request.operationId,
         actor: request.actor,
-        expectedCatalogRevision: request.expectedCatalogRevision,
         workflow: request.workflow,
         delta: request.delta,
       }),
@@ -1212,15 +1228,33 @@ export function writeBinding(
  * (a pending operation, which refuses dispatch) and rethrows — a half-written
  * registration is never reported as success.
  *
+ * R2/A05/A09/A28 — an interrupted registration link is FINISHED by the
+ * ordinary intent, not by a repair call: retrying the same registration (the
+ * same operation id with the same request, or a fresh operation id whose
+ * resolved registration identity matches the pending operation's) resumes that
+ * pending operation through the ONE reconcile implementation and returns its
+ * receipt. The pending operation's own reviewed delta, expectation and files
+ * are used — the retry neither restarts nor duplicates anything, and the
+ * original creation identity/timestamps survive because reconcile re-verifies
+ * the on-disk bytes instead of rewriting them.
+ *
+ * R1/R6/A09 — repeating a registration that already FULLY holds (the same
+ * workflow, the same registration identity and the same reviewed catalog
+ * delta, already committed) returns its recorded receipt: current success, no
+ * duplicate row, no timestamp or revision churn. A repeat whose registration
+ * identity differs is a genuinely different registration and keeps the
+ * create-only refusal.
+ *
  * Refusals: `catalog.registration-invalid` (request/delta shape, before any
  * write), `store.not-active` / `store.not-initialized` / the store-runtime
  * refusals, `catalog.revision-conflict` (the catalog moved past the reviewed
  * expectation), `catalog.registration-conflict` (the execution side is already
  * registered, or belongs to another request), `catalog.registration-pending`
- * (an operation for this workflow — or this operation id — is already in
- * flight), `catalog.registration-aborted` (that operation id is spent),
- * `store.operation-conflict` (the operation id was reused with a different
- * request), plus the producers' own refusals and the catalog domain verbs'
+ * (a DIFFERENT registration is in flight for this workflow — a genuine
+ * identity conflict, not a retry), `catalog.registration-aborted` (that
+ * operation id is spent), `store.operation-conflict` (the operation id was
+ * reused with a different request), plus the producers' own refusals, the
+ * reconcile verdict of a resumed operation, and the catalog domain verbs'
  * refusals at publish. An iteration row whose plan pointer the registered-plan
  * path resolver refuses (`PlanPathError`) throws BEFORE the journal row exists:
  * a refused pointer never becomes a `prepared` operation.
@@ -1238,6 +1272,19 @@ export async function registerCatalogExecution(
   const hash = requestHash(validated);
 
   const prepared = await withJournalWrite(context, (db) => {
+    // The registration identity and reviewed catalog delta a journal row was
+    // prepared against, read tolerantly: a damaged row proves nothing (every
+    // caller below treats an absent value as "not this registration"), and
+    // never throws out of a read.
+    const journalView = (row: JournalRow): { identity: unknown; catalog: unknown } => {
+      try {
+        const parsed = JSON.parse(row.catalog_delta_json) as unknown;
+        if (!isPlainObject(parsed) || !isPlainObject(parsed.workflow)) return { identity: undefined, catalog: undefined };
+        return { identity: parsed.workflow.identity, catalog: parsed.catalog };
+      } catch {
+        return { identity: undefined, catalog: undefined };
+      }
+    };
     // The operation id is checked FIRST: an idempotent replay of a committed
     // operation must not depend on where the catalog has moved since — only a
     // genuinely new operation is subject to the reviewed expectation.
@@ -1256,12 +1303,28 @@ export async function registerCatalogExecution(
           `operation ${JSON.stringify(validated.operationId)} was aborted and left no writes; re-register with a fresh operation id.`,
         );
       }
-      throw new CatalogRegistrationError(
-        "catalog.registration-pending",
-        `operation ${JSON.stringify(validated.operationId)} is still ${existing.phase} \u2014 it must be reconciled, not restarted: ` +
-          `run "mstar catalog reconcile --operation-id ${validated.operationId}".`,
-      );
+      // The SAME operation — an identical request hash cannot be a different
+      // registration (the hash covers the whole reviewed request) — is still
+      // in flight: this retry finishes its missing link instead of demanding
+      // the `catalog reconcile` ceremony (R6/A28).
+      return { kind: "resume" as const, operationId: existing.operation_id };
     }
+    // R1/R6/A09 — a repeat of a registration that already FULLY holds is a
+    // successful no-op: the same workflow, the same registration identity and
+    // the same reviewed catalog delta, already committed. Its recorded receipt
+    // is returned and nothing is written, re-timestamped or re-published — the
+    // create-only refusal below stays reserved for a genuinely different
+    // registration of the same workflow id.
+    const committedRows = db
+      .prepare(`select ${JOURNAL_COLUMNS} from catalog_operations where phase = 'committed' order by updated_at asc`)
+      .all() as JournalRow[];
+    const replayRow = committedRows.find((row) => {
+      if (parseJournalWorkflowId(row) !== plan.workflowId) return false;
+      const view = journalView(row);
+      return view.identity === plan.identity && stableJson(view.catalog) === stableJson(validated.delta);
+    });
+    if (replayRow !== undefined) return { kind: "replayed" as const, receipt: receiptOfRow(replayRow) };
+
     const versions = readJournalVersions(db);
     if (versions.catalogRevision !== validated.expectedCatalogRevision) {
       throw new CatalogError(
@@ -1272,11 +1335,19 @@ export async function registerCatalogExecution(
     }
     const inFlight = pendingRows(db).find((row) => parseJournalWorkflowId(row) === plan.workflowId);
     if (inFlight !== undefined) {
+      // A fresh operation id for the SAME registration is a retry: prove it by
+      // the identity the pending operation was prepared against (its own
+      // registration identity, never a re-derived guess). A damaged/unreadable
+      // delta proves nothing, so the refusal below stands.
+      if (journalView(inFlight).identity === plan.identity) {
+        return { kind: "resume" as const, operationId: inFlight.operation_id };
+      }
       throw new CatalogRegistrationError(
         "catalog.registration-pending",
         `workflow ${JSON.stringify(plan.workflowId)} has a pending registration operation ${JSON.stringify(inFlight.operation_id)} ` +
-          `(${inFlight.phase}); a half-registered workflow is never re-registered \u2014 ` +
-          `run "mstar catalog reconcile --operation-id ${inFlight.operation_id}".`,
+          `(${inFlight.phase}) for a DIFFERENT registration identity; a half-registered workflow is never re-registered \u2014 ` +
+          `run "mstar catalog reconcile --operation-id ${inFlight.operation_id}", or abandon it explicitly ` +
+          '("mstar catalog reconcile --abort").',
       );
     }
     insertPrepared(db, validated, hash, journalDeltaOf(plan, validated), { ...readFileVersions(plan), ...versions });
@@ -1284,6 +1355,9 @@ export async function registerCatalogExecution(
   });
 
   if (prepared.kind === "replayed") return prepared.receipt;
+  // The interrupted link is completed through the ONE reconcile path, after the
+  // journal transaction above closed: no nested committing public call.
+  if (prepared.kind === "resume") return await reconcileCatalogExecution(context, prepared.operationId);
 
   // Step 2 — the file primitives. A failure here leaves the prepared row as
   // the recovery record (and any partial bytes it produced), never a receipt.
@@ -1303,11 +1377,23 @@ export async function registerCatalogExecution(
  */
 function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCatalogDelta {
   if (workflow.kind === "plan") {
+    // The plan entity's identity, title and catalog LOCATION are derived from
+    // the selected document (R1) through the same derivation the snapshot row
+    // uses: the reviewed delta states the catalog spelling (plans-root-relative)
+    // while the registered row keeps the §4 canonical pointer, and the two can
+    // never disagree about which document this registration is.
+    const selected = derivePlanRegistration({ harnessDir: workflow.options.harnessDir, plan: workflow.options.plan });
     return {
       entities: [
-        { kind: "plan", id: workflow.options.plan.id, title: workflow.options.plan.title, rootKind: "plans", relativePath: workflow.options.plan.file },
+        {
+          kind: "plan",
+          id: selected.plan.id,
+          title: selected.plan.title,
+          rootKind: "plans",
+          relativePath: selected.catalogRelativePath,
+        },
       ],
-      binding: { catalogKind: "plan", catalogId: workflow.options.plan.id },
+      binding: { catalogKind: "plan", catalogId: selected.plan.id },
     };
   }
   if (workflow.kind === "iteration") {

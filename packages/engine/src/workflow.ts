@@ -26,7 +26,7 @@
  *   snapshot), no harness-root pollution.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
   CoordinationError,
@@ -42,7 +42,7 @@ import {
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
-import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
+import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
@@ -172,6 +172,73 @@ export type WorkflowBranchAnchors = {
  * imports this module (the reverse import would create a cycle).
  */
 export const PREPARE_PHASE = "phase-1-prepare";
+
+/**
+ * The forward phase labels an iteration's ABSENT `phase` derives to once
+ * execution ownership exists (R3). They are the same stage names the iteration
+ * gate transitions to (`iteration.ts` `PhaseTransition`), so a derived label
+ * and the gate can never disagree about what stage the work is in: execution
+ * underway (`EXECUTE_PHASE`), or every row Done with the close still pending
+ * (`CLOSE_PHASE`). A genuinely unstarted iteration derives `PREPARE_PHASE`
+ * instead — never the other way round: execution facts are never reset to fit
+ * a Prepare label.
+ */
+export const EXECUTE_PHASE = "phase-2-execute";
+export const CLOSE_PHASE = "phase-3-close";
+
+/**
+ * The phase derivation for a snapshot that declares NO phase (R3 / #293).
+ *
+ * A registered iteration whose producer predates the phase declaration (or one
+ * registered by hand) carries no `phase` at all. That absence is not a
+ * lifecycle state: the state is provable from the facts the document already
+ * holds. `deriveLifecyclePhase` reads exactly those facts:
+ *
+ * - not a running `type: iteration` — a plan snapshot has no phase concept,
+ *   and a terminal document carries its own outcome — nothing is derived and
+ *   `facts` names why;
+ * - running with NO execution ownership anywhere — every row still `Todo`, no
+ *   row progress, no row `coordination` block, no row `execution_lease`, no
+ *   workflow `integration_merge_lease` — derives `PREPARE_PHASE`. A
+ *   coordinator binding is NOT execution ownership, so a bound-but-unstarted
+ *   iteration still derives Prepare;
+ * - running WITH execution ownership derives the applicable FORWARD label:
+ *   `CLOSE_PHASE` when every row is `Done`, otherwise `EXECUTE_PHASE`.
+ *
+ * The result is a pure read — no snapshot byte is touched (`facts` is the
+ * provenance a caller can report). This is the ONE definition of "what phase
+ * does this document factually sit in"; the registration producer writes
+ * `PREPARE_PHASE` at creation for the same reason this derives it for old
+ * documents.
+ */
+export type LifecyclePhaseDerivation = Readonly<{
+  /** The derived phase, or `undefined` when the facts prove none. */
+  phase: string | undefined;
+  /** The lifecycle facts the decision rests on, in stable order (provenance). */
+  facts: readonly string[];
+}>;
+
+export function deriveLifecyclePhase(snapshot: WorkflowSnapshot): LifecyclePhaseDerivation {
+  const facts: string[] = [`type=${snapshot.type}`, `status=${snapshot.status}`];
+  if (snapshot.type !== "iteration" || snapshot.status !== "running") {
+    return { phase: undefined, facts };
+  }
+  const ownership: string[] = [];
+  if (snapshot.integration_merge_lease !== undefined) ownership.push("workflow integration_merge_lease");
+  const rows = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+  for (const row of rows) {
+    const planId = typeof row.id === "string" && row.id !== "" ? row.id : "(unnamed row)";
+    if (row.status !== undefined && row.status !== "Todo") ownership.push(`plan ${planId} status=${String(row.status)}`);
+    if (row.progress !== undefined && row.progress !== 0) ownership.push(`plan ${planId} progress=${String(row.progress)}`);
+    if (row.execution_lease !== undefined) ownership.push(`plan ${planId} execution_lease`);
+    if (row.coordination !== undefined) ownership.push(`plan ${planId} coordination`);
+  }
+  if (ownership.length === 0) {
+    return { phase: PREPARE_PHASE, facts: [...facts, `plans=${rows.length}`, "every row Todo", "no execution ownership"] };
+  }
+  const allDone = rows.length > 0 && rows.every((row) => row.status === "Done");
+  return { phase: allDone ? CLOSE_PHASE : EXECUTE_PHASE, facts: [...facts, ...ownership] };
+}
 
 export type WorkflowSnapshot = {
   schema_version: 1;
@@ -773,11 +840,20 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
 export const LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
 
 /**
+ * Machine code of the read-time absent-phase derivation diagnostic
+ * (`readWorkflowSnapshot`, R3/#293): the document declared no `phase`, and the
+ * lifecycle facts derived one. Non-blocking — the derived phase is a read-time
+ * view, and the next authorized mutation persists it.
+ */
+export const DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase";
+
+/**
  * Result of the canonical snapshot read: the validated snapshot plus the
- * non-blocking diagnostics collected while reading (currently only the
- * `workflow.snapshot.legacy-control-worktree-path` migration diagnostic for
- * v1-shaped documents). A read with diagnostics is NOT write permission —
- * writers keep strict validation and emit only the canonical shape.
+ * non-blocking diagnostics collected while reading (`workflow.snapshot.
+ * legacy-control-worktree-path` for v1-shaped documents, `workflow.snapshot.
+ * derived-phase` when an absent iteration phase was derived from lifecycle
+ * facts). A read with diagnostics is NOT write permission — writers keep
+ * strict validation and emit only the canonical shape.
  */
 export type WorkflowSnapshotRead = {
   snapshot: WorkflowSnapshot;
@@ -795,6 +871,15 @@ export type WorkflowSnapshotRead = {
  * source file's bytes are never touched; legacy snapshots migrate on their
  * next authorized read-modify-write through the canonical writer. Missing
  * files, malformed JSON, and non-object documents throw.
+ *
+ * R3/#293: a running `type: iteration` document that declares NO `phase`
+ * (registered by a producer that predates the phase declaration, or by hand)
+ * is the `not-prepare` dead end this reader exists to close. The phase is
+ * DERIVED from the lifecycle facts the document already holds
+ * (`deriveLifecyclePhase`) and returned as a read-time view with the
+ * non-blocking `workflow.snapshot.derived-phase` diagnostic — the bytes stay
+ * untouched, and the next authorized mutation persists the repair. Nothing is
+ * derived for a plan snapshot (no phase concept) or a terminal document.
  */
 export class WorkflowSnapshotValidationError extends Error {
   constructor(message: string, readonly violations: ValidationResult[]) { super(message); }
@@ -829,21 +914,42 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
     const detail = blocking.map((v) => `${v.code}: ${v.message}`).join("; ");
     throw new WorkflowSnapshotValidationError(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`, blocking);
   }
+  let snapshot: WorkflowSnapshot;
   if (migration.length === 0) {
-    return { snapshot: doc as WorkflowSnapshot, diagnostics: [] };
+    snapshot = doc as WorkflowSnapshot;
+  } else {
+    // In-memory normalization of the single permitted legacy alias.
+    const raw = doc as Record<string, unknown>;
+    const { control_worktree_path: _legacy, ...rest } = raw;
+    snapshot = { ...rest, integration_worktree_path: raw.control_worktree_path } as unknown as WorkflowSnapshot;
+    const revalidated = validateWorkflowSnapshot(snapshot);
+    if (!revalidated.ok) {
+      const detail = revalidated.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
+      throw new Error(
+        `refusing to read workflow snapshot ${snapshotPath}: legacy normalization produced an invalid document: ${detail}`,
+      );
+    }
   }
-  // In-memory normalization of the single permitted legacy alias.
-  const raw = doc as Record<string, unknown>;
-  const { control_worktree_path: _legacy, ...rest } = raw;
-  const normalized = { ...rest, integration_worktree_path: raw.control_worktree_path } as unknown as WorkflowSnapshot;
-  const revalidated = validateWorkflowSnapshot(normalized);
-  if (!revalidated.ok) {
-    const detail = revalidated.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
-    throw new Error(
-      `refusing to read workflow snapshot ${snapshotPath}: legacy normalization produced an invalid document: ${detail}`,
-    );
+  const diagnostics = [...migration];
+  if (snapshot.phase === undefined) {
+    // R3/#293 — the absent phase is derived from the lifecycle facts, in
+    // memory only. A derived phase is a read-time view: it is reported, never
+    // written here, and a derived FORWARD label (execution ownership already
+    // exists) is never reset to Prepare.
+    const derivation = deriveLifecyclePhase(snapshot);
+    if (derivation.phase !== undefined) {
+      diagnostics.push(
+        violation(
+          "medium",
+          DERIVED_PHASE_CODE,
+          `snapshot ${snapshotPath} declares no phase; the lifecycle facts derive ${derivation.phase} (${derivation.facts.join("; ")})`,
+          "no action needed — the derived phase is a read-time view and the next authorized mutation persists it",
+        ),
+      );
+      return { snapshot: { ...snapshot, phase: derivation.phase }, diagnostics };
+    }
   }
-  return { snapshot: normalized, diagnostics: migration };
+  return { snapshot, diagnostics };
 }
 
 /**
@@ -1652,13 +1758,103 @@ export async function declareWorkflowDeliveryKind(
 // → rollback removes only the exact snapshot version this call created.
 // ---------------------------------------------------------------------------
 
+/**
+ * The plan registration one SELECTED plan document proves (R1, A02): the
+ * identity and title the document itself is the authority for. Reading a
+ * document resolves and proves facts; it never enrolls anything — no snapshot,
+ * no root entry, no catalog row is written here (R1: "research or merely
+ * reading an artifact does not enroll it into execution").
+ *
+ * - `plan.id`: the document's own `plan_id` — the pointer is resolved through
+ *   the ONE registered-plan path contract (§4), so the id, the location and
+ *   the declared header must agree before the id is used.
+ * - `plan.title`: the document's first level-1 heading — the body is the title
+ *   authority, exactly as audit promotion reads it (`audit.ts`
+ *   `readPlanFileSummary`). A document with no heading proves no title, so the
+ *   plan id is the honest fallback rather than a refusal.
+ * - `plan.file`: the canonical absolute pointer the §4 resolver returns, so
+ *   the row is addressable by the same contract that later resolves it.
+ * - `catalogRelativePath`: the same document stated plans-root-relative, which
+ *   is the catalog entity location (`catalog-registration.ts`).
+ *
+ * A fully explicit declaration (`id` AND `title` supplied) is the caller's
+ * reviewed input and is returned verbatim without reading anything — the
+ * create-only producer keeps preserving what its caller declared. Supplying
+ * one of the two derives only the other.
+ */
+export type DerivedPlanRegistration = Readonly<{
+  plan: Readonly<{ id: string; title: string; file: string }>;
+  /** The catalog location spelling of the same document (plans-root-relative). */
+  catalogRelativePath: string;
+  /** The facts this derivation resolved; empty when nothing had to be derived. */
+  resolvedFrom: readonly Readonly<{ path: string; source: string }>[];
+}>;
+
+export function derivePlanRegistration(input: {
+  harnessDir: string;
+  plan: { id?: string; title?: string; file: string };
+}): DerivedPlanRegistration {
+  const file = input.plan.file;
+  const declaredId = typeof input.plan.id === "string" && input.plan.id.trim() !== "" ? input.plan.id : undefined;
+  const declaredTitle =
+    typeof input.plan.title === "string" && input.plan.title.trim() !== "" ? input.plan.title : undefined;
+  if (declaredId !== undefined && declaredTitle !== undefined) {
+    return {
+      plan: { id: declaredId, title: declaredTitle, file },
+      catalogRelativePath: file,
+      resolvedFrom: [],
+    };
+  }
+  if (typeof file !== "string" || file.trim() === "") {
+    throw new Error(
+      "derivePlanRegistration: the selected plan document is required — supply plan.file as the registered plan pointer " +
+        "(`{PLAN_DIR}/<id>.md` or its canonical absolute path)",
+    );
+  }
+  const harnessRoot = resolve(input.harnessDir);
+  // The plan id a pointer names is its file name without the `.md`; the §4
+  // resolver below then proves that id, that location and the document's own
+  // `plan_id` header are the same registration identity.
+  const planId = declaredId ?? basename(file).replace(/\.md$/, "");
+  const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
+  // The body is the title authority (the first level-1 heading); a document
+  // that declares no heading proves no title, so the plan id is the honest
+  // fallback rather than a refusal.
+  const heading = /^# (.+)$/m.exec(readFileSync(resolved.planPath, "utf8"))?.[1]?.trim();
+  const title = declaredTitle ?? (heading === undefined || heading === "" ? planId : heading);
+  // The catalog entity location is plans-root-relative while the row keeps the
+  // §4 canonical pointer: one document, two declared location forms.
+  const catalogRelativePath = relative(canonicalizeNearestExisting(resolvePlanDir(harnessRoot)), resolved.planPath)
+    .split(sep)
+    .join("/");
+  return {
+    plan: { id: planId, title, file: resolved.planPath },
+    catalogRelativePath,
+    resolvedFrom: [
+      {
+        path: "plan.file",
+        source: `registered plan document ${resolved.planPath} (declared plan_id ${resolved.declaredPlanId})`,
+      },
+      ...(declaredId === undefined ? [{ path: "plan.id", source: `registered plan document ${resolved.planPath}` }] : []),
+      ...(declaredTitle === undefined
+        ? [{ path: "plan.title", source: `plan document body of ${resolved.planPath}` }]
+        : []),
+    ],
+  };
+}
+
 /** Options for `registerPlanWorkflow`. `harnessDir` is required — the
  * snapshot and `status.json` live under the harness root. */
 export type RegisterPlanWorkflowOptions = {
   /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
   harnessDir: string;
-  /** The owned plan (contract §2: one independently owned plan per workflow on the new normal route). */
-  plan: { id: string; title: string; file: string };
+  /**
+   * The owned plan (contract §2: one independently owned plan per workflow on
+   * the new normal route). `file` is the selected plan document; `id` and
+   * `title` are DERIVED from it when omitted (R1) — a supplied value is used
+   * exactly as declared.
+   */
+  plan: { file: string; id?: string; title?: string };
   /** Delivery kind declared at registration (contract §1). Required — never inferred. */
   deliveryKind: WorkflowDeliveryKind;
   /** Project register id recorded on the snapshot (contract §3 register row). */
@@ -1729,13 +1925,19 @@ export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): st
  * definition, no second "which registration is this" source. Timestamps are
  * outside the compared identity, so the clock a caller passes never affects
  * the comparison.
+ *
+ * The row is derived from the selected plan document (`derivePlanRegistration`,
+ * R1): an omitted `id`/`title` is resolved from the document here, so the
+ * direct producer and the catalog journal derive the identical row from the
+ * identical inputs rather than each copying the caller's fields.
  */
 export function planWorkflowSnapshot(
   workflowId: string,
   options: RegisterPlanWorkflowOptions,
   startedAt: string,
 ): WorkflowSnapshot {
-  const planRow: PlanRow = { id: options.plan.id, title: options.plan.title, file: options.plan.file, status: "Todo" };
+  const plan = derivePlanRegistration({ harnessDir: options.harnessDir, plan: options.plan }).plan;
+  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
   const snapshot: WorkflowSnapshot = {
     schema_version: 1,
     id: workflowId,
@@ -1819,11 +2021,21 @@ export async function registerPlanWorkflow(
   assertSafePathComponent(workflowId, "workflow id");
   const { plan, deliveryKind } = options;
   if (!isPlainObject(plan)) {
-    throw new Error("registerPlanWorkflow: options.plan is required (the owned plan: id, title, file)");
+    throw new Error("registerPlanWorkflow: options.plan is required (the selected plan document: {PLAN_DIR}/<id>.md)");
   }
-  for (const field of ["id", "title", "file"] as const) {
-    if (typeof plan[field] !== "string" || plan[field].trim() === "") {
-      throw new Error(`registerPlanWorkflow: options.plan.${field} must be a non-empty string`);
+  if (typeof plan.file !== "string" || plan.file.trim() === "") {
+    throw new Error(
+      "registerPlanWorkflow: options.plan.file is required (the selected plan document — an omitted id/title is derived from it)",
+    );
+  }
+  // `id`/`title` are OPTIONAL intent inputs: an omitted one is derived from
+  // the selected document by `planWorkflowSnapshot` (R1). A supplied value is
+  // still validated — an empty declaration is malformed input, not an
+  // omission.
+  for (const field of ["id", "title"] as const) {
+    const value = plan[field];
+    if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`registerPlanWorkflow: options.plan.${field} must be a non-empty string when given`);
     }
   }
   if (typeof deliveryKind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) {

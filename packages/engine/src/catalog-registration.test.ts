@@ -222,30 +222,28 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ operationId: "op-snap", workflowId: "wf-plan-1", kind: "plan", phase: "prepared", rootVisible: false });
 
-    // An operation that is still in flight must be reconciled, not restarted.
-    await expect(
-      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-snap", expectedCatalogRevision: 0 })),
-    ).rejects.toMatchObject({ code: "catalog.registration-pending" });
-    // …and a fresh operation id for the same workflow is refused too: a
-    // half-registered workflow is never re-registered.
-    await expect(
-      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-snap-2", expectedCatalogRevision: 0 })),
-    ).rejects.toMatchObject({ code: "catalog.registration-pending" });
-
-    // Reconcile: the store is healthy again, so the operation completes.
+    // R2/A28 — the ordinary retry FINISHES the interrupted link instead of
+    // demanding the `catalog reconcile` ceremony: the store is healthy again,
+    // so a fresh operation id for the SAME registration resumes the pending
+    // operation and returns ITS receipt (the reviewed delta, expectation and
+    // files of that operation, not the retry's).
     setArtifactStore(createFsStore(harnessDir));
-    const receipt = await reconcileCatalogExecution(context, "op-snap");
-    expect(receipt).toEqual({ operationId: "op-snap", workflowId: "wf-plan-1", catalogRevision: 1, recovered: true });
+    const resumed = await registerCatalogExecution(
+      context,
+      planRequest({ harnessDir, operationId: "op-snap-2", expectedCatalogRevision: 0 }),
+    );
+    expect(resumed).toEqual({ operationId: "op-snap", workflowId: "wf-plan-1", catalogRevision: 1, recovered: true });
     expect(existsSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE))).toBe(true);
     expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
     expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
+    expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     await assertCatalogExecutionCommitted(context, "wf-plan-1");
 
     // Idempotent replay: the same receipt, no new writes, no new revision.
     const snapshotBytes = readFileSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE), "utf8");
     const rootBytes = readFileSync(join(harnessDir, "status.json"), "utf8");
-    expect(await reconcileCatalogExecution(context, "op-snap")).toEqual(receipt);
+    expect(await reconcileCatalogExecution(context, "op-snap")).toEqual(resumed);
     expect((await listCatalog(context, {})).total).toBe(1);
     expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
     expect(readFileSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotBytes);
@@ -384,8 +382,22 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     ).rejects.toMatchObject({ code: "store.operation-conflict" });
     // A committed registration is not re-registered (create-only), even under
     // a fresh operation id.
+    // R1/R6/A09 — …except when it is the SAME registration: the same workflow,
+    // identity and reviewed delta already fully hold, so the repeat is a
+    // successful no-op returning the recorded receipt (no second row, no
+    // timestamp or revision churn).
+    expect(
+      await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay-2", expectedCatalogRevision: 1 })),
+    ).toEqual(receipt);
+    expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
+    expect((await listCatalog(context, {})).total).toBe(1);
+    // A DIFFERENT registration of the same workflow id is not a retry: the
+    // create-only refusal stands and nothing is replaced.
     await expect(
-      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay-2", expectedCatalogRevision: 1 })),
+      registerCatalogExecution(
+        context,
+        planRequest({ harnessDir, operationId: "op-replay-3", expectedCatalogRevision: 1, title: "Another title" }),
+      ),
     ).rejects.toMatchObject({ code: "catalog.registration-conflict" });
     expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
     expect((await listCatalog(context, {})).total).toBe(1);
@@ -418,6 +430,198 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     await assertCatalogExecutionCommitted(context, "wf-plan-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Interrupted registration restart (R2/A05/A09/A28) and the selected-artifact
+// derivation (R1/A02). The scenario the recovery design names: a registration
+// that died between its links. The ordinary intent — the SAME registration
+// asked for again — must finish only the missing link, keep the original
+// creation identity/timestamps, and never recreate, duplicate or adopt
+// anything foreign.
+// ---------------------------------------------------------------------------
+
+describe("catalog execution registration \u2014 interrupted registration restart", () => {
+  test("interrupted registration \u2014 the same operation finishes its own missing root link against the existing bytes", async () => {
+    const { harnessDir, context } = await fixture("interrupted-link-");
+    const request = planRequest({ harnessDir, operationId: "op-link", expectedCatalogRevision: 0 });
+    const receipt = await registerCatalogExecution(context, request);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    const snapshotBytes = readFileSync(snapshotPath, "utf8");
+    const created = JSON.parse(snapshotBytes) as Record<string, unknown>;
+
+    // Reconstruct the interruption exactly: the operation wrote its snapshot
+    // and published its delta, then died before recording how far it got, and
+    // the root entry that made the workflow visible is gone (A05: the root
+    // link is missing after the interruption).
+    const handle = await openStore(context, "write");
+    handle.db
+      .prepare("update catalog_operations set phase = 'prepared', after_versions_json = '{}', result_json = null where operation_id = ?")
+      .run("op-link");
+    handle.close();
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }, null, 2));
+    expect(await listPendingCatalogRegistrations(context)).toHaveLength(1);
+
+    // The ordinary retry — the same operation id and the same request — finishes
+    // the missing link instead of demanding `catalog reconcile`.
+    const resumed = await registerCatalogExecution(context, request);
+    expect(resumed).toEqual({ ...receipt, recovered: true });
+    // The EXISTING bytes are the registration: no second snapshot, no rewritten
+    // timestamp, and the root entry carries the original creation time.
+    expect(readFileSync(snapshotPath, "utf8")).toBe(snapshotBytes);
+    const rootDoc = JSON.parse(readFileSync(join(harnessDir, "status.json"), "utf8")) as {
+      workflows: Array<Record<string, unknown>>;
+    };
+    expect(rootDoc.workflows).toEqual([
+      { id: "wf-plan-1", type: "plan", started_at: created.started_at, dir: "workflows/wf-plan-1" },
+    ]);
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+    // Exactly one catalog row and one revision: the replay published nothing new.
+    expect((await listCatalog(context, {})).total).toBe(1);
+    expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    await assertCatalogExecutionCommitted(context, "wf-plan-1");
+  });
+
+  test("interrupted registration \u2014 a pending operation for a DIFFERENT registration is never adopted", async () => {
+    const { harnessDir, context } = await fixture("interrupted-foreign-");
+    setArtifactStore(failingStore(harnessDir, "snapshot"));
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-first", expectedCatalogRevision: 0 })),
+    ).rejects.toThrow(/injected snapshot write failure/);
+    setArtifactStore(createFsStore(harnessDir));
+
+    // A different registration of the same workflow id is NOT a retry: it
+    // refuses, and the interrupted operation keeps its own reviewed identity.
+    await expect(
+      registerCatalogExecution(
+        context,
+        planRequest({ harnessDir, operationId: "op-second", expectedCatalogRevision: 0, title: "A different plan title" }),
+      ),
+    ).rejects.toMatchObject({ code: "catalog.registration-pending" });
+    expect(existsSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+    expect((await listCatalog(context, {})).total).toBe(0);
+    const pending = await listPendingCatalogRegistrations(context);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ operationId: "op-first", phase: "prepared", rootVisible: false });
+
+    // …and its own retry still finishes it: the refusal did not damage the
+    // operation, and the second attempt adopted nothing.
+    const resumed = await registerCatalogExecution(
+      context,
+      planRequest({ harnessDir, operationId: "op-first", expectedCatalogRevision: 0 }),
+    );
+    expect(resumed).toEqual({ operationId: "op-first", workflowId: "wf-plan-1", catalogRevision: 1, recovered: true });
+    expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
+  test("registration recovery \u2014 the shipped plan registration derives identity, title and catalog location from the selected document", async () => {
+    const { harnessDir, context } = await fixture("derived-plan-");
+    // The selected artifact: a real registered plan document (its own
+    // `plan_id` header is the identity authority, its first heading the title).
+    const planId = "20260918-derived-plan";
+    mkdirSync(join(harnessDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(harnessDir, "plans", `${planId}.md`),
+      `# State projection plan\n\n**plan_id:** ${planId}\n\nBody.\n`,
+      "utf8",
+    );
+
+    // The caller supplies the SELECTED DOCUMENT only: no copied id, no copied
+    // title, and no reviewed delta — the shipped route derives them (R1).
+    const receipt = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: {
+        kind: "plan",
+        workflowId: "wf-derived-1",
+        options: {
+          harnessDir,
+          plan: { file: `plans/${planId}.md` },
+          deliveryKind: "development",
+          branchSource: "feature/20260918-derived-plan",
+          branchTarget: "main",
+          startedAt: "2026-09-18T00:00:00.000Z",
+        },
+      },
+    });
+    expect(receipt).toEqual({ operationId: expect.any(String), workflowId: "wf-derived-1", catalogRevision: 1, recovered: false });
+
+    const snapshot = JSON.parse(
+      readFileSync(join(harnessDir, "workflows", "wf-derived-1", WORKFLOW_SNAPSHOT_FILE), "utf8"),
+    ) as { plans: Array<Record<string, unknown>> };
+    expect(snapshot.plans).toEqual([
+      {
+        id: planId,
+        title: "State projection plan",
+        file: realpathSync(join(harnessDir, "plans", `${planId}.md`)),
+        status: "Todo",
+      },
+    ]);
+    // The catalog entity states the same document, plans-root-relative.
+    const entity = await catalogPlan(context, planId);
+    expect(entity.title).toBe("State projection plan");
+    expect(entity.relativePath).toBe(`${planId}.md`);
+    expect((await resolveCatalogRegistrationState(context, "wf-derived-1")).binding).toEqual({
+      catalogKind: "plan",
+      catalogId: planId,
+      catalogRevision: 1,
+    });
+    // Derived identity, not an independent one: the second run of the same
+    // registration is a successful no-op on the SAME operation identity.
+    const snapshotBytes = readFileSync(join(harnessDir, "workflows", "wf-derived-1", WORKFLOW_SNAPSHOT_FILE), "utf8");
+    expect(
+      await registerShippedCatalogExecution(context, {
+        actor: "project-manager",
+        workflow: {
+          kind: "plan",
+          workflowId: "wf-derived-1",
+          options: {
+            harnessDir,
+            plan: { file: `plans/${planId}.md` },
+            deliveryKind: "development",
+            branchSource: "feature/20260918-derived-plan",
+            branchTarget: "main",
+            startedAt: "2026-09-18T00:00:00.000Z",
+          },
+        },
+      }),
+    ).toEqual(receipt);
+    expect(readFileSync(join(harnessDir, "workflows", "wf-derived-1", WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotBytes);
+    expect((await listCatalog(context, {})).total).toBe(1);
+    expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
+  });
+
+  test("registration recovery \u2014 a registration that already fully holds is a successful no-op (A09)", async () => {
+    const { harnessDir, context } = await fixture("repeat-noop-");
+    const request = planRequest({ harnessDir, operationId: "op-repeat", expectedCatalogRevision: 0 });
+    const receipt = await registerCatalogExecution(context, request);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    const snapshotBytes = readFileSync(snapshotPath, "utf8");
+    const rootBytes = readFileSync(join(harnessDir, "status.json"), "utf8");
+
+    // The same registration asked for again under a fresh operation id: the
+    // current success is returned, with no duplicate row, no re-timestamp and
+    // no revision or catalog churn.
+    const repeated = await registerCatalogExecution(
+      context,
+      planRequest({ harnessDir, operationId: "op-repeat-2", expectedCatalogRevision: 0 }),
+    );
+    expect(repeated).toEqual(receipt);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(snapshotBytes);
+    expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(rootBytes);
+    expect((await listCatalog(context, {})).total).toBe(1);
+    expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    // The second attempt recorded no operation of its own.
+    const handle = await openStore(context, "read");
+    const own = handle.db
+      .prepare("select count(*) as n from catalog_operations where operation_id = ?")
+      .get("op-repeat-2") as { n: number };
+    handle.close();
+    expect(own.n).toBe(0);
   });
 });
 
@@ -793,12 +997,14 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     const first = await shipped(`plans/${PLAN_ID}.md`);
     expect(first.recovered).toBe(false);
 
-    // A same-spelling retry reuses the committed operation id with a moved
-    // request expectation; the canonical spelling must be indistinguishable
-    // from it — a different id would have started a second operation for the
-    // same workflow and never collided with the committed one.
-    await expect(shipped(`plans/${PLAN_ID}.md`)).rejects.toMatchObject({ code: "store.operation-conflict" });
-    await expect(shipped(canonical)).rejects.toMatchObject({ code: "store.operation-conflict" });
+    // A same-spelling retry reuses the committed operation id — even though the
+    // catalog expectation has moved since. The canonical spelling must be
+    // indistinguishable from it: a different id would have started a second
+    // operation for the same workflow instead of replaying the committed one.
+    // R6/A09: the repeat returns the current success (no duplicate row, no
+    // churn), and a moved freshness token is not a different intent.
+    expect(await shipped(`plans/${PLAN_ID}.md`)).toEqual(first);
+    expect(await shipped(canonical)).toEqual(first);
 
     // One operation was ever recorded: the equivalent spelling left no
     // half-registered workflow behind.

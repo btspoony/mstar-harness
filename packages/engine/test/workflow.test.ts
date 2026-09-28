@@ -34,9 +34,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
+  CLOSE_PHASE,
+  DERIVED_PHASE_CODE,
+  EXECUTE_PHASE,
+  PREPARE_PHASE,
   closeWorkflow,
   consultDeliveryEvidence,
   declareWorkflowDeliveryKind,
+  deriveLifecyclePhase,
+  derivePlanRegistration,
   isStandaloneReportOnlyWorkflow,
   isTerminalSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
@@ -2842,4 +2848,209 @@ describe("prepare coordinator recovery audit schema", () => {
     expect(existsSync(path)).toBe(true);
     expect(readWorkflowSnapshot(dir).snapshot.coordination).toBeUndefined();
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// E06a — the missing phase (R3/#293) and the selected plan document as the
+// registration authority (R1). The #293 failure was a producer/consumer
+// disagreement: a manually registered iteration declared no `phase` at all,
+// so every Prepare admission that consumed it dead-ended in `not-prepare` and
+// the only escape was the persist/CAS ceremony. The phase is DERIVED from the
+// lifecycle facts instead: at creation (the producer), on old reads (this
+// reader), and persisted only by whatever authorized mutation comes next.
+// ---------------------------------------------------------------------------
+
+describe("workflow snapshot — missing phase derivation (R3/#293)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** A running iteration document that declares NO phase at all. */
+  function phaseLessIteration(root: string, overrides: Record<string, unknown> = {}): { dir: string; path: string; raw: string } {
+    const dir = join(root, "workflows", "20260928-manual-registration");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const raw = `${JSON.stringify(
+      {
+        schema_version: 1,
+        id: "20260928-manual-registration",
+        type: "iteration",
+        status: "running",
+        started_at: "2026-09-28T00:00:00.000Z",
+        updated_at: "2026-09-28",
+        compass_ref: "iterations/iter-20260928-fixture/delivery-compass.md",
+        branch: { base: "main", integration: "feature/20260928-fixture", target: "main" },
+        plans: [
+          { id: "20260928-plan-a", title: "Plan A", file: "plans/20260928-plan-a.md", status: "Todo" },
+          { id: "20260928-plan-b", title: "Plan B", file: "plans/20260928-plan-b.md", status: "Todo" },
+        ],
+        ...overrides,
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(path, raw, "utf8");
+    return { dir, path, raw };
+  }
+
+  test("missing phase — an old unstarted iteration derives Prepare on read, with no write and no persist step (A04)", () => {
+    const root = tmpRoot("workflow-missing-phase-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const { dir, path, raw } = phaseLessIteration(root);
+
+    const read = readWorkflowSnapshot(dir);
+    expect(read.snapshot.phase).toBe(PREPARE_PHASE);
+    expect(read.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([DERIVED_PHASE_CODE]);
+    expect(read.diagnostics[0]!.severity).toBe("medium");
+    // The derived phase is a read-time view: the document's own bytes are
+    // untouched, nothing is registered, and no persist/CAS step is involved.
+    expect(readFileSync(path, "utf8")).toBe(raw);
+    expect("phase" in (JSON.parse(raw) as Record<string, unknown>)).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+    expect(read.snapshot.started_at).toBe("2026-09-28T00:00:00.000Z");
+  });
+
+  test("missing phase — a coordinator binding alone is not execution ownership", () => {
+    const root = tmpRoot("workflow-missing-phase-binding-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const { dir } = phaseLessIteration(root, {
+      coordination: {
+        coordinator: { session_id: "s-1", session_file: join(root, "sessions", "s-1.json"), bound_at: "2026-09-28T00:00:00.000Z" },
+      },
+    });
+
+    expect(readWorkflowSnapshot(dir).snapshot.phase).toBe(PREPARE_PHASE);
+  });
+
+  test("missing phase — execution ownership derives the forward stage and is never reset to Prepare (R3)", () => {
+    const root = tmpRoot("workflow-missing-phase-forward-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const executing = phaseLessIteration(root, {
+      plans: [
+        { id: "20260928-plan-a", title: "Plan A", file: "plans/20260928-plan-a.md", status: "InProgress", progress: 40 },
+        { id: "20260928-plan-b", title: "Plan B", file: "plans/20260928-plan-b.md", status: "Todo" },
+      ],
+    });
+    const derived = deriveLifecyclePhase(readWorkflowSnapshot(executing.dir).snapshot);
+    expect(derived.phase).toBe(EXECUTE_PHASE);
+    expect(derived.facts.join(" | ")).toContain("20260928-plan-a status=InProgress");
+    expect(readWorkflowSnapshot(executing.dir).snapshot.phase).toBe(EXECUTE_PHASE);
+
+    const closedOut = phaseLessIteration(root, {
+      plans: [
+        { id: "20260928-plan-a", title: "Plan A", file: "plans/20260928-plan-a.md", status: "Done", progress: 100 },
+        { id: "20260928-plan-b", title: "Plan B", file: "plans/20260928-plan-b.md", status: "Done", progress: 100 },
+      ],
+    });
+    expect(readWorkflowSnapshot(closedOut.dir).snapshot.phase).toBe(CLOSE_PHASE);
+    expect(deriveLifecyclePhase(readWorkflowSnapshot(closedOut.dir).snapshot).facts.join(" | ")).toContain("status=Done");
+  });
+
+  test("missing phase — nothing is invented for a plan snapshot or a terminal document", () => {
+    const root = tmpRoot("workflow-missing-phase-guard-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+
+    const plan = phaseLessIteration(root, { type: "plan" });
+    expect(readWorkflowSnapshot(plan.dir).snapshot.phase).toBeUndefined();
+    expect(readWorkflowSnapshot(plan.dir).diagnostics).toEqual([]);
+
+    const terminal = phaseLessIteration(root, { status: "completed", ended_at: "2026-09-28T12:00:00.000Z" });
+    expect(deriveLifecyclePhase(readWorkflowSnapshot(terminal.dir).snapshot).phase).toBeUndefined();
+    expect(readWorkflowSnapshot(terminal.dir).snapshot.phase).toBeUndefined();
+    expect(readWorkflowSnapshot(terminal.dir).diagnostics).toEqual([]);
+  });
+});
+
+describe("registerPlanWorkflow — the selected plan document is the registration authority (R1)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** The SELECTED plan document (its own `plan_id` header + heading authority). */
+  function selectedPlan(root: string, planId: string, heading: string | undefined, declaredPlanId = planId): string {
+    const file = join(root, "plans", `${planId}.md`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${heading === undefined ? "" : `# ${heading}\n\n`}**plan_id:** ${declaredPlanId}\n`, "utf8");
+    return `plans/${planId}.md`;
+  }
+
+  test("registration recovery — identity, title and projections derive from the selected document (reading alone enrolls nothing)", async () => {
+    const root = tmpRoot("plan-register-derived-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const planId = "20260918-derived-registration";
+    const pointer = selectedPlan(root, planId, "Derived registration title");
+
+    // Deriving proves facts and writes nothing: a read/research pass never
+    // enrolls the artifact into execution.
+    const derived = derivePlanRegistration({ harnessDir: root, plan: { file: pointer } });
+    expect(derived.plan).toEqual({
+      id: planId,
+      title: "Derived registration title",
+      file: realpathSync(join(root, "plans", `${planId}.md`)),
+    });
+    expect(derived.catalogRelativePath).toBe(`${planId}.md`);
+    expect(derived.resolvedFrom.map((entry) => entry.path)).toEqual(["plan.file", "plan.id", "plan.title"]);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+
+    // The producer derives the same values, so its one owned row carries them.
+    const workflowId = "20260918-derived-registration-wf";
+    const result = await registerPlanWorkflow(workflowId, {
+      harnessDir: root,
+      plan: { file: pointer },
+      deliveryKind: "development",
+      branchSource: "feature/20260918-derived-registration",
+      branchTarget: "main",
+      startedAt: "2026-09-18T00:00:00.000Z",
+    });
+    expect(result.recovered).toBe(false);
+    const snapshot = JSON.parse(readFileSync(join(root, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE), "utf8")) as {
+      plans: unknown;
+    };
+    expect(snapshot.plans).toEqual([
+      { id: planId, title: "Derived registration title", file: derived.plan.file, status: "Todo" },
+    ]);
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+    expect(validateStatus(join(root, "status.json")).ok).toBe(true);
+  });
+
+  test("registration recovery — a document without a heading derives its plan id as the title", () => {
+    const root = tmpRoot("plan-register-no-heading-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const planId = "20260918-heading-less";
+    const pointer = selectedPlan(root, planId, undefined);
+
+    expect(derivePlanRegistration({ harnessDir: root, plan: { file: pointer } }).plan.title).toBe(planId);
+  });
+
+  test("registration recovery — a pointer whose document declares another plan_id refuses before any write", async () => {
+    const root = tmpRoot("plan-register-identity-");
+    roots.push(root);
+    setArtifactStore(createFsStore(root));
+    const planId = "20260918-pointer-identity";
+    const pointer = selectedPlan(root, planId, "Identity mismatch", "20260918-some-other-plan");
+
+    expect(() => derivePlanRegistration({ harnessDir: root, plan: { file: pointer } })).toThrow(/plan_id/);
+    await expect(
+      registerPlanWorkflow("20260918-pointer-identity-wf", {
+        harnessDir: root,
+        plan: { file: pointer },
+        deliveryKind: "development",
+        branchSource: "feature/20260918-pointer-identity",
+        branchTarget: "main",
+      }),
+    ).rejects.toThrow(/plan_id/);
+    expect(existsSync(join(root, "workflows"))).toBe(false);
+    expect(existsSync(join(root, "status.json"))).toBe(false);
+  });
 });
