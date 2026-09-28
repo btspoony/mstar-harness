@@ -70,6 +70,7 @@ import {
   type PrepareWorkflowResult,
 } from "../src/coordination.js";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { commitExecutionRegistration } from "../src/execution-registration.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import { resolveCurrentAuthority } from "../src/store-read.js";
@@ -81,6 +82,7 @@ import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, ty
 import {
   closeWorkflow,
   recordWorkflowDelivery,
+  registerIterationWorkflow,
   stableJson,
   WORKFLOW_SNAPSHOT_FILE,
   writeWorkflowSnapshot,
@@ -3454,34 +3456,47 @@ describe("Prepare workflow amendment", () => {
     }
   }, 30000);
 
-  test("both reviewed branch headers are required on an appended plan", async () => {
-    // The plan document is the reviewed authority for the branch metadata: an
-    // absent header is never treated as agreement with the branches the append
-    // itself claims, and the descriptive `Working branch policy` line beside it
-    // is prose — it cannot stand in for the `Working branch` declaration.
+  test("a plan that declares no branch form, or a policy naming no feature worktree, refuses an appended plan", async () => {
+    // #278/A07: the plan document is still the reviewed authority for the row's
+    // branch, but the DECLARATION that establishes it is whatever form the
+    // document actually carries — the literal `Working branch` header, or a
+    // `Working branch policy` naming a feature worktree (derived as the plan's
+    // own feature branch). What still refuses is a document that establishes no
+    // branch at all: never a prose sentence scanned for a branch-shaped token.
     const planCases: ReadonlyArray<{
       name: string;
       lines: readonly string[];
-      /** The declaration the refusal must name as missing. */
+      /** The field the refusal must name. */
       field: string;
-      header: string;
+      /** A phrase the message must carry, so the refusal stays actionable. */
+      names: string;
     }> = [
       {
-        name: "working-branch-policy-only",
+        name: "no-branch-declaration",
         lines: [
           `**plan_id:** ${PREPARE_APPEND}`,
           "**Status:** Todo",
           "**Main worktree branch:** main",
-          "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
         ],
         field: "metadata.working_branch",
-        header: "Working branch",
+        names: "declares no branch declaration",
+      },
+      {
+        name: "policy-names-no-feature-worktree",
+        lines: [
+          `**plan_id:** ${PREPARE_APPEND}`,
+          "**Status:** Todo",
+          "**Main worktree branch:** main",
+          "**Working branch policy:** Work happens directly on the integration branch; merge back into it.",
+        ],
+        field: "metadata.working_branch",
+        names: "names no feature worktree",
       },
       {
         name: "missing-main-worktree-branch",
         lines: [`**plan_id:** ${PREPARE_APPEND}`, "**Status:** Todo", `**Working branch:** feature/${PREPARE_APPEND}`],
         field: "mainWorktreeBranch",
-        header: "Main worktree branch",
+        names: "Main worktree branch",
       },
     ];
 
@@ -3499,7 +3514,7 @@ describe("Prepare workflow amendment", () => {
       expect(`${label}${failure.code}`).toBe(`${label}coordination.prepare-amendment.invalid-plan`);
       // The refusal names the missing declaration, the row and the reviewed
       // file as facts, so it stays actionable without pinning one sentence.
-      expect(failure.message).toContain(planCase.header);
+      expect(failure.message).toContain(planCase.names);
       expect(failure.message).toContain(planPath);
       expect(failure.details).toMatchObject({ plan_id: PREPARE_APPEND, field: planCase.field, path: planPath });
       // It refuses before mutation: every protected byte is unchanged.
@@ -3622,19 +3637,17 @@ describe("Prepare workflow amendment", () => {
     expect(protectedBytes(fixture).snapshot).toBe(before.snapshot);
   });
 
-  test("a non-Prepare phase, a terminal lifecycle, a progressed row or any lease/handoff state refuses without mutation", async () => {
-    const admissionCases: ReadonlyArray<{
+  test("only the lifecycle state refuses; an unrelated running row, a forward phase label or a merge lease no longer blocks the amendment", async () => {
+    // E07 action-local admission (design §4.1): the amendment is admitted while
+    // the addressed lifecycle is a REGISTERED RUNNING workflow. A sibling row's
+    // status, progress, lease or coordination block belongs to that row's own
+    // work — it is preserved by value and never blocks adding independently
+    // authorized work or repairing another row's pointer (A06).
+    const lifecycleCases: ReadonlyArray<{
       name: string;
       code: string;
       patchSnapshot: (doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>, fixture: PrepareFixture) => void;
     }> = [
-      {
-        name: "phase-2",
-        code: "coordination.prepare-amendment.not-prepare",
-        patchSnapshot: (doc) => {
-          doc.phase = "phase-2-execute";
-        },
-      },
       {
         name: "terminal",
         code: "coordination.prepare-amendment.not-prepare",
@@ -3644,59 +3657,22 @@ describe("Prepare workflow amendment", () => {
         },
       },
       {
-        name: "row-in-progress",
-        code: "coordination.prepare-amendment.execution-started",
-        patchSnapshot: (doc) => {
-          doc.plans[0]!.status = "InProgress";
-        },
-      },
-      {
-        name: "row-progress",
-        code: "coordination.prepare-amendment.execution-started",
-        patchSnapshot: (doc) => {
-          doc.plans[0]!.progress = 40;
-        },
-      },
-      {
-        name: "row-execution-lease",
-        code: "coordination.prepare-amendment.execution-started",
-        patchSnapshot: (doc, fixture) => {
-          doc.plans[0]!.execution_lease = {
-            holder: "11111111-1111-1111-1111-111111111111",
-            claimed_at: "2026-09-16T00:00:00Z",
-            worktree_path: join(fixture.root, "wt-row"),
-            working_branch: "feature/plan-prepare",
-          };
-        },
-      },
-      {
-        name: "row-coordination",
-        code: "coordination.prepare-amendment.execution-started",
-        patchSnapshot: (doc) => {
-          doc.plans[0]!.coordination = { revision: 1 };
-        },
-      },
-      {
-        name: "integration-merge-lease",
-        code: "coordination.prepare-amendment.execution-started",
-        patchSnapshot: (doc) => {
-          doc.integration_merge_lease = {
-            holder: "11111111-1111-1111-1111-111111111111",
-            claimed_at: "2026-09-16T00:00:00Z",
-            plan_id: PREPARE_ROW,
-            source_branch: "feature/plan-prepare",
-            target_branch: PREPARE_INTEGRATION_BRANCH,
-          };
+        name: "root-entry-not-running",
+        code: "coordination.prepare-amendment.not-prepare",
+        patchSnapshot: (_doc, fixture) => {
+          const register = readJson(fixture.statusPath) as { workflows: Array<Record<string, unknown>> };
+          register.workflows[0]!.status = "completed";
+          writeJson(fixture.statusPath, register);
         },
       },
     ];
 
-    for (const admissionCase of admissionCases) {
+    for (const lifecycleCase of lifecycleCases) {
       const fixture = makePrepareFixture();
       await ensurePrepareCoordinator(fixture);
       const view = await prepareViewOf(fixture);
       const doc = prepareSnapshotOf(fixture);
-      admissionCase.patchSnapshot(doc, fixture);
+      lifecycleCase.patchSnapshot(doc, fixture);
       writeJson(fixture.snapshotPath, doc);
       const before = protectedBytes(fixture);
 
@@ -3708,7 +3684,7 @@ describe("Prepare workflow amendment", () => {
       );
 
       // The case name names the state; the code names the refusal reason.
-      expect(`${admissionCase.name}: ${refusal.code}`).toBe(`${admissionCase.name}: ${admissionCase.code}`);
+      expect(`${lifecycleCase.name}: ${refusal.code}`).toBe(`${lifecycleCase.name}: ${lifecycleCase.code}`);
       expect(protectedBytes(fixture)).toEqual(before);
 
       // The read reports the same state as a blocker instead of a refusal.
@@ -3716,7 +3692,76 @@ describe("Prepare workflow amendment", () => {
       expect(readOnly.view.allowed).toBe(false);
       expect(readOnly.view.blockers).toHaveLength(1);
     }
-  }, 30000);
+
+    // The admitted states: the sibling row (or the recorded phase label, or an
+    // in-flight integration merge) is NOT part of the append's read set, so the
+    // append lands and every unrelated byte of that row survives unchanged. The
+    // stage view still reports what moved the lifecycle off a pristine Prepare.
+    const driftCases: ReadonlyArray<{
+      name: string;
+      blocker: string;
+      patchSnapshot: (doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>, fixture: PrepareFixture) => void;
+    }> = [
+      { name: "phase-2", blocker: "not-prepare", patchSnapshot: (doc) => { doc.phase = "phase-2-execute"; } },
+      { name: "row-in-progress", blocker: "execution-started", patchSnapshot: (doc) => { doc.plans[0]!.status = "InProgress"; } },
+      { name: "row-progress", blocker: "execution-started", patchSnapshot: (doc) => { doc.plans[0]!.progress = 40; } },
+      {
+        name: "row-execution-lease",
+        blocker: "execution-started",
+        patchSnapshot: (doc, fixture) => {
+          doc.plans[0]!.execution_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            worktree_path: join(fixture.root, "wt-row"),
+            working_branch: `feature/${PREPARE_ROW}`,
+          };
+        },
+      },
+      {
+        name: "row-coordination",
+        blocker: "execution-started",
+        patchSnapshot: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; },
+      },
+      {
+        name: "integration-merge-lease",
+        blocker: "execution-started",
+        patchSnapshot: (doc) => {
+          doc.integration_merge_lease = {
+            holder: "11111111-1111-1111-1111-111111111111",
+            claimed_at: "2026-09-16T00:00:00Z",
+            plan_id: PREPARE_ROW,
+            source_branch: `feature/${PREPARE_ROW}`,
+            target_branch: PREPARE_INTEGRATION_BRANCH,
+          };
+        },
+      },
+    ];
+
+    for (const driftCase of driftCases) {
+      const fixture = makePrepareFixture();
+      await ensurePrepareCoordinator(fixture);
+      const doc = prepareSnapshotOf(fixture);
+      driftCase.patchSnapshot(doc, fixture);
+      const siblingRow = doc.plans[0]!;
+      writeJson(fixture.snapshotPath, doc);
+
+      const amended = await amendPrepare(fixture, preparePatchOf(fixture));
+
+      expect(`${driftCase.name}: ${amended.view.planIds.join()}`).toBe(
+        `${driftCase.name}: ${[PREPARE_ROW, PREPARE_APPEND].join()}`,
+      );
+      // The unrelated row is preserved by value — the drift is not "repaired",
+      // rewritten or reset to Todo by an amendment that never addressed it.
+      expect(prepareSnapshotOf(fixture).plans[0]).toEqual(siblingRow);
+      // ...and the stage view reports the drift without making it a dead end:
+      // the fact is named, and the repair above still landed.
+      const readOnly = await prepareViewOf(fixture);
+      expect(`${driftCase.name}: ${readOnly.view.allowed}`).toBe(`${driftCase.name}: false`);
+      expect(`${driftCase.name}: ${readOnly.view.blockers.join(" ")}`).toMatch(
+        new RegExp(`${driftCase.name}: .*${driftCase.blocker}`),
+      );
+    }
+  }, 60000);
 
   test("duplicate plan ids refuse: an existing row id and a repetition inside one patch", async () => {
     const existing = makePrepareFixture();
@@ -3792,13 +3837,6 @@ describe("Prepare workflow amendment", () => {
         patch: (fixture) => preparePatchOf(fixture),
       },
       {
-        name: "metadata-unexpected-key",
-        patch: (fixture) =>
-          preparePatchOf(fixture, {
-            appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND, {}, { execution_mode: "sdd" })],
-          }),
-      },
-      {
         name: "working-branch-mismatch",
         patch: (fixture) =>
           preparePatchOf(fixture, {
@@ -3854,7 +3892,7 @@ describe("Prepare workflow amendment", () => {
     }
   }, 60000);
 
-  test("the proposal must match the reviewed compass exactly", async () => {
+  test("the reviewed compass approves the addressed plans; its plan set is not an equality gate", async () => {
     const undeclared = makePrepareFixture();
     await ensurePrepareCoordinator(undeclared);
     const undeclaredRefusal = await prepareRefusalOf(() =>
@@ -3863,16 +3901,39 @@ describe("Prepare workflow amendment", () => {
     expect(undeclaredRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
     expect(undeclaredRefusal.details.undeclared).toEqual([PREPARE_UNREVIEWED]);
 
-    // The compass declares a plan this patch leaves unregistered.
+    // The compass declares a plan this patch leaves unregistered: that is
+    // missing registration the plan's own ordinary append repairs, so the
+    // addressed work lands and the gap is reported as a warning instead of
+    // blocking it (§4.1/A06).
     const incomplete = makePrepareFixture();
     await ensurePrepareCoordinator(incomplete);
     writeText(
       incomplete.compassPath,
       readFileSync(incomplete.compassPath, "utf8").replace(`  - ${PREPARE_APPEND}\n`, `  - ${PREPARE_APPEND}\n  - ${PREPARE_UNREVIEWED}\n`),
     );
-    const incompleteRefusal = await prepareRefusalOf(() => amendPrepare(incomplete, preparePatchOf(incomplete)));
-    expect(incompleteRefusal.code).toBe("coordination.prepare-amendment.compass-mismatch");
-    expect(incompleteRefusal.details.missing).toEqual([PREPARE_UNREVIEWED]);
+    const incompleteResult = await amendPrepare(incomplete, preparePatchOf(incomplete));
+    expect(incompleteResult.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(incompleteResult.recovery?.outcome).toBe("applied");
+    expect(incompleteResult.recovery?.warnings.map((entry) => entry.code)).toContain("coordination.compass-plan-missing");
+    expect(incompleteResult.recovery?.warnings.find((entry) => entry.code === "coordination.compass-plan-missing")?.message).toContain(
+      PREPARE_UNREVIEWED,
+    );
+    // The existing row was neither re-pointed nor deleted to make the sets equal.
+    expect(prepareSnapshotOf(incomplete).plans).toHaveLength(2);
+
+    // A row the compass does not declare is isolated drift: preserved by value,
+    // reported, never a reason to withhold the addressed append.
+    const undeclaredRow = makePrepareFixture();
+    await ensurePrepareCoordinator(undeclaredRow);
+    writeText(
+      undeclaredRow.compassPath,
+      readFileSync(undeclaredRow.compassPath, "utf8").replace(`  - ${PREPARE_ROW}\n`, ""),
+    );
+    const undeclaredRowResult = await amendPrepare(undeclaredRow, preparePatchOf(undeclaredRow));
+    expect(undeclaredRowResult.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    expect(undeclaredRowResult.recovery?.warnings.map((entry) => entry.code)).toContain(
+      "coordination.compass-plan-undeclared",
+    );
 
     // Another lifecycle's compass: the ref itself is refused, not silently used.
     const borrowed = makePrepareFixture();
@@ -4583,7 +4644,7 @@ describe("Prepare workflow amendment", () => {
     expect(protectedBytes(noop)).toEqual(noopBefore);
   }, 30000);
 
-  test("a plan-file correction is gated by the collision, CAS and whole-workflow admission rules", async () => {
+  test("a plan-file correction is gated by the collision, CAS and addressed-row rules", async () => {
     // `correctPlanFiles` is validated as an array like every other patch key.
     const malformed = makePrepareFixture();
     await ensurePrepareCoordinator(malformed);
@@ -4652,8 +4713,10 @@ describe("Prepare workflow amendment", () => {
     expect(staleRefusal.code).toBe("coordination.prepare-amendment.stale");
     expect(protectedBytes(stale)).toEqual(staleBefore);
 
-    // A prepared/sealed row is never repointed: the whole-workflow admission
-    // refuses before the patch is even read, with the state named.
+    // A prepared/sealed ADDRESSED row is never repointed: the row this
+    // correction names carries execution evidence of its own, so the correction
+    // refuses with that state named. Sibling rows are not read at all — their
+    // state cannot block a pointer repair of another row (§4.1/A06).
     const admissionCases: ReadonlyArray<{
       name: string;
       patch: (
@@ -4701,6 +4764,438 @@ describe("Prepare workflow amendment", () => {
       expect(protectedBytes(fixture)).toEqual(before);
     }
   }, 30000);
+
+  test("a pointer correction lands while a sibling row runs and the compass set is incomplete (pointer correction — A06/#278)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // The addressed row holds the malformed repository-relative pointer the
+    // legacy registration wrote; the sibling row is mid-execution, with its own
+    // lease, progress and coordination evidence.
+    const runningSibling: Record<string, unknown> = {
+      ...planRow(PREPARE_APPEND, PROJECT_ID, `feature/${PREPARE_APPEND}`),
+      status: "InProgress",
+      progress: 40,
+      execution_lease: {
+        holder: "11111111-1111-1111-1111-111111111111",
+        claimed_at: "2026-09-16T00:00:00Z",
+        worktree_path: join(fixture.root, "wt-sibling"),
+        working_branch: `feature/${PREPARE_APPEND}`,
+      },
+      coordination: { revision: 7 },
+    };
+    const doc = prepareSnapshotOf(fixture);
+    doc.plans.push(runningSibling);
+    writeJson(fixture.snapshotPath, doc);
+    // ...and the reviewed compass declares an approved plan that has no row yet.
+    writeText(
+      fixture.compassPath,
+      readFileSync(fixture.compassPath, "utf8").replace(
+        `  - ${PREPARE_APPEND}\n`,
+        `  - ${PREPARE_APPEND}\n  - ${PREPARE_UNREVIEWED}\n`,
+      ),
+    );
+    const addressedBefore = prepareSnapshotOf(fixture).plans[0]!;
+
+    // The stage signal of this lifecycle is no longer pristine — a sibling row
+    // is mid-flight — so the view reports that fact instead of a dead end, while
+    // the amendment below still repairs the addressed row: the sibling's state is
+    // not the correction's read set (A06).
+    const view = await prepareViewOf(fixture);
+    expect(view.view.allowed).toBe(false);
+    expect(view.view.blockers.join(" ")).toMatch(/execution-started/);
+    expect(view.view.blockers.join(" ")).toContain(PREPARE_APPEND);
+
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        appendPlans: [],
+        correctPlanFiles: [
+          {
+            id: PREPARE_ROW,
+            expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+            file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          },
+        ],
+      }),
+    );
+
+    const after = prepareSnapshotOf(fixture).plans;
+    // The addressed row moved exactly one field — its pointer.
+    expect(after[0]).toEqual({ ...addressedBefore, file: join(fixture.planDir, `${PREPARE_ROW}.md`) });
+    // The running sibling is untouched: status, progress, lease and coordination
+    // evidence all survive by value (A06: other row/evidence preserved).
+    expect(after[1]).toEqual(runningSibling);
+    // The compass gap is unrelated drift this patch never consumed: reported,
+    // never a refusal, and no row was deleted to make the sets equal.
+    expect(amended.recovery?.outcome).toBe("applied");
+    expect(amended.recovery?.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
+    expect(amended.recovery?.warnings.map((entry) => entry.code)).toEqual(["coordination.compass-plan-missing"]);
+    expect(amended.recovery?.warnings[0]?.message).toContain(PREPARE_UNREVIEWED);
+    expect(amended.recovery?.commitState).toBe("committed");
+    // The declarations the repair resolved from are named as provenance.
+    expect(amended.recovery?.resolvedFrom).toEqual([
+      { path: "patch", source: "intent.request" },
+      { path: `plans.${PREPARE_ROW}`, source: "reviewed compass declaration" },
+      { path: "correctPlanFiles", source: "addressed row's own pointer" },
+    ]);
+  }, 30000);
+
+  test("a plan declaring its branch through `Working branch policy` appends with every reference derived (branch policy — A07/#278)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const planPath = join(fixture.planDir, `${PREPARE_APPEND}.md`);
+    // The document declares its branch through the policy form and no literal
+    // `Working branch` header — the declaration form a real reviewed plan carries.
+    writeText(
+      planPath,
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**Status:** Todo",
+        "**Main worktree branch:** main",
+        "**Working branch policy:** Feature worktree from the integration branch; merge back into that integration branch.",
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+
+    // Only the governing spec is supplied: the branch is derived from the
+    // declaration the document carries, and the lifecycle references are derived
+    // from the amended workflow's own compass and integration anchor.
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        appendPlans: [
+          {
+            id: PREPARE_APPEND,
+            title: `Plan ${PREPARE_APPEND}`,
+            file: planPath,
+            metadata: { primary_spec: fixture.specPath },
+          },
+        ],
+      }),
+    );
+
+    expect(amended.view.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
+    const appended = prepareSnapshotOf(fixture).plans[1]!;
+    expect(appended.file).toBe(planPath);
+    expect(appended.metadata).toEqual({
+      primary_spec: fixture.specPath,
+      spec_refs: [fixture.specPath],
+      iteration_compass: fixture.compassPath,
+      iteration_refs: [fixture.compassPath],
+      working_branch: `feature/${PREPARE_APPEND}`,
+      spec_integration_branch: PREPARE_INTEGRATION_BRANCH,
+      merge_target: PREPARE_INTEGRATION_BRANCH,
+    });
+    expect(amended.recovery?.outcome).toBe("applied");
+    expect(amended.recovery?.warnings).toEqual([]);
+    expect(amended.recovery?.resolvedFrom).toContainEqual({
+      path: `plans.${PREPARE_APPEND}`,
+      source: "reviewed compass declaration",
+    });
+
+    // A fenced example is not a declaration: with the policy hidden in a fence
+    // the document establishes no branch, and the append refuses instead of
+    // guessing one from prose.
+    const fenced = makePrepareFixture();
+    await ensurePrepareCoordinator(fenced);
+    const fencedPath = join(fenced.planDir, `${PREPARE_APPEND}.md`);
+    writeText(
+      fencedPath,
+      [
+        `# Plan ${PREPARE_APPEND}`,
+        "",
+        `**plan_id:** ${PREPARE_APPEND}`,
+        "**Status:** Todo",
+        "**Main worktree branch:** main",
+        "```md",
+        "**Working branch policy:** Feature worktree from the integration branch.",
+        "```",
+        "",
+        "Body.",
+        "",
+      ].join("\n"),
+    );
+
+    const refusal = await prepareRefusalOf(() => amendPrepare(fenced, preparePatchOf(fenced)));
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(refusal.details).toMatchObject({ plan_id: PREPARE_APPEND, field: "metadata.working_branch", path: fencedPath });
+  }, 30000);
+
+  test("an iteration that declares no phase derives its Prepare view and adopts it on the next amendment (derived Prepare — A04/#293)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // The manual/legacy registration shape: no phase anywhere in the document.
+    const doc = prepareSnapshotOf(fixture);
+    delete doc.phase;
+    writeJson(fixture.snapshotPath, doc);
+    const before = protectedBytes(fixture);
+
+    const view = await prepareViewOf(fixture);
+    expect(view.view.allowed).toBe(true);
+    expect(view.view.blockers).toEqual([]);
+    // The view reports the phase it read and that the label was DERIVED from the
+    // lifecycle facts rather than declared (E06a's phase authority).
+    expect(view.view.phase).toBe("phase-1-prepare");
+    expect(view.view.phaseDerived).toBe(true);
+    // The derivation is a read: no snapshot byte moved, and no `persist
+    // snapshot` step is needed for the lifecycle to be addressable.
+    expect(protectedBytes(fixture)).toEqual(before);
+
+    const amended = await amendPrepare(fixture, preparePatchOf(fixture));
+    expect(amended.view.phaseDerived).toBe(true);
+    expect(amended.view.phase).toBe("phase-1-prepare");
+    // The ordinary intent persisted the repair it derived.
+    expect(prepareSnapshotOf(fixture).phase).toBe("phase-1-prepare");
+
+    // ...and the next read reports the label as recorded, not as a derivation.
+    const after = await prepareViewOf(fixture);
+    expect(after.view.phase).toBe("phase-1-prepare");
+    expect(after.view.phaseDerived).toBeUndefined();
+  }, 30000);
+
+  test("unknown custom metadata survives a repair inertly while recorded authority is refused (unknown metadata — A08)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+
+    // An append carries custom keys this verb does not recognize: they travel
+    // onto the row inertly and the requested effect still completes.
+    const amended = await amendPrepare(
+      fixture,
+      preparePatchOf(fixture, {
+        appendPlans: [
+          prepareAppendOf(fixture, PREPARE_APPEND, {}, { execution_mode: "sdd", custom_note: { nested: [1, 2] } }),
+        ],
+      }),
+    );
+    expect(amended.recovery?.outcome).toBe("applied");
+    expect(prepareSnapshotOf(fixture).plans[1]!.metadata).toMatchObject({
+      execution_mode: "sdd",
+      custom_note: { nested: [1, 2] },
+    });
+    // The preservation is SAID, not silent: the receipt names what it kept
+    // without consuming it.
+    expect(amended.recovery?.warnings.map((entry) => entry.code)).toEqual(["coordination.append-custom-metadata"]);
+    expect(amended.recovery?.warnings[0]?.message).toContain("custom_note");
+
+    // A key the engine READS AS RECORDED AUTHORITY is refused instead of being
+    // preserved: custom metadata never becomes a fact (no authority elevation).
+    const reserved = makePrepareFixture();
+    await ensurePrepareCoordinator(reserved);
+    const refusal = await prepareRefusalOf(() =>
+      amendPrepare(
+        reserved,
+        preparePatchOf(reserved, {
+          appendPlans: [prepareAppendOf(reserved, PREPARE_APPEND, {}, { catalog_pin: { catalog_revision: 9 } })],
+        }),
+      ),
+    );
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(refusal.details.reserved).toEqual(["catalog_pin"]);
+
+    // An EXISTING row's custom metadata survives a pointer repair by value.
+    const existing = makePrepareFixture();
+    await ensurePrepareCoordinator(existing);
+    const existingDoc = prepareSnapshotOf(existing);
+    existingDoc.plans[0]!.metadata = {
+      ...(existingDoc.plans[0]!.metadata as Record<string, unknown>),
+      custom_note: "keep",
+    };
+    writeJson(existing.snapshotPath, existingDoc);
+
+    await amendPrepare(
+      existing,
+      preparePatchOf(existing, {
+        appendPlans: [],
+        correctPlanFiles: [
+          {
+            id: PREPARE_ROW,
+            expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+            file: join(existing.planDir, `${PREPARE_ROW}.md`),
+          },
+        ],
+      }),
+    );
+    expect(prepareSnapshotOf(existing).plans[0]!.metadata).toMatchObject({ custom_note: "keep" });
+  }, 30000);
+
+  test("a local pointer correction proceeds on the trusted root when the Git fact is unreadable (pointer correction — A24/R12)", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // A directory that looks like a linked checkout whose Git fact cannot be
+    // read: `git` answers non-zero for it, so the process root is genuinely
+    // unavailable there — the R12/A24 situation, not a stub.
+    const linked = join(fixture.root, "linked-checkout");
+    writeText(join(linked, ".git"), `gitdir: ${join(fixture.root, "no-such-main", ".git", "worktrees", "linked")}\n`);
+    expect(await errorCodeOf(async () => resolveProcessHarnessDir(linked))).toBe("coordination.not-in-git");
+
+    const view = await prepareViewOf(fixture);
+    const correction = preparePatchOf(fixture, {
+      appendPlans: [],
+      correctPlanFiles: [
+        {
+          id: PREPARE_ROW,
+          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+        },
+      ],
+    });
+    const amended = await amendWith(fixture, correction, {
+      snapshotVersion: view.view.snapshotVersion,
+      compassVersion: view.view.compassVersion,
+      cwd: linked,
+    });
+
+    expect(amended.recovery?.outcome).toBe("applied");
+    // The unreadable Git fact is a warning beside the repair this call needs no
+    // Git fact for; the still-unregistered compass plan is unrelated drift.
+    expect(amended.recovery?.warnings.map((entry) => entry.code)).toContain("coordination.git-unavailable");
+    expect(prepareSnapshotOf(fixture).plans[0]!.file).toBe(join(fixture.planDir, `${PREPARE_ROW}.md`));
+
+    // The same unreadable Git fact still refuses the component that genuinely
+    // needs an owned checkout/branch fact (an append), as an unavailable
+    // prerequisite rather than a global environment gate (A25).
+    const appendRefusal = await prepareRefusalOf(() =>
+      amendWith(fixture, preparePatchOf(fixture), {
+        snapshotVersion: amended.view.snapshotVersion,
+        compassVersion: amended.view.compassVersion,
+        cwd: linked,
+      }),
+    );
+    expect(appendRefusal.code).toBe("coordination.not-in-git");
+  }, 30000);
+});
+
+/* ------------------------------------------------------------------------ *
+ * Registration route parity — one canonical plan pointer (E07 fold)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * TWO routes persist one reviewed iteration intent: the file producer
+ * (`registerIterationWorkflow`) canonicalizes a row pointer before it writes the
+ * snapshot, while the ACTIVE DB route (`commitExecutionRegistration`) composed
+ * the same options verbatim — so one intent could persist two different
+ * `plans[]` spellings and the DB route accepted a pointer the file route
+ * refuses. The fold normalizes at the ONE derivation both routes run
+ * (`resolveCatalogExecutionPlan`).
+ */
+describe("registration route parity — one canonical plan pointer (E07 fold)", () => {
+  const ROUTE_PLAN = "plan-route-parity";
+  /** The canonical registered plan file of one harness, as §4 resolves it. */
+  function canonicalRowPointer(harness: string, planId: string): string {
+    return join(realpathSync(harness), "plans", `${planId}.md`);
+  }
+  /** The row state the DB route sealed for one iteration row. */
+  async function storedRowPointer(harness: string, workflowId: string, planId: string): Promise<string> {
+    const handle = await openStore({ harnessDir: harness }, "read");
+    try {
+      // The typed read of one raw store row: the schema is the store's own and
+      // the named const carries the shape a reader needs from it.
+      const row = handle.db
+        .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(workflowId, planId) as { state_json?: string } | undefined;
+      const state: { file?: string } = JSON.parse(String(row?.state_json));
+      return String(state.file);
+    } finally {
+      handle.close();
+    }
+  }
+
+  test("the DB registration route stores the same canonical row pointer as the file producer (pointer correction — route parity)", async () => {
+    const fileRoot = realpathSync(mkdtempSync(join(tmpdir(), "mstar-route-file-")));
+    const dbRoot = realpathSync(mkdtempSync(join(tmpdir(), "mstar-route-db-")));
+    roots.push(fileRoot, dbRoot);
+    const fileHarness = join(fileRoot, ".mstar");
+    const dbHarness = join(dbRoot, ".mstar");
+    for (const harness of [fileHarness, dbHarness]) {
+      writeText(join(harness, "plans", `${ROUTE_PLAN}.md`), `# Plan ${ROUTE_PLAN}\n\n**plan_id:** ${ROUTE_PLAN}\n`);
+    }
+    // The reviewed row pointer, spelled the one way both routes accept.
+    const rows = [{ id: ROUTE_PLAN, title: `Plan ${ROUTE_PLAN}`, file: `plans/${ROUTE_PLAN}.md` }];
+
+    // The file producer, on the pre-activation authority it owns.
+    setArtifactStore(createFsStore(fileHarness));
+    await registerIterationWorkflow("iter-route-file", {
+      harnessDir: fileHarness,
+      compassRef: "iterations/iter-route-file/delivery-compass.md",
+      branch: { base: "main", integration: "iteration/iter-route-file", target: "main" },
+      rows,
+    });
+    const fileRoute = readJson(join(fileHarness, "workflows", "iter-route-file", "snapshot.json")) as {
+      plans: Array<{ file: string }>;
+    };
+    expect(fileRoute.plans[0]!.file).toBe(canonicalRowPointer(fileHarness, ROUTE_PLAN));
+
+    // The ACTIVE DB route, on its own control root.
+    const store = await initializeStore({ harnessDir: dbHarness });
+    store.close();
+    const initialized = await initializeExecutionAuthority({ harnessDir: dbHarness });
+    setArtifactStore(createFsStore(dbHarness));
+    const iterationId = "iter-route-db";
+    const caller = { sessionId: FIXTURE_COORDINATOR_ID, role: "coordinator" as const, workflowId: iterationId, planId: null };
+    await commitExecutionRegistration(
+      { harnessDir: dbHarness, caller },
+      {
+        operationId: "op-route-db",
+        actor: "project-manager",
+        expectedCatalogRevision: 0,
+        workflow: {
+          kind: "iteration",
+          workflowId: iterationId,
+          options: {
+            harnessDir: dbHarness,
+            compassRef: "iterations/iter-route-db/delivery-compass.md",
+            branch: { base: "main", integration: "iteration/iter-route-db", target: "main" },
+            rows,
+          },
+        },
+        delta: {
+          entities: [
+            { kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId },
+          ],
+          binding: { catalogKind: "iteration", catalogId: iterationId },
+        },
+        expected: initialized.token,
+      },
+    );
+    // Route parity: one canonical form, the same value the file producer stores.
+    expect(await storedRowPointer(dbHarness, iterationId, ROUTE_PLAN)).toBe(
+      canonicalRowPointer(dbHarness, ROUTE_PLAN),
+    );
+
+    // ...and the DB route refuses the spelling the file route refuses, instead
+    // of persisting it verbatim — the finding this fold closes.
+    const verbatimId = "iter-route-verbatim";
+    const refusal = await errorCodeOf(() =>
+      commitExecutionRegistration(
+        { harnessDir: dbHarness, caller: { ...caller, workflowId: verbatimId } },
+        {
+          operationId: "op-route-verbatim",
+          actor: "project-manager",
+          expectedCatalogRevision: 1,
+          workflow: {
+            kind: "iteration",
+            workflowId: verbatimId,
+            options: {
+              harnessDir: dbHarness,
+              compassRef: `iterations/${verbatimId}/delivery-compass.md`,
+              branch: { base: "main", integration: `iteration/${verbatimId}`, target: "main" },
+              rows: [{ id: ROUTE_PLAN, title: `Plan ${ROUTE_PLAN}`, file: `${ROUTE_PLAN}.md` }],
+            },
+          },
+          delta: {
+            entities: [{ kind: "iteration", id: verbatimId, title: verbatimId, rootKind: "iterations", relativePath: verbatimId }],
+            binding: { catalogKind: "iteration", catalogId: verbatimId },
+          },
+          expected: initialized.token,
+        },
+      ),
+    );
+    expect(refusal).toBe("plan-path.invalid-pointer");
+  }, 60000);
 });
 
 /* ------------------------------------------------------------------------ *

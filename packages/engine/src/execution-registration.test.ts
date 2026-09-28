@@ -536,7 +536,12 @@ describe("execution-registration", () => {
   test("execution-registration-registers-an-iteration-lifecycle-with-its-own-binding-family", async () => {
     const fixture = await activeFixture("iteration");
     const iterationId = "iter-20260921-registration";
-    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `${iterationId}-plan.md` };
+    // §4: the row's pointer is the registered plan document, spelled the way the
+    // ONE registered-plan path contract accepts it — the file producer and the
+    // legacy journal always did; the DB route now resolves it through the same
+    // seam, so one intent cannot persist two spellings (E07 fold).
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
     const receipt = await commitExecutionRegistration(
       { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
       {
@@ -572,14 +577,18 @@ describe("execution-registration", () => {
       catalog_id: iterationId,
       catalog_revision: 1,
     });
-    // The iteration snapshot's own row metadata is the sealed input, unchanged:
-    // the registration publishes catalog rows, it never rewrites the plan row.
+    // The iteration snapshot's own row metadata is the sealed input: the
+    // registration publishes catalog rows and never rewrites the plan row — but
+    // the row's POINTER is the canonical registered plan file, because §4
+    // resolves it through the one registered-plan path contract before the
+    // intent is hashed, sealed or persisted (E07 fold: the DB route used to keep
+    // the caller's spelling verbatim while the file route canonicalized it).
     const sealed = await sealedInput(fixture.context, row.id, iterationId);
     expect(JSON.parse(String(sealed?.input_json))).toMatchObject({
       plan_id: row.id,
       id: row.id,
       title: row.title,
-      file: row.file,
+      file: join(realpathSync(join(fixture.context.harnessDir, "plans")), `${row.id}.md`),
       iteration_refs: ["delivery-compass.md"],
     });
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
@@ -1183,7 +1192,11 @@ describe("execution-registration \u2014 recovery-first registration", () => {
   test("registration recovery \u2014 an iteration registered without a phase derives Prepare at creation (A04/R3)", async () => {
     const fixture = await activeFixture("iteration-phase");
     const iterationId = "iter-20260921-phase";
-    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `${iterationId}-plan.md` };
+    // §4: an iteration row pointer is the registered plan document, resolved by
+    // the ONE registered-plan path contract — the same spelling the file producer
+    // and the legacy journal accept (E07 folded the DB route onto that seam).
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
     // No phase is declared anywhere in this request: the producer derives the
     // phase a genuinely unstarted iteration factually sits in.
     await commitExecutionRegistration(

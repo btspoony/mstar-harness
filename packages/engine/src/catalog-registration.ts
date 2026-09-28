@@ -659,7 +659,16 @@ function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot):
  * value to create the DB lifecycle and publish the same delta.
  */
 export function resolveCatalogExecutionPlan(context: StoreContext, request: unknown): CatalogExecutionPlan {
-  return executionPlanFor(context, validateRequest(request));
+  // ONE normalization seam for BOTH registration routes (§4 registered-plan
+  // contract). The file producer canonicalizes its rows before the snapshot is
+  // built and the legacy journal normalizes the reviewed workflow before it
+  // hashes or journals it, but the ACTIVE DB route composed the same intent
+  // verbatim — so one intent could persist two different `plans[]` spellings,
+  // and the DB route accepted a pointer the other two refuse. Normalizing HERE,
+  // in the derivation every route runs before anything is written, makes the
+  // canonical form route-independent by construction instead of by three
+  // separate call sites agreeing.
+  return executionPlanFor(context, validateRequest(normalizeIterationPlanPaths(request as CatalogExecutionRequest)));
 }
 
 /**
@@ -1265,10 +1274,10 @@ export async function registerCatalogExecution(
   request: CatalogExecutionRequest,
 ): Promise<CatalogExecutionReceipt> {
   // §4 path preflight BEFORE the first journal write: a refused plan pointer
-  // must not leave a `prepared` row, and the normalized request is what gets
-  // hashed, stored and later handed to the producer.
-  const normalized = normalizeIterationPlanPaths(request);
-  const plan = resolveCatalogExecutionPlan(context, normalized);
+  // must not leave a `prepared` row. The normalized request is what gets
+  // hashed, stored and later handed to the producer — `resolveCatalogExecutionPlan`
+  // is the ONE seam that normalizes it, for this route and the DB route alike.
+  const plan = resolveCatalogExecutionPlan(context, request);
   const validated = plan.request;
   const hash = requestHash(validated);
 

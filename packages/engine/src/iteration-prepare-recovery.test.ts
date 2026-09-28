@@ -258,6 +258,10 @@ describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-0002
     expect(shown.view.allowed).toBe(false);
     expect(shown.view.blockers.join(" ")).toMatch(/not-prepare/);
     expect(shown.view.derived).toBeUndefined();
+    // E07: the amendment is admitted per ADDRESSED COMPONENT (§4.1), so a
+    // recorded forward label no longer gates the verb — a local repair lands in
+    // an executing lifecycle (A06). What refuses here is the patch itself, which
+    // addresses nothing... and the label is still never rewritten.
     await expect(
       amendPrepareWorkflow({
         sessionPath: envelopePath,
@@ -266,7 +270,7 @@ describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-0002
         expectedCompassVersion: shown.view.compassVersion,
         patch: { mainWorktreeBranch: "main", appendPlans: [] },
       }),
-    ).rejects.toThrow(/not phase-1-prepare/);
+    ).rejects.toThrow(/changes nothing/);
     expect((readSnapshot(fixture) as Record<string, unknown>).phase).toBe("phase-2-execute");
   });
 
