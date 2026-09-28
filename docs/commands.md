@@ -162,7 +162,7 @@ The second terminal is transport, not a dependency. Any terminal works; Herdr or
 
 **When** — when the suite itself is the question: pruning or repairing test debt before an iteration, after a test-heavy change, or as a standalone backlog pass. `/codebase-audit` surveys the whole codebase rather than the test surface, and `/amazing-pr-review` reviews an existing change rather than the suite.
 
-**Args** — a `scope|subsystem` token narrows the sweep to that area; `quick` / `deep` set the effort level (the audit effort table shared with `/codebase-audit`) and default to a whole-repo sweep; the `campaign` token switches to a whole-subsystem campaign that marks every test declaration in an `R` / `F` / `C` / `D` ledger before any plan is written.
+**Args** — a `scope|subsystem` token narrows the sweep to that area; `quick` / `deep` set the effort level (the audit effort table shared with `/codebase-audit`) and default to a whole-repo sweep; the `campaign` token switches to a whole-subsystem campaign that marks every test declaration in an `R` / `F` / `C` / `D` ledger before any plan is written. `quick` and `campaign` are mutually exclusive — campaign breadth is always the whole subsystem, so the combination hard-stops and asks the user to drop one token.
 
 **Hosts** — the lane fan-out follows `/codebase-audit`: read-only `scout` / `explore` seats per lane under the assignment's read-only delegation grant; each host keeps its own invoke tool (no native dsh `workflow` script ships for this entry).
 
