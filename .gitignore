@@ -32,4 +32,4 @@ packages/opencode/mcp/
 packages/dsh/mcp/
 
 # Bun cache output that some session environments land inside the worktree root
-/Library/
+/Library/Caches/bun/
