@@ -114,22 +114,26 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
    - plans SSOT: `<main-repo-root>/{PLAN_DIR}/`
    - iterations SSOT: `<main-repo-root>/{ITERATION_DIR}/`
    - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
-7. **Phase 1 route — publish.** Transfer only the reviewed Phase 1 changes into
-   this integration checkout, commit them there and push `spec_integration_branch`:
-   the changes come **from** the primary checkout, while the commit and the push
-   happen **in the integration worktree**; afterwards restore the primary
-   checkout's corresponding uncommitted docs without switching its branch
-   (Phase-1 bounded exception → `phase-1-prepare.md` §1.6; never carry unrelated
-   user changes).
+7. **Phase 1 route — push the branch.** Push the newly created
+   `spec_integration_branch` (`git push -u origin <branch>` — upstream setup
+   only; **no commit is made**: the reviewed compass / plans / specs /
+   `<iteration-id>/` package are default-gitignored `{HARNESS_DIR}` process
+   artifacts and are **never** transferred, committed or pushed). The branch
+   tip stays at the recorded base, so the pushed remote tip equals the live
+   integration HEAD — the readiness fact the `phase-1-lock` anchor below
+   re-checks. The primary checkout keeps its uncommitted Phase 1 docs, never
+   switches branch, and carries no docs or unrelated user changes into the
+   integration worktree (Phase-1 bounded exception → `phase-1-prepare.md`
+   §1.6).
    **Every Phase 2 entry — first execute and resume alike, including the first
-   entry after an auto-continued Phase 1 (which has already published) — never
-   publishes again**: verify the checkout instead (branch =
+   entry after an auto-continued Phase 1 (which has already pushed the branch)
+   — never repeats this push**: verify the checkout instead (branch =
    `spec_integration_branch`, clean tree, remote tip already equal to the live
-   integration HEAD), do **not** re-publish, and do **not** repeat the
+   integration HEAD), do **not** push again here, and do **not** repeat the
    `phase-1-lock` anchor below — its binding is terminal by then (repeat-call
    semantics and refusal codes → active host reference). On the Phase 1 route the
    anchor instead requires that pushed remote tip to equal the live integration
-   HEAD, so it must not be executed before this step's publish.
+   HEAD, so it must not be executed before this step's push.
 
 All sessions MUST reread the **control-root copy** of the workflow snapshot immediately before
 claim, release, transfer, plan-status transition, or merge-lease mutation.
@@ -142,7 +146,7 @@ control **`Plan Path`** / **`SDD dir`** in Assignments
 <!-- host-hook: phase-1-lock -->
 > Execute the active host reference's `## Host hooks` declaration for `phase-1-lock`; this file defines no host action.
 >
-> **`phase-1-lock` 恰好触发一次**：只在 **Phase 1 路线**、且在 checklist **step 7 的 publish**（transfer → commit → push `spec_integration_branch`）之后 —— 该 anchor 的就绪合取要求已 push 的 remote tip 等于 live integration HEAD，因此**不得**在 step 7 之前执行。此后任何**再次走过 §2.3 的路线**（Phase 2 entry 首次 execute 或 resume，包括 auto-continue 进入的第一次 Phase 2 entry）都**不**触发它：那时 binding 已 terminal，也**不**需要重新调用（精确的重复调用语义与拒绝码 → active host reference）。
+> **`phase-1-lock` 恰好触发一次**：只在 **Phase 1 路线**、且在 checklist **step 7 的 branch push**（`git push -u` 新建的 `spec_integration_branch`；不 commit 任何 harness 产物）之后 —— 该 anchor 的就绪合取要求已 push 的 remote tip 等于 live integration HEAD，因此**不得**在 step 7 之前执行。此后任何**再次走过 §2.3 的路线**（Phase 2 entry 首次 execute 或 resume，包括 auto-continue 进入的第一次 Phase 2 entry）都**不**触发它：那时 binding 已 terminal，也**不**需要重新调用（精确的重复调用语义与拒绝码 → active host reference）。
 
 ### Same-host exclusive write lock
 

@@ -30,11 +30,11 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 |-----------------|------------------------|
 | 自己 Edit compass/plans/specs 冒充 product-manager / architect / writing-specialist 的审查编辑 | §5.1 → §5.2 → §5.3 **顺序**各 **1 次 invoke**；上一角色返回后再派发下一角色 |
 | 只写 `## Assignment` 或 checklist 就声称 review chain 完成 | **几条角色 ⇒ 几条 invoke**；零 invoke = `dispatch incomplete`（`mstar-dispatch-gates`） |
-| §5 完成前 commit / 创建 integration 分支 | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration/references/phase-1-prepare.md` §1.6） |
+| §5 完成前创建 integration worktree / push `spec_integration_branch` | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration/references/phase-1-prepare.md` §1.6） |
 
 派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
 
-**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 6 post-merge close 完成（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 §6.1–§6.4 完成）；`pause` 时 = Phase 1 完成。
+**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-integration checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 6 post-merge close 完成（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 §6.1–§6.4 完成）；`pause` 时 = Phase 1 完成。
 
 **Phase 2–5 共享 invariants / preflight / todos / STOP** → **`mstar-iteration/references/command-shared-invariants.md`**（不在本命令重复）。
 
@@ -42,7 +42,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 | 宿主上下文 | 走哪条 |
 |------------|--------|
-| **宿主 Plan mode**（Plan 会话活跃） | §0 Boot → **§P** — **先**空白 session plan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
+| **宿主 Plan mode**（Plan 会话活跃） | §0 Boot → **§P** — **先**空白 session plan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / integration worktree |
 | **其它**（非 Plan 会话） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
 
 **Both paths converge at §6**（integration worktree）。Default → §7 auto-continue Phase 2→6；`pause` → command ends at §6.
@@ -88,7 +88,7 @@ The `direction-lock` anchor (`mstar-iteration/references/phase-1-prepare.md` §1
 
 Produce harness artifacts per **`mstar-iteration/references/phase-1-prepare.md` §1.3–§1.5**（template: `mstar-iteration/references/iteration-compass-template.md`）：compass（frontmatter **must** include `iteration_base_branch`、`target_branch`、`status: active`）、plans、`status.json` 登记（§1.5）、`{ITERATION_DIR}/README.md` 索引（一行 = 一次迭代）、package dirs（`{ITERATION_DIR}/<iteration-id>/{guides,specs}/`）。
 
-## 5. Review & Edit Chain（HARD GATE — do not commit before this）
+## 5. Review & Edit Chain（HARD GATE — integration worktree only after this）
 
 Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：顺序 `product-manager` → `architect` → `writing-specialist` → PM lock（**禁止**并行三 roles；角色名提及写法 → active host reference）；**禁止** `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene（`iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md`）。Tool rule → **`mstar-dispatch-gates`** specialist review-and-edit（每 role 1 invoke，等磁盘修订返回）。Exception: user explicitly waives subagent dispatch ("PM-only review").
 
@@ -100,7 +100,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：�
 - [ ] `primary_spec` path exists (if declared)
 - [ ] `blocked_by` / sequential deps documented
 
-### iteration-start pre-commit checklist
+### iteration-start pre-integration checklist
 
 PM must print this block before §6; all `[ ]` must be `[x]`:
 
@@ -110,7 +110,7 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / specs / **`<iteration-id>/` package**；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
-- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：已 review 的本轮改动在该 integration checkout 上 commit，`iteration/<iteration-id>` 已 push —— never the primary checkout
+- [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— 本轮 review 的 compass / plans / specs 是默认 gitignored 的本地 `.mstar/` 工件，**不** commit、**不** push；never the primary checkout
 
 ## 6. Integration Branch
 
