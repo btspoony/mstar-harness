@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ExecutionError, readExecutionSession, serializeExecutionValue, type ExecutionCaller, type ExecutionContext, type ExecutionRead, type ExecutionSessionRef } from "./execution-store.js";
+import { ExecutionError, readExecutionSession, readOwnExecutionSession, serializeExecutionValue, type ExecutionCaller, type ExecutionContext, type ExecutionRead, type ExecutionSessionRef } from "./execution-store.js";
 import { withExecutionReadGuard, type StoreContext } from "./store-db.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity, type ExecutionIdentityScope } from "./session-identity.js";
 
@@ -113,8 +113,23 @@ export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
   return value;
 }
 
-/** Resume an independently acquired active session without binding or revision changes. */
-export async function resumeExecutionSession(context: ExecutionContext, ref: ExecutionSessionRef): Promise<ExecutionRead<ExecutionSessionRef>> {
+/**
+ * Resume an independently acquired active session without binding or revision
+ * changes (R8, A09/A15).
+ *
+ * The reference is a PROJECTION of the binding the store already holds, so it is
+ * an OPTIONAL input: a caller whose host lost the envelope passes none, and the
+ * engine reconstructs its OWN current binding from the durable session row
+ * (`readOwnExecutionSession`). The supplied reference stays a strict constraint
+ * when there is one — a stale, copied or foreign projection is refused, never
+ * silently replaced — and neither form writes: a repeat after a lost response
+ * returns the same binding.
+ */
+export async function resumeExecutionSession(
+  context: ExecutionContext,
+  ref?: ExecutionSessionRef | null,
+): Promise<ExecutionRead<ExecutionSessionRef>> {
+  if (ref === undefined || ref === null) return readOwnExecutionSession(context);
   assertRefShape(ref);
   if (
     context.caller.sessionId !== ref.sessionId ||

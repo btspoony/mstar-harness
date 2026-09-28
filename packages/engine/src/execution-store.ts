@@ -61,6 +61,7 @@ import {
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
+import { unresolvedRecovery, type RecoveryProblem, type ResolutionSource } from "./recovery-intent.js";
 import {
   rowPlanId,
   validatePlanRow,
@@ -3152,6 +3153,155 @@ export async function readExecutionSession(
       sessionId: session.sessionId,
       planId: session.planId,
     });
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+    };
+  });
+}
+
+/* ------------------------------------------------------------------------ *
+ * §2.3/§4.1 the caller's OWN binding, reconstructed from its durable row
+ * (R8/R9; A09/A15/A16)
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §2.3 the caller's OWN address. The trusted caller's identity IS the address,
+ * so no part of it is read from request JSON, and every check here is an
+ * argument check — no store is opened.
+ */
+function ownSessionAddress(caller: ExecutionCaller | undefined): SessionAddress {
+  if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
+    throw invalidInput(
+      "reconstructing the caller's own execution session needs the trusted caller's own workflow and session identity",
+    );
+  }
+  if (caller.role !== "coordinator" && caller.role !== "plan-pm") {
+    throw sessionRoleRefusal(`the trusted caller carries role ${JSON.stringify(caller.role)}`, { role: caller.role });
+  }
+  if (caller.role === "coordinator") {
+    if (caller.planId !== null) {
+      throw sessionRoleRefusal(
+        `the trusted coordinator caller carries plan ${JSON.stringify(caller.planId)} as its plan id \u2014 a coordinator ` +
+          `address takes no plan id`,
+        { plan_id: caller.planId },
+      );
+    }
+    return { workflowId: caller.workflowId, role: caller.role, sessionId: caller.sessionId, planId: null };
+  }
+  if (!isNonEmptyString(caller.planId)) {
+    throw sessionRoleRefusal(
+      `the trusted plan-pm caller carries ${JSON.stringify(caller.planId)} as its plan id \u2014 a plan-pm session names ` +
+        `the plan it is bound to`,
+      { plan_id: caller.planId },
+    );
+  }
+  return { workflowId: caller.workflowId, role: caller.role, sessionId: caller.sessionId, planId: caller.planId };
+}
+
+/**
+ * §2.3/§4.1 (R9/A16) the caller's own question when this store records NO row
+ * for its identity: the durable facts, the ONE decision that would release the
+ * addressed scope, the effect withheld — that identity's own binding, never
+ * another holder's — and what still works meanwhile.
+ *
+ * `holder` is the same ACTIVE record `readOwnership` treats as occupying the
+ * scope (no epoch filter), so this refusal and a bind's
+ * `coordination.duplicate-holder` name one fact. Reporting is all this path
+ * does: a held scope is never revived, stolen or replaced here — the narrow
+ * recovery transition owns replacement, and only after validated stop
+ * evidence.
+ */
+function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow[]): never {
+  const scope =
+    address.planId === null ? `workflow ${address.workflowId}` : `plan ${address.planId} of workflow ${address.workflowId}`;
+  const holder = rows.find((row) => row.state === "active" && row.ref.planId === address.planId);
+  const code = holder === undefined ? "coordination.session-not-found" : "coordination.duplicate-holder";
+  const currentFacts = [
+    `the trusted caller is ${address.role} session ${address.sessionId} of ${scope}`,
+    holder === undefined
+      ? `workflow ${address.workflowId} records no ${address.role} session ${address.sessionId} and holds no ACTIVE ` +
+        `${address.role} session of ${scope}`
+      : `workflow ${address.workflowId} holds the ACTIVE ${address.role} session ${holder.ref.sessionId} of ${scope} ` +
+        `(epoch ${holder.ref.epoch})`,
+  ];
+  const problem: RecoveryProblem = {
+    component: "session",
+    path: "session",
+    code,
+    sourcesTried: [
+      `execution_sessions rows of workflow ${address.workflowId} for role ${address.role}`,
+      "the trusted caller identity (workflow, role, plan, session)",
+    ],
+    currentFacts,
+    needed:
+      holder === undefined
+        ? `a binding this identity can resume: bind ${address.role} session ${address.sessionId} to ${scope}`
+        : `the stop/transfer decision for the live holder ${holder.ref.sessionId}: authorized stop evidence for that ` +
+          `holder, or a transfer of ${scope} to this identity`,
+    withheldEffect:
+      `only this identity's own session binding and reference \u2014 no row was written, and ${scope} is never taken ` +
+      `over by another name here`,
+    availableWork: [
+      `read the state of workflow ${address.workflowId} and every row of a scope no session of it holds`,
+      ...(holder === undefined
+        ? [`bind ${address.role} session ${address.sessionId} to ${scope} and resume it`]
+        : [
+            `resume ${holder.ref.sessionId}'s own binding from that holder's identity`,
+            `bind this identity once the stop/transfer decision is recorded`,
+          ]),
+    ],
+  };
+  throw new CoordinationError(code, `${problem.needed}: ${currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: address.workflowId,
+    role: address.role,
+    session_id: address.sessionId,
+    ...(holder === undefined ? {} : { holder: holder.ref.sessionId }),
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({
+      target: { workflowId: address.workflowId, ...(address.planId === null ? {} : { planId: address.planId }) },
+      unresolved: [problem],
+      resolvedFrom: [
+        { path: "workflowId", source: "caller.identity" },
+        { path: "role", source: "caller.identity" },
+        { path: "sessionId", source: "caller.identity" },
+      ] satisfies ResolutionSource[],
+    }),
+  });
+}
+
+/**
+ * §2.3/§4.1 (R8, A09/A15) the caller's OWN current binding, reconstructed from
+ * the session row this store holds instead of a reference the caller had to
+ * keep. The reference a host caches is a PROJECTION of that row: the store's
+ * own `{storeId, epoch}` generation and the session revision belong to the
+ * store, so a host that lost the envelope loses nothing the engine cannot read
+ * back — the trusted caller identity names the scope, and this read answers with
+ * the row recorded for it at the CURRENT epoch.
+ *
+ * It is a READ: no claim, identity, `bound_at` or revision is written, so a
+ * repeat after a lost response returns the same binding (A09). When this store
+ * holds no usable binding for the caller's own identity the refusal is the
+ * caller's own question (`unresolvedOwnSession`) or the precise stored-state
+ * verdict of `liveSession`; a foreign holder's row is never touched, and reads
+ * of unrelated scopes continue.
+ */
+export async function readOwnExecutionSession(context: ExecutionContext): Promise<ExecutionRead<ExecutionSessionRef>> {
+  const address = ownSessionAddress(context?.caller);
+  return withExecutionReadTransaction(context, (tx) => {
+    const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
+    const rows = readSessionRows(tx.db, store, address.workflowId, address.role);
+    if (rows.every((row) => row.ref.sessionId !== address.sessionId)) unresolvedOwnSession(address, rows);
+    // `liveSession` is the ONE availability verdict of an own row — active at
+    // the CURRENT epoch and bound to the caller's own plan — and its refusal
+    // names the exact stored state/epoch when the row is not usable.
+    const live = liveSession(tx, address);
     return {
       data: live.ref,
       token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
