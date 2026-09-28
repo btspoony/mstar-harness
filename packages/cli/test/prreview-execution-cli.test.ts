@@ -1150,7 +1150,7 @@ describe("mstar pr-review post", () => {
       const result: RunResult = { exitCode: noGhProc.exitCode, stdout: noGhProc.stdout.toString(), stderr: noGhProc.stderr.toString() };
       expect(noGhProc.exitCode).toBe(1);
       expect(envelope(result).status).toBe("error");
-      expect(message(result)).toContain("Executable not found in $PATH");
+      expect(message(result)).toContain("executable not found in $PATH: gh");
     });
   });
 

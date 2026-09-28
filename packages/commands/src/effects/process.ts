@@ -9,6 +9,15 @@ export type ProcessRequest = {
   signal: AbortSignal;
 };
 export type ProcessResult = { exitCode: number | null; signal: string | null; stdout: string; stderr: string };
+/** Runtime ENOENT messages differ per platform/Bun build (thrown synchronously
+ * or delivered on the error event); normalize both to one deterministic string. */
+function normalizeNotFound(error: unknown, executable: string): Error {
+  if (error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    return Object.assign(new Error(`executable not found in $PATH: ${executable}`), { code: "process.not-found", exitCode: 127 });
+  }
+  return error as Error;
+}
+
 /** Run one admitted argv vector without shell interpretation or protocol-fd inheritance. */
 export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
   if (request.signal.aborted) {
@@ -47,7 +56,7 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
     });
   } catch (error) {
     cleanup();
-    reject(error);
+    reject(normalizeNotFound(error, request.argv[0]!));
     return promise;
   }
   if (request.signal.aborted) abort();
@@ -58,9 +67,7 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
   child.once("error", (error) => {
     cleanup();
     settled = true;
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      reject(Object.assign(error, { code: "process.not-found", exitCode: 127 }));
-    } else reject(error);
+    reject(normalizeNotFound(error, request.argv[0]!));
   });
   child.once("close", (exitCode, signal) => finish({
     exitCode: exitCode ?? (signal ? 128 + ((constants.signals as Record<string, number>)[signal] ?? 0) : 1),

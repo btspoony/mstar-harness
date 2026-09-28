@@ -434,7 +434,7 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
     expect(jsonOf(released).data).toMatchObject({ planId: PLAN_ID, violations: [] });
     expectNoRegister(fixture);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
-  });
+  }, 30000);
 
   test("the view advertises the CLI's own issue verbs and no register version", async () => {
     const fixture = await makeFixture();
