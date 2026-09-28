@@ -116,14 +116,14 @@
         ],
         "spec_integration_branch": "feature/skill-programmatic-split",
         "merge_target": "feature/skill-programmatic-split",
-        "worktree_path": "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine",
+        "worktree_path": "/tmp/mstar-fixture/worktrees/mstar-harness-skill-engine",
         "working_branch": "feature/skill-programmatic-split",
-        "plan_path": "/Users/bibi/workspace/ai/mstar-harness/.mstar/plans/20260808-slice1-engine-foundation.md",
-        "sdd_dir": "/Users/bibi/workspace/ai/mstar-harness/.mstar/sdd/20260808-slice1-engine-foundation",
+        "plan_path": "/tmp/mstar-fixture/harness/.mstar/plans/20260808-slice1-engine-foundation.md",
+        "sdd_dir": "/tmp/mstar-fixture/harness/.mstar/sdd/20260808-slice1-engine-foundation",
         "execution_lease": {
           "holder": "omp-pm-session-20260808",
           "claimed_at": "2026-08-08",
-          "worktree_path": "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine",
+          "worktree_path": "/tmp/mstar-fixture/worktrees/mstar-harness-skill-engine",
           "working_branch": "feature/skill-programmatic-split",
           "base_sha": "471db08"
         }
@@ -187,7 +187,7 @@
     "harness_root": ".mstar",
     "iteration_base_branch": "main",
     "target_branch": "main",
-    "control_worktree_path": "/Users/bibi/workspace/ai/mstar-harness",
+    "control_worktree_path": "/tmp/mstar-fixture/harness",
     "iteration_refs": [
       "v2.0.0"
     ],

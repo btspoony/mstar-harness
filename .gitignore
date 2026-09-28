@@ -30,3 +30,6 @@ packages/opencode/mcp/
 packages/omp/mcp/
 packages/opencode/mcp/
 packages/dsh/mcp/
+
+# Bun cache output that some session environments land inside the worktree root
+/Library/Caches/bun/

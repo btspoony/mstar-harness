@@ -72,6 +72,8 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Externally observable state: assertions verify logs, events, files, exit codes — never implementation restatement or agent-reported success.
 - User-visible output is behavior (conditional): in repos shipping UI copy, CLI output, API error shapes, or prompt text, wording is behavior — snapshot or e2e coverage should pin it.
 
+For the deep method behind this category — value bar, authoring gate (used both to grade existing tests and to gate test proposals in plans), the junk-pattern sweep, the retention bar, per-candidate evidence fields, discovery lanes, and campaign scope — load **`references/test-audit.md`** (load when the category focus is `tests`, via `/amazing-test-audit`, or when the Test Coverage pass needs depth).
+
 ## 5. Tech Debt & Architecture
 
 - Duplication: the same logic re-implemented in 3+ places; divergent copies that have drifted.
