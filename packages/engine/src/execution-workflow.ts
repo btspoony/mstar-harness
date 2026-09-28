@@ -88,6 +88,7 @@ import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
   ExecutionError,
   advanceWorkflowHeaderRevision,
+  assertAuthorityGeneration,
   assertExecutionToken,
   assertOperationId,
   bindRecoveredSession,
@@ -100,12 +101,15 @@ import {
   readWorkflowSessionRows,
   recordRootMembershipLoss,
   requireWorkflowState,
+  resolveTokenFreshness,
   resolveWorkflowSession,
   resolveWorkflowWrite,
   revokeSessionRow,
+  semanticRequestHash,
   serializeExecutionValue,
   transferExecutionLease,
   withExecutionTransaction,
+  withRecoveryDetails,
   writeOperationReceipt,
   writeWorkflowState,
   type ExecutionCaller,
@@ -129,6 +133,15 @@ import {
   type PhaseGateOptions,
 } from "./iteration.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import {
+  WORKFLOW_OPERATION_SEMANTICS,
+  selectSemanticFields,
+  unresolvedRecovery,
+  type RecoveryDetails,
+  type RecoveryProblem,
+  type ResolutionSource,
+  type ResolutionWarning,
+} from "./recovery-intent.js";
 import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
@@ -272,50 +285,132 @@ function resolveWorkflowOperationRequest<Operation extends WorkflowExecutionOper
 }
 
 /**
- * §3.1 the canonical payload half of a workflow-operation request hash: the
- * operation's own fields, never the envelope (kind, scope, token and caller are
- * hashed beside it by `workflowOperationRequestHash`).
+ * §4.2 the field path one workflow operation addresses, as the intent names it:
+ * the ONE field the operation writes, and therefore the field whose current
+ * value decides whether its effect is already held (R6/R7/A09/A12) or
+ * genuinely conflicts (A11).
  */
-function workflowOperationPayload(operation: WorkflowExecutionOperation): Record<string, unknown> {
+function workflowOperationField(operation: WorkflowExecutionOperation): string {
   switch (operation.kind) {
     case "phase":
-      return { phase: operation.phase, compass_path: operation.compassPath };
+      return "operation.phase";
     case "lifecycle":
-      return { status: operation.status, reason: operation.reason };
+      return "operation.status";
     case "execution-policy":
-      return { policy: operation.policy };
+      return "operation.policy";
     case "integration-worktree":
-      return { path: operation.path };
+      return "operation.path";
     case "delivery":
-      return { delivery: operation.delivery };
+      return "operation.delivery";
   }
 }
 
-/** §3.1 request hash: operation kind, exact scope, expected token, caller identity and payload. */
+/** The stored value the addressed field carries right now, as one comparable canonical value. */
+function storedOperationValue(state: Record<string, unknown>, operation: WorkflowExecutionOperation): unknown {
+  switch (operation.kind) {
+    case "phase":
+      return state.phase;
+    case "lifecycle":
+      return state.status;
+    case "execution-policy":
+      return state.execution_policy;
+    case "integration-worktree":
+      return state.integration_worktree_path;
+    case "delivery":
+      return state.delivery;
+  }
+}
+
+/** The value this operation would store for its own field, in its stored form. */
+function requestedOperationValue(operation: WorkflowExecutionOperation): unknown {
+  switch (operation.kind) {
+    case "phase":
+      return operation.phase;
+    case "lifecycle":
+      return operation.status;
+    case "execution-policy":
+      return operation.policy;
+    // The transition records the checkout's CANONICAL path, so a repeat of the
+    // same checkout is the same effect however the caller spelled the path.
+    case "integration-worktree":
+      return canonicalTarget(operation.path);
+    case "delivery":
+      return operation.delivery;
+  }
+}
+
+/**
+ * §4.2 (R6/R7/A09/A12) whether the requested effect is ALREADY held by the state
+ * this transaction reads. The comparison is the operation's own addressed field
+ * against the value the transition would store for it — the semantic read set of
+ * the effect, never the whole header, the revisions or the receipt's history. A
+ * satisfied effect is a current success even when the caller's token or receipt
+ * is stale, and it must not spend a revision, a timestamp or a receipt row.
+ */
+function workflowIntentHeld(state: Record<string, unknown>, operation: WorkflowExecutionOperation): boolean {
+  const stored = storedOperationValue(state, operation);
+  if (stored === undefined) return false;
+  const requested = requestedOperationValue(operation);
+  if (requested === undefined) return false;
+  return serializeExecutionValue(stored) === serializeExecutionValue(requested);
+}
+
+/**
+ * §3.1/§4.2 the request fingerprint of one workflow operation: the operation
+ * kind, the addressed workflow, the caller identity the receipt is bound to and
+ * E01's semantic selection for that kind — never the transport freshness
+ * (`expected` token, `session` reference, `operationId`) the caller happened to
+ * present. A repeat after a lost response is the same intent even when the
+ * caller re-read the state and re-presented a fresh token (design R6/R7), so the
+ * fingerprint must not move with it; a different business payload still moves it
+ * and stays an operation conflict (A13).
+ */
 function workflowOperationRequestHash(
   caller: ExecutionCaller,
-  kind: string,
   workflowId: string,
-  expected: ExecutionToken,
-  payload: unknown,
+  operation: WorkflowExecutionOperation,
 ): string {
-  return createHash("sha256")
-    .update(
-      serializeExecutionValue({
-        operation: kind,
-        workflow_id: workflowId,
-        expected,
-        caller: {
-          session_id: caller.sessionId,
-          role: caller.role,
-          workflow_id: caller.workflowId,
-          plan_id: caller.planId,
-        },
-        payload,
-      }),
-      "utf8",
-    )
-    .digest("hex");
+  return semanticRequestHash({
+    operation: operation.kind,
+    address: { workflow_id: workflowId },
+    caller,
+    intent: selectSemanticFields({ workflowId, operation }, WORKFLOW_OPERATION_SEMANTICS[operation.kind]),
+  });
+}
+
+/**
+ * §4.1 the sidecar of one workflow-frame result: what this call did with the
+ * intent, the workflow it addressed, the facts it reconciled and the commit
+ * boundary the caller can rely on. It is the same object shape a refusal carries
+ * under `error.details.recovery`, so one contract covers both paths.
+ */
+function workflowRecovery(input: {
+  workflowId: string;
+  outcome: RecoveryDetails["outcome"];
+  applied: readonly string[];
+  commitState: RecoveryDetails["commitState"];
+  resolvedFrom?: readonly ResolutionSource[];
+  warnings?: readonly ResolutionWarning[];
+}): RecoveryDetails {
+  return {
+    outcome: input.outcome,
+    target: { workflowId: input.workflowId },
+    applied: [...input.applied],
+    unresolved: [],
+    resolvedFrom: [...(input.resolvedFrom ?? [])],
+    warnings: [...(input.warnings ?? [])],
+    commitState: input.commitState,
+  };
+}
+
+/** One comparable value, as the typed causes quote it. */
+function describeValue(value: unknown): string {
+  if (value === undefined) return "absent";
+  try {
+    return serializeExecutionValue(value);
+  } catch {
+    return JSON.stringify(value) ?? String(value);
+  }
 }
 
 /* ------------------------------------------------------------------------ *
@@ -579,6 +674,197 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
 }
 
 /* ------------------------------------------------------------------------ *
+ * §4.1 the typed causes of a withheld workflow effect
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §4.1 the stable code of a refusal this frame is about to report: the domain
+ * classes carry theirs (`CoordinationError`, `ExecutionError`, `StoreError`), and
+ * anything else is reported as an unclassified cause rather than guessed.
+ */
+function refusalCodeOf(error: unknown): string | undefined {
+  if (error instanceof CoordinationError || error instanceof ExecutionError || error instanceof StoreError) {
+    return error.code;
+  }
+  return undefined;
+}
+
+/**
+ * §4.1/§4.2 (A25) the typed cause of a transition whose external prerequisite is
+ * unavailable: the refusal the evidence produced, unchanged, with the recovery
+ * sidecar that states the stage it failed at, the known commit boundary (none —
+ * the evidence is read before the store is written, and an in-transaction
+ * mismatch rolls the whole transaction back) and what remains possible without
+ * it. The cause is reported, never invented: no field is added to the refusal
+ * and no substitute fact is fabricated.
+ */
+function prerequisiteCause(
+  error: unknown,
+  input: { workflowId: string; operation: WorkflowExecutionOperation; stage: "read" | "revalidate" },
+): unknown {
+  const code = refusalCodeOf(error);
+  // An ADDRESS verdict ("this store holds no such active lifecycle") is not an
+  // unavailable prerequisite: it is reported by its own precise refusal, never
+  // relabelled as a capability the transition could not read.
+  if (code === "coordination.workflow-not-found") return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const problem: RecoveryProblem = {
+    component: "operation-prerequisite",
+    path: workflowOperationField(input.operation),
+    code: code ?? "execution.prerequisite-unavailable",
+    sourcesTried: [
+      `the workflow ${input.workflowId} header this store owns`,
+      "the lifecycle's registered compass and the Git probes its checkouts answer",
+    ],
+    currentFacts: [
+      input.stage === "read"
+        ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
+          `checkout probes) before it can decide, and this call did not get past that read`
+        : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
+          `matches what the transition decided against`,
+      `the refusal reports: ${message}`,
+    ],
+    needed: message,
+    withheldEffect: "the whole transition: nothing was written, no revision advanced and no receipt was recorded",
+    availableWork: [
+      `read workflow ${input.workflowId}, its plan rows and its current phase`,
+      "transitions whose inputs are stored rows only (lifecycle, execution-policy, delivery) remain available",
+      "retry once the named prerequisite is readable again",
+    ],
+  };
+  return withRecoveryDetails(error, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    stage: input.stage,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    commit_state: "none",
+    recovery: unresolvedRecovery({
+      target: { workflowId: input.workflowId },
+      unresolved: [problem],
+    }),
+  });
+}
+
+/**
+ * §4.1/§4.2 (A11) the typed cause of a transition the current state refuses: the
+ * refusal the transition produced — code, message and its own details untouched —
+ * plus the exact conflicting field, the value it holds now, the value the request
+ * asks for, the ONE decision the caller must make and what still works. This is
+ * the grouped decision of a relevant conflict, not a bare refusal.
+ */
+function workflowConflictCause(
+  error: unknown,
+  input: { workflowId: string; operation: WorkflowExecutionOperation; state: Record<string, unknown> },
+): unknown {
+  const code = refusalCodeOf(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const field = workflowOperationField(input.operation);
+  const stored = describeValue(storedOperationValue(input.state, input.operation));
+  const requested = describeValue(requestedOperationValue(input.operation));
+  const problem: RecoveryProblem = {
+    component: "workflow-header",
+    path: field,
+    code: code ?? "coordination.invalid-transition",
+    sourcesTried: [
+      `workflow ${input.workflowId} as this transaction reads it`,
+      `the ${input.operation.kind} transition's own rules for ${field}`,
+    ],
+    currentFacts: [`${field} holds ${stored}`, `the request asks for ${requested}`, `the refusal reports: ${message}`],
+    needed: message,
+    withheldEffect:
+      `the ${input.operation.kind} transition: ${field} was not overwritten, no revision advanced and no receipt ` +
+      `was recorded`,
+    availableWork: [
+      `read the current state of workflow ${input.workflowId}`,
+      `retry the ${input.operation.kind} transition once the conflicting fact is resolved`,
+      "independent operations on other workflows and plans continue",
+    ],
+  };
+  return withRecoveryDetails(error, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    current_value: stored,
+    requested_value: requested,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({
+      target: { workflowId: input.workflowId },
+      unresolved: [problem],
+    }),
+  });
+}
+
+/**
+ * §4.1/§4.2 (A13) the refusal of a receipt whose effect a later accepted
+ * operation superseded: the recorded receipt is historical evidence and is never
+ * served as current state, and the typed cause names both facts with the one
+ * choice that remains — accept what is stored now, or express the desired effect
+ * as a NEW operation under a new operation id.
+ */
+function supersededEffectCause(input: {
+  workflowId: string;
+  operationId: string;
+  operation: WorkflowExecutionOperation;
+  state: Record<string, unknown>;
+}): ExecutionError {
+  const code = "execution.effect-superseded";
+  const field = workflowOperationField(input.operation);
+  const stored = describeValue(storedOperationValue(input.state, input.operation));
+  const recorded = describeValue(requestedOperationValue(input.operation));
+  const problem: RecoveryProblem = {
+    component: "workflow-header",
+    path: field,
+    code,
+    sourcesTried: [
+      `execution_operations(epoch, ${JSON.stringify(input.operationId)}) \u2014 the recorded receipt`,
+      `workflow ${input.workflowId} as this transaction reads it`,
+    ],
+    currentFacts: [
+      `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}`,
+      `${field} holds ${stored} now, so a later accepted operation superseded that effect`,
+    ],
+    needed:
+      `accept the current state of workflow ${input.workflowId}, or express the desired ${input.operation.kind} effect ` +
+      `again as a new operation with a NEW operation id`,
+    withheldEffect: `the recorded receipt: it is historical evidence and is never restored as current state`,
+    availableWork: [
+      `read the current state of workflow ${input.workflowId}`,
+      `express the desired effect under a new operation id`,
+      "independent operations on other workflows and plans continue",
+    ],
+  };
+  return new ExecutionError(
+    code,
+    `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}, but workflow ${input.workflowId} ` +
+      `holds ${stored} now \u2014 a later accepted operation superseded that effect, and a superseded receipt is never ` +
+      `restored. Nothing was written.`,
+    {
+      component: problem.component,
+      path: problem.path,
+      workflow_id: input.workflowId,
+      operation_id: input.operationId,
+      current_value: stored,
+      recorded_value: recorded,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      needed: problem.needed,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: input.workflowId },
+        unresolved: [problem],
+      }),
+    },
+  );
+}
+
+/* ------------------------------------------------------------------------ *
  * §3 `mutateExecutionWorkflow` — the published workflow verb surface
  * ------------------------------------------------------------------------ */
 
@@ -591,13 +877,19 @@ export function setWorkflowWitnessGapForTest(callback: (() => void) | undefined)
 /**
  * §3 the workflow-level transition surface of the DB authority: one coordinator
  * call carrying the §3.1 mutation envelope (operation id, coordinator session
- * reference, exact workflow token) and the operation itself, whose member of the
- * closed union selects the transition.
+ * reference, workflow token) and the operation itself, whose member of the closed
+ * union selects the transition.
  *
- * The frame is the plan frame's sibling and enforces the same rules in the same
- * order: an active authority, the caller's own live coordinator binding, the
- * exact CAS token, ONE revision advance for the accepted operation and a
- * committed receipt that makes an identical retry a replay. It adds nothing a
+ * The frame is the plan frame's sibling and enforces the same rules: an active
+ * authority, the caller's own live coordinator binding, the authority generation
+ * the caller's reference and token were read under, ONE revision advance for an
+ * accepted operation and a committed receipt that makes an identical retry a
+ * replay. The supplied token's ADDRESS and generation are strict; its REVISION is
+ * transport freshness, so the frame recomputes the intent against the state it
+ * reads now: a satisfied effect is a current success with no mutation (R6/A09/
+ * A12), a relevant conflict is refused with the exact field (A11), a superseded
+ * receipt is disclosed instead of restored (A13), and a superseded authority
+ * generation is re-resolved before anything is replayed (A26). It adds nothing a
  * caller can turn into permission: no gate verdict is read from the request, no
  * header field outside the operation's own member is writable, and identity
  * anchors are refused by the shape gate before the store is opened.
@@ -608,14 +900,14 @@ export async function mutateExecutionWorkflow(
 ): Promise<ExecutionReceipt<ExecutionState>> {
   const resolved = resolveWorkflowOperationRequest(context.caller, request);
   const operation = resolved.call.operation;
-  const evidence = await readWorkflowEvidence(context, resolved);
-  const requestHash = workflowOperationRequestHash(
-    context.caller,
-    operation.kind,
-    resolved.read.workflowId,
-    resolved.call.expected,
-    workflowOperationPayload(operation),
-  );
+  const workflowId = resolved.read.workflowId;
+  let evidence: WorkflowEvidence;
+  try {
+    evidence = await readWorkflowEvidence(context, resolved);
+  } catch (error) {
+    throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
+  }
+  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -625,37 +917,109 @@ export async function mutateExecutionWorkflow(
           `A staged store is inspectable only through migration diagnostics.`,
       );
     }
-    // §3.1 an identical retry returns its recorded receipt — but only after the
-    // CURRENT authority is revalidated, so a revoked or epoch-invalidated
-    // coordinator never replays a receipt it may no longer own. The receipt
-    // addresses the whole graph, so its token is the ROOT token.
+    // §2.1/§4.1 (A26) the generation fences run FIRST: a reference or token from
+    // a superseded epoch is re-resolved, never answered from a receipt recorded
+    // under a generation that no longer exists.
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: resolved.read.referenceStoreId,
+      referenceEpoch: resolved.read.referenceEpoch,
+      target: { workflowId },
+    });
+    const stored = requireWorkflowState(tx, workflowId);
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      { kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [workflowId], revision: stored.revision },
+      { target: { workflowId } },
+    );
+    // §4.2 the supplied token's ADDRESS and generation are fenced above; its
+    // revision is transport freshness. A token whose revision moved is recorded
+    // as provenance, not refused (A10): the intent below is recomputed against
+    // the state this transaction reads.
+    const warnings: readonly ResolutionWarning[] = freshness.current
+      ? []
+      : [
+          {
+            code: "execution.token-drifted",
+            path: "expected",
+            message:
+              `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
+              `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
+              `the current state instead of being refused`,
+          },
+        ];
+    // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
+    // after the CURRENT authority is revalidated (a revoked or epoch-invalidated
+    // coordinator never replays a receipt it may no longer own) and only while
+    // the effect it recorded is still held: a superseded effect is disclosed, not
+    // restored (A13). The receipt addresses the whole graph, so its token is the
+    // ROOT token. Looking the receipt up before the registry witness is what lets
+    // a terminal close's own retry answer, instead of "workflow not found".
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
-      workflowId: resolved.read.workflowId,
+      workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return replay;
+      if (!workflowIntentHeld(stored.state, operation)) {
+        throw supersededEffectCause({
+          workflowId,
+          operationId: resolved.call.operationId,
+          operation,
+          state: stored.state,
+        });
+      }
+      return {
+        ...replay,
+        recovery: workflowRecovery({
+          workflowId,
+          outcome: "already-satisfied",
+          applied: [],
+          commitState: "committed",
+          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
+        }),
+      };
     }
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
-    assertExecutionToken(resolved.call.expected, {
-      kind: "workflow",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [witness.workflowId],
-      revision: witness.revision,
-    });
-    revalidateWorkflowEvidence(evidence);
+    // §4.2 (R6/R7/A09/A12) the effect is ALREADY held: the current state is the
+    // success the caller asked for, so this call reports it and spends nothing —
+    // no revision, no timestamp, no receipt row. Stale evidence is not consulted:
+    // a satisfied effect does not depend on the precursor file it once read.
+    if (workflowIntentHeld(stored.state, operation)) {
+      return {
+        ...readExecutionStateGraph(tx),
+        operationId: resolved.call.operationId,
+        replayed: true,
+        recovery: workflowRecovery({
+          workflowId,
+          outcome: "already-satisfied",
+          applied: [],
+          commitState: "none",
+          resolvedFrom: [{ path: workflowOperationField(operation), source: "stored workflow header" }],
+          warnings,
+        }),
+      };
+    }
+    try {
+      revalidateWorkflowEvidence(evidence);
+    } catch (error) {
+      throw prerequisiteCause(error, { workflowId, operation, stage: "revalidate" });
+    }
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction:
     // header changes advance the addressed workflow once and the store once; a
     // registry membership loss adds the ROOT advance without a second store
     // bump, so the accepted operation advances the store revision exactly once.
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
-    const receipt = applyWorkflowOperation({ tx, witness, operation, evidence, at });
+    let receipt: ExecutionRead<ExecutionState>;
+    try {
+      receipt = applyWorkflowOperation({ tx, witness, operation, evidence, at });
+    } catch (error) {
+      throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
+    }
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -664,7 +1028,19 @@ export async function mutateExecutionWorkflow(
       receipt,
       now: at,
     });
-    return { ...receipt, operationId: resolved.call.operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId: resolved.call.operationId,
+      replayed: false,
+      recovery: workflowRecovery({
+        workflowId,
+        outcome: "applied",
+        applied: [`${operation.kind} on workflow ${workflowId}`],
+        commitState: "committed",
+        resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
+        warnings,
+      }),
+    };
   });
 }
 

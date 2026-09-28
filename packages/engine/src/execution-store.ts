@@ -61,7 +61,12 @@ import {
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
-import { unresolvedRecovery, type RecoveryProblem, type ResolutionSource } from "./recovery-intent.js";
+import {
+  unresolvedRecovery,
+  type RecoveryDetails,
+  type RecoveryProblem,
+  type ResolutionSource,
+} from "./recovery-intent.js";
 import {
   rowPlanId,
   validatePlanRow,
@@ -103,6 +108,7 @@ export type ExecutionErrorCode =
   | "execution.token-kind"
   | "execution.scope-mismatch"
   | "execution.stale-token"
+  | "execution.effect-superseded"
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
@@ -115,14 +121,21 @@ export type ExecutionErrorCode =
   | "store.not-active"
   | "store.stale-epoch";
 
-/** Typed refusal with an actionable, stable code. */
+/**
+ * Typed refusal with an actionable, stable code. `details` is the
+ * machine-readable half: the field facts the refusal names plus the contract's
+ * `recovery` sidecar (`RecoveryDetails`), so a consumer never has to parse the
+ * prose to learn what was withheld and which decision is still open.
+ */
 export class ExecutionError extends Error {
   readonly code: ExecutionErrorCode;
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: ExecutionErrorCode, message: string) {
+  constructor(code: ExecutionErrorCode, message: string, details?: Record<string, unknown>) {
     super(`[${code}] ${message}`);
     this.name = "ExecutionError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -202,7 +215,17 @@ export type ExecutionMutation = {
  * state the operation produced (a replay returns the RECORDED receipt, not a
  * re-read), and `replayed` distinguishes the idempotent retry from the commit.
  */
-export type ExecutionReceipt<T> = ExecutionRead<T> & { operationId: string; replayed: boolean };
+export type ExecutionReceipt<T> = ExecutionRead<T> & {
+  operationId: string;
+  replayed: boolean;
+  /**
+   * §4.1 the sidecar of this call's outcome: what was applied, what was
+   * already satisfied, the provenance it was resolved from, scoped warnings and
+   * the known commit boundary (`RecoveryDetails`). Present on every frame
+   * result; a refusal carries the same object under `error.details.recovery`.
+   */
+  recovery?: RecoveryDetails;
+};
 
 // ---------------------------------------------------------------------------
 // Canonical value form (§3.1)
@@ -440,6 +463,41 @@ export function parseExecutionToken(value: unknown): ParsedExecutionToken {
  * is `execution.stale-token` — never silently coerced.
  */
 export function assertExecutionToken(value: unknown, expected: ExecutionTokenExpectation): ParsedExecutionToken {
+  const parsed = parseTokenForAddress(value, expected);
+  if (parsed.epoch !== expected.epoch) {
+    throw authorityEpochRefusal({
+      source: "the token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: expected.epoch,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${expected.epoch}. Reopen the store and re-read before retrying.`,
+    });
+  }
+  if (expected.revision !== undefined && parsed.revision !== expected.revision) {
+    throw new ExecutionError(
+      "execution.stale-token",
+      `the token carries revision ${parsed.revision}; the current revision is ${expected.revision}. Re-read and retry with the current token.`,
+      {
+        component: "revision",
+        path: "expected",
+        current_revision: expected.revision,
+        presented_revision: parsed.revision,
+      },
+    );
+  }
+  return parsed;
+}
+
+/**
+ * §3.1 the address half of one token comparison: exact kind, store and key. A
+ * wrong kind, a foreign store or another address is `execution.token-kind` /
+ * `execution.scope-mismatch` — the address a supplied token names is never
+ * inferred, normalized or guessed. Epoch and revision stay with the caller,
+ * so the two comparisons below share exactly this gate.
+ */
+function parseTokenForAddress(
+  value: unknown,
+  expected: Omit<ExecutionTokenExpectation, "revision">,
+): ParsedExecutionToken {
   const parsed = parseExecutionToken(value);
   if (parsed.kind !== expected.kind) {
     throw new ExecutionError(
@@ -455,22 +513,189 @@ export function assertExecutionToken(value: unknown, expected: ExecutionTokenExp
       parsed.storeId !== expected.storeId
         ? `the token belongs to store ${parsed.storeId}, not to ${expected.storeId}`
         : `the token addresses ${JSON.stringify(parsed.key)}, not ${JSON.stringify(expected.key)}`,
-    );
-  }
-  if (parsed.epoch !== expected.epoch) {
-    throw new ExecutionError(
-      "store.stale-epoch",
-      `the token carries epoch ${parsed.epoch}; the current epoch is ${expected.epoch}. Reopen the store and re-read before retrying.`,
-    );
-  }
-  if (expected.revision !== undefined && parsed.revision !== expected.revision) {
-    throw new ExecutionError(
-      "execution.stale-token",
-      `the token carries revision ${parsed.revision}; the current revision is ${expected.revision}. Re-read and retry with the current token.`,
+      { expected: expected.key, actual: parsed.key },
     );
   }
   return parsed;
 }
+
+/**
+ * §2.1/§4.1 (A26) the refusal of a superseded authority GENERATION, shared by
+ * every fence that compares a caller-supplied epoch: a session reference and a
+ * comparison token carry the same fact, so they get the same report. The
+ * contract's recovery sidecar names what re-resolution the caller must perform
+ * and that nothing was written or replayed from the old generation — a caller
+ * that only saw the code would otherwise retry blindly against a store that
+ * renumbered itself.
+ */
+function authorityEpochRefusal(input: {
+  source: string;
+  presentedEpoch: number;
+  currentEpoch: number;
+  detail: string;
+  target?: RecoveryDetails["target"];
+}): ExecutionError {
+  const problem: RecoveryProblem = {
+    component: "authority",
+    path: "epoch",
+    code: "store.stale-epoch",
+    sourcesTried: [input.source, "store_meta.authority_epoch, read in this transaction"],
+    currentFacts: [
+      `${input.source} carries epoch ${input.presentedEpoch}`,
+      `the store's current authority epoch is ${input.currentEpoch}`,
+    ],
+    needed:
+      `re-resolve the current authority generation and re-acquire your own identity at epoch ${input.currentEpoch} ` +
+      `(resume or rebind the session row of that epoch), then retry against the current token`,
+    withheldEffect:
+      `only the addressed effect: nothing was written, no revision advanced and no receipt was replayed from epoch ` +
+      `${input.presentedEpoch}`,
+    availableWork: [
+      `read the current state at epoch ${input.currentEpoch}`,
+      `resume or rebind your own execution session at epoch ${input.currentEpoch}`,
+      "retry the operation with the token and reference of the current epoch",
+    ],
+  };
+  return new ExecutionError("store.stale-epoch", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    current_epoch: input.currentEpoch,
+    presented_epoch: input.presentedEpoch,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({
+      target: input.target ?? {},
+      unresolved: [problem],
+      resolvedFrom: [{ path: "epoch", source: input.source }],
+    }),
+  });
+}
+
+/**
+ * §2.1/§4.1 (A26) the authority-generation fence of one frame: the reference a
+ * caller presents must belong to THIS store and THIS epoch. A store mismatch is
+ * a scope mismatch; a superseded epoch is the typed re-resolution report above,
+ * so an authority that reactivated mid-call is re-resolved instead of being
+ * written to (or replayed) under a generation that no longer exists.
+ */
+export function assertAuthorityGeneration(
+  tx: ExecutionTransaction,
+  input: { referenceStoreId: string; referenceEpoch: number; target?: RecoveryDetails["target"] },
+): void {
+  if (input.referenceStoreId !== tx.storeId) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      `the session reference belongs to store ${input.referenceStoreId}, not to ${tx.storeId}`,
+    );
+  }
+  if (input.referenceEpoch !== tx.epoch) {
+    throw authorityEpochRefusal({
+      source: "the session reference",
+      presentedEpoch: input.referenceEpoch,
+      currentEpoch: tx.epoch,
+      target: input.target,
+      detail: `the session reference carries epoch ${input.referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`,
+    });
+  }
+}
+
+/**
+ * §4.2 (R6/R7) the freshness verdict of one supplied comparison token for a
+ * state intent. The token's ADDRESS (kind, store, key) and the authority
+ * generation it was read under are strict: a token of another record, another
+ * store or a superseded epoch authorizes nothing. Its REVISION is not a
+ * constraint — it is the state the caller had read, and a revision that moved
+ * says nothing about whether the requested effect is still valid. The frame
+ * therefore recomputes the intent against the state it holds now and decides
+ * semantically (already satisfied, genuinely conflicting, or applicable)
+ * instead of refusing a stale number.
+ *
+ * `current` is the addressed record as this transaction reads it, so the
+ * revision it carries is the one a caller must have read to be exactly current.
+ */
+export function resolveTokenFreshness(
+  value: unknown,
+  current: ExecutionTokenExpectation & { revision: number },
+  options: { target?: RecoveryDetails["target"] } = {},
+): TokenFreshness {
+  const parsed = parseTokenForAddress(value, current);
+  if (parsed.epoch !== current.epoch) {
+    throw authorityEpochRefusal({
+      source: "the comparison token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: current.epoch,
+      target: options.target,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${current.epoch}. Reopen the store and re-read before retrying.`,
+    });
+  }
+  return {
+    readRevision: parsed.revision,
+    currentRevision: current.revision,
+    current: parsed.revision === current.revision,
+  };
+}
+
+/**
+ * §3.1/§4.2 the request fingerprint of one state intent: the operation kind, the
+ * record it addresses, the caller identity the receipt is bound to and the
+ * operation's own SEMANTIC SELECTION — never the transport freshness (`expected`
+ * revision, `session` reference, `operationId`) the caller happened to present.
+ *
+ * A repeat after a lost response is the same intent even when the caller
+ * re-read the state and re-presented a fresh token (design R6/R7: "reuse receipt
+ * provenance without demanding its historical revision still equal the current
+ * revision"), so the fingerprint must not move with that token; a different
+ * business payload still moves it and stays an operation conflict (A13).
+ */
+export function semanticRequestHash(input: {
+  operation: string;
+  address: Readonly<Record<string, string>>;
+  caller: ExecutionCaller;
+  intent: Readonly<Record<string, unknown>>;
+}): string {
+  return createHash("sha256")
+    .update(
+      serializeExecutionValue({
+        operation: input.operation,
+        address: input.address,
+        caller: {
+          session_id: input.caller.sessionId,
+          role: input.caller.role,
+          workflow_id: input.caller.workflowId,
+          plan_id: input.caller.planId,
+        },
+        intent: input.intent,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/**
+ * §4.1 the typed cause of one refusal a frame produced: the SAME error — code,
+ * class and message unchanged — with the contract's `recovery` sidecar (and the
+ * field facts beside it) merged into whatever details it already carried, so
+ * `error.details.recovery` is the report and the prose is never the whole of
+ * it. A value that is not an `Error` is returned untouched: no sidecar is ever
+ * fabricated for a foreign value.
+ */
+export function withRecoveryDetails<T>(error: T, details: Record<string, unknown>): T {
+  if (!(error instanceof Error)) return error;
+  const target = error as { details?: Record<string, unknown> };
+  target.details = { ...(target.details ?? {}), ...details };
+  return error;
+}
+
+/** §4.2 the revision half of one state intent's freshness, as the frames report it. */
+export type TokenFreshness = Readonly<{
+  /** The record revision the caller's token carries (the state it had read). */
+  readRevision: number;
+  /** The record revision this transaction holds. */
+  currentRevision: number;
+  /** `false` when an accepted operation advanced the record since that read. */
+  current: boolean;
+}>;
 
 // ---------------------------------------------------------------------------
 // Store-side helpers
@@ -1997,19 +2222,13 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
 }
 
 /** §2.1: a reference from another store or another epoch fences before anything is read. */
-function assertReferenceAuthority(tx: ExecutionTransaction, referenceStoreId: string, referenceEpoch: number): void {
-  if (referenceStoreId !== tx.storeId) {
-    throw new ExecutionError(
-      "execution.scope-mismatch",
-      `the session reference belongs to store ${referenceStoreId}, not to ${tx.storeId}`,
-    );
-  }
-  if (referenceEpoch !== tx.epoch) {
-    throw new ExecutionError(
-      "store.stale-epoch",
-      `the session reference carries epoch ${referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`,
-    );
-  }
+function assertReferenceAuthority(
+  tx: ExecutionTransaction,
+  referenceStoreId: string,
+  referenceEpoch: number,
+  target?: RecoveryDetails["target"],
+): void {
+  assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...(target === undefined ? {} : { target }) });
 }
 
 /**
@@ -2531,11 +2750,53 @@ export function readOperationReplay<T>(
   const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
   if (recorded === null) return null;
   if (recorded.requestHash !== input.requestHash) {
+    // §4.1 (A13) the operation id is already committed for a DIFFERENT semantic
+    // intent: the receipt is not restored and the requested effect is withheld,
+    // and the typed cause names both so the caller sees the mismatch instead of
+    // a bare conflict.
+    const problem: RecoveryProblem = {
+      component: "operation",
+      path: "operationId",
+      code: "execution.operation-conflict",
+      sourcesTried: [
+        `execution_operations(epoch ${tx.epoch}, ${JSON.stringify(input.operationId)})`,
+        "the requested operation's semantic selection",
+      ],
+      currentFacts: [
+        `operation id ${JSON.stringify(input.operationId)} is committed for workflow ${recorded.workflowId} ` +
+          `with request fingerprint ${recorded.requestHash}`,
+        `the requested operation's fingerprint is ${input.requestHash}`,
+      ],
+      needed:
+        "retry the committed request unchanged (an operation id is an idempotency key, not a reusable slot), or use a " +
+        "new operation id for the new effect",
+      withheldEffect:
+        "the requested effect, exactly as sent: no state was restored from the committed receipt either",
+      availableWork: [
+        `read the current state of workflow ${recorded.workflowId}`,
+        "retry the committed request unchanged under its own operation id",
+        "express the new effect under a new operation id",
+      ],
+    };
     throw new ExecutionError(
       "execution.operation-conflict",
-      `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different request ` +
-        `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable slot \u2014 ` +
-        `retry the committed request unchanged or use a new id. Nothing was written.`,
+      `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different semantic ` +
+        `request (its addressed record, caller or business payload). An operation id is an idempotency key, not a reusable ` +
+        `slot \u2014 retry the committed request unchanged or use a new id. Nothing was written.`,
+      {
+        component: problem.component,
+        path: problem.path,
+        operation_id: input.operationId,
+        recorded_fingerprint: recorded.requestHash,
+        requested_fingerprint: input.requestHash,
+        sources_tried: problem.sourcesTried,
+        current_facts: problem.currentFacts,
+        available_work: problem.availableWork,
+        recovery: unresolvedRecovery({
+          target: { workflowId: input.workflowId, ...(input.planId === null ? {} : { planId: input.planId }) },
+          unresolved: [problem],
+        }),
+      },
     );
   }
   const receipt = readCommittedReceipt<T>(recorded, tx, input.operationId, input.workflowId, input.token);

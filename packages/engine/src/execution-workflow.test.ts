@@ -651,6 +651,15 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
 
   test("a checkout switched between the probe and the commit refuses as stale evidence", async () => {
     const fixture = await workflowFixture("worktree-stale");
+    // A request for the path the header ALREADY records is a satisfied effect:
+    // it writes nothing, so no probe of it can go stale (A12). The call below is
+    // a CHANGE of the recorded path, which is what takes the probe this case is
+    // about — and the checkout it probes is switched in the probe→commit window.
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "update execution_workflows set state_json = json_set(state_json, '$.integration_worktree_path', ?) where workflow_id = ?",
+      ).run(join(fixture.repoRoot, "wt-recorded-earlier"), WORKFLOW_ID);
+    });
     const before = await workflowFootprint(fixture.context);
     setWorkflowWitnessGapForTest(() => {
       runGit(["checkout", "-q", "-b", "feature/switched-in-the-window"], fixture.integrationPath);
@@ -932,15 +941,30 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
     expect(foreign.code).toBe("execution.scope-mismatch");
 
-    // A superseded token is a stale CAS, not a permission.
-    const live = await liveWorkflowToken(fixture);
-    const stale = live.replace(/:([0-9]+)$/, (_match: string, revision: string) => `:${Number(revision) + 7}`);
-    const staleRefusal = await refusalOf(() =>
-      workflowMutation(fixture, "op-stale-token", { kind: "lifecycle", status: "paused", reason: "stale" }, {
-        expected: stale as ExecutionToken,
+    // A token of a SUPERSEDED AUTHORITY GENERATION is a generation fence: it
+    // authorizes nothing, is reported with the typed re-resolution cause, and
+    // nothing is replayed (A26). A superseded REVISION alone is not a fence — the
+    // intent is recomputed against the current state instead (the
+    // `unrelated revision` case below).
+    const [storeRow] = rows(fixture.context, "select store_id, authority_epoch from store_meta where id = 1");
+    const [headerRow] = rows(
+      fixture.context,
+      `select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    const futureEpochToken = executionToken(
+      "workflow",
+      String(storeRow!.store_id),
+      Number(storeRow!.authority_epoch) + 1,
+      [WORKFLOW_ID],
+      Number(headerRow!.revision),
+    );
+    const staleEpochRefusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-stale-epoch", { kind: "lifecycle", status: "paused", reason: "stale" }, {
+        expected: futureEpochToken,
       }),
     );
-    expect(staleRefusal.code).toBe("execution.stale-token");
+    expect(staleEpochRefusal.code).toBe("store.stale-epoch");
+    expect(recoveryOf(staleEpochRefusal.details).commitState).toBe("none");
 
     // A staged authority serves no workflow transition at all.
     withRaw(fixture.context, (db) => {
@@ -954,6 +978,293 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
     });
 
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §4.1/§4.2 semantic replay, reconciliation and typed causes
+ * ------------------------------------------------------------------------ */
+
+/** The typed cause one refusal carries, as the consumer contract exposes it. */
+function recoveryOf(details: Record<string, unknown>): Record<string, unknown> {
+  const recovery = details.recovery;
+  if (typeof recovery !== "object" || recovery === null || Array.isArray(recovery)) {
+    throw new Error(`the refusal carries no recovery sidecar: ${JSON.stringify(details)}`);
+  }
+  return recovery as Record<string, unknown>;
+}
+
+/** The unresolved components of one recovery sidecar, in order. */
+function problemsOf(recovery: Record<string, unknown>): Array<Record<string, unknown>> {
+  const unresolved = recovery.unresolved;
+  if (!Array.isArray(unresolved)) throw new Error("the recovery sidecar lists no unresolved components");
+  return unresolved as Array<Record<string, unknown>>;
+}
+
+/** One string list of a recovery sidecar or problem, as one line a consumer can read. */
+function listOf(owner: Record<string, unknown>, key: string): string {
+  const value = owner[key];
+  if (!Array.isArray(value)) throw new Error(`the recovery report carries no ${key}`);
+  return value.map((entry) => String(entry)).join("; ");
+}
+
+/**
+ * The ONE thing a committed plan operation does to the workflow it belongs to:
+ * `advancePlanOperationRevisions` moves the workflow's revision and the store's
+ * revision without touching the workflow header. A caller's token for that header
+ * is then stale for a reason that says nothing about the intent it carries.
+ */
+function commitSiblingPlanChange(context: StoreContext): void {
+  withRaw(context, (db) => {
+    db.prepare("update execution_workflows set revision = revision + 1 where workflow_id = ?").run(WORKFLOW_ID);
+    db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  });
+}
+
+describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed causes", () => {
+  test("semantic replay: a repeat that re-read the state replays the recorded receipt with zero churn (A09/A01)", async () => {
+    const fixture = await workflowFixture("replay-zero-churn");
+    const policy = { plan_parallelism: "parallel" };
+    const firstToken = await liveWorkflowToken(fixture);
+    const first = await workflowMutation(fixture, "op-replay-policy", { kind: "execution-policy", policy }, {
+      expected: firstToken,
+    });
+    expect(first.replayed).toBe(false);
+    expect(first.recovery?.outcome).toBe("applied");
+    expect(first.recovery?.commitState).toBe("committed");
+    const settled = await workflowFootprint(fixture.context);
+
+    // The retry re-read the state first, so it presents a token read AFTER the
+    // commit: the transport freshness moved, the intent did not. That is the
+    // replay — the recorded receipt, and not one revision or receipt row more.
+    const retryToken = await liveWorkflowToken(fixture);
+    expect(retryToken).not.toBe(firstToken);
+    const again = await workflowMutation(fixture, "op-replay-policy", { kind: "execution-policy", policy });
+    expect(again.replayed).toBe(true);
+    expect(again.operationId).toBe("op-replay-policy");
+    expect(again.token).toBe(first.token);
+    expect(again.recovery?.outcome).toBe("already-satisfied");
+    expect(again.recovery?.commitState).toBe("committed");
+    expect(await workflowFootprint(fixture.context)).toEqual(settled);
+  });
+
+  test("semantic replay: a satisfied effect is the current success with no receipt and no churn (A12)", async () => {
+    const fixture = await workflowFixture("satisfied-effect");
+    const policy = { plan_parallelism: "parallel" };
+    const expected = await liveWorkflowToken(fixture);
+    await workflowMutation(fixture, "op-settled-policy", { kind: "execution-policy", policy }, { expected });
+    const settled = await workflowFootprint(fixture.context);
+
+    // A DIFFERENT operation id and the token read BEFORE the commit: the effect
+    // is already held, so this is the current success — no receipt row, no
+    // revision, no timestamp — and the drift is reported as provenance (A10),
+    // never as a refusal.
+    const held = await workflowMutation(fixture, "op-already-held", { kind: "execution-policy", policy }, { expected });
+    expect(held.replayed).toBe(true);
+    expect(held.recovery?.outcome).toBe("already-satisfied");
+    expect(held.recovery?.commitState).toBe("none");
+    expect(held.recovery?.warnings?.[0]?.code).toBe("execution.token-drifted");
+    expect(held.recovery?.warnings?.[0]?.path).toBe("expected");
+    expect(await workflowFootprint(fixture.context)).toEqual(settled);
+  });
+
+  test("unrelated revision: a token drifted by a committed sibling change is recomputed, sibling retained (A10)", async () => {
+    const fixture = await workflowFixture("unrelated-drift");
+    const expected = await liveWorkflowToken(fixture);
+    const before = revisions(fixture.context);
+    // A committed operation on a CHILD of the workflow: the row moves and the
+    // workflow's revision with it, while the header — the read set of a policy
+    // change — is byte-identical to what the caller read.
+    setRowStatus(fixture.context, PLAN_ID, "InProgress");
+    commitSiblingPlanChange(fixture.context);
+    const drifted = revisions(fixture.context);
+    expect(drifted.workflow).toBe(before.workflow + 1);
+    expect(drifted.store).toBe(before.store + 1);
+
+    const receipt = await workflowMutation(
+      fixture,
+      "op-drift-policy",
+      { kind: "execution-policy", policy: { plan_parallelism: "parallel" } },
+      { expected },
+    );
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.recovery?.outcome).toBe("applied");
+    expect(receipt.recovery?.warnings?.[0]?.code).toBe("execution.token-drifted");
+
+    // The sibling's own work is retained, the header carries the requested
+    // policy, and this accepted operation spends ONE revision of each counter.
+    const [row] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.status') as status from execution_plans ` +
+        `where workflow_id = '${WORKFLOW_ID}' and plan_id = '${PLAN_ID}'`,
+    );
+    expect(row!.status).toBe("InProgress");
+    const [header] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.execution_policy') as policy from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(JSON.parse(String(header!.policy))).toEqual({ plan_parallelism: "parallel" });
+    expect(revisions(fixture.context)).toEqual({
+      root: drifted.root,
+      store: drifted.store + 1,
+      workflow: drifted.workflow + 1,
+    });
+  });
+
+  test("relevant conflict: a phase the current gate does not produce is refused with its exact field (A11)", async () => {
+    const fixture = await workflowFixture("relevant-conflict");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-conflict-evidence", { kind: "delivery", delivery: DELIVERY_TAIL });
+    writeCompass(fixture.compassPath, {
+      status: "completed",
+      plans: [PLAN_ID],
+      targetBranch: "main",
+      endDate: "2026-01-02",
+    });
+    const before = await workflowFootprint(fixture.context);
+
+    // The gate of this lifecycle produces phase-4; the request asks for phase-2.
+    // The refusal keeps its own verdict AND names the exact conflicting field,
+    // its current value, the requested one and the one decision left.
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-conflict-phase", {
+        kind: "phase",
+        phase: "phase-2-execute",
+        compassPath: fixture.compassPath,
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.gate).toBe("phase-4-pr-delivery");
+    const recovery = recoveryOf(refused.details);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    const problems = problemsOf(recovery);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.component).toBe("workflow-header");
+    expect(problems[0]!.path).toBe("operation.phase");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("phase-4-pr-delivery");
+    expect(String(problems[0]!.withheldEffect)).toContain("was not overwritten");
+    expect(String(problems[0]!.needed)).toContain("phase-2-execute");
+    expect(listOf(problems[0]!, "availableWork")).toContain("read the current state of workflow");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("relevant conflict: an operation id reused for a different payload is disclosed, not replayed (A13)", async () => {
+    const fixture = await workflowFixture("reused-operation-id");
+    const first = await workflowMutation(fixture, "op-reused", {
+      kind: "execution-policy",
+      policy: { plan_parallelism: "parallel" },
+    });
+    expect(first.replayed).toBe(false);
+    const settled = await workflowFootprint(fixture.context);
+
+    // The same id with a DIFFERENT business payload is not the same intent: the
+    // recorded receipt must not answer it, and the typed cause names both the
+    // committed fingerprint and the requested one.
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-reused", { kind: "execution-policy", policy: { plan_parallelism: "serial" } }),
+    );
+    expect(refused.code).toBe("execution.operation-conflict");
+    const recovery = recoveryOf(refused.details);
+    expect(recovery.outcome).toBe("unresolved");
+    // This call committed nothing; the RECORDED operation is the committed one,
+    // and the facts say so.
+    expect(recovery.commitState).toBe("none");
+    const problems = problemsOf(recovery);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.component).toBe("operation");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("is committed for workflow");
+    expect(String(problems[0]!.needed)).toContain("new operation id");
+    expect(await workflowFootprint(fixture.context)).toEqual(settled);
+  });
+
+  test("semantic replay: a superseded receipt is disclosed, never restored (A13)", async () => {
+    const fixture = await workflowFixture("superseded-receipt");
+    const pause = await workflowMutation(fixture, "op-supersede", {
+      kind: "lifecycle",
+      status: "paused",
+      reason: "operator hold",
+    });
+    expect(pause.replayed).toBe(false);
+    // A later accepted operation moves the SAME field on: the recorded effect no
+    // longer holds, so its receipt is historical evidence and is never served as
+    // current state.
+    await workflowMutation(fixture, "op-supersede-on", { kind: "lifecycle", status: "running", reason: "operator release" });
+    const current = await workflowFootprint(fixture.context);
+    expect(parsedJson(current.workflow_state).status).toBe("running");
+
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-supersede", { kind: "lifecycle", status: "paused", reason: "operator hold" }),
+    );
+    expect(refused.code).toBe("execution.effect-superseded");
+    const recovery = recoveryOf(refused.details);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    const problems = problemsOf(recovery);
+    expect(problems[0]!.path).toBe("operation.status");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("running");
+    expect(String(problems[0]!.withheldEffect)).toContain("never restored");
+    expect(await workflowFootprint(fixture.context)).toEqual(current);
+  });
+
+  test("authority epoch: a generation change is re-resolved and never replays the old epoch (A26)", async () => {
+    const fixture = await workflowFixture("epoch-generation");
+    const expected = await liveWorkflowToken(fixture);
+    const policy = { plan_parallelism: "parallel" };
+    const first = await workflowMutation(fixture, "op-epoch-policy", { kind: "execution-policy", policy }, { expected });
+    expect(first.replayed).toBe(false);
+    const before = await workflowFootprint(fixture.context);
+
+    // A real generation change: the store's authority epoch advances (the step
+    // the activation path performs), while this caller's reference and token
+    // still name the old one. The committed receipt of the OLD epoch must not
+    // answer this call, and the cause names the re-resolution it needs.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    });
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-epoch-policy", { kind: "execution-policy", policy }, { expected }),
+    );
+    expect(refused.code).toBe("store.stale-epoch");
+    const recovery = recoveryOf(refused.details);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    const problems = problemsOf(recovery);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.path).toBe("epoch");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("current authority epoch");
+    expect(listOf(problems[0]!, "availableWork")).toContain("resume or rebind your own execution session");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("relevant conflict: an unavailable prerequisite is typed with no commit (A25)", async () => {
+    const fixture = await workflowFixture("git-unavailable");
+    const before = await workflowFootprint(fixture.context);
+
+    // Git is genuinely required to prove an integration checkout belongs to this
+    // repository. With no readable Git worktree the transition is reported as an
+    // unavailable prerequisite with its known commit boundary (none) and the work
+    // that remains possible — never as a missing user field and never as a
+    // fabricated substitute fact.
+    rmSync(join(fixture.repoRoot, ".git"), { recursive: true, force: true });
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-git-unavailable", {
+        kind: "integration-worktree",
+        path: fixture.integrationPath,
+      }),
+    );
+    expect(refused.code).toBe("coordination.not-in-git");
+    const recovery = recoveryOf(refused.details);
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    const problems = problemsOf(recovery);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.component).toBe("operation-prerequisite");
+    expect(problems[0]!.code).toBe("coordination.not-in-git");
+    expect(refused.details.stage).toBe("read");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("did not get past that read");
+    expect(listOf(problems[0]!, "availableWork")).toContain("lifecycle, execution-policy, delivery");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 });

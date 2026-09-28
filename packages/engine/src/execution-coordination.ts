@@ -15,7 +15,7 @@
  * mutator, and `mutateExecutionPlan` is published only once its whole closed
  * operation union exists (W4).
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
@@ -102,7 +102,8 @@ import {
   releaseExecutionLease,
   releaseIntegrationMergeLease,
   resolvePlanRead,
-  serializeExecutionValue,
+  resolveTokenFreshness,
+  semanticRequestHash,
   transferExecutionLease,
   withExecutionTransaction,
   writeExecutionInputPin,
@@ -119,6 +120,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ResolvedPlanRead,
+  type TokenFreshness,
 } from "./execution-store.js";
 import {
   assertCaptureRequest,
@@ -135,6 +137,7 @@ import {
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
+import { unresolvedRecovery, type RecoveryDetails, type RecoveryProblem, type ResolutionSource } from "./recovery-intent.js";
 import { findingsCleanupGate } from "./project.js";
 import { storeDbPath } from "./store-db.js";
 import {
@@ -375,36 +378,131 @@ function assertResidualAdmission(witness: ExecutionPlanWitness, tx: ExecutionTra
 }
 
 /**
- * §3.1 request hash: operation kind, exact scope, expected token, caller
- * identity and the operation payload as supplied. Reusing an operation id for
- * any other request refuses `execution.operation-conflict` instead of replaying
- * a foreign receipt, and another actor cannot replay this one.
+ * §3.1/§4.2 the request fingerprint of one plan operation: the operation kind,
+ * the addressed plan and the payload the verb's own projection captures — never
+ * the transport freshness (`expected` token, `session` reference, `operationId`)
+ * the caller happened to present. A repeat after a lost response is the same
+ * intent even when the caller re-read the row and re-presented a fresh token
+ * (design R6/R7), so the fingerprint must not move with it; reusing an operation
+ * id for a different business payload still refuses
+ * `execution.operation-conflict` instead of replaying a foreign receipt (A13),
+ * and another actor cannot replay this one.
  */
 function planOperationRequestHash(
   caller: ExecutionCaller,
   kind: string,
   read: { workflowId: string; planId: string },
-  expected: ExecutionToken,
   payload: unknown,
 ): string {
-  return createHash("sha256")
-    .update(
-      serializeExecutionValue({
-        operation: kind,
-        workflow_id: read.workflowId,
-        plan_id: read.planId,
-        expected,
-        caller: {
-          session_id: caller.sessionId,
-          role: caller.role,
-          workflow_id: caller.workflowId,
-          plan_id: caller.planId,
-        },
-        payload,
+  return semanticRequestHash({
+    operation: kind,
+    address: { workflow_id: read.workflowId, plan_id: read.planId },
+    caller,
+    intent: { payload },
+  });
+}
+
+/**
+ * §4.1 the sidecar of one plan-frame result: what this call did with the intent,
+ * the record it addressed and the commit boundary the caller can rely on — the
+ * same object shape a refusal carries under `error.details.recovery`, so a
+ * consumer reads one contract on both paths.
+ */
+function planRecovery(input: {
+  witness: ExecutionPlanWitness;
+  kind: string;
+  outcome: "applied" | "already-satisfied";
+  commitState: RecoveryDetails["commitState"];
+  resolvedFrom: readonly ResolutionSource[];
+}): RecoveryDetails {
+  return {
+    outcome: input.outcome,
+    target: { workflowId: input.witness.workflowId, planId: input.witness.planId },
+    applied: input.outcome === "applied" ? [`${input.kind} on plan ${input.witness.planId}`] : [],
+    unresolved: [],
+    resolvedFrom: [...input.resolvedFrom],
+    warnings: [],
+    commitState: input.commitState,
+  };
+}
+
+/**
+ * §4.1 (R6/A09/A12) the sidecar of a served replay: the requested effect is the
+ * one the recorded receipt already committed, so the call returns current
+ * success without a second commit. `commitState: "committed"` describes the
+ * receipt's own boundary — the effect IS committed, by the recorded operation,
+ * and no revision or timestamp moved for this retry.
+ */
+function replayRecovery(witness: ExecutionPlanWitness, kind: string): RecoveryDetails {
+  return planRecovery({
+    witness,
+    kind,
+    outcome: "already-satisfied",
+    commitState: "committed",
+    resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+  });
+}
+
+/**
+ * §4.1/§4.2 (A11) the refusal of one plan operation whose token is no longer the
+ * addressed row's CAS. Unlike a workflow header — whose revision moves when any
+ * child changes — a plan row's revision moves only when THAT row changes, so a
+ * mismatch here is a relevant change to the very record this operation writes:
+ * the requested effect is withheld, and the typed cause names the row, the
+ * revisions and the current token that replaces the caller's.
+ */
+function stalePlanRowRefusal(
+  witness: ExecutionPlanWitness,
+  freshness: TokenFreshness,
+  kind: string,
+): ExecutionError {
+  const problem: RecoveryProblem = {
+    component: "plan-row",
+    path: "expected",
+    code: "execution.stale-token",
+    sourcesTried: [
+      `execution_plans(${witness.workflowId}, ${witness.planId}) as this transaction reads it`,
+      "the caller's comparison token for that row",
+    ],
+    currentFacts: [
+      `plan ${witness.planId} of workflow ${witness.workflowId} is at revision ${freshness.currentRevision} ` +
+        `(status ${String(witness.view.plan.status ?? "none")})`,
+      `the supplied token carries revision ${freshness.readRevision}`,
+    ],
+    needed:
+      `re-read plan ${witness.planId} and retry the ${kind} operation with the token that read returns \u2014 the row's ` +
+      `current token is ${witness.token}`,
+    withheldEffect:
+      `the ${kind} operation and its whole transaction: the row, its coordination block and every revision are exactly ` +
+      `as they were`,
+    availableWork: [
+      `read plan ${witness.planId} and the workflow state`,
+      `retry the ${kind} operation against the token of that read`,
+      "operations on other rows and other workflows continue",
+    ],
+  };
+  return new ExecutionError(
+    "execution.stale-token",
+    `the token carries revision ${freshness.readRevision}; plan ${witness.planId} of workflow ${witness.workflowId} is at ` +
+      `revision ${freshness.currentRevision}. This is a relevant change to the addressed row: re-read it and retry.`,
+    {
+      component: problem.component,
+      path: problem.path,
+      workflow_id: witness.workflowId,
+      plan_id: witness.planId,
+      current_revision: freshness.currentRevision,
+      presented_revision: freshness.readRevision,
+      current_token: witness.token,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: witness.workflowId, planId: witness.planId },
+        unresolved: [problem],
+        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
       }),
-      "utf8",
-    )
-    .digest("hex");
+    },
+  );
 }
 
 /**
@@ -458,15 +556,31 @@ function withExecutionPlanOperation<T>(
       workflowId: witness.workflowId,
       planId: witness.planId,
     });
-    if (replay !== null) return replay;
+    if (replay !== null) {
+      // §4.2 (R6) the recorded receipt comes back with the provenance of the
+      // commit it records; nothing re-reads or re-writes the row it already
+      // applied, and the caller's token is not re-evaluated (the commit itself
+      // advanced the row, so an exact retry always presents a superseded token).
+      return { ...replay, recovery: replayRecovery(witness, request.operation.kind) };
+    }
     assertRunningWorkflow(witness);
-    assertExecutionToken(request.expected, {
-      kind: "plan",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [witness.workflowId, witness.planId],
-      revision: witness.revision,
-    });
+    // §4.2 (R6/R7) the supplied token's ADDRESS and generation are strict, its
+    // revision is not: an operation that committed in the commit window moved
+    // the row, and this frame re-decides against the row it holds now. A row
+    // revision that moved is a relevant change to the very record this operation
+    // writes, so it is refused with the exact facts instead of overwritten.
+    const freshness = resolveTokenFreshness(
+      request.expected,
+      {
+        kind: "plan",
+        storeId: tx.storeId,
+        epoch: tx.epoch,
+        key: [witness.workflowId, witness.planId],
+        revision: witness.revision,
+      },
+      { target: { workflowId: witness.workflowId, planId: witness.planId } },
+    );
+    if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
@@ -484,7 +598,18 @@ function withExecutionPlanOperation<T>(
       receipt,
       now: at,
     });
-    return { ...receipt, operationId: request.operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId: request.operationId,
+      replayed: false,
+      recovery: planRecovery({
+        witness,
+        kind: request.operation.kind,
+        outcome: "applied",
+        commitState: "committed",
+        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+      }),
+    };
   });
 }
 
@@ -596,7 +721,7 @@ export async function prepareExecutionPlan(
     throw invalidPlanInput("prepare requires an absolute assignmentPath");
   }
   const seal = readPrepareSeal(context, resolved.call);
-  const requestHash = planOperationRequestHash(context.caller, "prepare", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "prepare", resolved.read, {
     assignment_path: operation.assignmentPath,
   });
   const { planId, workflowId } = resolved.read;
@@ -735,7 +860,7 @@ export async function progressExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "progress"], "progress operation");
   const progress = operation.progress;
   assertViolationFree(validatePlanProgress(progress), "progress");
-  const requestHash = planOperationRequestHash(context.caller, "progress", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "progress", resolved.read, {
     progress: progressPayload(progress),
   });
   const { planId, workflowId } = resolved.read;
@@ -926,7 +1051,7 @@ export async function residualAddExecutionPlan(
       throw invalidPlanInput("residual-add requires every entry to be an issue observation object");
     }
   }
-  const requestHash = planOperationRequestHash(context.caller, "residual-add", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "residual-add", resolved.read, {
     entries: residualAddPayload(entries),
   });
   const actor = issueWriteSeat(context.caller.role);
@@ -1012,7 +1137,7 @@ export async function residualCloseExecutionPlan(
   }
   assertTerminalDisposition(operation.disposition);
   assertClosureAuthority(operation.disposition, operation.evidence);
-  const requestHash = planOperationRequestHash(context.caller, "residual-close", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "residual-close", resolved.read, {
     residual: residualClosePayload(operation),
   });
   const actor = issueWriteSeat(context.caller.role);
@@ -1365,7 +1490,7 @@ export async function handoffExecutionPlan(
   assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, prepared, planId, "handoff");
   assertHandoffGitProof(planScopeOf(before.data, planId).worktreePath, evidence, "handoff", planId);
   await assertFindingsClosed(context, planId, prepared, "hand off");
-  const requestHash = planOperationRequestHash(context.caller, "handoff", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "handoff", resolved.read, {
     evidence: handoffEvidencePayload(evidence),
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
@@ -1424,7 +1549,7 @@ export async function acceptExecutionPlan(
   const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
   requireHandoffState(named, ["submitted"], planId, "accept");
   assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "accept", planId);
-  const requestHash = planOperationRequestHash(context.caller, "accept", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "accept", resolved.read, {
     handoff_id: operation.handoffId,
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
@@ -1467,7 +1592,7 @@ export async function returnExecutionPlan(
   if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("return requires the non-empty handoffId it names");
   if (!isNonEmptyString(operation.reason)) throw invalidPlanInput("return requires the reason the attempt is sent back");
   const { planId } = resolved.read;
-  const requestHash = planOperationRequestHash(context.caller, "return", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "return", resolved.read, {
     handoff_id: operation.handoffId,
     reason: operation.reason,
   });
@@ -1537,7 +1662,7 @@ export async function integrationStartExecutionPlan(
   assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "integration-start", planId);
   const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
-  const requestHash = planOperationRequestHash(context.caller, "integration-start", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "integration-start", resolved.read, {
     handoff_id: operation.handoffId,
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
@@ -1626,7 +1751,7 @@ export async function integrationAcceptExecutionPlan(
       { plan_id: planId, base: attempt.base_sha, source: named.source_sha },
     );
   }
-  const requestHash = planOperationRequestHash(context.caller, "integration-accept", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "integration-accept", resolved.read, {
     handoff_id: operation.handoffId,
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
@@ -2024,7 +2149,7 @@ export async function completeExecutionPlan(
   await assertFindingsClosed(context, planId, prepared, "complete");
   assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
   completeWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, "complete", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "complete", resolved.read, {
     handoff_id: operation.handoffId,
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
@@ -2181,7 +2306,7 @@ export async function reconcileExecutionPlan(
     await assertFindingsClosed(context, planId, prepared, "complete");
   }
   reconcileWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, "reconcile", resolved.read, resolved.call.expected, {
+  const requestHash = planOperationRequestHash(context.caller, "reconcile", resolved.read, {
     handoff_id: operation.handoffId,
   });
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
