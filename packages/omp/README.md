@@ -31,7 +31,7 @@ Maintainers / local checkouts: `omp plugin link /path/to/mstar-harness/packages/
 | `extensions/phase2-orchestration.js` | Phase-2 orchestration extension (native launch opt-in `phase2PlanInstances` / `maxPlanInstances`, tool `mstar_phase2`) — extras off by default; see below |
 | `mcp.json` | Launch configuration for `npx @mstar-harness/cli mcp` (requires a published CLI release containing `mcp`) |
 | `skills/` | `mstar-harness-core`, `mstar-iteration`, `mstar-sdd`, roles, phase/dispatch gates, … |
-| `commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review` |
+| `commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review`, `/amazing-test-audit` |
 | `agents/` | Subagent role shells (`fullstack-dev`, `qc-specialist`, …) — no PM shell; the `mode: primary` project-manager seat is OpenCode-only |
 
 The engine and command runtime are bundled inline into the hook and extension bundles at build time. MCP is launched separately through the packaged `mcp.json` config with `npx @mstar-harness/cli mcp`, so the published CLI containing `mcp` and Node.js >=24.18.0 are required. The host package itself keeps its `@oh-my-pi/pi-coding-agent` imports external and resolves them against the running host, declared as an **optional peer** `^18.3.0` (any 18.x host) and developed against the host version pinned in `devDependencies`.

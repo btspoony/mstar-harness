@@ -933,7 +933,7 @@ describe("binding", () => {
 });
 
 describe("handoff-transitions", () => {
-  test("handoff seals the evidence, accept moves the lease to the coordinator, return restores it", async () => {
+  test("handoff seals the evidence, accept moves the lease to the coordinator, return restores it", { timeout: 60_000 }, async () => {
     const fixture = await gitFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);

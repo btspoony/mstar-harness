@@ -135,7 +135,7 @@ function bindCoordinator(fixture: Fixture): string {
   return fixture.envelopePath;
 }
 
-describe("iteration Prepare recovery — ordinary-intent derivation (R3 / I-000243)", () => {
+describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-000243)", () => {
   test("registration declares the Prepare phase and stores the harness-relative compass_ref from an absolute-in-root spelling", async () => {
     const fixture = makeFixture("iter-abs-compass");
     await register(fixture, absoluteCompassRef(fixture));

@@ -1,8 +1,8 @@
 # Command reference
 
-The slash commands this repository ships live in [`commands/`](../commands). This page indexes all six: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
+The slash commands this repository ships live in [`commands/`](../commands). This page indexes all seven: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
 
-Two boundaries hold across the page. All six are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
+Two boundaries hold across the page. All seven are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
 
 For project roadmap content, use the CLI `mstar roadmap` family (not a slash command): show, reviewed import, revision-guarded replace and transport export. The authoring/read/write rules live only in `mstar-project-governance`; `mstar-use-cli` indexes the family and the built command's `--help` owns its options.
 
@@ -12,6 +12,7 @@ For project roadmap content, use the CLI `mstar roadmap` family (not a slash com
 | [`/iteration-drive`](#iteration-drive) | Drive or resume the active iteration — or, with a scope, one prepared plan | `mstar-iteration` |
 | [`/iteration-loop`](#iteration-loop) | The same lifecycle end to end, autonomous lock, minimal human intervention | `mstar-iteration` |
 | [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → prioritized improvement plans | `mstar-audit` |
+| [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → plans to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
 
@@ -143,13 +144,29 @@ The second terminal is transport, not a dependency. Any terminal works; Herdr or
 
 **Purpose** — a read-only survey of a codebase as a senior advisor, producing prioritized, self-contained improvement plans in the plans directory (`{PLAN_DIR}/audit-<date>/`). No source edits, no state machine, no commits: the audit is advisory and its output is plan *candidates*.
 
-**When** — before `/iteration-start`, to discover what is worth doing; or standalone, to build a prioritized backlog. Findings feed the normal Prepare → Execute flow. `/amazing-pr-review` reviews an existing change rather than surveying the codebase, and `/amazing-e2e-check` verifies behaviour rather than reading code.
+**When** — before `/iteration-start`, to discover what is worth doing; or standalone, to build a prioritized backlog. Findings feed the normal Prepare → Execute flow. `/amazing-pr-review` reviews an existing change rather than surveying the codebase, `/amazing-test-audit` audits the test suite rather than the whole codebase, and `/amazing-e2e-check` verifies behaviour rather than reading code.
 
 **Args** — an optional keyword narrows the pass (a category focus such as `bug`, `security`, `perf`, `tech-debt`); the `simplify` variant runs a debt-focused deep pass over dead, duplicated, speculative and over-built surfaces.
 
 **Hosts** — on dsh, the large-repo fan-out runs through the native `workflow` tool rather than `subagent`; other hosts keep their own invoke tool.
 
 **Defined in** — [`commands/codebase-audit.md`](../commands/codebase-audit.md); procedure → `mstar-audit` (common core in the skill, full-audit detail in `references/codebase-audit.md`); dsh fan-out script → `mstar-host` → `references/dsh-workflow-scripts.md`.
+
+## /amazing-test-audit
+
+```text
+/amazing-test-audit [scope|subsystem] [quick|deep] [campaign]
+```
+
+**Purpose** — a read-only audit of the existing test surface: sweep for junk patterns (assertion-free probes, source restatements, mock-tested mocks, test-only production seams), grade every candidate against the value/retention bar, and produce prioritized plans to delete, repair, consolidate, or relocate tests. No test edits, no source edits, no state machine, no commits: the audit is advisory and its output is plan *candidates*. A baseline test failure is reported as a suspected product bug, never silently deleted.
+
+**When** — when the suite itself is the question: pruning or repairing test debt before an iteration, after a test-heavy change, or as a standalone backlog pass. `/codebase-audit` surveys the whole codebase rather than the test surface, and `/amazing-pr-review` reviews an existing change rather than the suite.
+
+**Args** — a `scope|subsystem` token narrows the sweep to that area; `quick` / `deep` set the effort level (the audit effort table shared with `/codebase-audit`) and default to a whole-repo sweep; the `campaign` token switches to a whole-subsystem campaign that marks every test declaration in an `R` / `F` / `C` / `D` ledger before any plan is written. `quick` and `campaign` are mutually exclusive — campaign breadth is always the whole subsystem, so the combination hard-stops and asks the user to drop one token.
+
+**Hosts** — the lane fan-out follows `/codebase-audit`: read-only `scout` / `explore` seats per lane under the assignment's read-only delegation grant; each host keeps its own invoke tool (no native dsh `workflow` script ships for this entry).
+
+**Defined in** — [`commands/amazing-test-audit.md`](../commands/amazing-test-audit.md); procedure → `mstar-audit` (common core in the skill, test-suite detail in `references/test-audit.md`); lane fan-out routing → `commands/amazing-test-audit.md` (Routing, mirrors `/codebase-audit`).
 
 ## /amazing-pr-review
 

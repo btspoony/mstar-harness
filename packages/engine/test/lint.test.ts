@@ -50,16 +50,13 @@ import {
 
 /**
  * Locate the read-only skill corpus: `MSTAR_CONTROL_SKILLS` env override →
- * the control checkout path → this checkout's own `skills/` (identical at
- * the base commit). Returns `null` when no corpus is available so the
- * corpus regression test skips instead of failing on machines without the
- * harness checkout (same pattern as roles.test.ts).
+ * this checkout's own `skills/`. Returns `null` when no corpus is available
+ * so the corpus regression test skips instead of failing on machines
+ * without the harness checkout (same pattern as roles.test.ts).
  */
 function resolveCorpusRoot(): string | null {
   const fromEnv = process.env.MSTAR_CONTROL_SKILLS;
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
-  const control = "/Users/bibi/workspace/ai/mstar-harness/skills";
-  if (existsSync(join(control, "mstar-roles", "SKILL.md"))) return control;
   let dir = import.meta.dir;
   for (;;) {
     const candidate = join(dir, "skills");
