@@ -98,6 +98,7 @@ import {
   readExecutionPlanWitness,
   readExecutionState,
   readExecutionSealedInput,
+  readHeldExecutionLeases,
   readLiveSessionIdentities,
   readPlanOperationReplay,
   parseExecutionToken,
@@ -151,7 +152,7 @@ import {
   type SemanticSelection,
 } from "./recovery-intent.js";
 import { findingsCleanupGate } from "./project.js";
-import { storeDbPath } from "./store-db.js";
+import { StoreError, storeDbPath } from "./store-db.js";
 import {
   consultDeliveryEvidence,
   isStandaloneDevelopmentWorkflow,
@@ -2271,6 +2272,91 @@ function applyCompletionFrame(input: {
       now: at,
     });
   }
+}
+
+/* ------------------------------------------------------------------------ *
+ * §R11/A21 the owned-claim cleanup of a failed/stopped close
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R11/A21 the execution-lease half of one failed/stopped close's cleanup:
+ * every HELD execution lease of ONE workflow whose holder session is not active
+ * at this epoch is released as a retained tombstone that records the stopped
+ * owner. Two rules are the whole rule:
+ *
+ * - OWNED means this workflow's own `execution_leases` rows; a claim of another
+ *   workflow is not reachable here at all;
+ * - a LIVE holder's claim is never released. Liveness is the holder's own
+ *   session row at this epoch — the only evidence a stopped owner is decided by
+ *   (§4.2: a stale heartbeat, an old `claimed_at` and a caller's assertion
+ *   authorize nothing) — so no close infers another session's stop, and the
+ *   terminal decision refuses on exactly the claims this leaves held.
+ *
+ * It reads the NARROW held-lease view on purpose: this half runs before the
+ * close's whole-view witness, and a held lease whose holder stopped is precisely
+ * the state that reader refuses (`assertLeaseOwnership` cannot represent it), so
+ * settling it first is what makes the terminal outcome reachable instead of
+ * forcing an unguarded operation.
+ */
+export function releaseStoppedExecutionLeases(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; releasedBy: string; at: string },
+): void {
+  const live = readLiveSessionIdentities(tx, input.workflowId);
+  for (const held of readHeldExecutionLeases(tx, input.workflowId)) {
+    const holder = held.lease.holder_session_id;
+    // A held lease whose ownership identity is missing is the same corrupt pair
+    // the whole-view reader refuses: it is refused here too, never released as a
+    // claim that names nobody.
+    if (
+      !isNonEmptyString(holder) ||
+      (held.lease.holder_role !== "coordinator" && held.lease.holder_role !== "plan-pm")
+    ) {
+      throw new StoreError(
+        "store.corrupt",
+        `execution_leases(${input.workflowId},${held.planId}).lease_json is held without the holder session identity and role ` +
+          `it must agree with; the execution authority cannot be verified`,
+      );
+    }
+    if (live.has(holder)) continue;
+    releaseExecutionLease(tx, {
+      workflowId: input.workflowId,
+      planId: held.planId,
+      lease: held.lease,
+      releasedBy: input.releasedBy,
+      reason: `stopped-owner:${holder}`,
+      now: input.at,
+    });
+  }
+}
+
+/**
+ * §R11/A21 the integration-claim half of the same cleanup, under the same two
+ * rules: this workflow's OWN merge claim is released when its holder's session
+ * is not active at this epoch, and left exactly where it is when that holder IS
+ * live — the terminal decision then refuses on it, because a running holder's
+ * claim needs that holder's own stop or transfer. It reports whether the claim
+ * was released, which is the caller's cue that the ownership it is about to
+ * judge changed.
+ *
+ * It is read from the caller's own witness rather than the narrow held-lease
+ * view: the whole-view reader carries a merge claim whatever its holder's state,
+ * so this half settles after that witness exists, in the same transaction.
+ */
+export function releaseStoppedMergeClaim(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; claim: IntegrationMergeLease; releasedBy: string; at: string },
+): boolean {
+  const holder = input.claim.holder;
+  if (readLiveSessionIdentities(tx, input.workflowId).has(holder)) return false;
+  releaseIntegrationMergeLease(tx, {
+    workflowId: input.workflowId,
+    claim: input.claim,
+    releasedBy: input.releasedBy,
+    reason: `stopped-owner:${holder}`,
+    now: input.at,
+  });
+  return true;
 }
 
 /* ------------------------------------------------------------------------ *

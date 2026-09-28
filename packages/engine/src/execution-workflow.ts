@@ -91,6 +91,8 @@ import {
   applyEntailedCompletion,
   completionFrameFor,
   readEntailedCompletions,
+  releaseStoppedExecutionLeases,
+  releaseStoppedMergeClaim,
   type DeliveryRoutePin,
   type EntailedRowCompletion,
 } from "./execution-coordination.js";
@@ -1009,6 +1011,12 @@ function amendmentComponentOf(operation: WorkflowExecutionOperation): string | u
  * caller can turn into permission: no gate verdict is read from the request, no
  * header field outside the operation's own member is writable, and identity
  * anchors are refused by the shape gate before the store is opened.
+ *
+ * §R11/A21 an explicit `failed`/`stopped` intent additionally settles the
+ * lifecycle's OWN claims whose holder session has stopped, inside this
+ * transaction and BEFORE the whole-view witness — the state a stopped holder
+ * leaves is exactly what that reader refuses, so settling it first is what makes
+ * the terminal outcome reachable. A live holder's claim is never released.
  */
 export async function mutateExecutionWorkflow(
   context: ExecutionContext,
@@ -1099,6 +1107,21 @@ export async function mutateExecutionWorkflow(
         }),
       };
     }
+    // §R11/A21 the failed/stopped close settles its OWN stopped claims BEFORE
+    // the whole-view witness: a held lease whose holder session stopped is
+    // exactly the state that reader refuses (`assertLeaseOwnership` cannot
+    // represent it), so settling those first is what makes the terminal outcome
+    // reachable at all — an unreachable terminal state forces an unguarded
+    // operation. Authorization is this caller's own live coordinator binding,
+    // resolved exactly as the witness resolves it, and the cleanup inherits this
+    // transaction: a close that refuses afterwards rolls it back whole.
+    // `at` is the ONE timestamp of this accepted operation, so the settled
+    // claims carry the same instant the close records.
+    const at = new Date().toISOString();
+    if (operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")) {
+      const session = resolveWorkflowSession(tx, resolved.read);
+      releaseStoppedExecutionLeases(tx, { workflowId, releasedBy: session.sessionId, at });
+    }
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
     // §4.2 (R6/R7/A09/A12) the effect is ALREADY held: the current state is the
     // success the caller asked for, so this call reports it and spends nothing —
@@ -1133,7 +1156,6 @@ export async function mutateExecutionWorkflow(
     } catch (error) {
       throw prerequisiteCause(error, { workflowId, operation, stage: "revalidate" });
     }
-    const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction:
     // header changes advance the addressed workflow once and the store once; a
     // registry membership loss adds the ROOT advance without a second store
@@ -1184,6 +1206,12 @@ export async function mutateExecutionWorkflow(
  * applies. Everything therefore commits on ONE handle in ONE transaction: a
  * crash leaves either the whole close or none of it, and the terminal decision
  * judges the rows this transaction just completed.
+ *
+ * §R11/A21 a `failed`/`stopped` close composes no row bookkeeping at all (no
+ * successful-delivery precondition): it settles the workflow's own stopped
+ * claims — the held execution leases before the witness, the integration claim
+ * here — and the terminal decision then judges exactly the ownership this
+ * transaction leaves behind.
  */
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
@@ -1213,10 +1241,22 @@ function applyWorkflowOperation(input: {
     !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
       ? composeEntailedCompletions({ tx, witness, read, evidence, at })
       : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
+  // §R11/A21 the integration-claim half of a failed/stopped close's own-claim
+  // cleanup, under the same rule the execution leases were settled by: the
+  // workflow's OWN merge claim goes when its holder's session is not active at
+  // this epoch, and stays when that holder is live. It reads the claim from the
+  // witness this transaction already holds (the whole-view reader carries a
+  // merge claim whatever its holder's state), so a settled claim re-reads the
+  // witness below.
+  const claim = operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")
+    ? witness.view.integrationLease
+    : null;
+  const settledClaim =
+    claim !== null && releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: witness.session.sessionId, at });
   // §R5 the rows the terminal decision reads are the ones this transaction just
   // completed, and the ownership it reads is the ownership this transaction just
   // released: both are re-read from the handle the transaction owns.
-  const effective = composed.completions.length === 0 ? witness : readExecutionWorkflowWitness(tx, read);
+  const effective = composed.completions.length === 0 && !settledClaim ? witness : readExecutionWorkflowWitness(tx, read);
   const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
   const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
   if (composed.fulfilment !== null) {
@@ -1392,9 +1432,15 @@ function applyPhaseTransition(input: {
  * released only by the explicit completion/reconcile transitions. A terminal
  * status additionally runs the existing rules: `completed` needs every owned row
  * `Done` and the existing delivery-evidence consultation to be clean, every
- * terminal status needs the lifecycle to own no execution or integration lease
+ * terminal status needs the lifecycle to own no lease a LIVE holder still holds
  * (the snapshot validator's terminal invariant, read from the rows that own
  * them), and the loss of registry membership commits with the terminal state.
+ *
+ * §R11/A21 `failed`/`stopped` demands NO successful-delivery evidence, and the
+ * claims this workflow owns whose holder has stopped are settled before this
+ * decision runs (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`),
+ * so what is left dangling here is exactly a live holder's claim — which this
+ * route refuses on rather than releasing a claim that is another session's.
  *
  * A restatement of the status the lifecycle is already in is ACCEPTED as an
  * ordinary operation (it changes only `updated_at`): the state machine has no
@@ -1448,9 +1494,13 @@ function applyLifecycleTransition(input: {
   const dangling = danglingOwnership(witness);
   if (dangling.length > 0) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
-        `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
-        `reconcile transition first`,
+      status === "completed"
+        ? `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
+          `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
+          `reconcile transition first`
+        : `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 this close settles only the ` +
+          `claims it owns whose holder has stopped, and a LIVE holder's claim needs that holder's own stop or transfer ` +
+          `(reconcile records the prior holder and the decision) before this lifecycle can end`,
       { workflow_id: workflowId, status },
     );
   }
@@ -1459,7 +1509,14 @@ function applyLifecycleTransition(input: {
   return true;
 }
 
-/** The outstanding ownership a terminal lifecycle may not carry, as named facts. */
+/**
+ * The outstanding ownership a terminal lifecycle may not carry, as named facts.
+ * A failed/stopped close reaches it only after its own stopped claims were
+ * settled (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`), so
+ * what remains here is a claim a live holder still holds — plus an
+ * earlier-epoch claim the store cannot authorize at this epoch, which is left
+ * exactly where §2.3 says it stays.
+ */
 function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
   const dangling: string[] = [];
   for (const plan of witness.view.plans) {

@@ -69,6 +69,7 @@ const TS = "2026-01-02T03:04:05.000Z";
 const WORKFLOW_ID = "wf-1";
 const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-coord";
+const PLAN_PM_ID = "host-plan";
 const RECOVERY_ID = "host-coord-next";
 const ITERATION_ID = "iter-20260101-workflow";
 const COMPASS_REF = `iterations/${ITERATION_ID}/delivery-compass.md`;
@@ -1785,5 +1786,330 @@ describe("execution-close-composition: §R10/A20 the terminal close's residue re
     );
     expect(stored!.status).toBe("stopped");
     expect(stored!.ended_at).toBe(endedAt);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §R11/A21/A28 the failed/stopped lifecycle of the DB authority
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Plant one plan-pm session row in the state a crash leaves it. No W-phase verb
+ * hands a lease to a session that then stops — and a plan-pm bind requires a
+ * prepared Assignment, a state this fixture deliberately does not build — so the
+ * crash states are planted raw, exactly as the W4 fixtures plant a foreign merge
+ * lease. `epoch` is the fixture's own, so the row is one ownership fact with the
+ * lease that names it.
+ */
+function plantPlanPmSession(context: StoreContext, input: { epoch: number; state: "active" | "suspended" | "revoked" }): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      "insert or replace into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+        "values (?, 'plan-pm', ?, ?, ?, 1, ?, ?)",
+    ).run(WORKFLOW_ID, PLAN_PM_ID, PLAN_ID, input.epoch, input.state, TS);
+  });
+}
+
+/** One workflow-level integration merge claim, planted raw (as the W4 fixtures do). */
+function plantMergeClaim(context: StoreContext, input: { ownerEpoch: number; holder: string; status?: "held" | "released" }): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)",
+    ).run(
+      WORKFLOW_ID,
+      input.ownerEpoch,
+      JSON.stringify({
+        holder: input.holder,
+        claimed_at: TS,
+        plan_id: PLAN_ID,
+        source_branch: SOURCE_BRANCH,
+        target_branch: "main",
+        ...(input.status === undefined ? {} : { status: input.status }),
+      }),
+    );
+  });
+}
+
+/** The stored execution lease record of the fixture's plan, parsed. */
+function storedLease(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select lease_json from execution_leases where workflow_id = '${WORKFLOW_ID}' and plan_id = '${PLAN_ID}'`,
+  );
+  if (row === undefined) throw new Error(`fixture: no execution lease row for ${PLAN_ID}`);
+  return parsedJson(row!.lease_json);
+}
+
+/** The stored integration merge claim of the fixture's workflow, parsed. */
+function storedMergeClaim(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`,
+  );
+  if (row === undefined) throw new Error("fixture: no integration merge lease row");
+  return parsedJson(row!.lease_json);
+}
+
+/** The terminal outcome and routing one closed lifecycle left behind. */
+function closedRow(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select (select count(*) from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+      `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+      `(select json_extract(state_json, '$.ended_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as ended_at, ` +
+      `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery, ` +
+      `(select json_extract(state_json, '$.status') from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${PLAN_ID}') as row_status`,
+  );
+  return row!;
+}
+
+describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its own stopped claims", () => {
+  test("failed lifecycle: an explicit failed close settles its own stopped claims with no delivery evidence (R11/A21)", async () => {
+    const fixture = await workflowFixture("failed-lifecycle");
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
+    const before = revisions(fixture.context);
+    // The workflow this close addresses is UNREADABLE through the whole-view
+    // reader — a held lease whose holder session stopped is exactly the state
+    // `assertLeaseOwnership` refuses — so the caller's CAS is the stored row's
+    // token, the last read it could take before the owner died.
+    const expected = workflowTokenOfRow(fixture.context);
+
+    const receipt = await workflowMutation(
+      fixture,
+      "op-failed-lifecycle",
+      { kind: "lifecycle", status: "failed", reason: "operator abandoned the wave" },
+      { expected },
+    );
+
+    // §R11 no successful-delivery precondition: the row is still Todo, no
+    // delivery evidence was ever recorded, and the lifecycle still ends.
+    const closed = closedRow(fixture.context);
+    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(closed.registered).toBe(0);
+    expect(closed.status).toBe("failed");
+    expect(closed.row_status).toBe("Todo");
+    expect(closed.delivery).toBeNull();
+    expect(typeof closed.ended_at).toBe("string");
+
+    // §R11/A21 the cleanup settles EXACTLY the claims this lifecycle owns whose
+    // holder stopped: both become retained tombstones that record the stopped
+    // owner, so "who owned this claim and who ended it" survives the close.
+    expect(storedLease(fixture.context)).toMatchObject({
+      holder_session_id: PLAN_PM_ID,
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: `stopped-owner:${PLAN_PM_ID}`,
+    });
+    expect(storedMergeClaim(fixture.context)).toMatchObject({
+      holder: PLAN_PM_ID,
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: `stopped-owner:${PLAN_PM_ID}`,
+    });
+    // One accepted operation: the workflow and the store each advance once, and
+    // the membership loss advances the root once.
+    expect(revisions(fixture.context)).toEqual({ root: before.root + 1, store: before.store + 1, workflow: before.workflow + 1 });
+  });
+
+  test("stopped lifecycle: an explicit stopped close settles its own stopped claim and keeps a released one (R11/A21)", async () => {
+    const fixture = await workflowFixture("stopped-lifecycle");
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
+    // An OWN claim that a prior step already released: settled, and never
+    // rewritten by this close.
+    plantLease(fixture.context, {
+      ownerEpoch: fixture.epoch,
+      holderId: COORDINATOR_ID,
+      holderRole: "coordinator",
+      status: "released",
+    });
+    const tombstone = storedLease(fixture.context);
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
+
+    const receipt = await workflowMutation(fixture, "op-stopped-lifecycle", {
+      kind: "lifecycle",
+      status: "stopped",
+      reason: "operator cancelled the wave",
+    });
+
+    const closed = closedRow(fixture.context);
+    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(closed.registered).toBe(0);
+    expect(closed.status).toBe("stopped");
+    expect(typeof closed.ended_at).toBe("string");
+    // The already released claim is exactly the tombstone it was: the close
+    // settles only what a stopped holder left held.
+    expect(storedLease(fixture.context)).toEqual(tombstone);
+    expect(storedMergeClaim(fixture.context)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: `stopped-owner:${PLAN_PM_ID}`,
+    });
+    expect(rows(fixture.context, `select 1 from execution_leases where workflow_id = '${WORKFLOW_ID}'`)).toHaveLength(1);
+  });
+
+  test("foreign claim: a live holder's claim is never released and refuses the close (R11/A21)", async () => {
+    const fixture = await workflowFixture("foreign-claim");
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "active" });
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
+    const before = await workflowFootprint(fixture.context);
+
+    // §R11 a genuinely LIVE holder is never inferred stopped: the terminal close
+    // withholds the outcome and names the holder whose own stop or transfer the
+    // claim needs.
+    const held = await refusalOf(() =>
+      workflowMutation(fixture, "op-foreign-claim", { kind: "lifecycle", status: "failed", reason: "abandon the wave" }),
+    );
+    expect(held.code).toBe("coordination.invalid-transition");
+    expect(held.message).toContain(PLAN_PM_ID);
+    expect(held.message).toContain("stop or transfer");
+    // No foreign release: the claim stays held and the refused close spent no
+    // revision, row or receipt.
+    expect(storedLease(fixture.context)).toMatchObject({ status: "held", holder_session_id: PLAN_PM_ID });
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The same rule covers a LIVE integration claim: `execution_integration_leases`
+    // is not readable through the narrow held-lease reader, so this is the half the
+    // terminal decision settles beside the claim it already judges.
+    const merge = await workflowFixture("foreign-merge-claim");
+    plantPlanPmSession(merge.context, { epoch: merge.epoch, state: "active" });
+    plantMergeClaim(merge.context, { ownerEpoch: merge.epoch, holder: PLAN_PM_ID });
+    const mergeBefore = await workflowFootprint(merge.context);
+    const mergeHeld = await refusalOf(() =>
+      workflowMutation(merge, "op-foreign-merge", { kind: "lifecycle", status: "stopped", reason: "cancelled" }),
+    );
+    expect(mergeHeld.code).toBe("coordination.invalid-transition");
+    expect(mergeHeld.message).toContain(PLAN_PM_ID);
+    // A held claim carries no release record at all: it is exactly where the live
+    // holder left it.
+    expect(storedMergeClaim(merge.context)).toMatchObject({ holder: PLAN_PM_ID });
+    expect(storedMergeClaim(merge.context).released_by).toBeUndefined();
+    expect(await workflowFootprint(merge.context)).toEqual(mergeBefore);
+
+    // Only THIS lifecycle's own live coordinator settles anything: a foreign
+    // coordinator's failed close is refused before the cleanup runs, so a stopped
+    // claim is left exactly where it was by an unauthorized address.
+    const unauthorized = await workflowFixture("foreign-authority");
+    plantPlanPmSession(unauthorized.context, { epoch: unauthorized.epoch, state: "suspended" });
+    plantLease(unauthorized.context, { ownerEpoch: unauthorized.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
+    const unauthorizedBefore = await workflowFootprint(unauthorized.context);
+    const foreignCaller: ExecutionCaller = { sessionId: "host-other", role: "coordinator", workflowId: "wf-other", planId: null };
+    const refused = await refusalOf(() =>
+      workflowMutation(
+        unauthorized,
+        "op-foreign-authority",
+        { kind: "lifecycle", status: "failed", reason: "not mine to end" },
+        {
+          // The whole-view read refuses this fixture's stopped-holder lease, so the
+          // CAS is the stored row's token: the refusal below is the ADDRESS's, not
+          // a read failure.
+          expected: workflowTokenOfRow(unauthorized.context),
+          who: foreignCaller,
+          session: {
+            ...unauthorized.coordinator,
+            sessionId: "host-other",
+            workflowId: "wf-other",
+          },
+        },
+      ),
+    );
+    expect(refused.code).toBe("execution.scope-mismatch");
+    expect(storedLease(unauthorized.context)).toMatchObject({ status: "held", holder_session_id: PLAN_PM_ID });
+    expect(await workflowFootprint(unauthorized.context)).toEqual(unauthorizedBefore);
+  });
+
+  test("repeated terminal: the identical retry replays the recorded outcome and settles nothing twice (A28)", async () => {
+    const fixture = await workflowFixture("repeated-terminal");
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
+    // The whole-view read refuses this state (a held lease whose holder stopped),
+    // so the CAS is the stored row's token — and BOTH calls below present the same
+    // request, which is what makes the second one a replay rather than a new intent.
+    const expected = workflowTokenOfRow(fixture.context);
+    const close: WorkflowExecutionOperation = { kind: "lifecycle", status: "failed", reason: "operator abandoned the wave" };
+
+    const receipt = await workflowMutation(fixture, "op-repeated-terminal", close, { expected });
+    expect(receipt.replayed).toBe(false);
+    const after = revisions(fixture.context);
+    const settled = storedLease(fixture.context);
+    const recorded = closedRow(fixture.context);
+
+    // §R6/A28 the crash at the terminal boundary: the retry of the SAME intent is
+    // answered from the recorded receipt, no claim is settled a second time, no
+    // revision moves, and the recorded outcome keeps its own ended_at.
+    const replay = await workflowMutation(fixture, "op-repeated-terminal", close, { expected });
+    expect(replay.replayed).toBe(true);
+    expect(replay.recovery?.outcome).toBe("already-satisfied");
+    expect(revisions(fixture.context)).toEqual(after);
+    expect(storedLease(fixture.context)).toEqual(settled);
+    expect(closedRow(fixture.context)).toEqual(recorded);
+  });
+
+  test("repeated terminal: a residue settles its leftover claims and never rewrites a recorded outcome (A28)", async () => {
+    const endedAt = "2026-01-05T06:07:08.000Z";
+    const fixture = await workflowFixture("terminal-residue");
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
+    // The residue a crash at the terminal boundary leaves: the outcome and its
+    // ended_at are already recorded, the ACTIVE routing row remains, and the
+    // workflow's own stopped claims were never settled.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.status', 'failed', '$.ended_at', ?) where workflow_id = ?").run(
+        endedAt,
+        WORKFLOW_ID,
+      );
+    });
+    // The whole-view read refuses this state (a held lease whose holder stopped),
+    // so the caller's CAS is the stored row's token.
+    const expected = workflowTokenOfRow(fixture.context);
+
+    const repaired = await workflowMutation(
+      fixture,
+      "op-terminal-residue",
+      { kind: "lifecycle", status: "failed", reason: "residue repaired" },
+      { expected },
+    );
+
+    // §R10/A20 the restatement of the RECORDED status is the residue's own
+    // repair: the outcome and its time stay exactly as they were recorded, the
+    // routing row goes, and the claims the crashed close never settled are
+    // settled by this repair.
+    const closed = closedRow(fixture.context);
+    expect(repaired.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(closed.registered).toBe(0);
+    expect(closed.status).toBe("failed");
+    expect(closed.ended_at).toBe(endedAt);
+    expect(storedLease(fixture.context)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: `stopped-owner:${PLAN_PM_ID}`,
+    });
+    expect(storedMergeClaim(fixture.context)).toMatchObject({
+      status: "released",
+      release_reason: `stopped-owner:${PLAN_PM_ID}`,
+    });
+
+    // §R10/E11 a RECORDED outcome is never rewritten: asking the same residue to
+    // become an outcome it did not record refuses and changes no byte at all.
+    const completed = await workflowFixture("terminal-completed");
+    withRaw(completed.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.status', 'completed', '$.ended_at', ?) where workflow_id = ?").run(
+        endedAt,
+        WORKFLOW_ID,
+      );
+    });
+    const before = await workflowFootprint(completed.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(completed, "op-terminal-rewrite", {
+        kind: "lifecycle",
+        status: "failed",
+        reason: "claim the wave failed",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain("never amended");
+    expect(await workflowFootprint(completed.context)).toEqual(before);
   });
 });
