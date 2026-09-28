@@ -712,6 +712,10 @@ export type TargetSelection = Readonly<{ workflowId?: string; planId?: string }>
  * root's own workflow directory plus a snapshot existence check per entry. This
  * bounded read is the whole candidate set: no repository-wide scan and no
  * "most recent" ordering, so resolution can only ever list what it read.
+ *
+ * It is walked ONLY when the intent names no target at all, where the list IS
+ * the answer (A22). A named target is validated against its own snapshot, so
+ * naming a workflow never reads — or depends on reading — the other ones.
  */
 function workflowIdsAt(root: string): string[] {
   const dir = resolveWorkflowDir(root, { harnessDir: root });
@@ -723,17 +727,49 @@ function workflowIdsAt(root: string): string[] {
 }
 
 /**
+ * The refusal of one unresolved TARGET component, in the standard shape: the
+ * withheld effect is always the addressed lifecycle effect, and the caller is
+ * told what is currently true and what to do next rather than handed a guess.
+ */
+function unresolvedTarget(input: {
+  code: RecoveryProblem["code"];
+  needed: string;
+  resolvedFrom: ResolutionSource[];
+  currentFacts: string[];
+  availableWork: string[];
+}): TargetResolution {
+  return {
+    ok: false,
+    resolvedFrom: input.resolvedFrom,
+    problem: {
+      component: "target",
+      path: "workflowId",
+      code: input.code,
+      sourcesTried: input.resolvedFrom.map((entry) => `${entry.path} (${entry.source})`),
+      currentFacts: input.currentFacts,
+      needed: input.needed,
+      withheldEffect:
+        "the addressed lifecycle effect - no target was guessed, so no workflow row, document or store was read for it",
+      availableWork: input.availableWork,
+    },
+  };
+}
+
+/**
  * Resolve the ADDRESSED TARGET of one sparse intent against a trusted root, in
  * source order: the explicit `selection`, then the durable `association` the
  * caller's identity already holds (its session envelope or catalog link).
- * Resolution reads only the addressed workflow's snapshot.
  *
- * Without either source no target is chosen, even when the root holds exactly
- * one workflow: the candidate identities are LISTED for the caller to select
- * (contract § One resolver path "never select the sole/most-recent workflow
- * without an association", A22). A selector that the root does not hold — or a
- * `planId` that is not a row of the addressed workflow — is the same kind of
- * unresolved component, not a silent fallback.
+ * A NAMED target is validated DIRECTLY against that one workflow's own
+ * snapshot document, so resolving it reads only the addressed workflow and can
+ * never depend on the root's other workflows. Only when neither source names a
+ * workflow is the root's own workflow directory listed — and then the listing
+ * is not a choice but the answer handed back: the candidate identities the
+ * caller must select between. Resolution never picks the sole/most-recent
+ * workflow without an association (contract § One resolver path, A22). A
+ * selector the root does not hold — or a `planId` that is not a row of the
+ * addressed workflow — is the same kind of unresolved component, reported from
+ * the addressed workflow's own facts, never a silent fallback.
  */
 export function resolveIntentTarget(input: {
   root: string;
@@ -741,47 +777,49 @@ export function resolveIntentTarget(input: {
   association?: TargetSelection;
 }): TargetResolution {
   const root = canonicalizeNearestExisting(input.root);
-  const candidates = workflowIdsAt(root);
-  const listed: ResolutionSource = { path: "workflowId", source: "workflows.dir" };
-  const facts =
-    candidates.length === 0
-      ? [`${root} holds no workflow`]
-      : candidates.map((id) => `workflow ${id} exists at ${root}`);
-  const unavailable = (code: RecoveryProblem["code"], needed: string, tried: ResolutionSource[]): TargetResolution => ({
-    ok: false,
-    resolvedFrom: tried,
-    problem: {
-      component: "target",
-      path: "workflowId",
-      code,
-      sourcesTried: tried.map((entry) => `${entry.path} (${entry.source})`),
-      currentFacts: facts,
-      needed,
-      withheldEffect:
-        "the addressed lifecycle effect - no target was guessed, so no workflow row, document or store was read for it",
+  const explicit = isNonEmptyString(input.selection?.workflowId) ? input.selection.workflowId : undefined;
+  const associated = isNonEmptyString(input.association?.workflowId) ? input.association.workflowId : undefined;
+  const workflowId = explicit ?? associated;
+
+  if (workflowId === undefined) {
+    // Nothing names a workflow: the root's own candidate identities are the
+    // whole answer, listed for the caller to select between (never chosen from).
+    const listed: ResolutionSource = { path: "workflowId", source: "workflows.dir" };
+    const candidates = workflowIdsAt(root);
+    return unresolvedTarget({
+      code: "coordination.invalid-input",
+      needed: "which workflow this intent addresses",
+      resolvedFrom: [listed],
+      currentFacts:
+        candidates.length === 0
+          ? [`${root} holds no workflow`]
+          : candidates.map((id) => `workflow ${id} exists at ${root}`),
       availableWork: [
         ...(candidates.length === 0 ? ["register or select the work this intent addresses"] : []),
         ...candidates.map((id) => `address workflow ${id} explicitly`),
       ],
-    },
-  });
-
-  const explicit = isNonEmptyString(input.selection?.workflowId) ? input.selection.workflowId : undefined;
-  const associated = isNonEmptyString(input.association?.workflowId) ? input.association.workflowId : undefined;
-  const workflowId = explicit ?? associated;
-  if (workflowId === undefined) {
-    return unavailable("coordination.invalid-input", "which workflow this intent addresses", [listed]);
+    });
   }
+
   const source: ResolutionSource =
     explicit !== undefined
       ? { path: "workflowId", source: "intent.explicit" }
       : { path: "workflowId", source: "target.association" };
+  const resolvedFrom: ResolutionSource[] = [source];
   const id = safePlanId(workflowId, "workflowId");
-  if (!candidates.includes(id)) {
-    return unavailable("coordination.workflow-not-found", `the addressed workflow ${id}`, [source, listed]);
+  // The addressed workflow's own snapshot is the only existence fact needed:
+  // one bounded check of the named workflow, never a listing of its siblings.
+  const snapshotFile = snapshotPathOf(root, id);
+  if (!existsSync(snapshotFile)) {
+    return unresolvedTarget({
+      code: "coordination.workflow-not-found",
+      needed: `the addressed workflow ${id}`,
+      resolvedFrom,
+      currentFacts: [`${root} holds no workflow ${id}`],
+      availableWork: ["address a workflow this control root holds", "register or select the work this intent addresses"],
+    });
   }
 
-  const resolvedFrom: ResolutionSource[] = [source];
   const explicitPlan = isNonEmptyString(input.selection?.planId) ? input.selection.planId : undefined;
   const associatedPlan = isNonEmptyString(input.association?.planId) ? input.association.planId : undefined;
   const planId = explicitPlan ?? associatedPlan;
@@ -790,9 +828,15 @@ export function resolveIntentTarget(input: {
   resolvedFrom.push({ path: "planId", source: explicitPlan !== undefined ? "intent.explicit" : "target.association" });
   // The addressed workflow's own row set is the bounded fact read that confirms
   // the plan id: one snapshot, never a scan of other workflows.
-  const snapshot = readSnapshot(dirname(snapshotPathOf(root, id)));
+  const snapshot = readSnapshot(dirname(snapshotFile));
   if (!snapshot.plans.some((row) => rowPlanIds(row).includes(plan))) {
-    return unavailable("coordination.plan-not-found", `the addressed plan ${plan} of workflow ${id}`, resolvedFrom);
+    return unresolvedTarget({
+      code: "coordination.plan-not-found",
+      needed: `the addressed plan ${plan} of workflow ${id}`,
+      resolvedFrom,
+      currentFacts: [`workflow ${id} exists at ${root}`, `workflow ${id} holds no plan row ${plan}`],
+      availableWork: [`address a plan row of workflow ${id}`],
+    });
   }
   return { ok: true, workflowId: id, planId: plan, resolvedFrom };
 }

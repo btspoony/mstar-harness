@@ -67,6 +67,7 @@ import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import { resolveCurrentAuthority } from "../src/store-read.js";
+import { assertAuthorityCurrent, currentAuthorityHandle } from "../src/store-activation.js";
 import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
@@ -5720,11 +5721,22 @@ describe("intent resolution — trusted root, associated target, authority chang
     return linked;
   }
 
-  /** Flip the recorded execution authority state; the store keeps its data. */
-  async function setExecutionAuthority(harness: string, state: "legacy" | "active"): Promise<void> {
+  /**
+   * ACTIVATE the recorded execution authority the way the real barrier does:
+   * flip `execution_meta` AND advance the store-wide `store_meta.authority_epoch`
+   * by one. The mid-call change under test is therefore a real authority
+   * GENERATION change (A26), not only a route/state flip — the epoch a caller
+   * was admitted under is superseded. The store keeps its data.
+   */
+  async function activateExecutionAuthority(harness: string): Promise<number> {
     const handle = await openStore({ harnessDir: harness }, "write");
     try {
-      handle.db.prepare("update execution_meta set authority_state = ? where id = 1").run(state);
+      handle.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+      handle.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+      const row = handle.db.prepare("select authority_epoch from store_meta where id = 1").get() as
+        | { authority_epoch?: unknown }
+        | undefined;
+      return Number(row?.authority_epoch);
     } finally {
       handle.close();
     }
@@ -5805,6 +5817,19 @@ describe("intent resolution — trusted root, associated target, authority chang
       `address workflow ${peerWorkflow} explicitly`,
     ]);
 
+    // A selector the root does not hold is refused — never substituted with a
+    // workflow that happens to exist. The addressed path reports the ADDRESSED
+    // workflow's own fact alone: the listing source is not consulted and the
+    // other candidate is not named anywhere, so resolving a named target never
+    // depends on enumerating its siblings.
+    const missing = resolveIntentTarget({ root: fixture.harness, selection: { workflowId: "wf-absent" } });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("an absent selector must not be substituted");
+    expect(missing.problem.code).toBe("coordination.workflow-not-found");
+    expect(missing.problem.sourcesTried).toEqual(["workflowId (intent.explicit)"]);
+    expect(missing.problem.currentFacts).toEqual([`${fixture.harness} holds no workflow wf-absent`]);
+    expect([...missing.problem.currentFacts, ...missing.problem.availableWork].join(" | ")).not.toContain(peerWorkflow);
+
     // A sole candidate is still only a LISTED candidate: the contract forbids
     // selecting the single root-visible workflow without an association.
     rmSync(join(fixture.harness, "workflows", peerWorkflow), { recursive: true, force: true });
@@ -5814,15 +5839,8 @@ describe("intent resolution — trusted root, associated target, authority chang
     expect(sole.problem.currentFacts).toEqual([`workflow ${WORKFLOW_ID} exists at ${fixture.harness}`]);
     expect(sole.problem.availableWork).toEqual([`address workflow ${WORKFLOW_ID} explicitly`]);
 
-    // A selector the root does not hold is refused against the same list — never
-    // substituted with the one workflow that happens to exist.
-    const missing = resolveIntentTarget({ root: fixture.harness, selection: { workflowId: "wf-absent" } });
-    expect(missing.ok).toBe(false);
-    if (missing.ok) throw new Error("an absent selector must not be substituted");
-    expect(missing.problem.code).toBe("coordination.workflow-not-found");
-    expect(missing.problem.currentFacts).toEqual([`workflow ${WORKFLOW_ID} exists at ${fixture.harness}`]);
-
-    // A plan id that is not a row of the addressed workflow is refused too.
+    // A plan id that is not a row of the addressed workflow is refused too,
+    // again from the addressed workflow's own facts.
     const wrongPlan = resolveIntentTarget({
       root: fixture.harness,
       selection: { workflowId: WORKFLOW_ID, planId: "plan-absent" },
@@ -5830,6 +5848,10 @@ describe("intent resolution — trusted root, associated target, authority chang
     expect(wrongPlan.ok).toBe(false);
     if (wrongPlan.ok) throw new Error("an absent plan row must not be substituted");
     expect(wrongPlan.problem.code).toBe("coordination.plan-not-found");
+    expect(wrongPlan.problem.currentFacts).toEqual([
+      `workflow ${WORKFLOW_ID} exists at ${fixture.harness}`,
+      `workflow ${WORKFLOW_ID} holds no plan row plan-absent`,
+    ]);
   });
 
   test("a trusted root survives a Git fact the process probe cannot read (A24)", async () => {
@@ -5929,8 +5951,11 @@ describe("intent resolution — trusted root, associated target, authority chang
     const before = readFileSync(fixture.snapshotPath);
 
     // The call resolves under the supported pre-activation route: a store that
-    // records a legacy execution authority is not a reason to switch.
+    // records a legacy execution authority is not a reason to switch. The
+    // authority GENERATION this call is admitted under is captured here, before
+    // the change under test.
     expect(await resolveCurrentAuthority({ harnessDir: fixture.harness })).toEqual({ route: "files", handle: null });
+    const admitted = await currentAuthorityHandle({ harnessDir: fixture.harness });
 
     // The snapshot write lock holds the call in flight while another writer
     // activates the execution authority, so the change lands strictly between
@@ -5945,9 +5970,13 @@ describe("intent resolution — trusted root, associated target, authority chang
       expectedRevision: view.revision,
       operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
     });
-    await setExecutionAuthority(fixture.harness, "active");
+    const activatedEpoch = await activateExecutionAuthority(fixture.harness);
     release.resolve();
     await held;
+
+    // The change was a real generation change, not only a state flip: the store
+    // advanced its authority epoch by one.
+    expect(activatedEpoch).toBe(admitted.epoch + 1);
 
     // The retired file reader reports its OWN authority verdict — the actual
     // cause, not a relabelled unreadable coordination document.
@@ -5955,13 +5984,19 @@ describe("intent resolution — trusted root, associated target, authority chang
     // The refusal is non-advancing: no stale snapshot, no prepared block.
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
 
-    // The current verdict now names the ACTIVE generation, so a caller
+    // The superseded generation is REJECTED by the one generation guard (§5): a
+    // handle captured before the change can never act on the live store, while
+    // the re-resolved verdict names the ACTIVE generation — so a caller
     // re-resolves the authority instead of replaying the route it was admitted
     // under (the epoch a DB-route caller re-asserts before committing).
+    expect(await errorCodeOf(() => assertAuthorityCurrent({ harnessDir: fixture.harness }, admitted))).toBe(
+      "store.stale-epoch",
+    );
     const active = await resolveCurrentAuthority({ harnessDir: fixture.harness });
     expect(active.route).toBe("execution");
     expect(typeof active.handle?.storeId).toBe("string");
-    expect(active.handle?.epoch).toBeGreaterThan(0);
+    expect(active.handle?.epoch).toBe(admitted.epoch + 1);
+    expect((await currentAuthorityHandle({ harnessDir: fixture.harness })).epoch).toBe(activatedEpoch);
   }, 30000);
 
   test("an authority change during a file-route amendment leaves no stale-file write (A26)", async () => {
@@ -5973,6 +6008,9 @@ describe("intent resolution — trusted root, associated target, authority chang
     store.close();
     const view = await prepareViewOf(fixture);
     const before = protectedBytes(fixture);
+    // The authority generation the amendment is admitted under, captured before
+    // the change under test.
+    const admitted = await currentAuthorityHandle({ harnessDir: fixture.harness });
 
     const release = Promise.withResolvers<void>();
     const held = withStatusWriteLock(fixture.snapshotPath, async () => {
@@ -5982,9 +6020,12 @@ describe("intent resolution — trusted root, associated target, authority chang
       snapshotVersion: view.view.snapshotVersion,
       compassVersion: view.view.compassVersion,
     });
-    await setExecutionAuthority(fixture.harness, "active");
+    const activatedEpoch = await activateExecutionAuthority(fixture.harness);
     release.resolve();
     await held;
+
+    // The change was a real generation change: the epoch advanced by one.
+    expect(activatedEpoch).toBe(admitted.epoch + 1);
 
     // The amendment read its own inputs before the change, so the refusal comes
     // from the authority facts it re-reads under its own lock: file persistence
@@ -5992,5 +6033,10 @@ describe("intent resolution — trusted root, associated target, authority chang
     expect(await errorCodeOf(() => pending)).toBe("execution.consumer-not-ready");
     expect(protectedBytes(fixture)).toEqual(before);
     expect(prepareSnapshotOf(fixture).integration_worktree_path).toBeUndefined();
+    // The superseded generation is rejected, so the call can only be resumed by
+    // re-resolving the authority it is now living under.
+    expect(await errorCodeOf(() => assertAuthorityCurrent({ harnessDir: fixture.harness }, admitted))).toBe(
+      "store.stale-epoch",
+    );
   }, 30000);
 });
