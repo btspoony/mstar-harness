@@ -1467,6 +1467,16 @@ type RowSatisfied = Readonly<{ field: string; source: string }>;
  */
 type RowAdmission = (context: RowContext) => void | RowSatisfied | Promise<void | RowSatisfied>;
 
+/**
+ * §4.1 how a mutation whose effect lands OUTSIDE this row discloses the
+ * components it commits as it goes: it reports each one the moment that commit
+ * stands, so a failure on a later component is refused as a partial boundary
+ * (the applied components enumerated, the remainder named) instead of as the
+ * "nothing moved" an atomic effect earns. A mutation that commits nothing
+ * outside simply never calls it.
+ */
+type ExternalCommitReporter = (component: string) => void;
+
 type RowFrameResult = {
   snapshot: WorkflowSnapshot;
   row: PlanRow;
@@ -1566,13 +1576,27 @@ function withRowRecoveryDetails<T>(error: T, details: Record<string, unknown>): 
  */
 function rowFrameRefusal(
   error: unknown,
-  input: { scope: ResolvedPlanScope; kind: string; context: RowContext; warnings: readonly ResolutionWarning[] },
+  input: {
+    scope: ResolvedPlanScope;
+    kind: string;
+    context: RowContext;
+    warnings: readonly ResolutionWarning[];
+    /**
+     * §4.1 the components a mutation had ALREADY committed in another authority
+     * when it refused (`withRowCommit` collects them from the mutation's
+     * `ExternalCommitReporter`): the refusal then reports that partial boundary
+     * instead of the "nothing moved" an atomic effect earns.
+     */
+    appliedOutside?: readonly string[];
+  },
 ): unknown {
   const refusalCode = errorCode(error) ?? "coordination.invalid-input";
   const declared = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
   const declaredPath = isPlainObject(declared) ? declared.path : undefined;
   const prerequisite = isPrerequisiteRefusal(refusalCode);
   const message = errorMessage(error);
+  const appliedOutside = input.appliedOutside ?? [];
+  const partialOutside = appliedOutside.length > 0;
   const problem: RecoveryProblem = {
     component: prerequisite ? "operation-prerequisite" : "plan-row",
     path: isNonEmptyString(declaredPath) ? declaredPath : prerequisite ? input.kind : "expectedRevision",
@@ -1580,20 +1604,34 @@ function rowFrameRefusal(
     sourcesTried: [
       `${input.scope.snapshotPath} as this call reads it under its own write lock`,
       `the ${input.kind} operation's own admission rules for the facts it depends on`,
+      ...(partialOutside ? ["the issue authority this mutation had already committed in"] : []),
     ],
     currentFacts: [
       `plan ${input.scope.planId} is at row revision ${input.context.revision} (status ${rowStatusOf(input.context.row) || "none"})`,
       `the refusal reports: ${message}`,
+      ...(partialOutside
+        ? [
+            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) in the issue authority: ${appliedOutside.join("; ")}`,
+            "the components after the failing one were not attempted, and the failing component's own commit boundary is unknown \u2014 a retry must reconcile them",
+          ]
+        : []),
     ],
     needed: message,
     withheldEffect: prerequisite
       ? `the ${input.kind} operation: a prerequisite it genuinely needs could not be read, so plan ${input.scope.planId}, its ` +
         "coordination block and every revision are exactly as they were"
-      : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
-        "revision are exactly as they were",
+      : partialOutside
+        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} component(s) had already committed in the issue ` +
+          "authority when the call refused and they are not rolled back, so plan " +
+          `${input.scope.planId}'s snapshot is not the whole story`
+        : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
+          "revision are exactly as they were",
     availableWork: [
       `read plan ${input.scope.planId} and its current row state`,
-      `retry the ${input.kind} operation once the conflicting fact is resolved`,
+      partialOutside
+        ? `retry the ${input.kind} operation exactly as it was requested: every component it already committed is ` +
+          "operation-id idempotent, so the repeat settles those components and completes the remainder"
+        : `retry the ${input.kind} operation once the conflicting fact is resolved`,
       "independent operations on other rows, plans and workflows continue",
     ],
   };
@@ -1606,12 +1644,26 @@ function rowFrameRefusal(
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({
-      target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
-      unresolved: [problem],
-      warnings: input.warnings,
-    }),
+    recovery: partlyAppliedRecovery(
+      unresolvedRecovery({
+        target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+        unresolved: [problem],
+        warnings: input.warnings,
+      }),
+      appliedOutside,
+    ),
   });
+}
+
+/**
+ * §4.1 the recovery sidecar of a refusal that committed components in another
+ * authority before it refused: `partial` is the boundary the caller can rely on
+ * and `applied` enumerates exactly what stands. A refusal that committed
+ * nothing keeps the `unresolved`/`none` `unresolvedRecovery` reports.
+ */
+function partlyAppliedRecovery(recovery: RecoveryDetails, applied: readonly string[]): RecoveryDetails {
+  if (applied.length === 0) return recovery;
+  return { ...recovery, outcome: "partial", applied: [...applied], commitState: "partial" };
 }
 
 /**
@@ -1643,7 +1695,15 @@ async function withRowCommit(
     /** `prepare` rewrites the pin itself, so it may not re-check the old seal. */
     freshness?: boolean;
     precheck: RowAdmission;
-    mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
+    /**
+     * §4.1 the mutation reports every component it commits outside this row
+     * through the second argument, so a failure on a later component refuses
+     * with the applied boundary instead of claiming nothing moved.
+     */
+    mutate: (
+      context: RowContext,
+      reportExternalCommit: ExternalCommitReporter,
+    ) => RowCommit | null | Promise<RowCommit | null>;
     /**
      * §4.1 a mutation whose effect lands OUTSIDE this row (the two residual verbs
      * compose the core issue authority): it returns no row commit, yet the call
@@ -1691,10 +1751,19 @@ async function withRowCommit(
     }
     if (satisfied !== null) return { snapshot, row, satisfied, applied: false, warnings };
     let commit: RowCommit | null;
+    // §4.1 the components (if any) this mutation commits in another authority,
+    // in call order: a failure after them refuses on that partial boundary.
+    const committedOutside: string[] = [];
     try {
-      commit = await opts.mutate(context);
+      commit = await opts.mutate(context, (component) => committedOutside.push(component));
     } catch (error) {
-      throw rowFrameRefusal(error, { scope, kind: opts.kind, context, warnings });
+      throw rowFrameRefusal(error, {
+        scope,
+        kind: opts.kind,
+        context,
+        warnings,
+        appliedOutside: committedOutside,
+      });
     }
     if (commit === null) return { snapshot, row, satisfied: null, applied: false, warnings };
     const nextSnapshot: WorkflowSnapshot = {
@@ -3269,7 +3338,7 @@ async function mutateResidualAdd(
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
     },
-    mutate: async (rowContext) => {
+    mutate: async (rowContext, reportExternalCommit) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
       // Issue mutations run under the snapshot lock (lock order: workflow
       // ownership locks → SQLite transaction). The envelope authorizes the
@@ -3284,6 +3353,13 @@ async function mutateResidualAdd(
             actor: "project-manager",
             sessionFile: sessionPath,
           },
+        );
+        // §4.1 each component is disclosed the moment its own commit stands: a
+        // failure on a later entry then refuses on the boundary that already
+        // moved (these capture/link commits are in the issue authority, not the
+        // snapshot) instead of reporting that nothing changed.
+        reportExternalCommit(
+          `issue ${capture.issueId} captured for plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
         );
         // Always link, never only on `created`: the plan link is the gate's
         // authority, and a replay (or a capture that appended an occurrence)
@@ -3300,6 +3376,9 @@ async function mutateResidualAdd(
             sessionFile: sessionPath,
             expectedRevision: capture.revision,
           },
+        );
+        reportExternalCommit(
+          `issue ${capture.issueId} linked to plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
         );
         // The link's revision, not the capture's: the caller closes the issue
         // under the current value.

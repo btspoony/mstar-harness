@@ -6330,4 +6330,68 @@ describe("file-route frames — semantic replay, unrelated revision, sealed inpu
     });
     expect(progressed.outcome).toBe("progressed");
   });
+
+  test("partial external commit: a mid-loop capture failure discloses the pair that already committed (A25)", async () => {
+    const fixture = makeFixture();
+    // The loop commits in the issue authority, so this fixture owns the store
+    // those captures land in; the frame and the row are the same as above.
+    await storeBacked(fixture, [PLAN_ID]);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const before = readFileSync(fixture.snapshotPath);
+
+    // The FIRST entry's capture and link both commit in the issue authority; the
+    // SECOND entry is then rejected by that authority's own vocabulary. The
+    // refusal may not report the boundary as untouched: the first pair stands,
+    // and a retry must reconcile it.
+    const refusal = (await failureOf(() =>
+      mutatePlanCoordination({
+        sessionPath: fixture.planSession,
+        planId: PLAN_ID,
+        expectedRevision: view.revision,
+        operation: {
+          kind: "residual-add",
+          entries: [finding("r-partial-1"), finding("r-partial-2", { severity: "blocker" })] as never,
+        },
+      }),
+    )) as CoordinationError;
+    expect(refusal.code).toBe("issue.scope-refused");
+
+    const recovery = refusal.details.recovery as
+      | { outcome?: string; commitState?: string; applied?: string[]; unresolved?: Array<Record<string, unknown>> }
+      | undefined;
+    expect(recovery?.outcome).toBe("partial");
+    expect(recovery?.commitState).toBe("partial");
+    expect(recovery?.applied).toEqual([
+      "issue I-000001 captured for plan plan-a (occurrence occ-r-partial-1)",
+      "issue I-000001 linked to plan plan-a (occurrence occ-r-partial-1)",
+    ]);
+    const problem = recovery?.unresolved?.[0];
+    expect(String(problem?.withheldEffect)).not.toContain("exactly as they were");
+    expect(String(problem?.withheldEffect)).toContain("already committed");
+    const facts = (problem?.currentFacts as unknown[] | undefined)?.map(String).join("; ") ?? "";
+    expect(facts).toContain("I-000001");
+    const available = (problem?.availableWork as unknown[] | undefined)?.map(String).join("; ") ?? "";
+    expect(available).toContain("retry");
+    expect(available).toContain("idempotent");
+
+    // The disclosure is the true state, not a claim: the first capture exists
+    // and is linked to THIS plan, while the row itself was never written.
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
+    expect((await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root)).revision).toBe(view.revision);
+    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+
+    // And the retry the sidecar points at really settles: the committed pair
+    // replays under its own operation ids and the corrected second entry lands.
+    const retried = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "residual-add", entries: [finding("r-partial-1"), finding("r-partial-2")] as never },
+    });
+    expect(retried.outcome).toBe("residual-added");
+    expect(retried.issues?.map((issue) => issue.issue_id)).toEqual(["I-000001", "I-000002"]);
+    expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001", "I-000002"]);
+  });
 });
