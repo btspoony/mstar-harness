@@ -14,7 +14,7 @@ function fixture() {
   fs.writeFileSync(path.join(source, ".codex-plugin/plugin.json"), "{}");
   fs.cpSync(repoAgents, path.join(source, "codex/agents"), { recursive: true });
   fs.mkdirSync(path.join(source, "commands"));
-  for (const name of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit", "amazing-pr-review", "amazing-e2e-check"]) {
+  for (const name of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit", "amazing-test-audit", "amazing-pr-review", "amazing-e2e-check"]) {
     fs.writeFileSync(path.join(source, "commands", `${name}.md`), "command");
   }
   fs.mkdirSync(path.join(root, "bin"));

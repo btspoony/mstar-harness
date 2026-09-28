@@ -1,6 +1,6 @@
 ---
 name: mstar-audit
-description: "Morning Star codebase audit — survey any repository and produce prioritized, self-contained improvement plans for the normal Prepare → Execute flow. Strictly read-only on source code. Use when asked to audit or survey a codebase, find improvement opportunities (bugs, security, performance, test gaps, tech debt, dependency upgrades, DX), suggest what to build next (direction/roadmap), or when the user says 'what should I improve / fix / refactor / upgrade in this codebase'. Loads for deep, evidence-first review of a pull request / branch / diff / working-tree changes / a single commit (the `pr` variant — 'deeply review a PR'). Per-variant process detail lives in `references/` (`codebase-audit.md` full audit, `pr-review.md` PR review). Dispatched by PM under Task category `audit`."
+description: "Morning Star codebase audit — survey any repository and produce prioritized, self-contained improvement plans for the normal Prepare → Execute flow. Strictly read-only on source code. Use when asked to audit or survey a codebase, find improvement opportunities (bugs, security, performance, test gaps, tech debt, dependency upgrades, DX), suggest what to build next (direction/roadmap), or when the user says 'what should I improve / fix / refactor / upgrade in this codebase'. Loads for deep, evidence-first review of a pull request / branch / diff / working-tree changes / a single commit (the `pr` variant — 'deeply review a PR'), or for test-suite audits — judging the existing test surface (junk patterns, value/retention bar, whole-subsystem campaign) via the `tests` focus or `/amazing-test-audit`. Per-variant process detail lives in `references/` (`codebase-audit.md` full audit, `pr-review.md` PR review, `test-audit.md` test-suite deep method). Dispatched by PM under Task category `audit`."
 ---
 
 # Morning Star Codebase Audit
@@ -33,6 +33,7 @@ Two entry families, one skill:
 |-------|------|
 | Full codebase audit — bare / `quick` / `deep` / category focus (`security`, `perf`, `tests`, ...) / `branch` / `next` / `roadmap` / `simplify` | **`references/codebase-audit.md`** (Phase 2 categories + effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates) — shared plan output → **`## Plan output (all variants)`** |
 | PR / branch / diff deep review (`pr`) | **`references/pr-review.md`**（三阶段流水线：领域收集 → 领域审查 → 主代理合成；存在 pinned diff pack 时 collect 波默认折入领域席位（`collectFolded`），kept 例外与 `- notes:` 声明见 § Review pipeline；多 PR 单会话语义见 `references/pr-review.md` § Review pipeline / § Batch sibling PRs） |
+| Test-suite audit — category focus `tests` depth / prune, repair, consolidate the test surface / `campaign` (one subsystem's whole test surface) / `/amazing-test-audit` | **`references/test-audit.md`**（value bar, authoring gate, junk-pattern sweep, retention bar, per-candidate evidence, discovery lanes, campaign R/F/C/D ledger; plans carry the edit shape + verification gates） |
 
 ## Workflow
 
@@ -150,3 +151,4 @@ Workflow, audit playbook, finding format, and the security deep-dive method are 
 - `references/codebase-audit.md` — full codebase audit variant: Phase 2 categories + subagent-prompt requirements, effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates, `mstar audit scaffold` callout (plan writing / handoff → `## Plan output (all variants)`)
 - `references/pr-review.md` — deep PR-review process: worktree isolation, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, three-stage pipeline + batch session policy
 - `references/security-review.md` — security deep-dive: exploitability bar, input-source triage, FP discipline, hunting angles, LLM/supply-chain/CI-CD surfaces
+- `references/test-audit.md` — test-suite audit deep method: value bar, authoring gate (grades existing tests and gates proposed ones), junk-pattern sweep, retention bar, per-candidate evidence, discovery lanes, campaign scope (per-test R/F/C/D ledger), plan edit shape + verification gates
