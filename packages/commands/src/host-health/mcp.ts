@@ -125,6 +125,21 @@ function stripTomlInlineComments(body: string): string {
   }).join("\n");
 }
 
+/** Anchor package.json files the dsh loader resolves plugins from, in
+ * `resolveBundleDir` order: the owning `@deepseek-ai/dsh` installation
+ * (found by walking up from the real `dsh` executable — no layout
+ * assumption), then the profile package itself. */
+function dshResolutionAnchors(profileDir: string): string[] {
+  const anchors: string[] = [];
+  const bin = dshBinRealPath();
+  if (bin !== null) {
+    const installAnchor = packageJsonNamed(path.dirname(bin), "@deepseek-ai/dsh");
+    if (installAnchor !== null) anchors.push(installAnchor);
+  }
+  anchors.push(path.join(profileDir, "package.json"));
+  return anchors;
+}
+
 /** The nearest ancestor package.json whose `name` matches, walking up from
  * `startDir`. */
 function packageJsonNamed(startDir: string, name: string): string | null {
@@ -158,25 +173,13 @@ function dshBinRealPath(): string | null {
   return null;
 }
 
-/** Anchor files the dsh loader resolves bundles and plugins from, in
- * `resolveBundleDir` order: the package.json of the owning `@deepseek-ai/dsh`
- * installation (found by walking up from the real `dsh` executable — no
- * layout assumption), then the profile package itself. */
-function dshResolutionAnchors(profileDir: string): string[] {
-  const anchors: string[] = [];
-  const bin = dshBinRealPath();
-  if (bin !== null) {
-    const installAnchor = packageJsonNamed(path.dirname(bin), "@deepseek-ai/dsh");
-    if (installAnchor !== null) anchors.push(installAnchor);
-  }
-  anchors.push(path.join(profileDir, "package.json"));
-  return anchors;
-}
-
 /** Whether `@deepseek-ai/dsh-mcp-client` is physically installed on the Node
  * ancestor chain of one of the loader anchors: the anchor dir itself and
- * every `node_modules` above it (this covers the package-internal layout,
- * the hoisted sibling in the install tree, and the profile node_modules).
+ * every `node_modules` above it (this covers the package-internal layout and
+ * the hoisted sibling in the install tree, while the profile anchor covers
+ * the profile node_modules). Installation-scope entries are visible to every
+ * profile (upstream collectInstallationScopePackages + scope: 'installation'),
+ * and the inspected DSH manifest declares the bridge as an app dependency.
  * A module-resolution probe is unusable here: Bun's resolver falls back to
  * its global install cache, which would report a bridge that no dsh profile
  * can actually load. pnpm/workspace layouts surface as symlinks, which
