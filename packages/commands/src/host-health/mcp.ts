@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import { delimiter } from "node:path";
+import os from "node:os";
 import path from "node:path";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
 import { DSH_BIN, DSH_DUMP_FLAG, DSH_HOME_ENV, DSH_PROFILE, DSH_PROFILE_FLAG, resolveDshProfileDir } from "./dsh.js";
@@ -122,6 +125,76 @@ function stripTomlInlineComments(body: string): string {
   }).join("\n");
 }
 
+/** The nearest ancestor package.json whose `name` matches, walking up from
+ * `startDir`. */
+function packageJsonNamed(startDir: string, name: string): string | null {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(fs.readFileSync(candidate, "utf8")) as { name?: unknown };
+      if (pkg.name === name) return candidate;
+    } catch {
+      // keep walking
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Real path of the first executable `dsh` on PATH. */
+function dshBinRealPath(): string | null {
+  for (const prefix of (process.env.PATH ?? "").split(delimiter)) {
+    if (prefix === "") continue;
+    const candidate = path.join(prefix, DSH_BIN);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // try the next PATH prefix
+    }
+  }
+  return null;
+}
+
+/** Anchor files the dsh loader resolves bundles and plugins from, in
+ * `resolveBundleDir` order: the package.json of the owning `@deepseek-ai/dsh`
+ * installation (found by walking up from the real `dsh` executable — no
+ * layout assumption), then the profile package itself. */
+function dshResolutionAnchors(profileDir: string): string[] {
+  const anchors: string[] = [];
+  const bin = dshBinRealPath();
+  if (bin !== null) {
+    const installAnchor = packageJsonNamed(path.dirname(bin), "@deepseek-ai/dsh");
+    if (installAnchor !== null) anchors.push(installAnchor);
+  }
+  anchors.push(path.join(profileDir, "package.json"));
+  return anchors;
+}
+
+/** Whether `@deepseek-ai/dsh-mcp-client` is physically installed on the Node
+ * ancestor chain of one of the loader anchors: the anchor dir itself and
+ * every `node_modules` above it (this covers the package-internal layout,
+ * the hoisted sibling in the install tree, and the profile node_modules).
+ * A module-resolution probe is unusable here: Bun's resolver falls back to
+ * its global install cache, which would report a bridge that no dsh profile
+ * can actually load. pnpm/workspace layouts surface as symlinks, which
+ * existsSync follows. */
+function bridgePluginResolves(profileDir: string): boolean {
+  const segments = ["@deepseek-ai", "dsh-mcp-client"];
+  for (const anchor of dshResolutionAnchors(profileDir)) {
+    let dir = path.dirname(anchor);
+    for (;;) {
+      if (fs.existsSync(path.join(dir, "node_modules", ...segments, "package.json"))) return true;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return false;
+}
+
 /** Inspect the dsh profile's MCP configuration through dsh's OWN composer:
  * `dsh --profile web --dump-config` prints the effective row tree AFTER
  * bundle order, patch layering, `resolution.entries` interception and both
@@ -142,7 +215,7 @@ function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: 
       timeout: 30_000,
     });
     if (proc.status === 0) dump = proc.stdout;
-    else dumpError = (proc.stderr ?? "").trim() || `exited ${String(proc.status)}`;
+    else dumpError = (proc.error !== undefined && proc.error !== null ? proc.error.message : (proc.stderr ?? "").trim()) || `exited ${String(proc.status)}`;
   } catch (error) {
     dumpError = error instanceof Error ? error.message : String(error);
   }
@@ -178,6 +251,22 @@ function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: 
       location: profileDir,
       ...runtimePrefix,
       errors: withError(["The mstar-mcp row is composed but disabled in the dsh configuration; enable it to expose the MCP server."]),
+      notes: [],
+    };
+  }
+  // The dump proves the row COMPOSES, not that the bridge plugin RESOLVES:
+  // app-boot tolerates an optional MCP entry that fails to load, so a row can
+  // sit in the tree with the bridge missing. Mirror the loader's anchor order
+  // (upstream resolveBundleDir): the owning dsh installation first, then the
+  // profile package; Node's ancestor walk inside each anchor covers the
+  // parent layers.
+  if (!bridgePluginResolves(profileDir)) {
+    return {
+      target: "dsh",
+      status: "mismatch",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError(["The mstar-mcp row is composed but @deepseek-ai/dsh-mcp-client does not resolve from the dsh installation or the profile; run `dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`."]),
       notes: [],
     };
   }

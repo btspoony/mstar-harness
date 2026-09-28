@@ -136,7 +136,8 @@ describe("MCP doctor health", () => {
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
     try {
-      // Mounted row → aligned.
+      // Mounted row → aligned — with the bridge resolving through a profile
+      // stub package (main entry present, so createRequire finds it).
       writeFileSync(dumpFile, [
         "- id: mstar",
         "  name: '@mstar-harness/dsh'",
@@ -148,9 +149,20 @@ describe("MCP doctor health", () => {
         "    command: npx",
         "    args: ['-y', '@mstar-harness/cli', 'mcp']",
       ].join("\n"), "utf8");
+      const bridgeDir = path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client");
+      mkdirSync(bridgeDir, { recursive: true });
+      writeFileSync(path.join(bridgeDir, "package.json"), JSON.stringify({ name: "@deepseek-ai/dsh-mcp-client", version: "0.0.0-stub", main: "index.js" }), "utf8");
+      writeFileSync(path.join(bridgeDir, "index.js"), "", "utf8");
       const mounted = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
       expect(mounted.status).toBe("aligned");
       expect(mounted.notes.join(" ")).toContain("Cordis mcp-client row launches");
+
+      // Same composed row, but the bridge no longer resolves → mismatch
+      // (the dump proves composition, not that the optional entry can load).
+      rmSync(bridgeDir, { recursive: true, force: true });
+      const unresolved = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+      expect(unresolved.status).toBe("mismatch");
+      expect(unresolved.errors.join(" ")).toContain("does not resolve");
 
       // A disabled row composes but exposes nothing → unavailable.
       writeFileSync(dumpFile, [
@@ -210,6 +222,46 @@ describe("MCP doctor health", () => {
     } finally {
       if (brokenPath === undefined) delete process.env.PATH;
       else process.env.PATH = brokenPath;
+    }
+  });
+
+  test("dsh bridge resolves through the hoisted sibling in the install tree", () => {
+    // The bridge installed beside the dsh package
+    // (`<install>/node_modules/@deepseek-ai/dsh-mcp-client`) resolves through
+    // the install anchor's ancestor chain, even though the profile has no
+    // local copy.
+    const installTree = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-hoisted-"));
+    roots.push(installTree);
+    const anchorNodeModules = path.join(installTree, "node_modules");
+    const dshPackageDir = path.join(anchorNodeModules, "@deepseek-ai", "dsh");
+    const bridgeSibling = path.join(anchorNodeModules, "@deepseek-ai", "dsh-mcp-client");
+    mkdirSync(path.join(dshPackageDir, "bin"), { recursive: true });
+    mkdirSync(bridgeSibling, { recursive: true });
+    writeFileSync(path.join(dshPackageDir, "package.json"), JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.0.0-stub", bin: { dsh: "bin/dsh" } }), "utf8");
+    writeFileSync(path.join(bridgeSibling, "package.json"), JSON.stringify({ name: "@deepseek-ai/dsh-mcp-client", version: "0.0.0-stub", main: "index.js" }), "utf8");
+    writeFileSync(path.join(bridgeSibling, "index.js"), "", "utf8");
+    const dumpFile = path.join(installTree, "dump.yml");
+    writeFileSync(dumpFile, [
+      "- id: mstar-mcp",
+      "  name: '@deepseek-ai/dsh-mcp-client'",
+      "  config:",
+      "    serverName: mstar",
+      "    transport: stdio",
+      "    command: npx",
+      "    args: ['-y', '@mstar-harness/cli', 'mcp']",
+    ].join("\n"), "utf8");
+    writeFileSync(path.join(dshPackageDir, "bin", "dsh"), `#!/bin/sh\ncat "${dumpFile}"\n`, { mode: 0o755 });
+    const hoistedHome = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-hoisted-home-"));
+    roots.push(hoistedHome);
+    const hoistedProfile = path.join(hoistedHome, "profiles", "web");
+    mkdirSync(hoistedProfile, { recursive: true });
+    const hoistedPath = process.env.PATH;
+    process.env.PATH = `${path.join(dshPackageDir, "bin")}${path.delimiter}${hoistedPath ?? ""}`;
+    try {
+      expect(diagnoseMcpTarget("dsh", hoistedProfile, currentRuntime).status).toBe("aligned");
+    } finally {
+      if (hoistedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = hoistedPath;
     }
   });
 
