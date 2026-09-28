@@ -10,7 +10,7 @@
  * Each case runs the real CLI as a subprocess against temp fixtures (and real
  * temp git repos where cheap) and asserts the exit code + printed output.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
@@ -1126,9 +1126,12 @@ describe("mstar pr-review worktree-cleanup — report gate + exactly-recorded br
 
 /** A throwaway PATH dir that exposes ONLY git (symlinked from the ambient
  * PATH): harness probing works, while gh stays unreachable no matter which
- * prefix the runner installed it to. */
+ * prefix the runner installed it to. Registered for afterEach cleanup. */
+const ghlessPaths: string[] = [];
+
 function ghlessPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "ghless-path-"));
+  ghlessPaths.push(dir);
   const git = which("git");
   if (git !== null) symlinkSync(git, join(dir, "git"));
   return dir;
@@ -1149,6 +1152,10 @@ function which(name: string): string | null {
 }
 
 describe("mstar pr-review post", () => {
+  afterEach(() => {
+    for (const dir of ghlessPaths.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   /**
    * Planning path is exercised end-to-end: the command's first external step
    * IS `gh pr view`. To stay deterministic regardless of whether the runner

@@ -16,7 +16,7 @@ afterEach(() => {
 function configRelativePath(target: HostTarget): string {
   switch (target) {
     case "omp": return ".omp/mcp.json";
-    case "opencode": return "opencode.json";
+    case "opencode": return path.join(".config", "opencode", "opencode.json");
     case "dsh": return "cordis.yml";
     case "cursor": return ".cursor/mcp.json";
     case "codex": return ".codex/config.toml";
@@ -120,39 +120,104 @@ describe("MCP doctor health", () => {
     expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("mismatch");
   });
 
-  test("dsh reads the Cordis sources under its profile", () => {
+  test("dsh health reads the effective dump through dsh itself", () => {
     const dshHome = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-"));
     roots.push(dshHome);
     const profileDir = path.join(dshHome, "profiles", "web");
-    mkdirSync(path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client"), { recursive: true });
-    const bundlePatch = path.join(profileDir, "node_modules", "@mstar-harness", "dsh", "bundle", "cordis.patch.yml");
-    mkdirSync(path.dirname(bundlePatch), { recursive: true });
-    writeFileSync(bundlePatch, [
-      "- insert:",
-      "    - id: mstar-mcp",
-      "      name: '@deepseek-ai/dsh-mcp-client'",
-      "      config:",
-      "        serverName: mstar",
-      "        transport: stdio",
-        "        command: npx",
-      "        args: ['-y', '@mstar-harness/cli', 'mcp']",
-    ].join("\n"), "utf8");
-    const patched = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
-    expect(patched.status).toBe("aligned");
-    expect(patched.notes.join(" ")).toContain("mcp-client");
+    mkdirSync(profileDir, { recursive: true });
 
-    // A comment mentioning the row is not a row: comment-only sources stay unavailable.
-    const bareHome = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-bare-"));
-    roots.push(bareHome);
-    const bareProfile = path.join(bareHome, "profiles", "web");
-    mkdirSync(path.join(bareProfile, "node_modules", "@mstar-harness", "dsh", "bundle"), { recursive: true });
-    writeFileSync(path.join(bareProfile, "node_modules", "@mstar-harness", "dsh", "bundle", "cordis.patch.yml"), "# mcp-client @mstar-harness/cli mcp mentioned in prose\n[]\n", "utf8");
-    expect(diagnoseMcpTarget("dsh", bareProfile, currentRuntime).status).toBe("unavailable");
+    // A fake `dsh` on PATH prints a fixture dump: the doctor must trust the
+    // composer's output (bundle order, patch layering, resolution.entries and
+    // the install anchors are dsh's own logic, not the doctor's).
+    const binDir = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-bin-"));
+    roots.push(binDir);
+    const dumpFile = path.join(dshHome, "dump.yml");
+    writeFileSync(path.join(binDir, "dsh"), `#!/bin/sh\ncat "${dumpFile}"\n`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      // Mounted row → aligned.
+      writeFileSync(dumpFile, [
+        "- id: mstar",
+        "  name: '@mstar-harness/dsh'",
+        "- id: mstar-mcp",
+        "  name: '@deepseek-ai/dsh-mcp-client'",
+        "  config:",
+        "    serverName: mstar",
+        "    transport: stdio",
+        "    command: npx",
+        "    args: ['-y', '@mstar-harness/cli', 'mcp']",
+      ].join("\n"), "utf8");
+      const mounted = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+      expect(mounted.status).toBe("aligned");
+      expect(mounted.notes.join(" ")).toContain("Cordis mcp-client row launches");
 
-    // A configured row without the bridge plugin installed is a mismatch.
-    const bare = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
-    rmSync(path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client"), { recursive: true, force: true });
-    expect(diagnoseMcpTarget("dsh", profileDir, currentRuntime).status).toBe("mismatch");
-    expect(bare.status).toBe("aligned");
+      // A disabled row composes but exposes nothing → unavailable.
+      writeFileSync(dumpFile, [
+        "- id: mstar-mcp",
+        "  name: '@deepseek-ai/dsh-mcp-client'",
+        "  disabled: true",
+      ].join("\n"), "utf8");
+      expect(diagnoseMcpTarget("dsh", profileDir, currentRuntime).status).toBe("unavailable");
+
+      // No mstar-mcp row at all → unavailable.
+      writeFileSync(dumpFile, "- id: mstar\n  name: '@mstar-harness/dsh'\n", "utf8");
+      const noRow = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+      expect(noRow.status).toBe("unavailable");
+      expect(noRow.errors.join(" ")).toContain("no mstar-mcp row");
+
+      // A DIFFERENT server reusing the bridge client (serverName not mstar)
+      // does not satisfy the mstar row's health.
+      writeFileSync(dumpFile, [
+        "- id: mstar-mcp",
+        "  name: '@deepseek-ai/dsh-mcp-client'",
+        "  config:",
+        "    serverName: other",
+        "    transport: stdio",
+        "    command: npx",
+        "    args: ['-y', '@mstar-harness/cli', 'mcp']",
+      ].join("\n"), "utf8");
+      expect(diagnoseMcpTarget("dsh", profileDir, currentRuntime).status).toBe("unavailable");
+
+      // Aligned row + a below-floor runtime → mismatch.
+      writeFileSync(dumpFile, [
+        "- id: mstar-mcp",
+        "  name: '@deepseek-ai/dsh-mcp-client'",
+        "  config:",
+        "    serverName: mstar",
+        "    transport: stdio",
+        "    command: npx",
+        "    args: ['-y', '@mstar-harness/cli', 'mcp']",
+      ].join("\n"), "utf8");
+      expect(diagnoseMcpTarget("dsh", profileDir, { kind: "node", version: "24.17.0" }).status).toBe("mismatch");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+
+    // A dsh binary that cannot produce the dump refuses with the failure,
+    // never a fabricated aligned/mismatch verdict.
+    const brokenBin = mkdtempSync(path.join(os.tmpdir(), "mcp-health-dsh-broken-"));
+    roots.push(brokenBin);
+    writeFileSync(path.join(brokenBin, "dsh"), "#!/bin/sh\necho boom >&2\nexit 1\n", { mode: 0o755 });
+    const brokenPath = process.env.PATH;
+    process.env.PATH = `${brokenBin}${path.delimiter}${brokenPath ?? ""}`;
+    try {
+      const failed = diagnoseMcpTarget("dsh", profileDir, currentRuntime);
+      expect(failed.status).toBe("unavailable");
+      expect(failed.errors.join(" ")).toContain("could not read the effective configuration");
+      expect(failed.errors.join(" ")).toContain("boom");
+    } finally {
+      if (brokenPath === undefined) delete process.env.PATH;
+      else process.env.PATH = brokenPath;
+    }
+  });
+
+  test("codex accepts single-quoted basic TOML strings", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-codex-sq-"));
+    roots.push(root);
+    mkdirSync(path.join(root, ".codex"), { recursive: true });
+    writeFileSync(path.join(root, ".codex", "config.toml"), "[mcp_servers.mstar]\ncommand = 'npx'\nargs = ['-y', '@mstar-harness/cli', 'mcp']\n", "utf8");
+    expect(diagnoseMcpTarget("codex", root, currentRuntime).status).toBe("aligned");
   });
 });

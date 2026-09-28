@@ -1,8 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { load } from "js-yaml";
 import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
-import { resolveDshProfileDir } from "./dsh.js";
+import { DSH_BIN, DSH_DUMP_FLAG, DSH_HOME_ENV, DSH_PROFILE, DSH_PROFILE_FLAG, resolveDshProfileDir } from "./dsh.js";
 import { resolveOpencodePluginPackageRoot } from "./plugin-version-alignment.js";
 import { compareSemver } from "./version-compare.js";
 import type { HostTarget } from "./plugin-version-alignment.js";
@@ -47,7 +47,7 @@ function actualRuntime(): McpRuntime {
  */
 const HOST_MCP_CONFIGS: Record<Exclude<HostTarget, "dsh">, { configFile: string; format: "mcpServers" | "mcp" | "toml" }> = {
   omp: { configFile: ".omp/mcp.json", format: "mcpServers" },
-  opencode: { configFile: "opencode.json", format: "mcp" },
+  opencode: { configFile: path.join(".config", "opencode", "opencode.json"), format: "mcp" },
   cursor: { configFile: ".cursor/mcp.json", format: "mcpServers" },
   codex: { configFile: ".codex/config.toml", format: "toml" },
   kimi: { configFile: ".kimi-code/mcp.json", format: "mcpServers" },
@@ -74,7 +74,8 @@ function isNpxMstarLaunch(entry: unknown): boolean {
 
 /** Structured check of the Codex TOML: the `[mcp_servers.mstar]` table
  * specifically (not any server) whose command/args launch
- * `npx @mstar-harness/cli mcp`. */
+ * `npx @mstar-harness/cli mcp`. Basic TOML strings may be single- or
+ * double-quoted. */
 function codexMstarServerPresent(content: string): boolean {
   // A commented-out table (`# [mcp_servers.mstar] ...`) cannot launch
   // anything: strip comment lines before scanning for the table body.
@@ -83,15 +84,27 @@ function codexMstarServerPresent(content: string): boolean {
   for (const match of active.matchAll(table)) {
     if (match[1] !== "mstar") continue;
     const body = stripTomlInlineComments(match[2] ?? "");
-    const command = /command\s*=\s*"([^"]*)"/.exec(body)?.[1];
-    const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(body);
-    const args = argsMatch === null ? [] : [...argsMatch[1]!.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+    const command = tomlString(body, "command");
+    const args = tomlStringArray(body, "args");
     const argv = [command ?? "", ...args];
     if (argv[0] !== "npx") continue;
     const cli = argv.indexOf("@mstar-harness/cli", 1);
     if (cli !== -1 && argv.slice(cli + 1).includes("mcp")) return true;
   }
   return false;
+}
+
+/** One basic TOML string value (`key = "..."` or `key = '...'`). */
+function tomlString(body: string, key: string): string | null {
+  const match = new RegExp(`${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(body);
+  return match === null ? null : match[1] ?? match[2] ?? null;
+}
+
+/** A basic TOML array-of-strings value (`key = ["a", 'b']`). */
+function tomlStringArray(body: string, key: string): string[] {
+  const match = new RegExp(`${key}\\s*=\\s*\\[([^\\]]*)\\]`).exec(body);
+  if (match === null) return [];
+  return [...match[1]!.matchAll(/"([^"]*)"|'([^']*)'/g)].map((m) => m[1] ?? m[2] ?? "");
 }
 
 /** Drop each line's tail after the first `#` that sits outside a quoted
@@ -109,115 +122,82 @@ function stripTomlInlineComments(body: string): string {
   }).join("\n");
 }
 
-/** The Cordis YAML config files a dsh profile composes its rows from: the
- * profile root list plus this bundle's own patch (shipped inside the
- * installed `@mstar-harness/dsh` package). */
-const DSH_CORDIS_FILES = ["cordis.yml", path.join("node_modules", "@mstar-harness", "dsh", "bundle", "cordis.patch.yml")] as const;
-
-/** Shape of one Cordis plugin row relevant to the doctor: only the fields the
- * mstar MCP row must carry. */
-type CordisRow = {
-  name: unknown;
-  config: {
-    transport: unknown;
-    serverName: unknown;
-    command: unknown;
-    args: unknown;
-  } | null;
-};
-
-function rowOf(value: unknown): CordisRow | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as { name?: unknown; config?: unknown };
-  const config = record.config !== null && typeof record.config === "object" && !Array.isArray(record.config)
-    ? record.config as CordisRow["config"] & Record<string, unknown>
-    : null;
-  return { name: record.name, config };
-}
-
-/** True when a parsed row list contains the mstar MCP launch row: the Cordis
- * `mcp-client` bridge targeting `npx @mstar-harness/cli mcp` under the stable
- * `mstar` server name. */
-function dshMcpRow(rows: readonly unknown[]): boolean {
-  return rows.some((raw) => {
-    const row = rowOf(raw);
-    if (row === null || row.name !== "@deepseek-ai/dsh-mcp-client" || row.config === null) return false;
-    const { transport, serverName, command, args } = row.config;
-    if (transport !== "stdio" || serverName !== "mstar" || command !== "npx") return false;
-    return Array.isArray(args) && args.includes("@mstar-harness/cli") && args.includes("mcp");
-  });
-}
-
-/** Parse one composed Cordis source: the profile root row list, or this
- * bundle's patch whose rows arrive under `- insert:` keys. */
-function dshCordisRows(text: string): unknown[] {
-  let parsed: unknown;
-  try {
-    parsed = load(text);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((entry) => {
-    const insert = entry !== null && typeof entry === "object" && !Array.isArray(entry)
-      ? (entry as { insert?: unknown }).insert
-      : undefined;
-    return Array.isArray(insert) ? insert : [entry];
-  });
-}
-
-/** The `mcp-client` row that launches the host-neutral MCP server. */
-function dshMcpRowPresent(cordisText: string): boolean {
-  return dshMcpRow(dshCordisRows(cordisText));
-}
-
-/** Inspect the dsh profile's composed Cordis sources for the mstar MCP row and
- * the `mcp-client` bridge plugin it needs. */
+/** Inspect the dsh profile's MCP configuration through dsh's OWN composer:
+ * `dsh --profile web --dump-config` prints the effective row tree AFTER
+ * bundle order, patch layering, `resolution.entries` interception and both
+ * install anchors — surfaces the doctor cannot re-implement faithfully. A
+ * mounted `@deepseek-ai/dsh-mcp-client` row in that dump is authoritative;
+ * a `disabled: true` row or no row at all reads as unavailable. */
 function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: string | null): McpTargetHealth {
   const runtimePrefix: Pick<McpTargetHealth, "runtimeFloor"> = { runtimeFloor };
   const withError = (errors: string[]): readonly string[] => (runtimeError === null ? errors : [...errors, runtimeError]);
-  const sources = DSH_CORDIS_FILES
-    .map((relative) => path.join(profileDir, relative))
-    .filter((file) => fs.existsSync(file));
-  if (sources.length === 0) {
+  const dshHome = path.resolve(profileDir, "..", "..");
+  let dump: string | null = null;
+  let dumpError: string | null = null;
+  try {
+    const proc = spawnSync(DSH_BIN, [DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], {
+      cwd: profileDir,
+      env: { ...process.env, [DSH_HOME_ENV]: dshHome },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    if (proc.status === 0) dump = proc.stdout;
+    else dumpError = (proc.stderr ?? "").trim() || `exited ${String(proc.status)}`;
+  } catch (error) {
+    dumpError = error instanceof Error ? error.message : String(error);
+  }
+  if (dump === null) {
     return {
       target: "dsh",
       status: "unavailable",
       location: profileDir,
       ...runtimePrefix,
-      errors: withError([`MCP client configuration unavailable for dsh; no Cordis config found under ${profileDir}.`]),
+      errors: withError([`MCP health for dsh could not read the effective configuration: \`dsh ${DSH_PROFILE_FLAG} ${DSH_PROFILE} ${DSH_DUMP_FLAG}\` failed (${dumpError ?? "dsh not found"}).`]),
       notes: [],
     };
   }
-  const rowSource = sources.find((file) => dshMcpRowPresent(fs.readFileSync(file, "utf8")));
-  if (rowSource === undefined) {
+  // A dump row starts at a top-level "- " line; everything indented under it
+  // (name, config, a `disabled: true` flag) belongs to that row's block. The
+  // mstar row is the bridge entry under the `mstar` server name — another
+  // DSH MCP server reusing the client package does not satisfy health.
+  const rowBlock = dump.split(/^(?=- )/m).find((block) => block.includes("@deepseek-ai/dsh-mcp-client") && /^\s+serverName:\s*mstar\s*$/m.test(block));
+  if (rowBlock === undefined) {
     return {
       target: "dsh",
       status: "unavailable",
-      location: sources[0]!,
+      location: profileDir,
       ...runtimePrefix,
-      errors: withError([`MCP client configuration unavailable for dsh; no mstar mcp-client row in ${sources.map((file) => path.relative(profileDir, file)).join(", ")}.`]),
+      errors: withError([`MCP client configuration unavailable for dsh; the composed configuration has no mstar-mcp row (checked via \`dsh ${DSH_DUMP_FLAG}\`).`]),
       notes: [],
     };
   }
-  const bridgePackage = path.join(profileDir, "node_modules", "@deepseek-ai", "dsh-mcp-client");
-  if (!fs.existsSync(bridgePackage)) {
+  if (/^\s+disabled:\s*true\s*$/m.test(rowBlock)) {
+    return {
+      target: "dsh",
+      status: "unavailable",
+      location: profileDir,
+      ...runtimePrefix,
+      errors: withError(["The mstar-mcp row is composed but disabled in the dsh configuration; enable it to expose the MCP server."]),
+      notes: [],
+    };
+  }
+  if (runtimeError !== null) {
     return {
       target: "dsh",
       status: "mismatch",
-      location: rowSource,
+      location: profileDir,
       ...runtimePrefix,
-      errors: withError([`The mstar mcp-client row is configured but the bridge plugin is not installed; run \`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client\` (${bridgePackage} is missing).`]),
+      errors: [runtimeError],
       notes: [],
     };
   }
   return {
     target: "dsh",
     status: "aligned",
-    location: rowSource,
+    location: profileDir,
     ...runtimePrefix,
     errors: [],
-    notes: [`Cordis mcp-client row launches npx @mstar-harness/cli mcp for dsh (server name "mstar").`],
+    notes: [`Cordis mcp-client row launches npx @mstar-harness/cli mcp for dsh (server name "mstar"; verified through \`dsh ${DSH_DUMP_FLAG}\`).`],
   };
 }
 
@@ -293,14 +273,6 @@ export function diagnoseMcpTarget(
     errors,
     notes: errors.length === 0 ? [`MCP config aligned for ${target}.`] : [],
   };
-}
-
-export function mcpTargetPackageRoot(target: HostTarget, checkout: string, options: { opencodePackagesRoot?: string } = {}): string {
-  if (target === "opencode") {
-    const opencodePackagesRoot = options.opencodePackagesRoot ?? path.join(checkout, "node_modules", "@mstar-harness");
-    return path.join(opencodePackagesRoot, "opencode");
-  }
-  return checkout;
 }
 
 export { resolveDshProfileDir };
