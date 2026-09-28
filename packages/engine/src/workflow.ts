@@ -2036,12 +2036,16 @@ export function normalizeIterationCompassRef(
           `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
       );
     }
-    const rel = relative(harnessRoot, resolved).split(sep).join("/");
-    // The canonical target is inside the root, but a purely lexical relative
-    // form can still escape it when the caller reached the document through a
-    // symlink OUTSIDE the root (relative() then starts with "../"). The stored
-    // contract form must stay resolvable inside the root on its own, so that
-    // shape refuses instead of being stored (Greptile #301 issue 3).
+    // Derive the stored pointer from the CANONICAL pair (Greptile #304 issue
+    // 2): when the harness root itself is reached through a symlink, mixing
+    // the symlink-spelled root with the real-spelled document makes
+    // relative() start with "../" even though both sides are inside. The
+    // canonical-vs-canonical form is still harness-relative (the Prepare
+    // reader joins it against the same root) and can never escape.
+    const rel = relative(rootCanon, canonicalizeNearestExisting(resolved)).split(sep).join("/");
+    // Invariant guard: the canonical containment above makes a true escape
+    // unreachable; if it ever regresses, refuse rather than store an escaping
+    // pointer.
     if (rel === ".." || rel.startsWith("../")) {
       throw refuse(
         `options.compassRef reaches an in-root document only through a path outside the harness root - ` +
@@ -2270,15 +2274,27 @@ export async function registerIterationWorkflow(
         // Crash/retry tolerance (Greptile #301 issue 2): an orphan written by
         // an OLDER producer may store the caller's absolute compassRef
         // spelling, while the retried candidate now carries the normalized
-        // relative form of the SAME document. When the only identity delta is
-        // that spelling, compare against the candidate re-keyed to the
-        // existing pointer and recover with the existing bytes verbatim —
-        // never re-registering the missing root entry against a refused
-        // identity or rewriting the orphan.
+        // relative form of the SAME document. Tolerance applies ONLY when
+        // both pointers resolve to the same canonical document (Greptile
+        // #304 issue 1: a retry naming a DIFFERENT compass must keep the
+        // ordinary identity refusal - the orphan's pointer is never adopted).
+        // When tolerant, recover with the existing bytes verbatim - never
+        // re-registering the missing root entry against a refused identity or
+        // rewriting the orphan.
         const spellingTolerant = (() => {
           if (existing.snapshot.id !== workflowId) return false;
-          if (existing.snapshot.compass_ref === undefined || snapshot.compass_ref === undefined) return false;
-          const rekeyed = { ...snapshot, compass_ref: existing.snapshot.compass_ref };
+          const existingRef = existing.snapshot.compass_ref;
+          const candidateRef = snapshot.compass_ref;
+          if (existingRef === undefined || candidateRef === undefined) return false;
+          try {
+            const sameDocument =
+              canonicalizeNearestExisting(resolve(harnessDir, existingRef)) ===
+              canonicalizeNearestExisting(resolve(harnessDir, candidateRef));
+            if (!sameDocument) return false;
+          } catch {
+            return false;
+          }
+          const rekeyed = { ...snapshot, compass_ref: existingRef };
           return iterationWorkflowRegistrationIdentity(rekeyed) === iterationWorkflowRegistrationIdentity(existing.snapshot);
         })();
         if (!spellingTolerant) {

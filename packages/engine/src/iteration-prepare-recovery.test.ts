@@ -162,18 +162,22 @@ describe("iteration Prepare recovery - ordinary-intent derivation (R3 / I-000243
     await expect(register(fixture, path.join(outside, "delivery-compass.md"))).rejects.toThrow(/outside the harness root/);
   });
 
-  test("an in-root document reached through an EXTERNAL symlink refuses: the stored relative form would escape", async () => {
+  test("an in-root document reached through an EXTERNAL symlink stores the canonical in-root form", async () => {
     const fixture = makeFixture("iter-symlink-through-external");
     const outside = mkdtempSync(path.join(os.tmpdir(), "prepare-through-external-"));
     roots.push(outside);
     const inRootCompass = path.join(fixture.harnessDir, "iterations", fixture.workflowId, "delivery-compass.md");
     const externalLink = path.join(outside, "compass-link");
     symlinkSync(inRootCompass, externalLink);
-    // The canonical target is inside the root, so containment passes — but
-    // the lexical relative form of the external link escapes it, and a later
-    // removal of the external link would strand the pointer. Refuses at
-    // registration instead (Greptile #301 issue 3).
-    await expect(register(fixture, externalLink)).rejects.toThrow(/stays resolvable/);
+    // The canonical target is inside the root, so the stored pointer is
+    // derived from the canonical pair and stays resolvable inside the root
+    // even after the external link is removed (Greptile #301 issue 3 fixed
+    // via the #304 issue 2 remedy: canonical-vs-canonical relative form).
+    await register(fixture, externalLink);
+    expect((readSnapshot(fixture) as Record<string, unknown>).compass_ref).toBe(`iterations/${fixture.workflowId}/delivery-compass.md`);
+    // And the stored form is exactly what the Prepare reader resolves.
+    const prepared = (readSnapshot(fixture) as Record<string, unknown>);
+    expect(prepared.phase).toBe("phase-1-prepare");
   });
 
   test("orphan recovery tolerates the pre-normalization compassRef spelling and preserves existing bytes", async () => {
@@ -181,7 +185,7 @@ describe("iteration Prepare recovery - ordinary-intent derivation (R3 / I-000243
     const absoluteRef = absoluteCompassRef(fixture);
     // Simulate the pre-change producer: register (which now normalizes),
     // then rewrite the snapshot's pointer back to the absolute spelling and
-    // drop the root entry — the exact crash/orphan state issue 2 describes.
+    // drop the root entry - the exact crash/orphan state issue 2 describes.
     await register(fixture, absoluteRef);
     const statusPath = path.join(fixture.harnessDir, "status.json");
     const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: unknown[] };
@@ -196,6 +200,52 @@ describe("iteration Prepare recovery - ordinary-intent derivation (R3 / I-000243
     const status2 = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<{ id: string }> };
     expect(status2.workflows.some((entry) => entry.id === fixture.workflowId)).toBe(true);
     expect((readSnapshot(fixture) as Record<string, unknown>).compass_ref).toBe(absoluteRef);
+  });
+
+  test("orphan recovery refuses a retry that names a DIFFERENT compass document", async () => {
+    const fixture = makeFixture("iter-orphan-other-compass");
+    await register(fixture, absoluteCompassRef(fixture));
+    const statusPath = path.join(fixture.harnessDir, "status.json");
+    const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: unknown[] };
+    status.workflows = [];
+    writeFileSync(statusPath, `${JSON.stringify(status, null, 2)}\n`);
+    // The orphan keeps the original compass; the retry names a second in-root
+    // document. Same-document tolerance must not adopt the orphan's pointer
+    // here - the ordinary identity refusal stands (Greptile #304 issue 1).
+    const otherCompass = path.join(fixture.harnessDir, "iterations", fixture.workflowId, "other-compass.md");
+    writeFileSync(otherCompass, `---\niteration_id: ${fixture.workflowId}\nstatus: active\nplans:\n  - ${fixture.planId}\n---\n\n# other\n`);
+    await expect(register(fixture, otherCompass)).rejects.toThrow(/different registration identity/);
+  });
+
+  test("a symlinked harness root with a real-path absolute compassRef registers with an in-root relative form", async () => {
+    // Greptile #304 issue 2: when the harness root itself is a symlink,
+    // mixing the symlink-spelled root with the real-spelled document must not
+    // reject a valid in-root compass. The stored form is derived from the
+    // canonical pair and stays inside.
+    const unpinned = mkdtempSync(path.join(os.tmpdir(), "prepare-root-link-"));
+    roots.push(unpinned);
+    const realRoot = path.join(unpinned, "real");
+    const rootLink = path.join(unpinned, "root-link");
+    mkdirSync(realRoot, { recursive: true });
+    symlinkSync(realRoot, rootLink);
+    const fixture: Fixture = { root: rootLink, harnessDir: path.join(rootLink, ".mstar"), workflowId: "iter-root-link", planId: "plan-a", envelopePath: path.join(rootLink, ".mstar", "workflows", "iter-root-link", "sessions", "coordinator-fixture-coordinator.json") };
+    git(rootLink, "init", "-b", "main");
+    git(rootLink, "config", "user.email", "fixture@example.test");
+    git(rootLink, "config", "user.name", "fixture");
+    writeFileSync(path.join(realRoot, ".gitkeep"), "");
+    git(rootLink, "add", ".gitkeep");
+    git(rootLink, "commit", "-m", "fixture root");
+    mkdirSync(path.join(realRoot, ".mstar", "plans"), { recursive: true });
+    mkdirSync(path.join(realRoot, ".mstar", "iterations", fixture.workflowId), { recursive: true });
+    mkdirSync(path.join(realRoot, ".mstar", "workflows", fixture.workflowId, "sessions"), { recursive: true });
+    writeFileSync(path.join(realRoot, ".mstar", "status.json"), `${JSON.stringify({ version: 2, updated_at: "2026-09-28", workflows: [] }, null, 2)}\n`);
+    writeFileSync(path.join(realRoot, ".mstar", "plans", "plan-a.md"), `# Fixture plan\n\n**plan_id:** plan-a\n`);
+    writeFileSync(path.join(realRoot, ".mstar", "iterations", "iter-root-link", "delivery-compass.md"), `---\niteration_id: iter-root-link\nstatus: active\nplans:\n  - plan-a\n---\n\n# compass\n`);
+    setArtifactStore(createFsStore(fixture.harnessDir));
+    // Absolute ref spelled through the REAL root (not the symlink spelling).
+    await register(fixture, path.join(realRoot, ".mstar", "iterations", "iter-root-link", "delivery-compass.md"));
+    const stored = (readSnapshot(fixture) as Record<string, unknown>).compass_ref;
+    expect(stored).toBe(`iterations/iter-root-link/delivery-compass.md`);
   });
 
   test("an in-root symlink whose target lies outside the harness refuses registration", async () => {
