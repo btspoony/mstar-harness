@@ -57,6 +57,16 @@ function engineCode(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+
+/**
+ * The typed details a refusal carries (`error.details`: the field facts and the
+ * `recovery` sidecar) are forwarded verbatim, so a command refusal is the same
+ * contract as the engine's own — never reduced to its code and message.
+ */
+function isDetailsRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function todayString(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -198,7 +208,13 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           }
           return ok("status.workflow-close", { snapshot: closed, unregistered: hadRootEntry, statusFile });
         } catch (error) {
-          return refused("status.workflow-close", engineCode(error, "workflow.close-refused"), messageOf(error));
+          // A refused close reports the engine's own typed cause: the field
+          // facts and the `recovery` sidecar travel with the code and message.
+          const details =
+            error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
+              ? error.details
+              : undefined;
+          return refused("status.workflow-close", engineCode(error, "workflow.close-refused"), messageOf(error), details);
         }
       },
     }),

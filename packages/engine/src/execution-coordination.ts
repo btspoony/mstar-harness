@@ -28,7 +28,6 @@ import {
   sha256Bytes,
   validatePlanProgress,
   validatePreparedCoordination,
-  type PlanProgress,
   type PreparedCoordination,
 } from "./coordination-write.js";
 import {
@@ -68,7 +67,6 @@ import {
   assertPrepareAdmission,
   assertTrackBranches,
   gitProof,
-  handoffEvidencePayload,
   integrationAnchors,
   integrationDiverged,
   integrationUnresolved,
@@ -104,6 +102,7 @@ import {
   resolvePlanRead,
   resolveTokenFreshness,
   semanticRequestHash,
+  serializeExecutionValue,
   transferExecutionLease,
   withExecutionTransaction,
   writeExecutionInputPin,
@@ -137,7 +136,15 @@ import {
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
-import { unresolvedRecovery, type RecoveryDetails, type RecoveryProblem, type ResolutionSource } from "./recovery-intent.js";
+import {
+  PLAN_OPERATION_SEMANTICS,
+  selectSemanticFields,
+  unresolvedRecovery,
+  type RecoveryDetails,
+  type RecoveryProblem,
+  type ResolutionSource,
+  type SemanticSelection,
+} from "./recovery-intent.js";
 import { findingsCleanupGate } from "./project.js";
 import { storeDbPath } from "./store-db.js";
 import {
@@ -379,27 +386,143 @@ function assertResidualAdmission(witness: ExecutionPlanWitness, tx: ExecutionTra
 
 /**
  * §3.1/§4.2 the request fingerprint of one plan operation: the operation kind,
- * the addressed plan and the payload the verb's own projection captures — never
- * the transport freshness (`expected` token, `session` reference, `operationId`)
- * the caller happened to present. A repeat after a lost response is the same
- * intent even when the caller re-read the row and re-presented a fresh token
- * (design R6/R7), so the fingerprint must not move with it; reusing an operation
- * id for a different business payload still refuses
+ * the addressed plan, the caller identity the receipt is bound to and E01's
+ * PUBLISHED semantic selection for that kind (`PLAN_OPERATION_SEMANTICS`) —
+ * never the transport freshness (`expected` token, `session` reference,
+ * `operationId`) the caller happened to present. A repeat after a lost response
+ * is the same intent even when the caller re-read the row and re-presented a
+ * fresh token (design R6/R7), so the fingerprint must not move with it; reusing
+ * an operation id for a different business payload still refuses
  * `execution.operation-conflict` instead of replaying a foreign receipt (A13),
  * and another actor cannot replay this one.
+ *
+ * The selected fields are E01's own table: the fingerprint's contract is the
+ * published selection, so a verb-local projection that merely re-renders the
+ * request — an absent `track_branches` written as `null`, a snake_case alias —
+ * is never the intent. A projection that RENDERS the request for a mutation
+ * stays with that mutation.
  */
 function planOperationRequestHash(
   caller: ExecutionCaller,
-  kind: string,
   read: { workflowId: string; planId: string },
-  payload: unknown,
+  operation: CoordinationOperation,
 ): string {
   return semanticRequestHash({
-    operation: kind,
+    operation: operation.kind,
     address: { workflow_id: read.workflowId, plan_id: read.planId },
     caller,
-    intent: { payload },
+    intent: selectSemanticFields({ planId: read.planId, operation }, PLAN_OPERATION_SEMANTICS[operation.kind]),
   });
+}
+
+/**
+ * §4.1/§4.2 (A13) the plan-owned record each operation kind's effect is read
+ * from, as the dot paths `selectSemanticFields` walks over ONE
+ * `ExecutionPlanView`: serving a committed receipt is current success only while
+ * the state that receipt recorded is still the state this transaction reads.
+ *
+ * The projection is the kind's OWN effect and nothing else — never the whole
+ * row, its siblings or a revision — so a later accepted operation that changed
+ * an unrelated field leaves the recorded effect genuinely held (A10), while the
+ * effect itself being replaced is disclosed (A13). The two residual verbs write
+ * no plan-owned state at all (their effect is an issue row in the issue
+ * authority, whose operation-id idempotency and issue CRS decide a retry, and
+ * which neither a later plan operation nor anything else on that authority
+ * supersedes): their plan-owned projection is empty by construction.
+ */
+const PLAN_EFFECT_FIELDS: Readonly<Record<CoordinationOperation["kind"], SemanticSelection>> = {
+  prepare: ["coordination.prepared", "plan.metadata.worktree_path", "plan.metadata.working_branch"],
+  progress: ["coordination.progress", "plan.status", "plan.metadata.track_branches"],
+  "residual-add": [],
+  "residual-close": [],
+  handoff: ["coordination.handoff", "plan.status"],
+  accept: ["coordination.handoff", "plan.status"],
+  return: ["coordination.handoff", "plan.status"],
+  "integration-start": ["coordination.handoff", "plan.status"],
+  "integration-accept": ["coordination.handoff", "plan.status"],
+  complete: ["coordination.handoff", "plan.status"],
+  reconcile: ["coordination.handoff", "plan.status"],
+};
+
+/**
+ * §4.2 (A12/A13) whether the effect one recorded plan receipt committed is STILL
+ * held: the recorded view and the state this transaction reads, compared on the
+ * kind's own effect projection. The canonical serialization is the same one the
+ * fingerprint uses, so "the same effect" is one comparison everywhere.
+ */
+function planEffectHeld(recorded: unknown, current: ExecutionPlanView, kind: CoordinationOperation["kind"]): boolean {
+  const fields = PLAN_EFFECT_FIELDS[kind];
+  return (
+    serializeExecutionValue(selectSemanticFields(recorded, fields)) ===
+    serializeExecutionValue(selectSemanticFields(current, fields))
+  );
+}
+
+/**
+ * §4.1/§4.2 (A13) the refusal of a plan receipt whose effect a later accepted
+ * operation superseded: the recorded receipt is historical evidence and is never
+ * served as current state, and the typed cause names both facts with the one
+ * choice that remains — accept what the row holds now, or express the desired
+ * effect as a NEW operation under a new operation id. Same report shape as the
+ * workflow frame's superseded-effect refusal, addressed to the plan row.
+ */
+function supersededPlanEffectCause(input: {
+  witness: ExecutionPlanWitness;
+  operationId: string;
+  kind: CoordinationOperation["kind"];
+  recorded: unknown;
+}): ExecutionError {
+  const code = "execution.effect-superseded";
+  const fields = PLAN_EFFECT_FIELDS[input.kind];
+  const field = fields[0] ?? "coordination";
+  const current = JSON.stringify(selectSemanticFields(input.witness.view, fields)) ?? "absent";
+  const recorded = JSON.stringify(selectSemanticFields(input.recorded, fields)) ?? "absent";
+  const problem: RecoveryProblem = {
+    component: "plan-row",
+    path: field,
+    code,
+    sourcesTried: [
+      `execution_operations(epoch, ${JSON.stringify(input.operationId)}) \u2014 the recorded receipt`,
+      `execution_plans(${input.witness.workflowId}, ${input.witness.planId}) as this transaction reads it`,
+    ],
+    currentFacts: [
+      `operation id ${JSON.stringify(input.operationId)} committed the ${input.kind} effect ${recorded} on plan ` +
+        `${input.witness.planId}`,
+      `the row holds ${current} now, so a later accepted operation superseded that effect`,
+    ],
+    needed:
+      `accept the current state of plan ${input.witness.planId}, or express the desired ${input.kind} effect again as a ` +
+      `new operation with a NEW operation id`,
+    withheldEffect: "the recorded receipt: it is historical evidence and is never restored as current state",
+    availableWork: [
+      `read plan ${input.witness.planId} and its current token`,
+      `express the desired effect under a new operation id`,
+      "independent operations on other plans and workflows continue",
+    ],
+  };
+  return new ExecutionError(
+    code,
+    `operation id ${JSON.stringify(input.operationId)} committed the ${input.kind} effect ${recorded} on plan ` +
+      `${input.witness.planId} of workflow ${input.witness.workflowId}, but the row holds ${current} now \u2014 a later ` +
+      `accepted operation superseded that effect, and a superseded receipt is never restored. Nothing was written.`,
+    {
+      component: problem.component,
+      path: problem.path,
+      workflow_id: input.witness.workflowId,
+      plan_id: input.witness.planId,
+      operation_id: input.operationId,
+      current_value: current,
+      recorded_value: recorded,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      needed: problem.needed,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: input.witness.workflowId, planId: input.witness.planId },
+        unresolved: [problem],
+      }),
+    },
+  );
 }
 
 /**
@@ -520,14 +643,15 @@ function storedCoordinationOf(view: ExecutionPlanView): Record<string, unknown> 
  * §3.1/§4.1 the transaction of ONE accepted plan operation. Inside one
  * `BEGIN IMMEDIATE` transaction: the authority is active, the caller's
  * reference is revalidated against the store's own rows (which also selects the
- * addressed plan and re-reads the store-held session), a committed receipt is
- * returned for an identical retry BEFORE the CAS is re-evaluated, the workflow
- * must still be running, and the supplied token must be the plan's exact CAS.
- * Only then does `run` produce the operation's read, and the transaction's one
- * revision advance has already run: the advance and the receipt are the frame's,
- * so an operation cannot forget either, and an operation that composes another
- * domain's writes into this transaction reads the revision it commits at from
- * the shared counter instead of advancing it a second time.
+ * addressed plan and re-reads the store-held session), the supplied token's
+ * ADDRESS and generation are fenced, a committed receipt is returned for an
+ * identical retry whose recorded effect the row still holds, the workflow must
+ * still be running, and the supplied token's revision must be the plan's exact
+ * CAS. Only then does `run` produce the operation's read, and the transaction's
+ * one revision advance has already run: the advance and the receipt are the
+ * frame's, so an operation cannot forget either, and an operation that composes
+ * another domain's writes into this transaction reads the revision it commits
+ * at from the shared counter instead of advancing it a second time.
  *
  * The caller has already passed `assertPlanOperationAdmissible` and the
  * operation-shape checks; `run` is synchronous for the same reason
@@ -550,25 +674,12 @@ function withExecutionPlanOperation<T>(
       );
     }
     const witness = readExecutionPlanWitness(tx, read);
-    const replay = readPlanOperationReplay<T>(tx, {
-      operationId: request.operationId,
-      requestHash,
-      workflowId: witness.workflowId,
-      planId: witness.planId,
-    });
-    if (replay !== null) {
-      // §4.2 (R6) the recorded receipt comes back with the provenance of the
-      // commit it records; nothing re-reads or re-writes the row it already
-      // applied, and the caller's token is not re-evaluated (the commit itself
-      // advanced the row, so an exact retry always presents a superseded token).
-      return { ...replay, recovery: replayRecovery(witness, request.operation.kind) };
-    }
-    assertRunningWorkflow(witness);
-    // §4.2 (R6/R7) the supplied token's ADDRESS and generation are strict, its
-    // revision is not: an operation that committed in the commit window moved
-    // the row, and this frame re-decides against the row it holds now. A row
-    // revision that moved is a relevant change to the very record this operation
-    // writes, so it is refused with the exact facts instead of overwritten.
+    // §4.2 (R6/R7/A26) the supplied token's ADDRESS and generation are strict and
+    // are fenced BEFORE anything is replayed or decided: a token of another
+    // record, another store or a superseded epoch authorizes neither a replay nor
+    // a mutation. Its REVISION is not a constraint — the commit this frame
+    // records advanced the row, so an exact retry always presents a superseded
+    // revision, which is exactly why revision drift stays replay freshness.
     const freshness = resolveTokenFreshness(
       request.expected,
       {
@@ -580,6 +691,33 @@ function withExecutionPlanOperation<T>(
       },
       { target: { workflowId: witness.workflowId, planId: witness.planId } },
     );
+    const replay = readPlanOperationReplay<T>(tx, {
+      operationId: request.operationId,
+      requestHash,
+      workflowId: witness.workflowId,
+      planId: witness.planId,
+    });
+    if (replay !== null) {
+      // §4.2 (R6/A13) the recorded receipt comes back with the provenance of the
+      // commit it records — but only while the effect it recorded is still the
+      // row's effect: nothing re-reads or re-writes the row it already applied, a
+      // superseded effect is disclosed instead of restored, and the caller's
+      // token revision is not re-evaluated (the commit itself advanced the row,
+      // so an exact retry always presents a superseded token).
+      if (!planEffectHeld(replay.data, witness.view, request.operation.kind)) {
+        throw supersededPlanEffectCause({
+          witness,
+          operationId: request.operationId,
+          kind: request.operation.kind,
+          recorded: replay.data,
+        });
+      }
+      return { ...replay, recovery: replayRecovery(witness, request.operation.kind) };
+    }
+    assertRunningWorkflow(witness);
+    // §4.2 (R6/R7) a row revision that moved is a relevant change to the very
+    // record this operation writes, so it is refused with the exact facts instead
+    // of overwritten.
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
@@ -721,9 +859,7 @@ export async function prepareExecutionPlan(
     throw invalidPlanInput("prepare requires an absolute assignmentPath");
   }
   const seal = readPrepareSeal(context, resolved.call);
-  const requestHash = planOperationRequestHash(context.caller, "prepare", resolved.read, {
-    assignment_path: operation.assignmentPath,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const state = witness.view.plan as Record<string, unknown>;
@@ -828,16 +964,6 @@ export async function prepareExecutionPlan(
  * §3 `progress` — the executing row's status, summary and evidence
  * ------------------------------------------------------------------------ */
 
-/** §3.1 the canonical payload half of a progress request hash. */
-function progressPayload(progress: PlanProgress): Record<string, unknown> {
-  return {
-    status: progress.status,
-    summary: progress.summary,
-    evidence_paths: [...progress.evidence_paths],
-    track_branches: progress.track_branches === undefined ? null : [...progress.track_branches],
-  };
-}
-
 /**
  * §3 `progress` on the DB authority: the plan session that HOLDS the plan's
  * execution lease moves its own row's status, summary and reported branches,
@@ -860,9 +986,7 @@ export async function progressExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "progress"], "progress operation");
   const progress = operation.progress;
   assertViolationFree(validatePlanProgress(progress), "progress");
-  const requestHash = planOperationRequestHash(context.caller, "progress", resolved.read, {
-    progress: progressPayload(progress),
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
   // §D the areas a plan's own evidence may live in: derived from the harness
   // root this store lives in, never from a caller-supplied path.
@@ -949,49 +1073,6 @@ function advancePlanRowRevision(tx: ExecutionTransaction, witness: ExecutionPlan
 }
 
 /**
- * §3.1 the canonical payload half of a residual-add request hash: every field
- * the capture below consumes, in the entry's own order. A payload that differs
- * in any of them is a different request, so reusing the operation id refuses
- * `execution.operation-conflict` rather than replaying a foreign receipt.
- */
-function residualAddPayload(entries: readonly ResidualEntry[]): unknown[] {
-  return entries.map((entry) => ({
-    title: entry.title ?? null,
-    kind: entry.kind ?? null,
-    severity: entry.severity ?? null,
-    impact: entry.impact ?? null,
-    acceptance: entry.acceptance ?? null,
-    owner: entry.owner ?? null,
-    source_identity: entry.sourceIdentity ?? null,
-    root_cause_key: entry.rootCauseKey ?? null,
-    acceptance_key: entry.acceptanceKey ?? null,
-    occurrence_key: entry.occurrenceKey ?? null,
-    source_kind: entry.sourceKind ?? null,
-    location: entry.location ?? null,
-    observed_behavior: entry.observedBehavior ?? null,
-    evidence: Array.isArray(entry.evidence) ? [...entry.evidence] : null,
-    discovered_at: entry.discoveredAt ?? null,
-  }));
-}
-
-/** §3.1 the canonical payload half of a residual-close request hash. */
-function residualClosePayload(operation: ResidualCloseOperation): Record<string, unknown> {
-  const evidence: Record<string, unknown> = isPlainObject(operation.evidence) ? operation.evidence : {};
-  return {
-    issue_id: operation.issueId ?? null,
-    disposition: operation.disposition ?? null,
-    expected_issue_revision: operation.expectedIssueRevision ?? null,
-    evidence: {
-      reason: evidence.reason ?? null,
-      scope: evidence.scope ?? null,
-      references: Array.isArray(evidence.references) ? [...evidence.references] : null,
-      canonical_issue_id: evidence.canonicalIssueId ?? null,
-      alignment_ref: evidence.alignmentRef ?? null,
-    },
-  };
-}
-
-/**
  * The deterministic issue operation ids of one residual mutation: one logical
  * mutation per session / plan / key, so an explicit retry converges on the same
  * issue rows instead of duplicating them. The shape is the file route's
@@ -1051,9 +1132,7 @@ export async function residualAddExecutionPlan(
       throw invalidPlanInput("residual-add requires every entry to be an issue observation object");
     }
   }
-  const requestHash = planOperationRequestHash(context.caller, "residual-add", resolved.read, {
-    entries: residualAddPayload(entries),
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
     assertResidualAdmission(witness, tx);
@@ -1137,9 +1216,7 @@ export async function residualCloseExecutionPlan(
   }
   assertTerminalDisposition(operation.disposition);
   assertClosureAuthority(operation.disposition, operation.evidence);
-  const requestHash = planOperationRequestHash(context.caller, "residual-close", resolved.read, {
-    residual: residualClosePayload(operation),
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
     assertResidualAdmission(witness, tx);
@@ -1490,9 +1567,7 @@ export async function handoffExecutionPlan(
   assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, prepared, planId, "handoff");
   assertHandoffGitProof(planScopeOf(before.data, planId).worktreePath, evidence, "handoff", planId);
   await assertFindingsClosed(context, planId, prepared, "hand off");
-  const requestHash = planOperationRequestHash(context.caller, "handoff", resolved.read, {
-    evidence: handoffEvidencePayload(evidence),
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     assertPlanOwnedWrite(witness, "handoff");
     const coordination = coordinationOf(witness);
@@ -1549,9 +1624,7 @@ export async function acceptExecutionPlan(
   const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
   requireHandoffState(named, ["submitted"], planId, "accept");
   assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "accept", planId);
-  const requestHash = planOperationRequestHash(context.caller, "accept", resolved.read, {
-    handoff_id: operation.handoffId,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["submitted"], planId, "accept");
@@ -1592,10 +1665,7 @@ export async function returnExecutionPlan(
   if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("return requires the non-empty handoffId it names");
   if (!isNonEmptyString(operation.reason)) throw invalidPlanInput("return requires the reason the attempt is sent back");
   const { planId } = resolved.read;
-  const requestHash = planOperationRequestHash(context.caller, "return", resolved.read, {
-    handoff_id: operation.handoffId,
-    reason: operation.reason,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["submitted", "accepted"], planId, "return");
@@ -1662,9 +1732,7 @@ export async function integrationStartExecutionPlan(
   assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "integration-start", planId);
   const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
-  const requestHash = planOperationRequestHash(context.caller, "integration-start", resolved.read, {
-    handoff_id: operation.handoffId,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["accepted", "integrating"], planId, "integration-start");
@@ -1751,9 +1819,7 @@ export async function integrationAcceptExecutionPlan(
       { plan_id: planId, base: attempt.base_sha, source: named.source_sha },
     );
   }
-  const requestHash = planOperationRequestHash(context.caller, "integration-accept", resolved.read, {
-    handoff_id: operation.handoffId,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["integrating"], planId, "integration-accept");
@@ -2149,9 +2215,7 @@ export async function completeExecutionPlan(
   await assertFindingsClosed(context, planId, prepared, "complete");
   assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
   completeWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, "complete", resolved.read, {
-    handoff_id: operation.handoffId,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     const sealed = requirePrepared(coordinationOf(witness), planId, "complete");
@@ -2306,9 +2370,7 @@ export async function reconcileExecutionPlan(
     await assertFindingsClosed(context, planId, prepared, "complete");
   }
   reconcileWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, "reconcile", resolved.read, {
-    handoff_id: operation.handoffId,
-  });
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     if (decision.outcome === "already-completed") {

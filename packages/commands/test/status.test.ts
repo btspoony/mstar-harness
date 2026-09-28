@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { initializeStore } from "@mstar-harness/engine";
+import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
@@ -44,6 +44,34 @@ describe("status command family", () => {
       const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir }, context(dir));
       expect(result).toMatchObject({ status: "refused", code: "workflow.snapshot.invalid-status", exitCode: 1 });
       expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused active workflow-close carries the engine's typed details and recovery sidecar", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-close-details-"));
+    try {
+      const store = await initializeStore({ harnessDir: dir });
+      store.close();
+      const authority = await initializeExecutionAuthority({ harnessDir: dir });
+      const sessionRef = encodeExecutionSessionRef({
+        storeId: authority.storeId,
+        epoch: authority.epoch + 1,
+        workflowId: "wf-close",
+        role: "coordinator",
+        sessionId: "main-session",
+        planId: null,
+      });
+      const result = await statusDefinition("status.workflow-close").execute(
+        { workflow: "wf-close", harness: dir, sessionRef, expect: "token", operation: "close-1", reason: "wave complete" },
+        { ...context(dir), sessionId: "main-session" },
+      );
+      // The authority fence of the DB frame refuses the superseded generation:
+      // the command surface reports that typed cause, not a code and prose.
+      expect(result).toMatchObject({ status: "refused", code: "store.stale-epoch", exitCode: 1 });
+      const details = result.status === "ok" ? undefined : result.details;
+      expect(details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

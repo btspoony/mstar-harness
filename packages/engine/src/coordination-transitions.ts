@@ -617,26 +617,6 @@ export function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
 }
 
 /**
- * The caller-supplied half of one handoff, as the request hash records it:
- * every path, revision and decision the caller stated, and none of the digests
- * this route derives from the files themselves — a retry of the same request
- * is the same request even when the bytes behind a path moved.
- */
-export function handoffEvidencePayload(input: HandoffEvidenceInput): Record<string, unknown> {
-  return {
-    source_sha: input.source_sha,
-    review_base: input.review_base,
-    review_head: input.review_head,
-    qc: {
-      decision: input.qc_decision,
-      reports: input.qc_reports.map((ref) => ref.path),
-      consolidated: input.qc_consolidated.path,
-    },
-    qa: { gate: input.qa_gate, decision: "pass", report: input.qa_report.path },
-  };
-}
-
-/**
  * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
  * integration-start, integration-accept and complete all re-check that the QC
  * and QA reports still are the bytes their verdicts were recorded against.

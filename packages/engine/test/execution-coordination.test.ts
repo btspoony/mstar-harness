@@ -1164,6 +1164,87 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(parsedJson(releasedFootprint.own_lease).status).toBe("released");
   });
 
+  test("a superseded plan effect is disclosed instead of replayed, and the token fence runs before a replay", async () => {
+    const fixture = await liveWorkflow("progress-superseded");
+    const { context, epoch, planTokens, storeId } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "superseded");
+    const boundToken = await planTokenOf(fixture, OWN_PLAN);
+
+    const progressCall = (operationId: string, expected: ExecutionToken, status: string) =>
+      progressExecutionPlan(domainContext(context, seat.caller), {
+        operationId,
+        session: seat.session,
+        expected,
+        planId: OWN_PLAN,
+        operation: {
+          kind: "progress",
+          progress: { status: status as "InProgress", summary: `${status} on the DB route`, evidence_paths: [] },
+        },
+      });
+
+    const first = await progressCall("progress-1", boundToken, "InProgress");
+    expect(first.replayed).toBe(false);
+    const accepted = planFootprint(context, OWN_PLAN);
+
+    // §4.2 (R6/A12) the commit advanced the row, so an exact retry always
+    // presents the token it superseded: the revision is transport freshness, and
+    // the recorded receipt is the current success with nothing written.
+    const replayed = await progressCall("progress-1", boundToken, "InProgress");
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.data).toEqual(first.data);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
+
+    // §4.2 (R6/R7/A26) the token's ADDRESS and generation are fenced BEFORE the
+    // recorded receipt is served: a matching receipt answers nothing to a token
+    // of another row, of another store or of a superseded epoch.
+    const foreignRow = await refusalOf(async () =>
+      progressCall("progress-1", executionToken("plan", storeId, epoch, [WORKFLOW_ID, PEER_PLAN], 1), "InProgress"),
+    );
+    expect(foreignRow).toMatchObject({ code: "execution.scope-mismatch" });
+    const foreignStore = await refusalOf(async () =>
+      progressCall(
+        "progress-1",
+        executionToken("plan", "11111111-1111-4111-8111-111111111111", epoch, [WORKFLOW_ID, OWN_PLAN], 1),
+        "InProgress",
+      ),
+    );
+    expect(foreignStore).toMatchObject({ code: "execution.scope-mismatch" });
+    const staleEpoch = await refusalOf(async () =>
+      progressCall("progress-1", executionToken("plan", storeId, epoch + 1, [WORKFLOW_ID, OWN_PLAN], 1), "InProgress"),
+    );
+    expect(staleEpoch).toMatchObject({ code: "store.stale-epoch" });
+    expect(staleEpoch.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
+
+    // §4.2 (A10) a later accepted operation on the SAME row that owns none of
+    // this effect (a residual capture writes the row back unchanged) leaves the
+    // recorded progress effect genuinely held: still current success, still no
+    // second commit.
+    await residualAddCall(
+      fixture,
+      seat,
+      "residual-unrelated",
+      [residualEntry({ occurrenceKey: "unrelated-1" })],
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    const stillHeld = await progressCall("progress-1", boundToken, "InProgress");
+    expect(stillHeld.replayed).toBe(true);
+    expect(stillHeld.data).toEqual(first.data);
+
+    // §4.2 (A13) a later accepted operation that REPLACES the recorded effect
+    // supersedes it: the retry is disclosed, never restored, and the row stays
+    // exactly as the superseding operation left it.
+    const second = await progressCall("progress-2", await planTokenOf(fixture, OWN_PLAN), "InReview");
+    expect(second.replayed).toBe(false);
+    const supersededFootprint = planFootprint(context, OWN_PLAN);
+    const superseded = await refusalOf(async () => progressCall("progress-1", boundToken, "InProgress"));
+    expect(superseded).toMatchObject({ code: "execution.effect-superseded" });
+    expect(superseded.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(supersededFootprint);
+    expect(parsedJson(supersededFootprint.plan_coordination).progress).toMatchObject({ status: "InReview" });
+  });
+
   test("a concurrent catalog edit never rebinds the frozen input, and only an eligible prepare selects one", async () => {
     const fixture = await liveWorkflow("frozen-input");
     const { context, coordinatorCaller, documents, planTokens } = fixture;
