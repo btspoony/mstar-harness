@@ -73,7 +73,7 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 ## `mstar-iteration` Phase 1 in Plan mode (shared gate)
 
 - **Single plan session**: use **one** plan file (host or SSOT draft); iterate the **same** file in place with feedback-driven edits. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate.
-- **Do not** run Review & Edit, commit, or create the integration branch until the user approves implementation (host approval gate: **Build** / **`ExitPlanMode`** / plan resolve). Plan mode ≠ executing todos — approval is the Phase 1 executable gate (Review chain, lock, branch).
+- **Do not** run Review & Edit or create the integration branch until the user approves implementation (host approval gate: **Build** / **`ExitPlanMode`** / plan resolve). Plan mode ≠ executing todos — approval is the Phase 1 executable gate (Review chain, lock, branch).
 - Prepare phase (`specify → clarify → plan`) still applies; the mirrored plan is the harness **`plan`** artifact, not a substitute for clarify.
 - Branch policy in the plan session: write **recommended** `iteration_base_branch` / `target_branch` (+ short rationale) into the plan — do **not** silently default to `main`/`master`.
 - Host plan approval is **not** Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC, and QA per the SSOT plan.
@@ -90,4 +90,4 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Host plan approval treated as Done authority | Check harness plan/status/QC/QA gates first |
 | Resume starts coding from host chat summary | Reload harness context and SSOT plan/status first |
-| Phase 1 Plan mode: Review / commit / branch before Build | Keep Pre-Build document-only; execute those todos after approval |
+| Phase 1 Plan mode: Review / branch before Build | Keep Pre-Build document-only; execute those todos after approval |

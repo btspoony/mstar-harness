@@ -29,7 +29,7 @@ Host plan approval (`ExitPlanMode`) is **not** Morning Star **Done** (gate → c
 
 ## `mstar-iteration` Phase 1
 
-When iteration Phase 1 runs in Plan mode, the shared gate (single plan session, feedback-driven in-place edits, no Review & Edit / commit / integration branch until approval) → core. After approval: reload `mstar-harness-core` + **`kimi.md`**; resume as `project-manager` orchestration.
+When iteration Phase 1 runs in Plan mode, the shared gate (single plan session, feedback-driven in-place edits, no Review & Edit / integration branch until approval) → core. After approval: reload `mstar-harness-core` + **`kimi.md`**; resume as `project-manager` orchestration.
 
 ## Enforcement
 
