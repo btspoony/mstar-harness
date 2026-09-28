@@ -145,7 +145,7 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 | Early CreatePlan | After read-only research, **CreatePlan once** with blank Phase 1 scaffold + Build-bound todos; **record the returned plan file path** | Wait until direction lock finishes; call CreatePlan again later |
 | Feedback loop | User gives **direction / opinions only** (no questionnaire). Agent explores, recommends, and **edits that same plan file in place** (+ SSOT drafts). Absorb feedback → update again | Routine one-question-at-a-time interview; gate plan updates on user answers; write a second `*.plan.md`; open interview helpers before feedback-close |
 | Feedback-close | When user signals feedback done (e.g. 反馈结束 / 总结 / 准备 Build): if blocking gaps remain → **minimal** deferred interview on gaps only, still editing the **same** plan file; else ready for Build | Start the interview helper as the main Plan-session loop |
-| Pre-Build | Maintain documents only | Execute Review chain, commit, or create `spec_integration_branch` |
+| Pre-Build | Maintain documents only | Execute Review chain, or create `spec_integration_branch` |
 | Build | Finalize SSOT from the **same** CreatePlan body → sequential Review & Edit → PM lock → integration branch | Replay feedback/interview; finalize from a different plan URI than View Plan |
 
 **Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
