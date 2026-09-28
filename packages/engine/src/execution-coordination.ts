@@ -101,6 +101,7 @@ import {
   readHeldExecutionLeases,
   readLiveSessionIdentities,
   readPlanOperationReplay,
+  readWorkflowSessionRows,
   parseExecutionToken,
   releaseExecutionLease,
   releaseIntegrationMergeLease,
@@ -125,6 +126,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ResolvedPlanRead,
+  type SessionRow,
   type TokenFreshness,
 } from "./execution-store.js";
 import {
@@ -2280,9 +2282,9 @@ function applyCompletionFrame(input: {
 
 /**
  * §R11/A21 the execution-lease half of one failed/stopped close's cleanup:
- * every HELD execution lease of ONE workflow whose holder session is not active
- * at this epoch is released as a retained tombstone that records the stopped
- * owner. Two rules are the whole rule:
+ * every HELD execution lease of ONE workflow whose holder ownership identity is
+ * not active at this epoch is released as a retained tombstone that records the
+ * stopped owner. Two rules are the whole rule:
  *
  * - OWNED means this workflow's own `execution_leases` rows; a claim of another
  *   workflow is not reachable here at all;
@@ -2302,23 +2304,21 @@ export function releaseStoppedExecutionLeases(
   tx: ExecutionTransaction,
   input: { workflowId: string; releasedBy: string; at: string },
 ): void {
-  const live = readLiveSessionIdentities(tx, input.workflowId);
+  const holders = holderRowsByRole(tx, input.workflowId);
   for (const held of readHeldExecutionLeases(tx, input.workflowId)) {
     const holder = held.lease.holder_session_id;
+    const role = held.lease.holder_role;
     // A held lease whose ownership identity is missing is the same corrupt pair
     // the whole-view reader refuses: it is refused here too, never released as a
     // claim that names nobody.
-    if (
-      !isNonEmptyString(holder) ||
-      (held.lease.holder_role !== "coordinator" && held.lease.holder_role !== "plan-pm")
-    ) {
+    if (!isNonEmptyString(holder) || (role !== "coordinator" && role !== "plan-pm")) {
       throw new StoreError(
         "store.corrupt",
         `execution_leases(${input.workflowId},${held.planId}).lease_json is held without the holder session identity and role ` +
           `it must agree with; the execution authority cannot be verified`,
       );
     }
-    if (live.has(holder)) continue;
+    if (heldLeaseHolderIsLive(tx, holders, role, holder, held.planId)) continue;
     releaseExecutionLease(tx, {
       workflowId: input.workflowId,
       planId: held.planId,
@@ -2328,6 +2328,49 @@ export function releaseStoppedExecutionLeases(
       now: input.at,
     });
   }
+}
+
+/**
+ * §3.1 the session rows of this workflow by role, ACTIVE or NOT: a holder's stop
+ * is one row's own state, so the reader that decides it must see the suspended
+ * and revoked rows too — exactly what `readLiveSessionIdentities` cannot serve.
+ */
+function holderRowsByRole(
+  tx: ExecutionTransaction,
+  workflowId: string,
+): Readonly<Record<"coordinator" | "plan-pm", readonly SessionRow[]>> {
+  return {
+    coordinator: readWorkflowSessionRows(tx, workflowId, "coordinator"),
+    "plan-pm": readWorkflowSessionRows(tx, workflowId, "plan-pm"),
+  };
+}
+
+/**
+ * §3.1/§4.2 whether a held execution lease's OWNERSHIP IDENTITY — the holder
+ * role and session id it names, plus the plan a `plan-pm` holder holds — is the
+ * ACTIVE session row of this epoch. This is the whole-view reader's own lookup
+ * (`assertLeaseOwnership` resolves a holder by role + session + plan
+ * association), and a session id alone is not that identity: `execution_sessions`
+ * is keyed by `(workflow_id, role, session_id)`, so one session id can carry an
+ * ACTIVE `coordinator` row and a stopped `plan-pm` row at the same time. An
+ * active row of another role, another plan or another epoch is a DIFFERENT owner:
+ * it does not keep a stopped holder's lease held, and leaving that lease held
+ * would make the very state this cleanup exists to settle unreadable.
+ */
+function heldLeaseHolderIsLive(
+  tx: ExecutionTransaction,
+  rowsByRole: Readonly<Record<"coordinator" | "plan-pm", readonly SessionRow[]>>,
+  role: "coordinator" | "plan-pm",
+  sessionId: string,
+  planId: string,
+): boolean {
+  return rowsByRole[role].some(
+    (row) =>
+      row.ref.sessionId === sessionId &&
+      row.state === "active" &&
+      row.ref.epoch === tx.epoch &&
+      (row.ref.planId === null || row.ref.planId === planId),
+  );
 }
 
 /**
@@ -2341,7 +2384,11 @@ export function releaseStoppedExecutionLeases(
  *
  * It is read from the caller's own witness rather than the narrow held-lease
  * view: the whole-view reader carries a merge claim whatever its holder's state,
- * so this half settles after that witness exists, in the same transaction.
+ * so this half settles after that witness exists, in the same transaction. The
+ * claim names no holder ROLE (`IntegrationMergeLease` carries a holder and the
+ * plan it merges), so the identity this half decides against is the workflow's
+ * active session carrying that session id — the strongest identity the record
+ * itself has.
  */
 export function releaseStoppedMergeClaim(
   tx: ExecutionTransaction,

@@ -1801,12 +1801,15 @@ describe("execution-close-composition: §R10/A20 the terminal close's residue re
  * lease. `epoch` is the fixture's own, so the row is one ownership fact with the
  * lease that names it.
  */
-function plantPlanPmSession(context: StoreContext, input: { epoch: number; state: "active" | "suspended" | "revoked" }): void {
+function plantPlanPmSession(
+  context: StoreContext,
+  input: { epoch: number; state: "active" | "suspended" | "revoked"; sessionId?: string },
+): void {
   withRaw(context, (db) => {
     db.prepare(
       "insert or replace into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
         "values (?, 'plan-pm', ?, ?, ?, 1, ?, ?)",
-    ).run(WORKFLOW_ID, PLAN_PM_ID, PLAN_ID, input.epoch, input.state, TS);
+    ).run(WORKFLOW_ID, input.sessionId ?? PLAN_PM_ID, PLAN_ID, input.epoch, input.state, TS);
   });
 }
 
@@ -2017,6 +2020,66 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
     expect(refused.code).toBe("execution.scope-mismatch");
     expect(storedLease(unauthorized.context)).toMatchObject({ status: "held", holder_session_id: PLAN_PM_ID });
     expect(await workflowFootprint(unauthorized.context)).toEqual(unauthorizedBefore);
+  });
+
+  test("colliding identity: a stopped plan-pm holder sharing the live coordinator's session id settles, and a live one still blocks (R11/A21)", async () => {
+    const fixture = await workflowFixture("colliding-identity");
+    // §2.2 `execution_sessions` is keyed by (workflow, role, session_id), so the
+    // workflow's own ACTIVE coordinator and a STOPPED plan-pm holder may carry
+    // the same session id. A crash state is planted (no W-phase verb produces a
+    // lease held by a session that is not its own).
+    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended", sessionId: COORDINATOR_ID });
+    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "plan-pm" });
+    // The pair is unreadable through the whole-view reader (a held lease whose
+    // plan-pm holder row stopped) — the state this close's own cleanup exists to
+    // settle — so the CAS is the stored row's token.
+    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
+    const expected = workflowTokenOfRow(fixture.context);
+
+    const receipt = await workflowMutation(
+      fixture,
+      "op-colliding-identity",
+      { kind: "lifecycle", status: "failed", reason: "the holder of record stopped" },
+      { expected },
+    );
+
+    // Liveness is the lease's OWN ownership identity — role, session id, and the
+    // plan a plan-pm holds — not its session id: the ACTIVE coordinator row that
+    // happens to carry that id is a different owner, so the stopped plan-pm's
+    // claim is settled as stopped-owned instead of being left held, which would
+    // make the close's whole-view read refuse and wedge the terminal outcome.
+    const closed = closedRow(fixture.context);
+    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(closed.registered).toBe(0);
+    expect(closed.status).toBe("failed");
+    expect(typeof closed.ended_at).toBe("string");
+    expect(storedLease(fixture.context)).toMatchObject({
+      holder_session_id: COORDINATOR_ID,
+      holder_role: "plan-pm",
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: `stopped-owner:${COORDINATOR_ID}`,
+    });
+
+    // The identity rule is not "release whatever shares a session id": the SAME
+    // collision whose plan-pm holder row IS active at this epoch is a genuine
+    // owner, so its claim stays held and the close refuses on it.
+    const live = await workflowFixture("colliding-identity-live");
+    plantPlanPmSession(live.context, { epoch: live.epoch, state: "active", sessionId: COORDINATOR_ID });
+    plantLease(live.context, { ownerEpoch: live.epoch, holderId: COORDINATOR_ID, holderRole: "plan-pm" });
+    const before = await workflowFootprint(live.context);
+    const held = await refusalOf(() =>
+      workflowMutation(live, "op-colliding-identity-live", {
+        kind: "lifecycle",
+        status: "failed",
+        reason: "abandon the wave",
+      }),
+    );
+    expect(held.code).toBe("coordination.invalid-transition");
+    expect(held.message).toContain(COORDINATOR_ID);
+    expect(held.message).toContain("stop or transfer");
+    expect(storedLease(live.context)).toMatchObject({ status: "held", holder_role: "plan-pm" });
+    expect(await workflowFootprint(live.context)).toEqual(before);
   });
 
   test("repeated terminal: the identical retry replays the recorded outcome and settles nothing twice (A28)", async () => {
