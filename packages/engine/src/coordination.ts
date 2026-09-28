@@ -6740,10 +6740,12 @@ export async function showPrepareWorkflow(
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
   const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot, { derivePhase: true });
-  const derived = [
-    admission.ok && admission.derivesPhase ? "phase" : null,
-    compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
-  ].filter((entry): entry is string => entry !== null);
+  const derived = admission.ok
+    ? [
+        admission.derivesPhase ? "phase" : null,
+        compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
+      ].filter((entry): entry is string => entry !== null)
+    : [];
   return {
     ok: true,
     operation: "show-prepare",
