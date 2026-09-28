@@ -877,3 +877,62 @@ export function evidenceRefOf(filePath: string): EvidenceRef {
 export function isArtifactVersion(value: unknown): value is string {
   return typeof value === "string" && (value === "absent" || HASH_RE.test(value));
 }
+
+/* ------------------------------------------------------------------------ *
+ * §R11/A21 file-authority claim ownership — the holder identity one held
+ * claim names, resolved the way THIS authority records identities
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R11/A21 whether a HELD claim's holder is a LIVE session of this workflow, as
+ * the FILE authority resolves ownership — the mirror of the DB route's
+ * `heldLeaseHolderIsLive` (`execution-coordination.ts`), which asks the
+ * holder's own `execution_sessions` row at the current epoch instead.
+ *
+ * The file authority has no session table, no epoch and no heartbeat: its
+ * durable session record is the workflow's own role-typed binding, and a
+ * claim's holder is resolved through exactly those identities — the
+ * workflow-level `coordination.coordinator` binding (role `coordinator`) and the
+ * `coordination.session` binding of the plan row(s) the claim's scope carries
+ * (role `plan-pm`, THAT plan). The activation import resolves a held lease the
+ * same way (`insertExecutionLease`, which calls the coordinator a transfer moved
+ * the claim to, otherwise the plan's own plan session) and calls a holder that
+ * resolves to NEITHER an orphan claim with "no owner to import".
+ *
+ * So the identity is a PAIR, exactly as the DB route keys it: the role the
+ * binding is stored as (its LOCATION — the workflow block or that plan's row)
+ * plus the session id it names — never a bare session-id set (the DB route's
+ * own L2 finding: one session id can carry a live coordinator identity and a
+ * stopped plan identity at the same time), and never a session of another
+ * workflow or another plan.
+ *
+ * A `true` holder is an owner this workflow still records, so its claim is left
+ * exactly where it is — for that holder's own stop or transfer. Only a holder
+ * that resolves to none of those identities (a claim with no owner in this
+ * workflow) is settled by a terminal failed/stopped close. No `claimed_at` age,
+ * heartbeat, stale-session guess or caller assertion is consulted (§4.2: an old
+ * claim and a caller's assertion authorize nothing).
+ */
+export function fileClaimHolderIsLive(
+  input: Readonly<{
+    /** The session id the held claim names (`execution_lease.holder` / `integration_merge_lease.holder`). */
+    holder: string;
+    /** The workflow's `coordination` block — the role `coordinator` identity. */
+    coordination: unknown;
+    /**
+     * The plan `coordination` blocks the claim's scope carries: the addressed
+     * plan row's own block for a row claim, every plan row's for a workflow-wide
+     * claim (the DB route's integration half decides against ANY active session
+     * of the workflow, because that record names no holder role).
+     */
+    planCoordinations: readonly unknown[];
+  }>,
+): boolean {
+  if (!isNonEmptyString(input.holder)) return false;
+  const coordinator = isPlainObject(input.coordination) ? input.coordination.coordinator : undefined;
+  if (isPlainObject(coordinator) && coordinator.session_id === input.holder) return true;
+  return input.planCoordinations.some((block) => {
+    const planSession = isPlainObject(block) ? block.session : undefined;
+    return isPlainObject(planSession) && planSession.session_id === input.holder;
+  });
+}

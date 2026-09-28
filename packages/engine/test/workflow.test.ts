@@ -71,7 +71,7 @@ import {
 } from "../src/catalog-registration.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
-import { validateStatus } from "../src/status.js";
+import { unregisterWorkflow, validateStatus } from "../src/status.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -3910,5 +3910,396 @@ describe("closeFileWorkflow — the file-authority close (A17-A20/A28)", () => {
     expect(stored.status).toBe("completed");
     expect(stored.ended_at).toBe(endedAt);
     expect(storedRow(stored).status).toBe("Done");
+  }, 30000);
+});
+
+describe("closeWorkflow — the file-authority failed/stopped producer (R11/A21/A28)", () => {
+  const id = "00000111-file-terminal-fixture";
+  const planId = "20260928-file-terminal-fixture";
+  const coordinatorId = "coordinator-00000111";
+  /** The coordinator identity a RECORDED recovery replaced (attested stopped). */
+  const priorCoordinator = "coordinator-00000111-prior";
+  const planSessionId = "plan-pm-00000111";
+  const endedAt = "2026-09-16T03:00:00Z";
+  const workingBranch = "feature/file-terminal-fixture";
+  const roots: string[] = [];
+
+  afterEach(() => {
+    setArtifactStore(undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function harnessRoot(prefix: string): string {
+    const root = realpathSync(tmpRoot(prefix));
+    roots.push(root);
+    return root;
+  }
+
+  function workflowDirOf(root: string): string {
+    return join(root, "workflows", id);
+  }
+
+  /** The registered ACTIVE workflow ids of a harness root. */
+  function registeredIds(root: string): string[] {
+    const doc = JSON.parse(readFileSync(join(root, "status.json"), "utf8")) as { workflows?: Array<{ id?: string }> };
+    return (doc.workflows ?? []).map((entry) => String(entry.id));
+  }
+
+  function storedSnapshot(snapshotPath: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  }
+
+  function storedRow(snapshot: Record<string, unknown>): Record<string, unknown> {
+    return (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+  }
+
+  /** Overwrite one stored snapshot with a patch — the residue a crash or a foreign writer plants. */
+  function withSnapshot(snapshotPath: string, patch: Record<string, unknown>): void {
+    writeFileSync(snapshotPath, `${JSON.stringify({ ...storedSnapshot(snapshotPath), ...patch }, null, 2)}\n`);
+  }
+
+  async function refusalOf(run: () => Promise<unknown>): Promise<CoordinationError> {
+    try {
+      await run();
+    } catch (error) {
+      if (error instanceof CoordinationError) return error;
+      throw error;
+    }
+    throw new Error("expected the call to be refused");
+  }
+
+  /**
+   * The role-typed session envelope the file authority writes for one identity
+   * (the binding's `session_file`): `<role>-<sessionId>.json` inside the
+   * workflow's own `sessions/` dir.
+   */
+  function envelope(root: string, role: "coordinator" | "plan-pm", sessionId: string, boundPlan?: string): string {
+    const sessions = join(workflowDirOf(root), "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const path = join(sessions, `${role}-${sessionId}.json`);
+    const body: Record<string, unknown> = { schema_version: 1, role, session_id: sessionId, workflow_id: id, harness_root: root };
+    if (boundPlan !== undefined) body.plan_id = boundPlan;
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+    return path;
+  }
+
+  /**
+   * One ACTIVE, coordinated file-authority lifecycle: the bound coordinator
+   * envelope (plus the plan session's), the root entry, and a snapshot whose
+   * row carries a plan session binding and — when the caller asks — the held
+   * claims a terminal close has to judge. A claim holder that resolves to
+   * neither the coordinator binding nor the plan's own binding is the shape a
+   * RECORDED identity recovery leaves behind (`recovered`): its attestation
+   * names the prior holder among the sessions that stopped.
+   */
+  function terminalHarness(
+    root: string,
+    options: {
+      /** The session holding the row's execution lease; omitted = no lease (a released claim). */
+      rowHolder?: string;
+      /** The session holding the integration merge claim; omitted = unclaimed. */
+      mergeHolder?: string;
+      /** Record the coordinator identity recovery the prior holder's stop is attested by. */
+      recovered?: boolean;
+    },
+  ): { snapshotPath: string; coordinatorSession: string } {
+    const workflowDir = workflowDirOf(root);
+    mkdirSync(workflowDir, { recursive: true });
+    const coordinatorSession = envelope(root, "coordinator", coordinatorId);
+    const planSession = envelope(root, "plan-pm", planSessionId, planId);
+    writeFileSync(
+      join(root, "status.json"),
+      `${JSON.stringify(
+        {
+          version: 2,
+          updated_at: "2026-09-16",
+          workflows: [{ id, status: "running", type: "plan", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${id}` }],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const coordination: Record<string, unknown> = {
+      coordinator: { session_id: coordinatorId, session_file: coordinatorSession, bound_at: "2026-09-16T00:10:00Z" },
+    };
+    if (options.recovered === true) {
+      coordination.identity_recoveries = [
+        {
+          operation_id: "recovery-1",
+          request_hash: "a".repeat(64),
+          workflow_id: id,
+          prior_session_id: priorCoordinator,
+          session_id: coordinatorId,
+          authorization_ref: "operator:fixture",
+          reason: "the prior coordinator host stopped",
+          stopped_session_ids: [priorCoordinator],
+          snapshot_version_before: `sha256:${"b".repeat(64)}`,
+          compass_version: `sha256:${"c".repeat(64)}`,
+          recovered_at: "2026-09-16T01:00:00Z",
+        },
+      ];
+    }
+    const row: Record<string, unknown> = {
+      id: planId,
+      plan_id: planId,
+      file: `plans/${planId}.md`,
+      title: `file terminal fixture ${planId}`,
+      status: "InProgress",
+      coordination: {
+        revision: 2,
+        session: { session_id: planSessionId, session_file: planSession, bound_at: "2026-09-16T00:20:00Z" },
+      },
+    };
+    if (options.rowHolder !== undefined) {
+      row.execution_lease = {
+        holder: options.rowHolder,
+        claimed_at: "2026-09-16T00:30:00Z",
+        worktree_path: join(root, "wt-feature"),
+        working_branch: workingBranch,
+      };
+    }
+    const snapshot: Record<string, unknown> = {
+      schema_version: 1,
+      id,
+      type: "plan",
+      delivery_kind: "verification/report-only",
+      status: "running",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      completion_policy: "acceptance report",
+      coordination,
+      plans: [row],
+    };
+    if (options.mergeHolder !== undefined) {
+      snapshot.integration_merge_lease = {
+        holder: options.mergeHolder,
+        claimed_at: "2026-09-16T00:40:00Z",
+        plan_id: planId,
+        source_branch: workingBranch,
+        target_branch: "integration/main",
+      };
+    }
+    const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+    setArtifactStore(createFsStore(root));
+    return { snapshotPath, coordinatorSession };
+  }
+
+  test("failed lifecycle: an explicit failed close records the outcome and settles its own stopped claims (R11/A21)", async () => {
+    const root = harnessRoot("file-terminal-failed-");
+    const { snapshotPath, coordinatorSession } = terminalHarness(root, {
+      rowHolder: priorCoordinator,
+      mergeHolder: priorCoordinator,
+      recovered: true,
+    });
+
+    const closed = await closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: coordinatorSession });
+
+    // §R11 no successful-delivery precondition: the row is still InProgress, no
+    // delivery evidence was ever recorded, and the lifecycle still ends.
+    expect(closed.status).toBe("failed");
+    expect(closed.ended_at).toBe(endedAt);
+    expect(closed.updated_at).toBe(endedAt);
+    const stored = storedSnapshot(snapshotPath);
+    const row = storedRow(stored);
+    expect(row.status).toBe("InProgress");
+    expect(row.execution_lease).toBeUndefined();
+    expect(row.coordination).toMatchObject({ session: { session_id: planSessionId } });
+    expect(stored.integration_merge_lease).toBeUndefined();
+    expect(stored.delivery).toBeUndefined();
+    // The identity recovery that attests the prior holder stopped survives the
+    // close: the file route records WHO owned the settled claims.
+    expect((stored.coordination as Record<string, unknown>).identity_recoveries).toHaveLength(1);
+    // The terminal write is this call's half; the root entry the next transport
+    // step removes is still listed (removal-at-terminal).
+    expect(registeredIds(root)).toEqual([id]);
+    await unregisterWorkflow(join(root, "status.json"), id);
+    expect(registeredIds(root)).toEqual([]);
+  }, 30000);
+
+  test("stopped lifecycle: an explicit stopped close settles only what a stopped holder left held (R11/A21)", async () => {
+    const root = harnessRoot("file-terminal-stopped-");
+    const { snapshotPath, coordinatorSession } = terminalHarness(root, {
+      // The row's own claim was already released (the file route's release IS the
+      // key's absence); only the stopped holder's merge claim is left to settle.
+      mergeHolder: priorCoordinator,
+      recovered: true,
+    });
+    const before = storedRow(storedSnapshot(snapshotPath));
+    expect(before.execution_lease).toBeUndefined();
+
+    const closed = await closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "stopped", sessionPath: coordinatorSession });
+
+    expect(closed.status).toBe("stopped");
+    expect(closed.ended_at).toBe(endedAt);
+    // The already-released claim's row comes out of the close byte-identical:
+    // nothing is invented onto a row that holds nothing.
+    expect(storedRow(storedSnapshot(snapshotPath))).toEqual(before);
+    expect(storedSnapshot(snapshotPath).integration_merge_lease).toBeUndefined();
+  }, 30000);
+
+  test("failed lifecycle: an explicit failed close borrows no completed-close precondition (R11)", async () => {
+    const root = harnessRoot("file-terminal-paused-");
+    // `paused` is a valid nonterminal status the completed close leaves alone,
+    // the report-only fulfilment is missing, and the row is not Done: none of
+    // that is a failed close's business — the terminal intent is the decision.
+    const { snapshotPath, coordinatorSession } = terminalHarness(root, { rowHolder: priorCoordinator, recovered: true });
+    withSnapshot(snapshotPath, { status: "paused" });
+
+    const closed = await closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: coordinatorSession });
+
+    expect(closed.status).toBe("failed");
+    expect(closed.ended_at).toBe(endedAt);
+    const stored = storedSnapshot(snapshotPath);
+    expect(storedRow(stored).status).toBe("InProgress");
+    expect(stored.delivery).toBeUndefined();
+    expect(storedRow(stored).execution_lease).toBeUndefined();
+  }, 30000);
+
+  test("foreign claim: a live holder's claim is never released and refuses the close (R11/A21)", async () => {
+    // §R11 a genuinely LIVE holder is never inferred stopped: the row's own
+    // bound plan session (role plan-pm, this plan) holds the claim.
+    const root = harnessRoot("file-terminal-foreign-row-");
+    const rowFixture = terminalHarness(root, { rowHolder: planSessionId });
+    const rowBefore = readFileSync(rowFixture.snapshotPath, "utf8");
+    const held = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: rowFixture.coordinatorSession }),
+    );
+    expect(held.code).toBe("coordination.invalid-transition");
+    expect(held.message).toContain(planSessionId);
+    expect(held.message).toContain("stop or transfer");
+    expect(held.details).toMatchObject({ workflow_id: id, status: "failed" });
+    // No foreign release and no byte spent: the claim stays held, the lifecycle
+    // stays running and registered.
+    expect(readFileSync(rowFixture.snapshotPath, "utf8")).toBe(rowBefore);
+    expect(storedRow(storedSnapshot(rowFixture.snapshotPath)).execution_lease).toMatchObject({ holder: planSessionId });
+    expect(registeredIds(root)).toEqual([id]);
+
+    // The same rule covers the workflow's OWN live coordinator identity: the
+    // merge claim it holds is not this close's to settle.
+    const mergeRoot = harnessRoot("file-terminal-foreign-merge-");
+    const mergeFixture = terminalHarness(mergeRoot, { mergeHolder: coordinatorId });
+    const mergeBefore = readFileSync(mergeFixture.snapshotPath, "utf8");
+    const mergeHeld = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(mergeRoot), { endedAt, outcome: "stopped", sessionPath: mergeFixture.coordinatorSession }),
+    );
+    expect(mergeHeld.code).toBe("coordination.invalid-transition");
+    expect(mergeHeld.message).toContain(coordinatorId);
+    expect(mergeHeld.message).toContain("stop or transfer");
+    expect(readFileSync(mergeFixture.snapshotPath, "utf8")).toBe(mergeBefore);
+
+    // A workflow-wide claim is decided against the PLAN identity too: the plan
+    // session this workflow records keeps its own merge claim held.
+    const planClaimRoot = harnessRoot("file-terminal-foreign-plan-claim-");
+    const planClaimFixture = terminalHarness(planClaimRoot, { mergeHolder: planSessionId });
+    const planClaimBefore = readFileSync(planClaimFixture.snapshotPath, "utf8");
+    const planClaimHeld = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(planClaimRoot), {
+        endedAt,
+        outcome: "failed",
+        sessionPath: planClaimFixture.coordinatorSession,
+      }),
+    );
+    expect(planClaimHeld.code).toBe("coordination.invalid-transition");
+    expect(planClaimHeld.message).toContain(planSessionId);
+    expect(readFileSync(planClaimFixture.snapshotPath, "utf8")).toBe(planClaimBefore);
+
+    // Only THIS lifecycle's own coordinator settles anything: a foreign address
+    // is refused before the cleanup runs, so a settleable claim is untouched.
+    const foreignRoot = harnessRoot("file-terminal-foreign-address-");
+    const foreignFixture = terminalHarness(foreignRoot, { rowHolder: priorCoordinator, recovered: true });
+    const otherSession = envelope(foreignRoot, "coordinator", "host-other");
+    const foreignBefore = readFileSync(foreignFixture.snapshotPath, "utf8");
+    const foreign = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(foreignRoot), { endedAt, outcome: "failed", sessionPath: otherSession }),
+    );
+    expect(foreign.code).toBe("coordination.session-mismatch");
+    expect(readFileSync(foreignFixture.snapshotPath, "utf8")).toBe(foreignBefore);
+    expect(storedRow(storedSnapshot(foreignFixture.snapshotPath)).execution_lease).toMatchObject({ holder: priorCoordinator });
+  }, 30000);
+
+  test("repeated terminal: the duplicate stop returns the recorded outcome and settles nothing twice (A28)", async () => {
+    const root = harnessRoot("file-terminal-duplicate-");
+    const { snapshotPath, coordinatorSession } = terminalHarness(root, {
+      rowHolder: priorCoordinator,
+      mergeHolder: priorCoordinator,
+      recovered: true,
+    });
+    const first = await closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: coordinatorSession });
+    expect(first.status).toBe("failed");
+    const after = readFileSync(snapshotPath, "utf8");
+
+    // §R6/A28 the duplicate stop SUCCEEDS as the recorded fact: the retry asks
+    // for a different timestamp and the committed one is what stands — no
+    // settled claim is released twice and no byte is rewritten.
+    const retry = await closeWorkflow(id, workflowDirOf(root), {
+      endedAt: "2027-01-01T00:00:00Z",
+      outcome: "failed",
+      sessionPath: coordinatorSession,
+    });
+    expect(retry.status).toBe("failed");
+    expect(retry.ended_at).toBe(endedAt);
+    expect(retry.updated_at).toBe(endedAt);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(after);
+
+    // §R10/§5 a recorded outcome is never rewritten: asking THIS closed lifecycle
+    // to become an outcome it did not record refuses and changes no byte.
+    withSnapshot(snapshotPath, { status: "completed", ended_at: "2026-09-01T00:00:00Z" });
+    const completedBefore = readFileSync(snapshotPath, "utf8");
+    const amended = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: coordinatorSession }),
+    );
+    expect(amended.code).toBe("coordination.invalid-transition");
+    expect(amended.message).toContain("never amended");
+    expect(amended.details).toMatchObject({ status: "completed", requested: "failed" });
+    expect(readFileSync(snapshotPath, "utf8")).toBe(completedBefore);
+  }, 30000);
+
+  test("repeated terminal: an interrupted unregister resumes and preserves the recorded outcome (A28)", async () => {
+    const root = harnessRoot("file-terminal-resume-");
+    const { snapshotPath, coordinatorSession } = terminalHarness(root, {
+      rowHolder: priorCoordinator,
+      mergeHolder: priorCoordinator,
+      recovered: true,
+    });
+
+    // The crash boundary this row splits at: the terminal write (and, in the same
+    // locked snapshot write, its claim settle) committed; the root cleanup did not.
+    const written = await closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: coordinatorSession });
+    expect(written.status).toBe("failed");
+    expect(registeredIds(root)).toEqual([id]);
+    const rowBytes = JSON.stringify(storedRow(storedSnapshot(snapshotPath)));
+
+    // The next NORMAL close — the file authority's composed close — continues
+    // that cleanup: it reads the recorded outcome as the terminal fact and only
+    // finishes the root unregister. Nothing is re-settled, no row byte moves,
+    // and the recorded `ended_at` is not reset by the new timestamp.
+    const resumed = await closeFileWorkflow({
+      harnessRoot: root,
+      workflowId: id,
+      endedAt: "2027-02-02T00:00:00Z",
+      sessionPath: coordinatorSession,
+    });
+    expect(resumed.outcome).toBe("already-terminal");
+    expect(resumed.composed).toEqual([]);
+    expect(resumed.unregistered).toBe(true);
+    expect(resumed.snapshot.status).toBe("failed");
+    expect(resumed.snapshot.ended_at).toBe(endedAt);
+    const stored = storedSnapshot(snapshotPath);
+    expect(stored.status).toBe("failed");
+    expect(stored.ended_at).toBe(endedAt);
+    expect(JSON.stringify(storedRow(stored))).toBe(rowBytes);
+    expect(registeredIds(root)).toEqual([]);
+
+    // §R10 the ordinary close reads a recorded outcome AS ITSELF: a `completed`
+    // request over this failed lifecycle returns the recorded outcome and never
+    // relabels it.
+    const readAsIs = await closeWorkflow(id, workflowDirOf(root), {
+      endedAt: "2027-03-03T00:00:00Z",
+      sessionPath: coordinatorSession,
+    });
+    expect(readAsIs.status).toBe("failed");
+    expect(readAsIs.ended_at).toBe(endedAt);
+    expect(JSON.stringify(storedRow(storedSnapshot(snapshotPath)))).toBe(rowBytes);
   }, 30000);
 });
