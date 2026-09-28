@@ -41,6 +41,7 @@ import {
   assertSealedInputsUnchanged,
   assertStandaloneSourceGitProof,
   assertViolationFree,
+  assignmentIntentOf,
   catalogPinFactsOn,
   captureGitProofWitness,
   gitObjectExists,
@@ -66,6 +67,7 @@ import {
   assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
+  entailedHandoffStatus,
   gitProof,
   integrationAnchors,
   integrationDiverged,
@@ -932,6 +934,13 @@ export async function prepareExecutionPlan(
       plan_sha256: seal.planSha256,
       qa_gate: seal.assignment.qaGate,
       findings_cleanup: seal.assignment.findingsCleanup,
+      // §4.2 (A29) the same SEMANTIC projection the file route's `prepare`
+      // records, from the same mapping: every transition of this row then
+      // re-authenticates the reviewed Assignment by MEANING, so a reformatted
+      // document leaves the row fresh while a scope/approval change still
+      // invalidates it (`assertPreparedFresh`). The whole-document hash above
+      // stays the seal's byte witness; it is no longer the formatting gate.
+      assignment_intent: assignmentIntentOf(seal.assignment),
       prepared_by: witness.session.sessionId,
       prepared_at: at,
     };
@@ -1565,6 +1574,11 @@ export async function handoffExecutionPlan(
   const before = await readExecutionPlan(context, request.session, planId);
   const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "handoff");
   assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, prepared, planId, "handoff");
+  // §R5 the entailed predecessor recording is decided BEFORE SQLite ownership
+  // and re-decided inside it: the row must be able to record InReview (already
+  // recorded, or InProgress under this session's own claim), and nothing is
+  // recorded here — the preflight only refuses an unclaimed row early.
+  entailedHandoffStatus(before.data.plan as unknown as PlanRow, planId);
   assertHandoffGitProof(planScopeOf(before.data, planId).worktreePath, evidence, "handoff", planId);
   await assertFindingsClosed(context, planId, prepared, "hand off");
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
@@ -1573,7 +1587,7 @@ export async function handoffExecutionPlan(
     const coordination = coordinationOf(witness);
     const sealed = requirePrepared(coordination, planId, "handoff");
     assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, sealed, planId, "handoff");
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "handoff");
+    const entailed = entailedHandoffStatus(witness.view.plan as unknown as PlanRow, planId);
     // §4.1 the reviewed bytes are re-read immediately before the commit.
     assertHandoffEvidenceUnchanged(evidence, "handoff");
     const previous = coordination?.handoff;
@@ -1597,6 +1611,13 @@ export async function handoffExecutionPlan(
     };
     writeCoordinationBlock(tx, witness, {
       block: { ...storedCoordinationOf(witness.view), handoff: record },
+      // §R5 the entailed recording commits with the seal, in this one statement:
+      // the row's InReview report and the handoff are one transition, one
+      // revision, and a row that already recorded InReview writes no status at
+      // all (A01).
+      ...(entailed === null
+        ? {}
+        : { state: { ...(witness.view.plan as unknown as Record<string, unknown>), status: entailed } }),
       what: `plan ${planId} coordination`,
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);

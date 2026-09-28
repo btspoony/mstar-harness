@@ -104,6 +104,7 @@ import {
   assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
+  entailedHandoffStatus,
   gitProof,
   integrationAnchors,
   integrationDiverged,
@@ -111,10 +112,12 @@ import {
   mergeLeaseOfAttempt,
   readHandoffEvidence,
   requireExecutionLease,
+  requireHandoffState,
   requireIntegration,
   requirePlanHandoff,
   requirePlanSessionBinding,
   requireProgressStatus,
+  requireRowStatus,
   rowCoordinationOf,
   rowStatusOf,
   standaloneDeliveryAnchors,
@@ -1609,6 +1612,16 @@ function rowFrameRefusal(
   const refusalCode = errorCode(error) ?? "coordination.invalid-input";
   const declared = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
   const declaredPath = isPlainObject(declared) ? declared.path : undefined;
+  // §6.2 an operation that declared its own §R5 report (a recorded decision
+  // that is genuinely absent — `missingDecision`) keeps it: the report names
+  // the one fact the caller must obtain, and this frame adds the row's own
+  // commit boundary and drift warning to it instead of replacing it with the
+  // generic problem. Both routes then report the SAME object for the same
+  // state; every other refusal keeps the generic report below.
+  const declaredReport =
+    isPlainObject(declared) && isPlainObject((declared as Record<string, unknown>).recovery)
+      ? ((declared as Record<string, unknown>).recovery as RecoveryDetails)
+      : undefined;
   const prerequisite = isPrerequisiteRefusal(refusalCode);
   const message = errorMessage(error);
   const appliedOutside = input.appliedOutside ?? [];
@@ -1652,20 +1665,26 @@ function rowFrameRefusal(
     ],
   };
   return withRowRecoveryDetails(error, {
-    component: problem.component,
-    path: problem.path,
+    ...(declaredReport === undefined
+      ? {
+          component: problem.component,
+          path: problem.path,
+          sources_tried: problem.sourcesTried,
+          current_facts: problem.currentFacts,
+          available_work: problem.availableWork,
+        }
+      : {}),
     workflow_id: input.scope.workflowId,
     plan_id: input.scope.planId,
     current_revision: input.context.revision,
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    available_work: problem.availableWork,
     recovery: partlyAppliedRecovery(
-      unresolvedRecovery({
-        target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
-        unresolved: [problem],
-        warnings: input.warnings,
-      }),
+      declaredReport === undefined
+        ? unresolvedRecovery({
+            target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+            unresolved: [problem],
+            warnings: input.warnings,
+          })
+        : { ...declaredReport, warnings: [...declaredReport.warnings, ...input.warnings] },
       appliedOutside,
     ),
   });
@@ -4585,14 +4604,11 @@ async function mutateHandoff(
           { plan_id: scope.planId, state: previous.state, handoff_id: previous.id },
         );
       }
-      const status = rowStatusOf(context.row);
-      if (status !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `handoff requires ${scope.planId} to be InReview \u2014 it is ${status || "unstatused"}`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      // §R5 the entailed predecessor recording: a claimed row that still reads
+      // InProgress records InReview in the same commit as the seal; a row that
+      // already records InReview writes no status (A01); an unclaimed row is
+      // refused with the recorded state named.
+      entailedHandoffStatus(context.row, scope.planId);
       assertHandoffGitProof(scope.worktreePath, input, "handoff", scope.planId);
       await assertHandoffGates(scope, prepared, input);
     },
@@ -4623,8 +4639,16 @@ async function mutateHandoff(
         handoff: record,
       };
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      // §R5 the entailed recording and the seal are ONE row write: the row's
+      // InReview report commits with the handoff, and a row that already
+      // recorded InReview keeps exactly the row it had (A01).
+      const entailed = entailedHandoffStatus(context.row, scope.planId);
+      const row: PlanRow =
+        entailed === null
+          ? { ...context.row, coordination: nextCoordination }
+          : { ...context.row, status: entailed, coordination: nextCoordination };
       // The execution lease stays with the plan session: handoff is not release.
-      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
+      return { row, coordination: nextCoordination };
     },
   });
   return {
@@ -4671,20 +4695,10 @@ async function mutateAccept(
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "submitted") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 accept requires submitted`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
-      if (rowStatusOf(context.row) !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `accept requires ${scope.planId} to still be InReview`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      // §R5 the SAME decision gate the DB route runs, so a missing acceptance is
+      // reported identically on both routes: nothing is recorded in its place.
+      requireHandoffState(handoff, ["submitted"], scope.planId, "accept");
+      requireRowStatus(context.row, "InReview", scope.planId, "accept", { still: true });
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "accept", scope.planId);
       assertEvidenceDigests(handoff);
     },
@@ -4726,13 +4740,7 @@ async function mutateReturn(
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "submitted" && handoff.state !== "accepted") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 a return requires submitted or accepted`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
+      requireHandoffState(handoff, ["submitted", "accepted"], scope.planId, "return");
     },
     mutate: (context) => {
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
@@ -4984,13 +4992,7 @@ async function mutateIntegrationStart(
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "accepted" && handoff.state !== "integrating") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-start requires accepted (or a started attempt to re-verify)`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
+      requireHandoffState(handoff, ["accepted", "integrating"], scope.planId, "integration-start");
       assertEvidenceDigests(handoff);
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "integration-start", scope.planId);
       // The coordinator owns the row between accept and complete: integration
@@ -5074,20 +5076,8 @@ async function mutateIntegrationAccept(
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "integrating") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-accept requires an integrating attempt`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
-      if (rowStatusOf(context.row) !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `integration-accept requires ${scope.planId} to still be InReview`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      requireHandoffState(handoff, ["integrating"], scope.planId, "integration-accept");
+      requireRowStatus(context.row, "InReview", scope.planId, "integration-accept", { still: true });
       assertEvidenceDigests(handoff);
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
       assertMergeLease(context.snapshot, session, scope.planId, handoff);
