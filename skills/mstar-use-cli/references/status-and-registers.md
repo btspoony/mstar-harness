@@ -6,6 +6,8 @@ Field schemas, section meanings and per-document semantics are owned by `mstar-a
 
 For ordinary lifecycle intents use the owning public verb rather than replacing a snapshot as a setup step. Current authority derives coherent projections and action-local prerequisites; the raw versioned replacement protocol below is for an explicitly requested raw replacement on its supported authority only. Preserve an `applied` or `partial` receipt and resolve only its outstanding conflict; do not treat partial success as a mutation-free refusal.
 
+For the open-issue store, discover JSON shapes with `mstar-harness schema CaptureInput`, `OccurrenceInput`, `IssueTriage`, `ClosureEvidence`, and `IssueLink` before `issue add|occurrence|triage|close|waive|duplicate|supersede|link` (the corresponding verb help owns flags). `ClosureEvidence` has disposition-specific required fields; use the schema rather than guessing from a prior refusal. Store reads/export need no write payload. Plan-scoped `issue-add` and `issue-close` are separate authority routes, not substitutes for the unscoped actor's explicit operation and issue-revision inputs.
+
 ## The coordinated write surfaces
 
 | Surface | Path shape | Holds | Store kind |

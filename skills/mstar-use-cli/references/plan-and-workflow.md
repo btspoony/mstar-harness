@@ -6,6 +6,8 @@ What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belo
 
 Normal route: choose the public intent verb from current help and inspect its receipt. The engine derives associated scope, current token and own session projection where authoritative facts exist, and commits entailed predecessors with the action. Do not interpose a manual `persist`/rebind/repair step just to replay normal progress. A `partial` result names what applied and what genuine conflict remains; only the conflicting component needs an operator decision. Explicit actor identity, ambiguous target, foreign holder or stop authorization remain real inputs; never forward credentials to a leaf.
 
+Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress` JSON and `mstar-harness schema HandoffEvidence` describes `plan handoff` JSON, including nested QC/QA fields. Build a complete JSON object from the schema before invoking `--file`; the CLI accepts an absolute JSON file, not a one-field-at-a-time trial. Actor identity and the intended operation/target remain operator inputs; associated binding and entailed bookkeeping are derived by the action. Historical `submit` is not a plan verb: bounded non-authoritative advice is `mstar-harness judgment review-advice` with its own help and review-pack input, not a lifecycle submission.
+
 ## Transports
 
 One control harness has one execution authority, and that authority's state decides which transport every coordination verb takes. The **active DB route** is the canonical one; the file forms survive only while that authority is not active.
