@@ -1555,6 +1555,39 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
+  test("a deleted plan document refuses as a sealed-input staleness, never a filesystem error", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Assignment drifts (so this bind is an adoption) and the plan half of
+    // the sealed pair is gone: the refusal must be the structured one.
+    editAssignment(fixture, "comment-only drift, plan removed.");
+    rmSync(fixture.planPath, { force: true });
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "plan-gone-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("changed or is gone");
+    expect(refused?.message).not.toMatch(/ENOENT/);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
     const fixture = makeFixture();
     const leaf = join(fixture.workflowDir, "sessions", "leaf.json");

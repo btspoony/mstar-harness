@@ -1265,7 +1265,7 @@ function stalePrepared(
   prepared: PreparedCoordination,
 ): { refusal: CoordinationError; old_sha256: string; new_sha256: string } | null {
   if (!existsSync(assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
+    throw new CoordinationError("coordination.assignment-stale", `${assignmentPath} changed or is gone`, {
       path: assignmentPath,
     });
   }
@@ -1375,9 +1375,16 @@ function bindStaleAdoption(
     );
   }
   // The plan half of the pair `prepare` sealed: the refreshed pin must not sit
-  // beside a plan document that moved after preparation. (`prepared_by` /
-  // `prepared_at` stay exempt: they are provenance, never gates, and the DB
-  // route records its own receipts.)
+  // beside a plan document that moved after preparation, and a plan document
+  // that is GONE reports through the same sealed-input family as a missing
+  // Assignment — never as a raw filesystem error. (`prepared_by` / `prepared_at`
+  // stay exempt: they are provenance, never gates, and the DB route records its
+  // own receipts.)
+  if (!existsSync(scope.planPath)) {
+    throw new CoordinationError("coordination.assignment-stale", `plan document ${scope.planPath} changed or is gone`, {
+      path: scope.planPath,
+    });
+  }
   if (sha256Bytes(readFileSync(scope.planPath)) !== prepared.plan_sha256) {
     throw new CoordinationError(
       "coordination.assignment-stale",
@@ -1417,7 +1424,7 @@ export function assertSealedInputsUnchanged(seal: {
 }): void {
   const recheck = (filePath: string, expected: string, what: string): void => {
     if (!existsSync(filePath)) {
-      throw new CoordinationError("coordination.assignment-stale", `${what} is gone: ${filePath}`, { path: filePath });
+      throw new CoordinationError("coordination.assignment-stale", `${what} ${filePath} changed or is gone`, { path: filePath });
     }
     const actual = sha256Bytes(readFileSync(filePath));
     if (actual !== expected) {
