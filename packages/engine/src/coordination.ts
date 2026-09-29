@@ -160,6 +160,7 @@ import {
 } from "./store-db.js";
 import {
   IssueError,
+  assertCaptureRequest,
   captureIssue,
   closeIssue,
   linkIssue,
@@ -3405,6 +3406,22 @@ async function mutateResidualAdd(
 ): Promise<CoordinationResult> {
   if (!Array.isArray(request.entries) || request.entries.length === 0) {
     throw invalidInput("residual-add requires at least one entry");
+  }
+  const invalidEntries: string[] = [];
+  for (const [index, entry] of request.entries.entries()) {
+    if (!isPlainObject(entry)) {
+      invalidEntries.push(`entries[${index}]: expected an issue observation object`);
+      continue;
+    }
+    try {
+      assertCaptureRequest({ ...entry, projectId: scope.projectId });
+    } catch (error) {
+      if (!(error instanceof IssueError)) throw error;
+      invalidEntries.push(`entries[${index}]: ${error.message}`);
+    }
+  }
+  if (invalidEntries.length > 0) {
+    throw invalidInput(`residual-add entries are invalid: ${invalidEntries.join("; ")}`);
   }
   const context = planStoreContext(scope);
   const receipts: CoordinationIssueReceipt[] = [];

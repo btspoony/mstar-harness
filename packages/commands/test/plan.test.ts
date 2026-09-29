@@ -107,6 +107,16 @@ describe("plan command family", () => {
     if (!malformed.success) expect(malformed.error.issues[0]?.path).toEqual(["progress"]);
   });
 
+  test("derived issue entries accept sparse findings while keeping event identity explicit", () => {
+    const result = definition("plan.issue-add").input.safeParse({
+      entries: [{ title: "A finding", occurrenceKey: "event-17" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.entries?.[0]?.occurrenceKey).toBe("event-17");
+    }
+  });
+
   test("plan binds require runtime session identity and coordinator progress remains role-scoped", async () => {
     const data = fixture();
     const ctx = context(data.root);

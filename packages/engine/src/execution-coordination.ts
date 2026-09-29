@@ -141,6 +141,7 @@ import {
   issueWriteSeat,
   linkIssueOn,
   storeRevisionOn,
+  IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
 } from "./issue.js";
@@ -1249,6 +1250,34 @@ function residualLinkOperationId(sessionId: string, planId: string, occurrenceKe
 function residualCloseOperationId(sessionId: string, planId: string, issueId: string): string {
   return `residual-close:${sessionId}:${planId}:${issueId}`;
 }
+/** Derive plan-owned fields and report every independently invalid entry before writing. */
+function deriveResidualEntries(entries: readonly unknown[], projectId: string): CaptureInput[] {
+  const derived: CaptureInput[] = [];
+  const problems: Array<{ path: string; code: string; message: string }> = [];
+  entries.forEach((entry, index) => {
+    if (!isPlainObject(entry)) {
+      problems.push({ path: `entries[${index}]`, code: "coordination.invalid-input", message: "expected an issue observation object" });
+      return;
+    }
+    const input = { ...entry, projectId } as CaptureInput;
+    try {
+      assertCaptureRequest(input);
+      derived.push(input);
+    } catch (error) {
+      if (!(error instanceof IssueError)) throw error;
+      problems.push({ path: `entries[${index}]`, code: error.code, message: error.message });
+    }
+  });
+  if (problems.length > 0) {
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      `residual-add entries are invalid: ${problems.map(({ path, message }) => `${path}: ${message}`).join("; ")}`,
+      { problems },
+    );
+  }
+  return derived;
+}
+
 
 /**
  * §3 `residual-add` on the DB authority: the plan session that HOLDS the plan's
@@ -1283,37 +1312,28 @@ export async function residualAddExecutionPlan(
   if (!Array.isArray(entries) || entries.length === 0) {
     throw invalidPlanInput("residual-add requires at least one entry");
   }
-  // The request hash below reads every entry field, so a malformed entry is
-  // refused as this route's caller-input refusal rather than as a read of a
-  // non-object (`assertExactKeys` checks the operation's keys, not its items).
-  for (const entry of entries) {
-    if (!isPlainObject(entry)) {
-      throw invalidPlanInput("residual-add requires every entry to be an issue observation object");
-    }
-  }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
     assertResidualAdmission(witness, tx);
-    // §D the project the finding belongs to is a fact of the addressed plan
-    // ROW, not of the caller's request — which is why each entry's own
-    // validation (the same `assertCaptureRequest` the public verb runs) happens
-    // here, where that row is known, and before that entry's first write.
+    // Project membership is the only capture field owned by the plan. Resolve
+    // and validate every entry before the first issue write; keep occurrence
+    // keys caller-owned because they are the stable identity of each event.
     const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
+    const derivedEntries = deriveResidualEntries(entries, projectId);
     const { planId } = witness;
     const sessionId = witness.session.sessionId;
     // §3.1 the shared store revision this transaction commits at: the frame's
     // single advance has already run, so every composed issue helper joins it
     // instead of advancing the same counter once more.
     const composed: ComposedTransactionRevision = { committedStoreRevision: storeRevisionOn(tx.db) };
-    for (const entry of entries) {
-      const input: CaptureInput = { ...entry, projectId };
-      assertCaptureRequest(input);
+    for (const input of derivedEntries) {
+      const occurrenceKey = input.occurrenceKey;
       const capture = captureIssueOn(
         tx.db,
         input,
         {
-          operationId: residualCaptureOperationId(sessionId, planId, entry.occurrenceKey),
+          operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey),
           actor,
         },
         composed,
@@ -1327,7 +1347,7 @@ export async function residualAddExecutionPlan(
         capture.issueId,
         { kind: "plan", target: planId },
         {
-          operationId: residualLinkOperationId(sessionId, planId, entry.occurrenceKey),
+          operationId: residualLinkOperationId(sessionId, planId, occurrenceKey),
           actor,
           expectedRevision: capture.revision,
         },
