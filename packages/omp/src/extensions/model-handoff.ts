@@ -81,8 +81,9 @@
  *   arm takes the unregistered reservation path — the expected route for a new
  *   iteration, never a reason to skip the call; on the ACTIVE route the named
  *   workflow exists in the DB and its coordinator seat must already be this
- *   session. A false/absent preference is inert and writes nothing. The arm is
- *   single-entry in memory (`armInFlight`) *and*
+ *   session. A false/absent preference returns a neutral successful no-op,
+ *   leaving the session model and ledger unchanged. The arm is single-entry
+ *   in memory (`armInFlight`) *and*
  *   re-checks the durable state after every `await`, so two concurrent starts
  *   cannot both reserve and arm. The arm attempt is recorded, `@slow` is
  *   selected once through `pi.setModel`, and `pending` is entered only when the
@@ -91,11 +92,11 @@
  *   a conflict). The durable record carries the binding of the route that
  *   answered — the adopted DB session reference on the ACTIVE route, the
  *   envelope-address paths on the FILE route.
- * - **Fire** (`{operation:"phase1-complete"}`): re-reads the preference, runs
- *   the frozen E2 readiness checkpoint on the route the recorded binding names
- *   (the DB views for an ACTIVE binding, the register/snapshot/envelope for a
- *   FILE one), **re-reads the preference again** after
- *   that asynchronous work (a settings edit during readiness is honored), then
+ * - **Fire** (`{operation:"phase1-complete"}`): an off preference is a neutral
+ *   no-op even without a binding; otherwise it runs the frozen E2 readiness
+ *   checkpoint on the route the recorded binding names (the DB views for an
+ *   ACTIVE binding, the register/snapshot/envelope for a FILE one), re-reads
+ *   the preference after that asynchronous work (honoring settings edits), then
  *   performs — synchronously, with no `await` in between — the final pending
  *   scan, the `pending → attempting` record append, the navigation-guard arm and
  *   the single public `setModel`.
@@ -164,7 +165,7 @@ import type {
   Phase1Receipt,
 } from "../model-handoff-readiness";
 import { readHandoffSettings } from "../model-handoff-settings";
-import { HANDOFF_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice } from "../notices";
+import { HANDOFF_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, neutralNotice, statusNotice } from "../notices";
 import type { NoticeTitle } from "../notices";
 
 /** Ledger `customType` of the durable handoff record (the only writer). */
@@ -839,15 +840,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     }
   };
 
-  /** Skipped-fire notice at a bound site: sampled title, condition preserved in the detail. */
-  const notifySkipped = (binding: HandoffBinding, condition: string, tail: string): void => {
-    const observed = observedWorkflowStatus(binding);
-    const detail = `model handoff skipped for this coordinator session: ${condition}. ${tail}`;
-    notice(
-      observed !== null
-        ? statusNotice({ workflowId: observed.id, status: observed.status, detail })
-        : fallbackNotice({ subject: "Model handoff skipped", detail }),
-    );
+
+  const preferenceOff = (pending: boolean): ToolOutcome => {
+    notice(neutralNotice({
+      subject: "Model handoff preference off",
+      detail: "modelHandoff is off in native settings; no model action was taken.",
+    }));
+    return outcome(true, false, "modelHandoff is off in native settings; no model action was taken and the session model and handoff record are unchanged.", {
+      code: "preference-off",
+      ...(pending ? { state: "pending" } : {}),
+    });
   };
 
   /**
@@ -998,6 +1000,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         { code: "in-flight", state: "attempting" },
       );
     }
+
+    const settings = await readHandoffSettings(ctx.cwd);
+    const afterSettings = suspensionReason(ctx, sessionId, generation);
+    if (afterSettings !== null) return suspend(afterSettings, decision.kind === "pending" ? "pending" : "none");
+    if (!settings.ok) {
+      return outcome(false, true, `the model-handoff preference could not be read: ${settings.message}`, {
+        code: "settings-read-failed",
+      });
+    }
+    if (!settings.value.modelHandoff) return preferenceOff(decision.kind === "pending");
     if (decision.kind === "pending" || decision.kind === "uncertain") {
       return outcome(
         false,
@@ -1015,26 +1027,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
-    // The preference decides whether a binding exists at all: an unreadable or
-    // disabled preference creates no record and no model action. Enabling the
-    // preference never arms by itself (no settings-change callback exists here).
-    const settings = await readHandoffSettings(ctx.cwd);
-    const afterSettings = suspensionReason(ctx, sessionId, generation);
-    if (afterSettings !== null) return suspend(afterSettings, "none");
-    if (!settings.ok) {
-      return outcome(false, true, `the model-handoff preference could not be read: ${settings.message}`, {
-        code: "settings-read-failed",
-      });
-    }
-    if (!settings.value.modelHandoff) {
-      return outcome(
-        false,
-        false,
-        "modelHandoff is off in native settings; this session is not armed and its model is unchanged. Enabling it later does not retro-arm an in-flight iteration.",
-        { code: "preference-off", handoffTarget: settings.value.handoffTarget },
-      );
-    }
-
+    // Enabling the preference never arms by itself.
     // E1 resolves the derived paths for the explicitly named workflow. Which
     // arm answers is decided by the CONTROL ROOT this session addresses (§6),
     // never by the caller or by the tool input:
@@ -1396,6 +1389,24 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         { code: "in-flight", state: "attempting" },
       );
     }
+    if (decision.kind === "none" || decision.kind === "pending") {
+      const settings = await readHandoffSettings(ctx.cwd);
+      const afterSettings = suspensionReason(ctx, sessionId, generation);
+      if (afterSettings !== null) return suspend(afterSettings, decision.kind);
+      if (decision.kind === "pending") {
+        const liveDecision = reconstruct(ctx);
+        if (liveDecision.kind !== "pending" || liveDecision.record.operationId !== decision.record.operationId) {
+          return outcome(false, true, "the pending model handoff changed while settings were read.", { code: "not-pending" });
+        }
+      }
+      if (!settings.ok) {
+        return outcome(false, true, `the model-handoff preference could not be read: ${settings.message}`, {
+          code: "settings-read-failed",
+          ...(decision.kind === "pending" ? { state: "pending" } : {}),
+        });
+      }
+      if (!settings.value.modelHandoff) return preferenceOff(decision.kind === "pending");
+    }
     if (decision.kind !== "pending") {
       const described = decision.kind === "none" ? "no binding" : `${decision.kind} (${decision.record.binding.workflowId})`;
       return outcome(false, true, `no pending model handoff exists for this coordinator session: ${described}.`, {
@@ -1458,17 +1469,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         { code: "settings-read-failed", state: "pending" },
       );
     }
-    if (!settings.value.modelHandoff) {
-      // Bound site with a pending binding: title from the own-workflow snapshot
-      // sample (presentation only), falling back when it is not readable.
-      notifySkipped(record.binding, "modelHandoff is off in native settings", `${SLOW_SPEC} stays in place. Re-enabling it before Phase 1 completes can still fire this binding.`);
-      return outcome(
-        false,
-        false,
-        "modelHandoff is off in native settings; the automatic target switch was skipped and the binding stays pending.",
-        { code: "preference-off", state: "pending" },
-      );
-    }
+    if (!settings.value.modelHandoff) return preferenceOff(true);
 
     // E2 readiness checkpoint (frozen contract; read-only).
     const readiness = await handoffSeams.inspectReadiness(record.binding, completion);
@@ -1492,19 +1493,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         { code: "settings-read-failed", state: "pending" },
       );
     }
-    if (!refreshed.value.modelHandoff) {
-      notifySkipped(
-        record.binding,
-        "modelHandoff is off in native settings",
-        `${SLOW_SPEC} stays in place; the preference was turned off while Phase 1 was being checked.`,
-      );
-      return outcome(
-        false,
-        false,
-        "modelHandoff is off in native settings; the automatic target switch was skipped and the binding stays pending.",
-        { code: "preference-off", state: "pending" },
-      );
-    }
+    if (!refreshed.value.modelHandoff) return preferenceOff(true);
     const handoffTarget = refreshed.value.handoffTarget;
 
     if (!readiness.ready) {

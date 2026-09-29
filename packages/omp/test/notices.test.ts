@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatNotice, statusNotice, fallbackNotice, PHASE2_NOTICE_CUSTOM_TYPE, HANDOFF_NOTICE_CUSTOM_TYPE } from "../src/notices";
+import { formatNotice, statusNotice, fallbackNotice, neutralNotice, PHASE2_NOTICE_CUSTOM_TYPE, HANDOFF_NOTICE_CUSTOM_TYPE } from "../src/notices";
 
 test("statusNotice names the workflow and its actual status", () => {
   const n = statusNotice({ workflowId: "iter-x", status: "completed", detail: "observation stopped" });
@@ -13,6 +13,12 @@ test("fallbackNotice never asserts a workflow status", () => {
   const n = fallbackNotice({ subject: "model handoff", detail: "navigation refused" });
   expect(n.title).not.toContain("Phase-2");
   expect(n.title).not.toMatch(/\b(completed|failed|stopped|running)\b/);
+});
+
+test("neutral preference notice does not imply failure or workflow status", () => {
+  const notice = neutralNotice({ subject: "Model handoff preference off", detail: "no model action was taken" });
+  expect(formatNotice(notice)).toBe("Model handoff preference off: no model action was taken");
+  expect(notice.title).not.toMatch(/needs attention|Workflow/);
 });
 
 test("visible custom types are the shared bar titles", () => {
