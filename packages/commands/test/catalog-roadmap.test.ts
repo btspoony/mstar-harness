@@ -271,6 +271,7 @@ describe("catalog and roadmap command families", () => {
     }, invocation(cwd));
     expect(conflicting.status).toBe("refused");
     expect(conflicting.code).toBe("roadmap.operation-conflict");
+  });
 
   test("milestone grouped roadmap export retains absent prose and escapes stored text", async () => {
     const { cwd, harness } = await activeFixture("milestone-roadmap-export");
