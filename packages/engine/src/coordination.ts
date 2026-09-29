@@ -128,7 +128,7 @@ import {
 import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
-import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
+import { PlanPathError, planDeclaredHeaders, planDeclaredHeadersFromContent, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -1448,19 +1448,30 @@ function bindStaleAdoption(
   // refusal here instead. (`prepared_by` / `prepared_at` stay exempt: they are
   // provenance, never gates, and the DB route records its own receipts.)
   //
-  // One redirect guard on the moved bytes: when the plan DECLARES a
-  // `Working branch`, that declaration must still name the branch this bind
-  // acts under (the lease's `working_branch` comes from the Assignment scope,
-  // which the checks above re-validated). Prepare only freezes the header for
-  // appended rows, so an absent header adopts like any other body edit, and
-  // downstream L1 checks stay fail-closed against the lease regardless — this
-  // guard exists so an adopted seal can never describe a plan whose own
-  // declaration points the work somewhere else.
-  const planNow = sha256Bytes(readSealedInput(scope.planPath, "plan document"));
+  // ONE read drives the whole decision: the digest this bind would pin and the
+  // declarations checked below come from the same snapshot, so a replacement
+  // landing mid-check cannot make the branch guards certify bytes the pin does
+  // not describe (the repo's read-sealed-inputs-once rule).
+  //
+  // Redirect guard on the moved bytes: when the plan DECLARES a `Working
+  // branch`, that declaration must still name the branch this bind acts under
+  // (the lease's `working_branch` comes from the Assignment scope, which the
+  // checks above re-validated), and a declared `Main worktree branch` must
+  // still match the actual main checkout — the SDD execution path reads that
+  // header in the LIVE plan file for its residency expectation, so prepare
+  // proves the equality against the caller's checkout and adoption re-proves
+  // it against the repo's main worktree; an unresolvable probe refuses,
+  // fail-closed. An ABSENT declaration adopts like any other body edit:
+  // prepare validates headers only for appended rows, existing-row seals
+  // legitimately carry header-less plans, and the header is not an input to
+  // any bind decision — the guards exist so an adopted seal can never
+  // contradict the declarations the plan itself carries.
+  const planBytes = readSealedInput(scope.planPath, "plan document");
+  const planNow = sha256Bytes(planBytes);
   if (planNow !== prepared.plan_sha256) {
     let planHeaders: Map<string, string>;
     try {
-      planHeaders = planDeclaredHeaders(scope.planPath);
+      planHeaders = planDeclaredHeadersFromContent(planBytes.toString("utf8"), scope.planPath);
     } catch (error) {
       throw new CoordinationError(
         "coordination.assignment-stale",

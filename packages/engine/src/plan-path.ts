@@ -91,6 +91,17 @@ const PLAN_CONSULTED_HEADERS: Record<string, true> = {
  * exported form is what lets registration and the amendment reuse one parser.
  */
 export function planDeclaredHeaders(planPath: string): Map<string, string> {
+  return planDeclaredHeadersFromContent(readFileSync(planPath, "utf8"), planPath);
+}
+
+/**
+ * The same consulted-header read over ALREADY-READ plan bytes: the caller
+ * hashes and validates one snapshot (a bind adoption pins the digest and
+ * checks the declarations of those exact bytes), so the parser must not
+ * re-read the path and observe a different file. `planPath` names diagnostics
+ * only — it is never read here.
+ */
+export function planDeclaredHeadersFromContent(content: string, planPath: string): Map<string, string> {
   const headers = new Map<string, string>();
   // The fence is tracked by its marker character and run length: it is closed
   // only by a run of the same character at least as long, so a `~~~` example is
@@ -98,7 +109,7 @@ export function planDeclaredHeaders(planPath: string): Map<string, string> {
   // fence cannot close it early.
   let marker: string | undefined;
   let markerLength = 0;
-  for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
+  for (const raw of content.split(/\r?\n/)) {
     const line = raw.trim();
     const fence = /^(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
