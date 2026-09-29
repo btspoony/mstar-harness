@@ -398,6 +398,7 @@ export {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
+  listAuditPlanIds,
   promoteAuditPlans,
   scaffoldAuditPlan,
   scanSecrets,
