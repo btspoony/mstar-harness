@@ -243,6 +243,17 @@ test("sparse input reaches the command resolver without transport defaulting", a
   const result = await run(["report"]);
   expect(JSON.parse(result.stdout)).toMatchObject({ command: "report", status: "ok" });
 });
+test("plan payload decode returns indexed field paths in the usage envelope", async () => {
+  const result = await run(["plan", "issue-add", "--entries", "[{},5]"]);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    command: "plan.issue-add",
+    status: "usage",
+    details: {
+      diagnostics: [{ path: "entries[1]", index: 1 }],
+    },
+  });
+});
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));
   const source = path.join(root, "roadmap.md");
