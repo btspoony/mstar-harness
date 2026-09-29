@@ -7287,6 +7287,32 @@ async function closeRowDecision(
     }
     await assertFindingsClosed(scope, prepared, what);
     assertExecutionHolder(context.row, session.session_id, planId, what);
+    // Contract §1 (E10/§R5): the ORDERING relaxation lets this close compose the
+    // Done projection from ALREADY-recorded evidence; it never licenses
+    // completing a row whose completion policy's fulfilment was never recorded.
+    // `entailedFileFulfilment` above would happily derive the fulfilment from the
+    // handoff, so the gate has to be explicit here — otherwise the close
+    // fabricates the very Done the ordinary route refuses without the record.
+    if (fileFulfilmentOutstanding(context.snapshot, planId)) {
+      throw missingDecision({
+        planId,
+        what,
+        component: "workflow-delivery",
+        path: "delivery.completion",
+        currentFacts: [
+          `plan ${planId} is accepted but its row is still ${rowStatusOf(context.row) || "unstatused"}`,
+          `workflow ${String(context.snapshot.id)} registers completion_policy ${JSON.stringify(context.snapshot.completion_policy ?? null)}`,
+          "no completion fulfilment of that registered policy is recorded on the workflow",
+        ],
+        needed:
+          `${what} completes report-only plan ${planId} only from a fulfilment that was RECORDED, and this workflow records none — ` +
+          "record the completion evidence first, then retry",
+        availableWork: [
+          `record the completion fulfilment for the registered policy and retry ${what}`,
+          "independent operations on other rows, plans and workflows continue",
+        ],
+      });
+    }
     return { kind: "standalone", handoffId: handoff.id, fulfilment };
   }
   if (route === "standalone-development") {

@@ -2453,10 +2453,12 @@ describe("report-only completion", () => {
     expect(recordedHandoffState(fixture)).toBe("accepted");
     expect(snapshotBytes(fixture)).toBe(before);
 
-    // No fabricated Done state: the close refuses the unfinished row too.
+    // No fabricated Done state: the close refuses the row too — and it refuses
+    // for the reason that actually blocks it (the completion fulfilment was
+    // never recorded), not with a row-status restatement.
     const closed = closeReportOnly(fixture);
     expect(closed.exitCode).toBe(1);
-    expect(String(jsonOf(closed).message)).toContain("every plan row must be Done");
+    expect(String(jsonOf(closed).message)).toContain("only from a fulfilment that was RECORDED");
     expect(readJson(fixture.snapshotPath).status).toBe("running");
     expect(snapshotBytes(fixture)).toBe(before);
 
