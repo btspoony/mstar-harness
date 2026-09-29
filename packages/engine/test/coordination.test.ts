@@ -1581,11 +1581,83 @@ describe("admission self-claim and orphan adoption", () => {
     })();
 
     expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("plan document");
     expect(refused?.message).toContain("changed or is gone");
-    expect(refused?.message).not.toMatch(/ENOENT/);
+    expect(refused?.message).not.toMatch(/ENOENT|EISDIR/);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a sealed input that cannot be read is the same structured refusal, not a filesystem error", async () => {
+    // The portable read-failure trigger: the path exists but is a DIRECTORY, so
+    // the read itself fails (EISDIR) with no pre-check to race. The decision must
+    // map it to the sealed-input refusal family — the check-then-act window the
+    // reviewers found cannot reopen through a path that exists and is unreadable.
+    const planHalf = makeFixture();
+    await ensureCoordinator(planHalf);
+    await preparePlan(planHalf, PLAN_ID);
+    const planRowBefore = planRowOf(planHalf, PLAN_ID);
+    const planSnapshotBefore = readFileSync(planHalf.snapshotPath, "utf8");
+    editAssignment(planHalf, "comment-only drift, plan half made unreadable.");
+    rmSync(planHalf.planPath, { force: true });
+    mkdirSync(planHalf.planPath, { recursive: true });
+
+    const planRefusal = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: planHalf.assignmentPath },
+          cwd: planHalf.root,
+          sessionId: "unreadable-plan-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(planRefusal?.code).toBe("coordination.assignment-stale");
+    expect(planRefusal?.message).toContain("plan document");
+    expect(planRefusal?.message).not.toMatch(/EISDIR|ENOENT/);
+    expect(readFileSync(planHalf.snapshotPath, "utf8")).toBe(planSnapshotBefore);
+    expect(planRowOf(planHalf, PLAN_ID)).toEqual(planRowBefore);
+    expect(selfAmendmentAudit(planHalf)).toHaveLength(0);
+
+    // The Assignment half reports the same family with its own name. The row is
+    // bound to a plan session first (so the mutation is a plan-session operation
+    // and reaches the freshness check), and its revision is read BEFORE the file
+    // is broken — the read path refuses the same way once it is.
+    const assignmentHalf = makeFixture();
+    await ensureCoordinator(assignmentHalf);
+    await preparePlan(assignmentHalf, PLAN_ID);
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: assignmentHalf.harness },
+      cwd: assignmentHalf.root,
+      sessionId: "unreadable-assignment-holder",
+    });
+    const assignmentSnapshotBefore = readFileSync(assignmentHalf.snapshotPath, "utf8");
+    const revision = (await readPlanCoordination(bound.session_file, PLAN_ID, assignmentHalf.root)).revision;
+    rmSync(assignmentHalf.assignmentPath, { force: true });
+    mkdirSync(assignmentHalf.assignmentPath, { recursive: true });
+
+    const assignmentRefusal = await (async () => {
+      try {
+        await mutatePlanCoordination({
+          sessionPath: bound.session_file,
+          planId: PLAN_ID,
+          expectedRevision: revision,
+          operation: { kind: "progress", progress: { status: "InProgress", summary: "x", evidence_paths: [] } },
+        });
+        throw new Error("expected the mutation to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(assignmentRefusal?.code).toBe("coordination.assignment-stale");
+    expect(assignmentRefusal?.message).toContain("Assignment");
+    expect(assignmentRefusal?.message).not.toMatch(/EISDIR|ENOENT/);
+    expect(readFileSync(assignmentHalf.snapshotPath, "utf8")).toBe(assignmentSnapshotBefore);
   });
 
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
