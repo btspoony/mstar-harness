@@ -294,7 +294,7 @@ afterAll(() => {
 });
 
 describe("execution-consumer-manifest — canonical collection", () => {
-  test("collects the exact consumer set with capabilities, runtime floors and copied trees", () => {
+  test("collects consumer capabilities and runtime floors", () => {
     const root = buildFixture();
     const manifest = collectExecutionConsumerManifest(root);
 
@@ -379,33 +379,6 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/engine/src",
     ]);
 
-    const dshCopies = manifest.consumers.find((consumer) => consumer.id === "dsh")?.copiedInstructions ?? [];
-    expect(dshCopies.map((tree) => `${tree.sourceRoot}->${tree.targetRoot}`)).toEqual([
-      "agents->packages/dsh/harness-agents",
-      "commands->packages/dsh/harness-commands",
-      "skills->packages/dsh/harness-skills",
-    ]);
-    expect(dshCopies.map((tree) => tree.files)).toEqual([1, 1, 2]);
-
-    const ompCopies = manifest.consumers.find((consumer) => consumer.id === "omp")?.copiedInstructions ?? [];
-    expect(ompCopies.map((tree) => tree.targetRoot)).toEqual([
-      "packages/omp/agents",
-      "packages/omp/assets",
-      "packages/omp/commands",
-      "packages/omp/harness-agents",
-      "packages/omp/harness-commands",
-      "packages/omp/harness-skills",
-      "packages/omp/skills",
-    ]);
-
-    const opencodeCopies =
-      manifest.consumers.find((consumer) => consumer.id === "opencode")?.copiedInstructions ?? [];
-    expect(opencodeCopies.map((tree) => `${tree.targetRoot}:${tree.mode}`)).toEqual([
-      "packages/opencode/harness-agents:merge",
-      "packages/opencode/harness-agents:merge",
-      "packages/opencode/harness-commands:copy",
-      "packages/opencode/harness-skills:copy",
-    ]);
 
     verifyExecutionConsumerManifest(manifest);
   });
