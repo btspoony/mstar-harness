@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
@@ -113,5 +113,47 @@ describe("coordination checks command family", () => {
       code: "lease.merge-lease.invalid",
       exitCode: 1,
     });
+  });
+  test("derived view selects the requested row, ignores unrelated rows, and stays read-only", async () => {
+    const cwd = tempRoot();
+    const harness = path.join(cwd, ".mstar");
+    const workflowDir = path.join(harness, "workflows", "wf-derived");
+    mkdirSync(workflowDir, { recursive: true });
+    const file = path.join(workflowDir, "snapshot.json");
+    const selectedLease = {
+      holder: "session-a",
+      claimed_at: "2026-09-26T12:00:00Z",
+      worktree_path: path.join(cwd, "feature-a"),
+      working_branch: "feature/a",
+    };
+    writeFileSync(file, JSON.stringify({
+      plans: [
+        { id: "plan-a", status: "InProgress", execution_lease: selectedLease },
+        { id: "plan-b", status: "InProgress", execution_lease: { holder: "" } },
+      ],
+    }));
+    const before = readFileSync(file, "utf8");
+    const result = await definition("lease.verify").execute(
+      { workflow: "wf-derived", plan: "plan-a", harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { workflow: "wf-derived", plan: "plan-a", lease: selectedLease } });
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  test("authority failure does not fall back to a snapshot", async () => {
+    const cwd = tempRoot();
+    const harness = path.join(cwd, ".mstar");
+    const workflowDir = path.join(harness, "workflows", "wf-authority");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ plans: [{ id: "plan-a", status: "Todo" }] }));
+    // An invalid active execution store is authoritative; the readable snapshot
+    // must not be used as a fallback.
+    writeFileSync(path.join(harness, "store.db"), "not a sqlite database");
+    const result = await definition("lease.verify").execute(
+      { workflow: "wf-authority", plan: "plan-a", harness } as never,
+      context(cwd),
+    );
+    expect(result.status).not.toBe("ok");
   });
 });
