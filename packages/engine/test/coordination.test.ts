@@ -1467,6 +1467,94 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
+  test("an identity or scope header edited inside the interleave window is refused", async () => {
+    // Every header class the locked decision depends on, each edited AFTER the
+    // pre-lock read: the bind must refuse as a scope/contract change with nothing
+    // written. `plan id` is the identity half, `worktree path` the lease-driving
+    // half (the resolver returns it unvalidated), `sdd dir` the resolver's own
+    // check, and `qa gate` the executed contract.
+    const headerEdits: Array<{ header: string; from: string; to: string; what: string }> = [
+      { header: "Plan id", from: `**Plan id**: ${PLAN_ID}`, to: "**Plan id**: plan-elsewhere", what: "identity" },
+      { header: "Workflow id", from: `**Workflow id**: ${WORKFLOW_ID}`, to: "**Workflow id**: wf-elsewhere", what: "identity" },
+      { header: "Worktree Path", from: "**Worktree Path**: ", to: "**Worktree Path**: /tmp/window-lease", what: "lease" },
+      { header: "Working branch", from: "**Working branch**: feature/plan-a", to: "**Working branch**: feature/other", what: "lease" },
+      { header: "SDD dir", from: "**SDD dir**: ", to: "**SDD dir**: /tmp/window-sdd", what: "scope" },
+      { header: "QA gate", from: "**QA gate**: mandatory", to: "**QA gate**: pm-acceptance", what: "contract" },
+    ];
+
+    for (const edit of headerEdits) {
+      const fixture = makeFixture();
+      await ensureCoordinator(fixture);
+      await preparePlan(fixture, PLAN_ID);
+      const rowBefore = planRowOf(fixture, PLAN_ID);
+      const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+      setBindPreInterleaveForTest(() => {
+        setBindPreInterleaveForTest(undefined);
+        const text = readFileSync(fixture.assignmentPath, "utf8");
+        expect(text).toContain(edit.from);
+        writeText(fixture.assignmentPath, text.replace(edit.from, edit.to));
+      });
+
+      try {
+        expect({
+          what: edit.what,
+          code: await errorCodeOf(() =>
+            bindPlanSession({
+              scope: { assignmentPath: fixture.assignmentPath },
+              cwd: fixture.root,
+              sessionId: "window-adopter",
+            }),
+          ),
+        }).toEqual({ what: edit.what, code: "coordination.assignment-stale" });
+      } finally {
+        setBindPreInterleaveForTest(undefined);
+      }
+
+      // Fail-closed means nothing written: no pin refresh, no lease, no audit.
+      expect({ what: edit.what, bytes: readFileSync(fixture.snapshotPath, "utf8") }).toEqual({
+        what: edit.what,
+        bytes: snapshotBefore,
+      });
+      expect({ what: edit.what, row: planRowOf(fixture, PLAN_ID) }).toEqual({ what: edit.what, row: rowBefore });
+      expect({ what: edit.what, audit: selfAmendmentAudit(fixture).length }).toEqual({ what: edit.what, audit: 0 });
+    }
+  });
+
+  test("a plan document edited inside the interleave window is refused too", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    setBindPreInterleaveForTest(() => {
+      setBindPreInterleaveForTest(undefined);
+      // Both halves move: the Assignment drifts byte-level (which is what makes
+      // this bind an adoption at all) AND the plan document it was sealed with.
+      writeText(fixture.assignmentPath, `${readFileSync(fixture.assignmentPath, "utf8")}\ncomment-only drift.\n`);
+      writeText(fixture.planPath, `${readFileSync(fixture.planPath, "utf8")}\nplan edited after prepare.\n`);
+    });
+
+    try {
+      expect(
+        await errorCodeOf(() =>
+          bindPlanSession({
+            scope: { assignmentPath: fixture.assignmentPath },
+            cwd: fixture.root,
+            sessionId: "plan-edit-adopter",
+          }),
+        ),
+      ).toBe("coordination.assignment-stale");
+    } finally {
+      setBindPreInterleaveForTest(undefined);
+    }
+    // The pair `prepare` sealed is only re-sealed as a pair: a moved plan
+    // document blocks the adoption even though the Assignment drift alone would
+    // have been adopted.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
     const fixture = makeFixture();
     const leaf = join(fixture.workflowDir, "sessions", "leaf.json");

@@ -1216,10 +1216,11 @@ async function withRowCommit(
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
       if (opts.staleAdoption !== undefined) {
         context.staleAdoption = bindStaleAdoption(
-          scope.assignmentPath,
+          scope,
           coordination.prepared,
           coordination,
           opts.staleAdoption.sessionId,
+          context.snapshot,
         );
       } else {
         assertPreparedFresh(scope.assignmentPath, coordination.prepared);
@@ -1304,50 +1305,88 @@ function staleRefusal(assignmentPath: string, prepared: PreparedCoordination, ac
  * (nothing to pin).
  */
 function bindStaleAdoption(
-  assignmentPath: string,
+  scope: ResolvedPlanScope,
   prepared: PreparedCoordination,
   coordination: RowCoordination | undefined,
   adopter: string,
+  snapshot: WorkflowSnapshot,
 ): { old_sha256: string; new_sha256: string } | null {
-  // (PR #309 second review) ONE read decides both halves: the drift the pin
-  // measurement sees and the gates compared against the prepared block come from
-  // the same bytes. Parsing the headers outside the lock (as this once did) left
-  // a window where a gate edit landing between the two reads was compared as its
-  // OLD value while the pin was refreshed to the NEW one — a contract change
-  // adopted as if it were byte-level. The read happens here, inside the lock, and
-  // nothing but these bytes drives the decision.
-  const input = readAssignmentInput(assignmentPath);
-  const stale = input.sha256 === prepared.assignment_sha256 ? null : {
-    old_sha256: prepared.assignment_sha256,
-    new_sha256: input.sha256,
-  };
-  if (stale === null) return null;
+  // (PR #309 reviews 2 and 3) ONE read, inside the lock, drives EVERY part of
+  // this decision: the drift the pin is refreshed to and the contract the
+  // refreshed pin must still describe. An earlier version parsed the headers
+  // before the lock (so an edit landing in between was judged by its old gates)
+  // and then compared a hand-picked subset (so a scope edit in the same window
+  // was adopted while the row kept the old scope). The rule now: the bytes being
+  // pinned must pass the SAME scope validation the resolver performs, declare
+  // the same gates, and leave the plan half of the sealed pair unchanged.
+  const read = readAssignmentInput(scope.assignmentPath);
+  if (read.sha256 === prepared.assignment_sha256) return null;
   const holder = coordination?.session;
   const adoptable =
     coordination?.prepared !== undefined &&
     coordination.handoff === undefined &&
     (holder === undefined || holder.session_id === adopter);
-  if (!adoptable) throw staleRefusal(assignmentPath, prepared, input.sha256);
-  // (PR #309-1) The pin may only move under the SAME executed contract. The gate
-  // pair is that contract half — `qa_gate` picks the acceptance gate and
-  // `findings_cleanup` the residual policy — so a drift that also changes either
-  // of them is not a byte-level self-amendment but a contract change, and only
-  // the coordinator's `prepare` may re-seal a contract. The rest of the block
-  // (path, plan hash, author, time) is deliberately not compared here: the path
-  // is the resolver's guarantee, and a plan-document edit is caught by the
-  // execution-input pin.
-  const { qaGate, findingsCleanup } = input.headers;
-  if (qaGate !== prepared.qa_gate || findingsCleanup !== prepared.findings_cleanup) {
+  if (!adoptable) throw staleRefusal(scope.assignmentPath, prepared, read.sha256);
+
+  // The identity/scope half, through the resolver that owns those rules (harness
+  // root, workflow id, plan id, plan path, SDD dir) — never a hand-picked list,
+  // so a header the resolver checks can never be skipped here.
+  let addressed: ResolvedPlanScope;
+  try {
+    addressed = scopeFromAssignment(read.headers, scope.harnessRoot, {
+      requirePrepared: true,
+      chosenRoot: scope.harnessRoot,
+      preloaded: { snapshot },
+    });
+  } catch (error) {
     throw new CoordinationError(
       "coordination.assignment-stale",
-      `Assignment ${assignmentPath} changed its contract after preparation (qa_gate ${prepared.qa_gate} \u2192 ` +
-        `${qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${findingsCleanup}) \u2014 a gate ` +
-        "change belongs to the coordinator's `prepare`, which re-seals the reviewed contract; only a byte-level drift " +
-        "within the same gates may be adopted",
-      { path: assignmentPath, expected: prepared.qa_gate, actual: qaGate },
+      `Assignment ${scope.assignmentPath} no longer describes this plan's scope after preparation: ` +
+        `${error instanceof Error ? error.message : String(error)} \u2014 the coordinator must re-run \`prepare\` against the reviewed scope`,
+      { path: scope.assignmentPath, expected: prepared.assignment_sha256, actual: read.sha256 },
     );
   }
-  return stale;
+  // Everything the resolved scope carries, compared field by field from the
+  // object itself: a field added to the scope later is covered automatically,
+  // and worktree path / working branch (which the resolver returns unvalidated
+  // and the lease then records) are covered here.
+  for (const [field, value] of Object.entries(scope)) {
+    const other = (addressed as unknown as Record<string, unknown>)[field];
+    if (other !== value) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `Assignment ${scope.assignmentPath} changed the plan scope after preparation (${field} ${String(value)} \u2192 ` +
+          `${String(other)}) \u2014 an adopted pin must describe the scope this bind is acting under; the coordinator ` +
+          "re-runs `prepare` for a scope change",
+        { path: scope.assignmentPath, expected: String(value), actual: String(other) },
+      );
+    }
+  }
+  // The executed contract's parameters: a gate change re-seals a contract and
+  // belongs to the coordinator's `prepare`.
+  if (read.headers.qaGate !== prepared.qa_gate || read.headers.findingsCleanup !== prepared.findings_cleanup) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `Assignment ${scope.assignmentPath} changed its contract after preparation (qa_gate ${prepared.qa_gate} \u2192 ` +
+        `${read.headers.qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${read.headers.findingsCleanup}) \u2014 ` +
+        "a gate change belongs to the coordinator's `prepare`; only a byte-level drift within the same gates and scope " +
+        "may be adopted",
+      { path: scope.assignmentPath, expected: prepared.qa_gate, actual: read.headers.qaGate },
+    );
+  }
+  // The plan half of the pair `prepare` sealed: the refreshed pin must not sit
+  // beside a plan document that moved after preparation. (`prepared_by` /
+  // `prepared_at` stay exempt: they are provenance, never gates, and the DB
+  // route records its own receipts.)
+  if (sha256Bytes(readFileSync(scope.planPath)) !== prepared.plan_sha256) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `plan document ${scope.planPath} changed after preparation \u2014 an adopted pin never re-seals a moved plan; ` +
+        "the coordinator re-runs `prepare`",
+      { path: scope.planPath, expected: prepared.plan_sha256 },
+    );
+  }
+  return { old_sha256: prepared.assignment_sha256, new_sha256: read.sha256 };
 }
 
 /**
@@ -1846,19 +1885,10 @@ async function bindPlanSessionForPlan(
     }
     return claimPlanSession(scope, adopter);
   }
-  const assignment = parseAssignmentFile(prepared.assignment_path);
-  // Validation, not a value. This re-pins the prepared Assignment's headers to
-  // this harness root and to this workflow's row before the locked section — the
-  // same checks the locator-addressed scope ran, on the path the prepared block
-  // records — so a header set that no longer describes the prepared scope
-  // refuses here instead of inside the lock. The bind then mutates through the
-  // caller's own `scope`; the returned copy is deliberately discarded, because
-  // the locked re-read is what decides.
-  void scopeFromAssignment(assignment, harnessRoot, {
-    requirePrepared: true,
-    chosenRoot: harnessRoot,
-    preloaded: { snapshot },
-  });
+  // No pre-lock re-validation of the prepared Assignment here. It used to run at
+  // this point, but the locked decision now derives the same scope from the very
+  // bytes it pins (`bindStaleAdoption`), so a second unlocked parse would only
+  // add a second read whose result no longer decides anything.
   // Spec §D2: there is deliberately NO staleness verdict here. An unlocked read
   // may not decide a refusal that a concurrent write can invalidate (the
   // interleave test drives exactly that: a row orphaned between this read and
