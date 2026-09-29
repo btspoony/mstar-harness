@@ -1280,6 +1280,155 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
+  test("a drift that keeps the gates is adopted; one that changes a gate is terminal", async () => {
+    // Byte-level drift with identical gates: adopted (PR #309-1's accepted half).
+    const comment = makeFixture();
+    await ensureCoordinator(comment);
+    await preparePlan(comment, PLAN_ID);
+    editAssignment(comment, "<!-- reviewed: still the same contract -->");
+    const adopted = await bindPlanSession({
+      scope: { assignmentPath: comment.assignmentPath },
+      cwd: comment.root,
+      sessionId: "comment-adopter",
+    });
+    expect(adopted.outcome).toBe("claimed");
+    expect(selfAmendmentAudit(comment)).toHaveLength(1);
+
+    // The same drift PLUS a changed contract header: terminal, nothing written.
+    const changed = makeFixture();
+    await ensureCoordinator(changed);
+    await preparePlan(changed, PLAN_ID);
+    writeText(
+      changed.assignmentPath,
+      readFileSync(changed.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+    );
+    const before = planRowOf(changed, PLAN_ID);
+    const snapshotBefore = readFileSync(changed.snapshotPath, "utf8");
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { assignmentPath: changed.assignmentPath },
+          cwd: changed.root,
+          sessionId: "gate-adopter",
+        }),
+      ),
+    ).toBe("coordination.assignment-stale");
+    expect(readFileSync(changed.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(changed, PLAN_ID)).toEqual(before);
+    expect(selfAmendmentAudit(changed)).toHaveLength(0);
+  });
+
+  test("a continuing bind restores a missing recorded envelope instead of binding a gone file", async () => {
+    const fixture = makeFixture();
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    // The claimant prepared the row it claimed (the state the continuing bind
+    // completes), and THEN its envelope is lost — a crash between prepare and
+    // the bind that claims the lease.
+    const claimView = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    rmSync(claim.session_file, { force: true });
+    expect(existsSync(claim.session_file)).toBe(false);
+
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    expect(bound.outcome).toBe("claimed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
+    // The row records a file that EXISTS and holds the recorded session.
+    expect(existsSync(bound.session_file)).toBe(true);
+    expect(readJson(bound.session_file).session_id).toBe("claimant");
+    const binding = planCoordinationOf(fixture, PLAN_ID).session as Record<string, unknown>;
+    expect(existsSync(String(binding.session_file))).toBe(true);
+    expect(binding.session_id).toBe("claimant");
+  });
+
+  test("a claim is idempotent for the recorded holder and refuses any other id", async () => {
+    const fixture = makeFixture();
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    const before = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The recorded id re-claims: the binding stands, nothing advances.
+    const again = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    expect(again.outcome).toBe("claim-bootstrapped");
+    expect(again.session_file).toBe(claim.session_file);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(before);
+
+    // Any other identity is still a duplicate holder.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "intruder",
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+  });
+
+  test("the documented abandoned-claim recovery works end to end", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    // The claimant dies between its claim and its prepare: its envelope is the
+    // only thing the row has, and it is gone.
+    rmSync(claim.session_file, { force: true });
+
+    // The documented recovery: re-present the recorded id on the same locator.
+    const recovered = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    expect(recovered.outcome).toBe("claim-bootstrapped");
+    expect(existsSync(recovered.session_file)).toBe(true);
+
+    const view = await readPlanCoordination(recovered.session_file, PLAN_ID, fixture.root);
+    expect(view.allowed_operations).toEqual(["prepare"]);
+    const prepared = await mutatePlanCoordination({
+      sessionPath: recovered.session_file,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    expect(prepared.outcome).toBe("prepared");
+
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    expect(bound.outcome).toBe("claimed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
+    expect((planRowOf(fixture, PLAN_ID).execution_lease as Record<string, unknown>).holder).toBe("claimant");
+  });
+
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
     const fixture = makeFixture();
     const leaf = join(fixture.workflowDir, "sessions", "leaf.json");

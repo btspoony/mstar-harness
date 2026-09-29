@@ -1159,7 +1159,7 @@ async function withRowCommit(
      */
     freshness?: boolean;
     /** Spec §D2 the one mutation allowed to adopt a stale pin: `bind`. */
-    staleAdoption?: { sessionId: string };
+    staleAdoption?: { sessionId: string; addressed: AssignmentHeaders };
     precheck: (context: RowContext) => void | Promise<void>;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
   },
@@ -1193,6 +1193,7 @@ async function withRowCommit(
           coordination.prepared,
           coordination,
           opts.staleAdoption.sessionId,
+          opts.staleAdoption.addressed,
         );
       } else {
         assertPreparedFresh(scope.assignmentPath, coordination.prepared);
@@ -1274,6 +1275,7 @@ function bindStaleAdoption(
   prepared: PreparedCoordination,
   coordination: RowCoordination | undefined,
   adopter: string,
+  addressed: AssignmentHeaders,
 ): { old_sha256: string; new_sha256: string } | null {
   const stale = stalePrepared(assignmentPath, prepared);
   if (stale === null) return null;
@@ -1283,6 +1285,24 @@ function bindStaleAdoption(
     coordination.handoff === undefined &&
     (holder === undefined || holder.session_id === adopter);
   if (!adoptable) throw stale.refusal;
+  // (PR #309-1) The pin may only move under the SAME executed contract. The gate
+  // pair is that contract half — `qa_gate` picks the acceptance gate and
+  // `findings_cleanup` the residual policy — so a drift that also changes either
+  // of them is not a byte-level self-amendment but a contract change, and only
+  // the coordinator's `prepare` may re-seal a contract. The rest of the block
+  // (path, plan hash, author, time) is deliberately not compared here: the path
+  // is the resolver's guarantee, and a plan-document edit is caught by the
+  // execution-input pin.
+  if (addressed.qaGate !== prepared.qa_gate || addressed.findingsCleanup !== prepared.findings_cleanup) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `Assignment ${assignmentPath} changed its contract after preparation (qa_gate ${prepared.qa_gate} \u2192 ` +
+        `${addressed.qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${addressed.findingsCleanup}) \u2014 a gate ` +
+        "change belongs to the coordinator's `prepare`, which re-seals the reviewed contract; only a byte-level drift " +
+        "within the same gates may be adopted",
+      { path: assignmentPath, expected: prepared.qa_gate, actual: addressed.qaGate },
+    );
+  }
   return stale;
 }
 
@@ -1823,11 +1843,15 @@ async function bindPlanSessionForPlan(
     harness_root: harnessRoot,
   };
   let created = "";
-  let freshEnvelope = false;
+  // (PR #309-2) True ONLY when this call created the file: a fresh bind's new
+  // envelope, or the restore of a continuing bind's missing one. A foreign
+  // bind that merely refuses keeps its hands off the claim's envelope.
+  let envelopeOwned = false;
   const result = await withRowCommit(scope, {
     expectedRevision: null,
-    // Spec §D2: this mutation owns the whole pin decision, for this adopter.
-    staleAdoption: { sessionId: adopter },
+    // Spec §D2: this mutation owns the whole pin decision, for this adopter — and
+    // only within the contract the addressed Assignment declares.
+    staleAdoption: { sessionId: adopter, addressed: assignment },
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared`, { plan_id: planId });
@@ -1863,6 +1887,12 @@ async function bindPlanSessionForPlan(
             { expected: canonicalTarget(expectedEnvelope), actual: canonicalTarget(bound.session_file) },
           );
         }
+        // (PR #309-2) A continuing bind must never leave the row pointing at a
+        // file that is not there: the recorded envelope IS the identity this
+        // bind reports, so a missing one is restored here (exclusive create, the
+        // lawful case for a caller-asserted id) rather than silently bound.
+        const restored = ensureSessionEnvelope(session);
+        if (restored !== null) envelopeOwned = true;
       }
       if (context.coordination.handoff !== undefined) {
         throw new CoordinationError(
@@ -1879,7 +1909,7 @@ async function bindPlanSessionForPlan(
       // fresh bind creates one, and only an envelope this call created is ever
       // dropped on failure.
       created = continuing ? canonicalTarget(bound.session_file) : createSessionEnvelope(session);
-      freshEnvelope = !continuing;
+      if (!continuing) envelopeOwned = true;
       const transition = claimLease(context.row, session.session_id, {
         worktree_path: scope.worktreePath,
         working_branch: scope.workingBranch,
@@ -1937,7 +1967,9 @@ async function bindPlanSessionForPlan(
       return commit;
     },
   }).catch((error: unknown) => {
-    if (freshEnvelope && created !== "") dropSessionEnvelope(created);
+    // Only an envelope THIS bind created is ever dropped: the claim's file is
+    // left alone when a foreign bind's duplicate-holder refusal is what fired.
+    if (envelopeOwned && created !== "") dropSessionEnvelope(created);
     throw error;
   });
 
@@ -1949,6 +1981,37 @@ async function bindPlanSessionForPlan(
     outcome: "claimed",
     view: buildView(harnessRoot, workflowId, scope.projectId, scope, result.snapshot, result.row, session, created),
   };
+}
+
+/**
+ * The session envelope these exact bytes describe, created if the path is free.
+ * `createSessionEnvelope` refuses an existing file, and that refusal is the
+ * answer this needs (`null` means "the recorded envelope is already there") — so
+ * the exclusive-create result is the only signal consumed, never an inspection of
+ * somebody else's file. A restore is lawful because the file route treats
+ * `--session-id` as a caller-asserted identity: the envelope is identity +
+ * pointers and names the session the row already records, so re-creating it
+ * grants nothing the recorded binding did not already carry.
+ */
+function ensureSessionEnvelope(session: CoordinationSession): string | null {
+  try {
+    return createSessionEnvelope(session);
+  } catch (error) {
+    if (error instanceof CoordinationError && error.code === "coordination.session-mismatch") return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether `session` IS the row's recorded binding — id and canonical envelope
+ * file. Callers state their own rule for what that means: the claim's re-claim
+ * reads it as "this row is mine to restore", the bind's continuation as "the
+ * claim this bind completes".
+ */
+function isClaimant(session: CoordinationSession, bound: CoordinatorBinding | undefined): boolean {
+  if (bound === undefined || bound.session_id !== session.session_id) return false;
+  const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
+  return canonicalTarget(bound.session_file) === canonicalTarget(path);
 }
 
 let bindPreInterleaveForTest: (() => void) | undefined;
@@ -2019,18 +2082,32 @@ async function claimPlanSession(scope: ResolvedPlanScope, sessionId: string): Pr
     harness_root: harnessRoot,
   };
   let created = "";
+  // True ONLY when this call created the file (a fresh claim's envelope, or the
+  // restore of one that went missing). A re-claim that finds its envelope in
+  // place owns nothing, so a later failure never unlinks the claim's own file.
+  let envelopeOwned = false;
   const result = await withRowCommit(scope, {
     expectedRevision: null,
     // The claim writes no pin, so there is none for it to re-authenticate.
     freshness: false,
     precheck: async (context) => {
       const bound = context.coordination?.session;
-      if (bound !== undefined) {
+      // (PR #309-3) A claim is IDEMPOTENT for the row's recorded holder: the same
+      // `--session-id` re-emits/validates that binding instead of refusing as a
+      // duplicate, which is the only lawful recovery for a claimant that stopped
+      // between its claim and its `prepare` (no takeover verb exists). Any OTHER
+      // id — including one that merely copies the file name — keeps the refusal.
+      const reclaiming = isClaimant(session, bound);
+      if (bound !== undefined && !reclaiming) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
-          `plan ${planId} is already claimed by session ${bound.session_id} \u2014 prepare and bind it instead of claiming a second time`,
+          `plan ${planId} is already claimed by session ${bound.session_id} \u2014 re-claim with that session id, prepare and bind it, instead of claiming with another one`,
           { holder: bound.session_id, session_file: bound.session_file },
         );
+      }
+      if (reclaiming) {
+        const restored = ensureSessionEnvelope(session);
+        if (restored !== null) envelopeOwned = true;
       }
       // Everything else a claim requires of the row is exactly the shared
       // first-owner admission `prepare` uses: unprepared, un-handed-off,
@@ -2047,7 +2124,17 @@ async function claimPlanSession(scope: ResolvedPlanScope, sessionId: string): Pr
       await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
     },
     mutate: (context) => {
+      const recorded = context.coordination?.session;
+      if (recorded !== undefined && recorded.session_id === session.session_id) {
+        // Idempotent re-claim: the binding stands exactly as recorded (same
+        // envelope path, same `bound_at` — a recovery does not re-date what it
+        // restores), so this returns the claim unchanged instead of advancing
+        // the row.
+        created = canonicalTarget(recorded.session_file);
+        return null;
+      }
       created = createSessionEnvelope(session);
+      envelopeOwned = true;
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
         revision: context.revision + 1,
@@ -2057,7 +2144,7 @@ async function claimPlanSession(scope: ResolvedPlanScope, sessionId: string): Pr
       return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
     },
   }).catch((error: unknown) => {
-    if (created !== "") dropSessionEnvelope(created);
+    if (envelopeOwned && created !== "") dropSessionEnvelope(created);
     throw error;
   });
 
@@ -2667,6 +2754,10 @@ async function mutatePrepare(
       path: scope.planPath,
     });
   }
+  // (PR #309-2) Set only if the claimant path had to restore a missing envelope
+  // for the row it is bound to: this prepare created that file, so it drops it
+  // again if the prepare itself refuses.
+  let prepareRestoredEnvelope = "";
   const result = await withRowCommit(scope, {
     expectedRevision: request.expectedRevision,
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
@@ -2691,6 +2782,16 @@ async function mutatePrepare(
         );
       }
       if (claimant) {
+        // (PR #309-2) The recorded envelope must BE the envelope this bind will
+        // report and bind the row to: `createSessionEnvelope` writes these exact
+        // bytes, so a missing or mismatched file means the recorded binding
+        // cannot prove the identity it names. That is checked INSIDE the lock,
+        // after the seat decision, so a claimant whose envelope is gone gets the
+        // remedy rather than a duplicate-holder verdict it cannot act on. A
+        // non-claimant still keeps the unchanged refusal — the check is never a
+        // bypass of it.
+        const restored = isClaimant(session, bound) ? ensureSessionEnvelope(session) : null;
+        if (restored !== null) prepareRestoredEnvelope = restored;
         // Identity is the row's recorded binding and the canonical envelope,
         // never a copy of it. `readOnly: true` skips `assertRowBinding`'s
         // lease-ownership half ON PURPOSE: the D0 claim bootstrap writes the
@@ -2754,6 +2855,9 @@ async function mutatePrepare(
       else metadata.catalog_pin = pin;
       return { row: { ...context.row, metadata, coordination: nextCoordination }, coordination: nextCoordination };
     },
+  }).catch((error: unknown) => {
+    if (prepareRestoredEnvelope !== "") dropSessionEnvelope(prepareRestoredEnvelope);
+    throw error;
   });
   return {
     ok: true,
