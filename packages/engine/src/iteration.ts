@@ -1059,6 +1059,7 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
               .replace(/\\\\/g, "\u0000")
               .replace(/\\"/g, '"')
               .replace(/\u0000/g, "\\")
+              .replace(/\\n/g, "\n")
           : /^\[.*\]$/.test(value)
             ? parseFlowArray(value, filePath)
             : value.replace(/^["']|["']$/g, "");

@@ -205,6 +205,39 @@ describe("catalog and roadmap command families", () => {
     }
   });
 
+  test("newline title round-trips through export and replace", async () => {
+    const { cwd, harness } = await activeFixture("newline-title");
+    const title = "Line one\nLine two";
+    const source = [
+      "---",
+      "project_id: proj",
+      "title: " + JSON.stringify(title),
+      "status: active",
+      "created_at: 2026-09-29",
+      "---",
+      "",
+      "## Direction",
+      "",
+      "Retained prose.",
+      "",
+    ].join("\n");
+    const sourceFile = join(cwd, "newline-source.md");
+    writeFileSync(sourceFile, source);
+    const seeded = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: sourceFile, expectProject: 1, expectRoadmap: "absent", operation: "newline-seed", harness }, invocation(cwd));
+    expect(seeded.status).toBe("ok");
+    const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(exported.status).toBe("ok");
+    const exportedFile = join(cwd, "newline-exported.md");
+    writeFileSync(exportedFile, String(exported.data));
+    const replaced = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: exportedFile, expectProject: 1, expectRoadmap: 1, operation: "newline-replace", harness }, invocation(cwd));
+    expect(replaced.status).toBe("ok");
+    const shown = await roadmap["roadmap.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+    expect(shown.status).toBe("ok");
+    if (shown.status === "ok") {
+      expect(shown.data.content.frontmatter.title).toBe(title);
+    }
+  });
+
   test("roadmap JSON export returns the v2 envelope", async () => {
     const { cwd, harness } = await activeFixture("roadmap-json-export");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));
