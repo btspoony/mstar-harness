@@ -434,30 +434,28 @@ export type ExecutionMigrationReceipt = {
 };
 
 /**
- * §6 item 2: the apply request — the reviewed manifest, its hash, a verified
- * recovery point and the validated coverage set of that exact document, in the
- * §6/§4.2 shape. `applyExecutionMigration` declares that intersection
- * literally; this alias exists so callers can name it.
+ * §6 item 2: the reviewed manifest and verified recovery point are caller-owned.
+ * Manifest hashes and byte-derived coverage are redundant facts and may be
+ * omitted; the transaction re-derives both before it stages anything.
  */
 export type ExecutionMigrationApplyInput = ExecutionMigrationInput & {
   manifest: ExecutionManifest;
-  manifestHash: string;
+  manifestHash?: string;
   backup: BackupReceipt;
-  coverage: ExecutionCoverageSet;
+  coverage?: ExecutionCoverageSet;
 };
 
 /**
- * §6 item 3: the activation request — the recorded manifest's identity (never
- * its document: the barrier re-reads the staged record and hashes it itself),
- * the epoch the reviewer observed, the operator attestation and the digest of
- * the coverage that was validated for that manifest.
+ * §6 item 3: manifest identity and operator attestation remain explicit.
+ * Epoch and coverage digest are derivable from the recorded manifest and
+ * coverage; supplied values remain constraints, never authority.
  */
 export type ExecutionMigrationActivationInput = ExecutionMigrationInput & {
   manifestId: string;
   manifestHash: string;
-  expectedEpoch: number;
+  expectedEpoch?: number;
   attestation: ActivationAttestation;
-  coverageDigest: string;
+  coverageDigest?: string;
 };
 
 /** §4.2 `collectExecutionCoverage`: the frozen manifest plus its explicit inventory. */
@@ -2426,7 +2424,7 @@ function assertReviewedManifestHolds(input: {
   }
 }
 
-/** The reviewed manifest, checked against the hash the caller hands back and the control root it was reviewed for. */
+/** The reviewed manifest: supplied hash is constrained when present; canonical hash is always derived. */
 function requireReviewedManifest(
   manifest: ExecutionManifest | undefined,
   manifestHash: string | undefined,
@@ -2439,11 +2437,8 @@ function requireReviewedManifest(
         `recorded v1 staging explicitly and re-preview the workspace under the current generation; nothing was staged.`,
     );
   }
-  if (typeof manifestHash !== "string" || manifestHash.trim() === "") {
-    throw conflict("the apply request must carry the reviewed manifest hash; nothing was staged.");
-  }
   const recomputed = executionManifestHash(manifest);
-  if (!sameBytesDigest(recomputed, manifestHash)) {
+  if (manifestHash !== undefined && !sameBytesDigest(recomputed, manifestHash)) {
     throw conflict(
       `the manifest does not hash to the reviewed value (recomputed ${recomputed}, supplied ${manifestHash}); the document ` +
         `and its hash must be the pair the reviewer saw.`,
@@ -2790,6 +2785,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
   const { context, inventoryPath } = resolveMigrationInput(input, "apply");
   const inventory = inventoryPath ?? null;
   const manifest = requireReviewedManifest(input.manifest, input.manifestHash, context);
+  const manifestHash = executionManifestHash(manifest);
   // §6 item 2: the recovery point is re-verified against the reviewed authority
   // and the bytes it names BEFORE any lock is taken or any byte is written.
   await assertBackupDescribesStore(context, input.backup, {
@@ -2853,12 +2849,11 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
             if (tx.execution.authorityState === "active") {
               throw conflict("the execution authority is ACTIVE; a manifest stages into a legacy or staged authority only.");
             }
-            // §4.1/§4.2 the coverage boundary: the reviewed set is recomputed
-            // from the SAME discovered bytes under the locks and must be the
-            // caller's set and the manifest's own discovery. A missing, forged or
-            // drifted receipt refuses with nothing staged.
-            const coverage = coverageFromDiscovery({ discovered, manifest, manifestHash: input.manifestHash });
-            if (serializeExecutionValue(coverage.set) !== serializeExecutionValue(input.coverage)) {
+            // §4.1/§4.2 the coverage boundary: coverage is always recomputed from
+            // the SAME discovered bytes under the locks. A caller-supplied set,
+            // when present, is a constraint rather than proof or authority.
+            const coverage = coverageFromDiscovery({ discovered, manifest, manifestHash });
+            if (input.coverage !== undefined && serializeExecutionValue(coverage.set) !== serializeExecutionValue(input.coverage)) {
               throw conflict(
                 `the supplied coverage of manifest ${manifest.id} is not the set recomputed from this workspace (supplied digest ` +
                   `${input.coverage.digest}, recomputed ${coverage.set.digest}). Coverage is recomputed from the named bytes at every ` +
@@ -2870,7 +2865,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
               .prepare("select manifest_hash, phase, coverage_json from execution_migrations where manifest_id = ?")
               .get(manifest.id) as { manifest_hash?: unknown; phase?: unknown; coverage_json?: unknown } | undefined;
             if (recorded !== undefined) {
-              if (recorded.manifest_hash !== input.manifestHash) {
+              if (recorded.manifest_hash !== manifestHash) {
                 throw conflict(
                   `manifest ${manifest.id} is already recorded with a different hash (${String(recorded.manifest_hash)}); ` +
                     `another manifest is staged under this id, and only an explicit abort can replace it.`,
@@ -2933,7 +2928,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
                 "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, coverage_json, activation_receipt_json, " +
                   "retirement_json, created_at, updated_at) values (?, ?, 'staged', ?, ?, null, null, ?, ?)",
               )
-              .run(manifest.id, input.manifestHash, serializeExecutionValue(manifest), serializeExecutionValue(coverage.set), now, now);
+              .run(manifest.id, manifestHash, serializeExecutionValue(manifest), serializeExecutionValue(coverage.set), now, now);
             // §2.2 the root revision advances ONCE (registry membership and the
             // authority state both changed in this one transaction) and the store
             // revision advances once for the multi-domain write. The epoch does
@@ -3395,18 +3390,14 @@ export async function activateExecutionMigration(
   const inventory = inventoryPath ?? null;
   const manifestId = requireManifestRef(input.manifestId, "activate", "manifestId");
   const manifestHash = requireManifestRef(input.manifestHash, "activate", "manifestHash");
-  if (!isNonEmptyString(input.coverageDigest) || !/^[0-9a-f]{64}$/.test(input.coverageDigest)) {
-    throw conflict(
-      `activation requires coverageDigest: the canonical digest of the coverage set validated for this manifest. The barrier recomputes ` +
-        `that coverage from the named bytes and compares it, so an absent or unusable witness is refused rather than guessed. ` +
-        `Nothing was activated.`,
-    );
+  if (
+    input.coverageDigest !== undefined &&
+    (!isNonEmptyString(input.coverageDigest) || !/^[0-9a-f]{64}$/.test(input.coverageDigest))
+  ) {
+    throw conflict(`activation coverageDigest must be the canonical 64-hex digest when supplied; nothing was activated.`);
   }
-  if (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0) {
-    throw conflict(
-      `activation requires expectedEpoch: the positive store epoch the reviewed manifest was staged at. The barrier is a ` +
-        `CAS on it, so an absent or unusable witness is refused rather than guessed. Nothing was activated.`,
-    );
+  if (input.expectedEpoch !== undefined && (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0)) {
+    throw conflict(`activation expectedEpoch must be a positive store epoch when supplied; nothing was activated.`);
   }
   const attestation = validateActivationAttestation(input.attestation);
   if (attestation.operator.actor !== operator) {
@@ -3425,7 +3416,15 @@ export async function activateExecutionMigration(
   // because discovery no longer recognises the workspace: after activation the
   // file route is fenced, and after retirement the root register is gone.
   const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "activation");
-  if (known.phase === "active") return replayActivation(known, attestationDigest, input.coverageDigest);
+  const coverageDigest = input.coverageDigest ?? known.coverage?.digest;
+  if (!isNonEmptyString(coverageDigest) || !/^[0-9a-f]{64}$/.test(coverageDigest)) {
+    throw conflict(`the staged manifest has no validated coverage from which to derive activation; nothing was activated.`);
+  }
+  const expectedEpoch = input.expectedEpoch ?? known.manifest.epoch;
+  if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch <= 0) {
+    throw conflict(`activation cannot derive a valid epoch from the staged manifest; nothing was activated.`);
+  }
+  if (known.phase === "active") return replayActivation(known, attestationDigest, coverageDigest);
   if (known.phase !== "staged") {
     throw conflict(
       `manifest ${manifestId} is recorded ${known.phase}; only a staged manifest activates. An aborted or retired manifest ` +
@@ -3452,7 +3451,11 @@ export async function activateExecutionMigration(
               root,
               verb: "activation",
             });
-            if (record.phase === "active") return replayActivation(record, attestationDigest, input.coverageDigest);
+            if (record.phase === "active") {
+              const recordedCoverageDigest = input.coverageDigest ?? record.coverage?.digest;
+              if (recordedCoverageDigest === undefined) throw conflict("active migration has no recorded coverage digest.");
+              return replayActivation(record, attestationDigest, recordedCoverageDigest);
+            }
             if (record.phase !== "staged") {
               throw conflict(
                 `manifest ${manifestId} is recorded ${record.phase}; only a staged manifest activates, and nothing was activated.`,
@@ -3472,10 +3475,10 @@ export async function activateExecutionMigration(
                   `manifest ${manifestId}. Nothing was activated.`,
               );
             }
-            if (input.expectedEpoch !== tx.epoch || manifest.epoch !== tx.epoch) {
+            if (expectedEpoch !== tx.epoch || manifest.epoch !== tx.epoch) {
               throw conflict(
                 `the barrier is a CAS on the store epoch: the manifest was reviewed at epoch ${manifest.epoch}, the caller ` +
-                  `expects ${input.expectedEpoch}, and the live store is at epoch ${tx.epoch}. Re-preview against the current ` +
+                  `expects ${expectedEpoch}, and the live store is at epoch ${tx.epoch}. Re-preview against the current ` +
                   `authority; nothing was activated.`,
               );
             }
@@ -3514,10 +3517,10 @@ export async function activateExecutionMigration(
             // stopped/reloaded attestation) and requires it to be BOTH the digest
             // the operator approved and the set recorded at staging.
             const barrierCoverage = coverageFromDiscovery({ discovered, manifest, manifestHash: record.manifestHash });
-            if (barrierCoverage.set.digest !== input.coverageDigest) {
+            if (barrierCoverage.set.digest !== coverageDigest) {
               throw conflict(
-                `activation supplies coverage digest ${input.coverageDigest}, but the coverage recomputed from this workspace is ` +
-                  `${barrierCoverage.set.digest}; the barrier activates exactly the reviewed coverage. Nothing was activated.`,
+                `activation coverage digest ${coverageDigest} does not match the coverage recomputed from this workspace ` +
+                  `(${barrierCoverage.set.digest}); the barrier activates exactly the reviewed coverage. Nothing was activated.`,
               );
             }
             if (record.coverage === null || serializeExecutionValue(record.coverage) !== serializeExecutionValue(barrierCoverage.set)) {

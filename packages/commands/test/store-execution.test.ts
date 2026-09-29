@@ -101,6 +101,59 @@ describe("store and execution command surface", () => {
     expect(typeof dataOf(backup).storeId).toBe("string");
   });
 
+  test("maintenance input derives inventory from the reviewed manifest and aggregates irreducible requirements", async () => {
+    const root = fixture("execution-sparse-maintenance");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const inventory = join(harness, "execution-inventory", "inventory.json");
+    const evidenceRoot = dirname(inventory);
+    for (const name of ["sdd", "host", "package"]) mkdirSync(join(evidenceRoot, name), { recursive: true });
+    writeJson(inventory, {
+      version: 2,
+      roots: {
+        sdd: join(evidenceRoot, "sdd"),
+        host: join(evidenceRoot, "host"),
+        package: join(evidenceRoot, "package"),
+      },
+      hostSessions: [],
+      sddEvidence: [],
+      consumers: [],
+      injectors: [],
+      injectorInventory: null,
+      backup: null,
+    });
+    const manifestPath = join(root, "execution-manifest.json");
+    writeJson(manifestPath, { version: 2, id: "fixture-manifest", root: harness, inventoryPath: inventory, surfaces: [] });
+    const apply = await invoke(definition("store.execution.apply"), {
+      harness,
+      operation: "sparse-apply",
+      operator: "ops-engineer",
+      manifest: manifestPath,
+      backup: join(root, "unused-recovery-receipt.json"),
+    }, root);
+    expect(apply.status).toBe("refused");
+    if (apply.status === "refused") {
+      expect(apply.code).toBe("execution.coverage-incomplete");
+      expect(apply.message).not.toContain("--inventory");
+    }
+
+    const missingStoreMaintenance = await invoke(definition("store.activate"), { harness }, root);
+    expect(missingStoreMaintenance.status).toBe("usage");
+    if (missingStoreMaintenance.status === "usage") {
+      expect(missingStoreMaintenance.message).toContain("--manifest");
+      expect(missingStoreMaintenance.message).toContain("--attestation");
+    }
+    const missingExecutionMaintenance = await invoke(definition("store.execution.apply"), { harness }, root);
+    expect(missingExecutionMaintenance.status).toBe("usage");
+    if (missingExecutionMaintenance.status === "usage") {
+      expect(missingExecutionMaintenance.message).toContain("--operation");
+      expect(missingExecutionMaintenance.message).toContain("--operator");
+      expect(missingExecutionMaintenance.message).toContain("--manifest");
+      expect(missingExecutionMaintenance.message).toContain("--backup");
+    }
+  });
+
+
   test("refuses the control-root store and refuses an un-applied migration at activation", async () => {
     const root = fixture("store-barriers");
     const control = join(root, "control");

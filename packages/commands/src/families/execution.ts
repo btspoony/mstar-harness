@@ -63,6 +63,18 @@ function readJson(value: string | undefined, flag: string): Record<string, unkno
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new SddScriptError(`${flag} must contain a JSON object`, 2);
   return parsed as Record<string, unknown>;
 }
+function requireInputs(input: ExecutionInput, fields: readonly (keyof ExecutionInput)[]): void {
+  const missing = fields.filter((field) => {
+    const value = input[field];
+    return typeof value !== "string" || value.trim() === "";
+  });
+  if (missing.length > 0) {
+    throw new SddScriptError(
+      `${missing.map((field) => `--${field}`).join(", ")} ${missing.length === 1 ? "is" : "are"} required`,
+      2,
+    );
+  }
+}
 function executionContext(input: ExecutionInput, invocation: InvocationContext, verb: string): StoreContext {
   const harness = absolute(input.harness, "--harness");
   const root = resolveProcessHarnessDir(invocation.cwd, harness);
@@ -77,23 +89,44 @@ function document<T>(value: string | undefined, flag: string): T {
 }
 function reviewedInventory(manifest: ExecutionManifestDocument, input: ExecutionInput, verb: string): string | undefined {
   const supplied = absolute(input.inventory, "--inventory", true);
-  const expected = "inventoryPath" in manifest ? manifest.inventoryPath : null;
-  if (expected === null) {
-    if (supplied !== undefined) throw new SddScriptError(`${verb}: this reviewed manifest has no explicit inventory`, 2);
-    return undefined;
+  const expected = "inventoryPath" in manifest && typeof manifest.inventoryPath === "string" ? manifest.inventoryPath : undefined;
+  if (supplied !== undefined && supplied !== expected) {
+    throw new SddScriptError(`${verb}: --inventory must match the manifest's reviewed discovery scope`, 2);
   }
-  if (supplied === undefined || supplied !== expected) throw new SddScriptError(`${verb}: --inventory must match the manifest's reviewed discovery scope`, 2);
-  return supplied;
+  return expected;
 }
-function coverageSet(input: ExecutionInput, manifest: ExecutionManifestDocument, verb: string): ExecutionCoverageSet {
-  const set = document<ExecutionCoverageSet>(input.coverage, "--coverage");
-  if (set.version !== 1 || !Array.isArray(set.receipts) || typeof set.digest !== "string" || !lossDigestPattern.test(set.digest)) {
+async function coverageSet(
+  input: ExecutionInput,
+  manifest: ExecutionManifestDocument,
+  context: StoreContext,
+  operationId: string,
+  operator: string,
+  verb: string,
+): Promise<ExecutionCoverageSet> {
+  const inventoryPath = reviewedInventory(manifest, input, verb);
+  if (input.coverage === undefined) {
+    if (inventoryPath === undefined) {
+      throw new SddScriptError(
+        `${verb}: --coverage is needed for a control-root-only manifest because no inventory exists to derive non-control coverage`,
+        2,
+      );
+    }
+    return collectExecutionCoverage({
+      context,
+      operationId,
+      operator,
+      inventoryPath,
+      manifest: manifest as ExecutionManifest,
+    });
+  }
+  const supplied = document<ExecutionCoverageSet>(input.coverage, "--coverage");
+  if (supplied.version !== 1 || !Array.isArray(supplied.receipts) || typeof supplied.digest !== "string" || !lossDigestPattern.test(supplied.digest)) {
     throw new SddScriptError(`${verb}: --coverage is not a canonical execution coverage set`, 2);
   }
-  if (set.manifestId !== manifest.id || set.manifestHash !== executionManifestHash(manifest)) {
+  if (supplied.manifestId !== manifest.id || supplied.manifestHash !== executionManifestHash(manifest)) {
     throw new SddScriptError(`${verb}: --coverage belongs to a different reviewed manifest`, 2);
   }
-  return set;
+  return supplied;
 }
 function requireDigest(input: ExecutionInput): string {
   const digest = required(input.acceptLossDigest, "--accept-loss-digest");
@@ -127,13 +160,14 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       });
     }
     if (verb === "apply") {
+      requireInputs(input, ["operation", "operator", "manifest", "backup"]);
       const operationId = required(input.operation, "--operation");
       const operator = required(input.operator, "--operator");
       const reviewed = document<ExecutionManifestDocument>(input.manifest, "--manifest");
       if (reviewed.version !== 2) throw new SddScriptError("apply requires the version 2 execution manifest", 2);
       const manifest = reviewed as ExecutionManifest;
       const inventoryPath = reviewedInventory(manifest, input, verb);
-      const coverage = coverageSet(input, manifest, verb);
+      const coverage = await coverageSet(input, manifest, context, operationId, operator, verb);
       const backup = document<BackupReceipt>(input.backup, "--backup");
       if (typeof backup.backupPath !== "string" || backup.backupPath.trim() === "") throw new SddScriptError("--backup must be the recovery-point receipt", 2);
       const manifestHash = executionManifestHash(manifest);
@@ -141,11 +175,12 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       return ok(id, { ...receipt, manifestHash, coverageDigest: coverage.digest });
     }
     if (verb === "activate") {
+      requireInputs(input, ["operation", "operator", "manifest", "attestation"]);
       const operationId = required(input.operation, "--operation");
       const operator = required(input.operator, "--operator");
       const manifest = document<ExecutionManifestDocument>(input.manifest, "--manifest");
       const inventoryPath = reviewedInventory(manifest, input, verb);
-      const coverage = coverageSet(input, manifest, verb);
+      const coverage = await coverageSet(input, manifest, context, operationId, operator, verb);
       const attestation = document<ActivationAttestation>(input.attestation, "--attestation");
       const manifestHash = executionManifestHash(manifest);
       const receipt = await activateExecutionMigration({ context, operationId, operator, ...(inventoryPath === undefined ? {} : { inventoryPath }), manifestId: manifest.id, manifestHash, expectedEpoch: manifest.epoch, attestation, coverageDigest: coverage.digest });
