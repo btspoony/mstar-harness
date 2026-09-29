@@ -271,16 +271,18 @@ describe("mstar status workflow-close", () => {
     );
   });
 
-  test("unregister failure reports a partial close; the retry finishes it without changing ended_at", () => {
+  test("an unaddressable root register reports a partial close; the retry finishes it without changing ended_at", () => {
     setupHarness((harness, { snapshot, root }) => {
-      // Round 1: a v1 root refuses the unregister — the snapshot close is
-      // already durable, so the failure must surface as a partial close and
-      // the root bytes must be preserved.
+      // Round 1: a v1 root is unaddressable by the v2 JSON writer, so the
+      // register entry cannot be REMOVED. Contract §3 (close row): "root-removal
+      // failure is explicit partial closure" — the terminal snapshot is already
+      // durable and is never rolled back, but the close is refused and says so.
       const v1Root = JSON.stringify({ version: 1, updated_at: "2026-08-19", plans: [] }, null, 2);
       writeFileSync(root, v1Root);
       const partial = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(partial.exitCode).toBe(1);
-      expect(message(partial)).toContain("partial close");
+      expect(envelope(partial).code).toBe("coordination.root-register-unwritable");
+      expect(message(partial)).toContain("PARTIAL");
 
       const afterPartial = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(afterPartial.status).toBe("completed");
@@ -289,7 +291,7 @@ describe("mstar status workflow-close", () => {
 
       // Round 2: the root is migrated (v2 + the stale entry); the retry only
       // finishes the unregister — a DIFFERENT --ended-at must not touch the
-      // already-terminal snapshot.
+      // already-terminal snapshot, which keeps the FIRST close's timestamp.
       writeFileSync(root, JSON.stringify(rootDoc([rootEntry()]), null, 2));
       const retry = runCli(closeArgs(harness, ["--ended-at", "2026-09-20"]));
       expect(retry.exitCode).toBe(0);

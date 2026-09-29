@@ -193,19 +193,25 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("legal 'create feature/x from main' + --branch main → exit 0 (branch checked = feature/x)", () => {
+  test("legal 'create feature/x from main' + --branch main → exit 1 — the explicit flag conflicts with the Assignment's declared branch", () => {
     withAssignment(assignment({ "Working branch": "create feature/x from main" }), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
-      expect(result.exitCode).toBe(0);
-      expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
+      // The Assignment's declared branch (the create form's target `feature/x`)
+      // is the checked branch; an explicit `--branch` that disagrees is a
+      // conflict, never a silent override of the declared form.
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("dispatch.branch.conflict");
     });
   });
 
-  test("Assignment branch form wins over --branch (feature/foo + --branch main → exit 0)", () => {
+  test("Assignment branch form wins over --branch (feature/foo + --branch main → the conflict is the refusal)", () => {
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
-      expect(result.exitCode).toBe(0);
-      expectEnvelope(result, "ok", "dispatch.validate.ok");
+      // Precedence is still the Assignment's: `feature/foo` is the branch that
+      // gets checked, so `--branch main` is not treated as working on main —
+      // it is a disagreement with the declared form and refuses as one.
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("dispatch.branch.conflict");
       expect(violationCodes(result)).not.toContain("dispatch.default-branch.protected");
     });
   });

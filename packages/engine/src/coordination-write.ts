@@ -104,6 +104,11 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.delivery-source-repair.already-aligned",
   "coordination.delivery-source-repair.not-legacy-shape",
   "coordination.delivery-source-repair.pr-conflict",
+  // The close's root-removal step (plan-workflow-lifecycle-contract §3 close
+  // row): the terminal state is committed, but the root register could not be
+  // read as a v2 register, so its entry could not be removed — an explicit
+  // PARTIAL close the caller resolves by migrating the register and retrying.
+  "coordination.root-register-unwritable",
 ] as const;
 
 export type CoordinationErrorCode = (typeof COORDINATION_ERROR_CODES)[number];

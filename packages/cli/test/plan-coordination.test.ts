@@ -2222,6 +2222,14 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   rmSync(fixture.snapshotPath, { force: true });
   rmSync(join(fixture.harness, "status.json"), { force: true });
 
+  // The registration producer DERIVES the row identity and title from the
+  // selected plan document (contract R1: the document is the registration
+  // authority), so the shared fixture's `# plan a` placeholder — which declares
+  // no `plan_id` — is not registrable. Seed the document the registration is
+  // reviewed against; the title must agree with the `--plan-title` below, which
+  // is a constraint against the document rather than an override of it.
+  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Plan ${PLAN_ID}\n`);
+
   // A real feature checkout: `handoff` and `accept` read the pinned source
   // commit and the branch it was made on. A report-only workflow owns no
   // delivery branch, so this commit is the inspected source, never a merge

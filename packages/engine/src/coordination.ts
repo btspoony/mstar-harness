@@ -53,7 +53,7 @@ import {
   type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { GateResult } from "./core.js";
+import { readJson, type GateResult } from "./core.js";
 import {
   ASSIGNMENT_INTENT_FIELDS,
   COORDINATION_ERROR_CODES,
@@ -7473,8 +7473,26 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
   // left behind is disclosed with it.
   let hadEntry = false;
   try {
-    hadEntry = findRegisteredWorkflow(harnessRoot, input.workflowId) !== undefined;
-    if (hadEntry) await unregisterWorkflow(statusPath, input.workflowId);
+    // §3 close row: "root-removal failure is explicit partial closure". A root
+    // the v2 JSON writer cannot address is exactly that failure — the removal
+    // could not be ATTEMPTED — so it must not be conflated with "the register
+    // genuinely holds no entry for this workflow" (nothing to remove, a clean
+    // close). `findRegisteredWorkflow` answers `undefined` for both, so the
+    // register's own shape disambiguates before the skip is taken.
+    const registered = findRegisteredWorkflow(harnessRoot, input.workflowId);
+    hadEntry = registered !== undefined;
+    if (hadEntry) {
+      await unregisterWorkflow(statusPath, input.workflowId);
+    } else if (!isV2RootRegister(statusPath)) {
+      throw new CoordinationError(
+        "coordination.root-register-unwritable",
+        `workflow ${input.workflowId} is terminal, but its root register could not be read as a v2 register \u2014 ` +
+          "the register entry could not be removed, so this close is PARTIAL: the terminal state is committed and stands " +
+          "(a retry never rewrites the terminal timestamp). Migrate the root register (`mstar migrate`), then re-run the close " +
+          "to finish the unregister.",
+        { workflow_id: input.workflowId, applied: [...composed], rootRegister: "not-v2-register" },
+      );
+    }
   } catch (error) {
     throw discloseFileClosePrefix(error, composed, input.workflowId);
   }
@@ -7484,6 +7502,24 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
     unregistered: hadEntry,
     outcome: alreadyTerminal ? "already-terminal" : "completed",
   };
+}
+
+/**
+ * Whether the root register at `statusPath` is a v2 register the JSON writer can
+ * address: absent/empty counts (there is nothing to unregister and nothing was
+ * left behind), a document carrying a `workflows` array counts, and anything
+ * else — a pre-migration v1 root, or a document whose `workflows` was replaced —
+ * does not. An unreadable/undecodable document is reported as un-addressable
+ * rather than thrown: the caller is already handling a partial close and needs
+ * the diagnosis, not a second failure from the diagnosis itself.
+ */
+function isV2RootRegister(statusPath: string): boolean {
+  try {
+    const doc = readJson(statusPath);
+    return Object.keys(doc).length === 0 || Array.isArray(doc.workflows);
+  } catch {
+    return false;
+  }
 }
 
 /** The row revision a composed close passes as transport freshness (never intent). */
