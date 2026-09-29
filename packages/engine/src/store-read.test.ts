@@ -405,8 +405,8 @@ describe("milestone views", () => {
     const envelope = await withStoreRead(context, queryMilestones("proj-a"));
     expect(envelope.data.projectId).toBe("proj-a");
     expect(milestoneRows(envelope.data)).toEqual([
-      ["M-A1", "proj-a", "A first", 0, 3, 1, 1, 1, 2],
-      ["M-A2", "proj-a", "A second", 1, 0, 0, 0, 0, 0],
+      ["M-A1", "proj-a", "A first", 0, 3, 1, 1, 1],
+      ["M-A2", "proj-a", "A second", 1, 0, 0, 0, 0],
     ]);
     expect(envelope.data.issues.map((issue) => [issue.id, issue.milestoneId, issue.disposition])).toEqual([
       ["I-A1", "M-A1", "open"],
@@ -420,33 +420,33 @@ describe("milestone views", () => {
     // The other project's grouping is its own, and an absent project refuses
     // instead of answering an empty one.
     const other = await withStoreRead(context, queryMilestones("proj-b"));
-    expect(milestoneRows(other.data)).toEqual([["M-B1", "proj-b", "B only", 0, 1, 0, 1, 0, 1]]);
+    expect(milestoneRows(other.data)).toEqual([["M-B1", "proj-b", "B only", 0, 1, 0, 1, 0]]);
     expect(other.data.unassignedIssues).toBe(0);
     await expect(withStoreRead(context, queryMilestones("proj-absent"))).rejects.toMatchObject({ code: "milestone.project-not-found" });
   });
 
   test("a milestone status query filters one milestone and refuses without its project or id", async () => {
     const { context } = await workspace("milestone-status-");
+    await registerProject(context, "proj-b");
     await registerProject(context, "proj-a");
     await withWrite(context, (db) => {
       seedMilestone(db, { id: "M-1", name: "One", ordinal: 0 });
       seedMilestone(db, { id: "M-2", name: "Two", ordinal: 1 });
       seedIssue(db, { id: "I-1", title: "first", milestoneId: "M-1" });
       seedIssue(db, { id: "I-2", title: "second", milestoneId: "M-2" });
+      seedMilestone(db, { id: "M-B1", name: "Foreign", projectId: "proj-b" });
       seedIssue(db, { id: "I-3", title: "unassigned" });
     });
 
     const one = await withStoreRead(context, queryMilestones("proj-a", "M-1"));
-    expect(milestoneRows(one.data)).toEqual([["M-1", "proj-a", "One", 0, 1, 1, 0, 0, 0]]);
+    expect(milestoneRows(one.data)).toEqual([["M-1", "proj-a", "One", 0, 1, 1, 0, 0]]);
     expect(one.data.issues.map((issue) => issue.id)).toEqual(["I-1"]);
     // The unassigned count is the project's, not the filtered milestone's.
     expect(one.data.unassignedIssues).toBe(1);
 
-    // A well-formed but unknown id answers an empty result, not another
-    // milestone's data; a missing project or id is a usage refusal.
-    const unknown = await withStoreRead(context, queryMilestones("proj-a", "M-missing"));
-    expect(unknown.data.milestones).toEqual([]);
-    expect(unknown.data.issues).toEqual([]);
+    // Unknown and cross-project IDs refuse instead of answering an empty or foreign result.
+    await expect(withStoreRead(context, queryMilestones("proj-a", "M-missing"))).rejects.toMatchObject({ code: "milestone.not-found" });
+    await expect(withStoreRead(context, queryMilestones("proj-a", "M-B1"))).rejects.toMatchObject({ code: "milestone.project-mismatch" });
     // The standalone query is a real view request: it refuses to run outside
     // the boundary's single read transaction.
     await expect(withStoreRead(context, { view: "milestones", needsProjection: false } as never)).rejects.toMatchObject({ exitCode: 2 });
