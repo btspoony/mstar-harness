@@ -13032,12 +13032,19 @@ function project(db, projectId) {
 function readMilestonesOn(db, projectId, milestoneId) {
   guard(db);
   project(db, projectId);
+  if (milestoneId !== undefined) {
+    const owner = db.prepare("select project_id from project_milestones where milestone_id=?").get(milestoneId);
+    if (!owner)
+      return fail("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
+    if (owner.project_id !== projectId)
+      fail("milestone.project-mismatch", `Milestone ${milestoneId} does not belong to project ${projectId}.`);
+  }
   const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
   const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
   const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
   const milestones = rows.map((r) => {
     const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
-    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, doneIssues: resolvedIssues + otherRetiredIssues, resolvedIssues, otherRetiredIssues };
+    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, resolvedIssues, otherRetiredIssues };
   });
   const issues = db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params).map((r) => ({ id: String(r.id), title: String(r.title), acceptance: String(r.acceptance), disposition: r.disposition, revision: Number(r.revision), milestoneId: String(r.milestone_id) }));
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
