@@ -25,7 +25,7 @@ function invocation(cwd: string): InvocationContext {
 
 const catalog = Object.fromEntries(getCatalogCommandDefinitions().map((definition) => [definition.id, definition]));
 const roadmap = Object.fromEntries(getRoadmapCommandDefinitions().map((definition) => [definition.id, definition]));
-const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${title}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
+const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${JSON.stringify(title)}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
 
 async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
   const cwd = join(root, name);
@@ -108,7 +108,7 @@ describe("catalog and roadmap command families", () => {
     if (exported.status === "ok") {
       expect(exported.data).toContain('project_id: "proj"');
       expect(exported.data).toContain('title: "Project"');
-      expect(exported.data).toContain("status: active");
+      expect(exported.data).toContain('status: "active"');
       expect(exported.data).toContain("created_at: ");
       const file = join(cwd, "roadmap.md");
       writeFileSync(file, String(exported.data));
@@ -158,7 +158,7 @@ describe("catalog and roadmap command families", () => {
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
     expect(exported.status).toBe("ok");
     const exportedMarkdown = String(exported.data);
-    expect(exportedMarkdown.split("\n").find((line) => line.startsWith("title: "))).toBe(`title: ${title}`);
+    expect(exportedMarkdown.split("\n").find((line) => line.startsWith("title: "))).toBe(`title: ${JSON.stringify(title)}`);
 
     const roundTripFile = join(cwd, "roadmap-roundtrip.md");
     writeFileSync(roundTripFile, exportedMarkdown);
@@ -167,17 +167,17 @@ describe("catalog and roadmap command families", () => {
   });
 
   test("quoted and bracketed roadmap titles survive export and replace", async () => {
-    const { cwd, harness } = await activeFixture("title-quoting");
     const titles = [
       'He said "hi" and O\'Brien said \'no\'',
       "[Phase 1] rollout",
       "plain title",
     ];
-    for (const title of titles) {
+    for (const [titleIndex, title] of titles.entries()) {
+      const { cwd, harness } = await activeFixture(`title-quoting-${titleIndex}`);
       const source = [
         "---",
         "project_id: proj",
-        `title: ${title.includes("'") ? `'${title.replace(/'/g, "''")}'` : title}`,
+        `title: ${JSON.stringify(title)}`,
         "status: active",
         "created_at: 2026-09-29",
         "---",
