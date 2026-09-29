@@ -1209,6 +1209,36 @@ describe("preference off is a neutral no-op", () => {
 });
 
 describe("fire reads current preference", () => {
+  test("phase1-complete checks preference before requiring a pending binding", async () => {
+    const offRepo = buildControlRepo();
+    writePluginOverrides(offRepo.main, { modelHandoff: false, handoffTarget: "@default" });
+    const off = await createHarness({
+      cwd: offRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(offRepo.main),
+    });
+
+    const skipped = await off.runTool({ operation: "phase1-complete", workflowId: "no-binding" });
+    expect(codeOf(skipped)).toBe("preference-off");
+    expect(skipped.isError).toBe(false);
+    expect(skipped.content[0]?.text).toContain("this session is not armed and its model is unchanged");
+    expect(off.records()).toEqual([]);
+    expect(off.switched).toEqual([]);
+
+    const onRepo = buildControlRepo();
+    writePluginOverrides(onRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const on = await createHarness({
+      cwd: onRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(onRepo.main),
+    });
+    const refused = await on.runTool({ operation: "phase1-complete", workflowId: "no-binding" });
+    expect(codeOf(refused)).toBe("not-pending");
+    expect(refused.isError).toBe(true);
+    expect(on.records()).toEqual([]);
+    expect(on.switched).toEqual([]);
+  });
+
   test("fire reads current preference: destination, enablement, readiness and a settings edit during the readiness checkpoint are honored", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });

@@ -41,7 +41,7 @@ Do not load for:
 ### 1. Task → command family
 
 
-Start with the intended verb and its current help, not a universal preflight chain. The active engine derives trustworthy scope/root/session projections and composes entailed bookkeeping inside the requested action. Supply only facts it cannot derive (the intended target, independently acquired identity, genuine authorization/foreign-holder stop evidence, and any actual conflicting choice). Inspect the action receipt: `applied`, `partial` (name committed components and remaining conflict), or exact replay; retry the same intent only after reading a genuine refusal. Do not repair state through a separate command before replaying a normal action.
+Start with the intended verb and its current help, not a universal preflight chain. Supply the non-derivable inputs it requires: on the active route, session reference, full execution token and operation id; pre-activation, session envelope and row revision; for a fresh plan-PM bind, explicit operator `--session-id`. Acquire the current expectation from an authoritative read. Inspect the `applied` or `replayed` receipt; preserve already-applied components only where the verb documents action-local partial semantics. A refusal identifies the missing input or genuine conflict. Do not repair state through a separate command before replaying a normal action.
 Find the task, run the family, then read its owning skill for the rules around it.
 
 | Task | Family | Owning skill |
@@ -90,7 +90,7 @@ Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — i
 
 ### 2. Conflict diagnostics (not a preflight chain)
 
-Use `references/preconditions.md` only when the intended verb cannot derive a required fact. A genuinely ambiguous root/target, foreign live holder, missing independent caller identity, or unavailable authorization requires the owner to supply that fact. A stale raw-replacement byte version requires a fresh read. Do not rebind, copy tokens, or run `persist` merely to replay an ordinary lifecycle action; a partial result retains applied components.
+Use `references/preconditions.md` when the intended verb refuses for a required fact: supply its explicit session address, current expectation and operation id as appropriate to the route, then resolve a genuinely ambiguous root/target, foreign live holder, missing independent caller identity or unavailable authorization with the owner. A stale raw-replacement byte version requires a fresh read. Do not make `persist` or rebind a routine prerequisite for an ordinary lifecycle action; preserve components already applied where that verb documents partial-applied semantics.
 
 ### 3. Lifecycle shape
 

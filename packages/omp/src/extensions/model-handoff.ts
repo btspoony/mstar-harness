@@ -1387,7 +1387,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   const fire = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
     const sessionId = sessionIdOf(ctx);
     const generation = gate.generation;
-    const decision = reconstruct(ctx);
+    let decision = reconstruct(ctx);
 
     if (attemptIsRunning(decision)) {
       return outcome(
