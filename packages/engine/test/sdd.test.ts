@@ -884,9 +884,12 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   const harnessDir = opts.nestedHarness ? join(control, "state", ".mstar") : join(control, ".mstar");
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
+  // The registered plan document (§4): its `plan_id` header is the identity
+  // authority a registration resolves the pointer against, and its heading is
+  // the title authority (the registration calls declare that same title).
   writeFileSync(
     planFile,
-    "# Plan\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n",
+    `# Plan\n\n**plan_id:** ${PLAN_ID}\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n`,
   );
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
@@ -1470,7 +1473,9 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       setArtifactStore(createFsStore(f.harnessDir));
       await registerPlanWorkflow("wf-recovered", {
         harnessDir: f.harnessDir,
-        plan: { id: PLAN_ID, title: "Recovered plan", file: `plans/${PLAN_ID}.md` },
+        // The declared title is the one the selected document states (its
+        // heading is the title authority, §4/R1).
+        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
         deliveryKind: "development",
         branchSource: "main",
         branchTarget: f.workingBranch,
@@ -1495,7 +1500,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       setArtifactStore(createFsStore(f.harnessDir));
       await registerPlanWorkflow("wf-verify", {
         harnessDir: f.harnessDir,
-        plan: { id: PLAN_ID, title: "Verification run", file: `plans/${PLAN_ID}.md` },
+        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
         deliveryKind: "verification/report-only",
         completionPolicy: "acceptance artifacts recorded under the plan's sddDir",
       });

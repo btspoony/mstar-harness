@@ -55,6 +55,8 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult } from "./core.js";
 import {
+  ASSIGNMENT_INTENT_FIELDS,
+  COORDINATION_ERROR_CODES,
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
@@ -68,6 +70,8 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
+  type AssignmentIntent,
+  type CoordinationErrorCode,
   type HandoffIntegration,
   type PlanHandoff,
   type PlanProgress,
@@ -76,6 +80,17 @@ import {
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
 } from "./coordination-write.js";
+import {
+  selectSemanticFields,
+  unresolvedRecovery,
+  type IntentContext,
+  type RecoveryDetails,
+  type RecoveryProblem,
+  type ResolutionSource,
+  type ResolutionWarning,
+  type RootResolution,
+  type TargetResolution,
+} from "./recovery-intent.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
   IMPLEMENTED_OPERATIONS,
@@ -89,17 +104,21 @@ import {
   assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
+  entailedHandoffStatus,
   gitProof,
   integrationAnchors,
   integrationDiverged,
   integrationUnresolved,
   mergeLeaseOfAttempt,
+  missingDecision,
   readHandoffEvidence,
   requireExecutionLease,
+  requireHandoffState,
   requireIntegration,
   requirePlanHandoff,
   requirePlanSessionBinding,
   requireProgressStatus,
+  requireRowStatus,
   rowCoordinationOf,
   rowStatusOf,
   standaloneDeliveryAnchors,
@@ -128,7 +147,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
@@ -150,8 +169,13 @@ import {
 } from "./issue.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
+  DERIVED_PHASE_CODE,
+  closeWorkflow,
+  deriveLifecyclePhase,
+  isCloseTimestamp,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
+  isTerminalSnapshot,
   rowValidationRoute,
   consultDeliveryEvidence,
   readWorkflowSnapshot,
@@ -161,6 +185,7 @@ import {
   WORKFLOW_TERMINAL_STATUSES,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
+  type WorkflowDeliveryEvidence,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
@@ -288,9 +313,16 @@ export type CoordinationResult = {
   operation: string;
   session: CoordinationSession;
   session_file: string;
-  /** `claimed` / `resumed` / `prepared` / `progressed` / `residual-added` / `residual-closed`. */
+  /** `claimed` / `resumed` / `prepared` / `progressed` / `already-satisfied` / `residual-added` / `residual-closed`. */
   outcome?: string;
   view?: PlanCoordinationView;
+  /**
+   * §4.1 the recovery sidecar of this call: what it did with the intent, the
+   * row it addressed, the facts it reconciled and the commit boundary the
+   * caller can rely on. The same object shape a refusal carries under
+   * `error.details.recovery`, so one contract covers both paths.
+   */
+  recovery?: RecoveryDetails;
   /**
    * The issues a scoped issue operation captured or closed, in call order
    * (G2a). The IDs are DB-allocated, so the caller learns them here instead of
@@ -377,13 +409,44 @@ export type PlanCoordinationOperation =
   | { kind: "repair-delivery-source"; handoffId: string }
   | { kind: "reconcile"; handoffId: string };
 
-/** One whole coordination request: one session, one operation, one precondition. */
+/**
+ * One whole coordination request: one session, one operation, one precondition.
+ *
+ * § One resolver path (S2/E02) every field but the operation is DERIVABLE, so
+ * a public caller states what it actually holds: the bound session envelope, or
+ * the acquired identity whose own envelope the engine resolves; the addressed
+ * plan; the revision `show` reported. An explicitly supplied value is a
+ * CONSTRAINT — it is validated exactly as before, never replaced — so a fully
+ * specified caller keeps this surface's behavior byte for byte.
+ */
 export type CoordinationRequest = {
-  sessionPath: string;
-  /** Required for a coordinator session; never another plan for a plan session. */
+  /** The bound coordinator/plan session envelope (absolute); omitted → the identity's own envelope. */
+  sessionPath?: string;
+  /** Sparse intent: the process context the trusted control root is resolved from. */
+  cwd?: string;
+  /** Sparse intent: the trusted control root the caller already holds (never re-derived from Git). */
+  controlRoot?: string;
+  /**
+   * Sparse intent: the caller's independently acquired identity — a SELECTOR
+   * for the workflow/plan and for its own envelope, never authority. A role
+   * string or session reference authorizes nothing on its own.
+   */
+  identity?: ExecutionIdentity;
+  /**
+   * Required for a coordinator session; never another plan for a plan session.
+   * Omitted → the addressed plan the resolved target names.
+   */
   planId?: string;
-  /** The selected row's `coordination.revision` from `show` (absent row = 0). */
-  expectedRevision: number;
+  /**
+   * The selected row's `coordination.revision` from `show` (absent row = 0).
+   * §4.2 this is transport FRESHNESS, not the intent: a token whose revision
+   * moved is reported as provenance (`recovery.warnings`) and the operation's
+   * own record, read under the lock, decides whether the intent is already
+   * satisfied, still applicable, or in conflict with another writer's work.
+   * Omitted → the revision the addressed row carries when this call resolves
+   * it, which is the value `show` would have handed the caller.
+   */
+  expectedRevision?: number;
   operation: PlanCoordinationOperation;
 };
 
@@ -560,6 +623,296 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     dir = parent;
   }
   return resolveHarnessDir(start);
+}
+
+/* ------------------------------------------------------------------------ *
+ * § Intent resolution (S2): trusted root, associated target
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The process-root probe WITHOUT the hard Git verdict. `resolveProcessHarnessDir`
+ * keeps refusing for callers that bring no root of their own; an engine
+ * operation that already holds a trusted root must not be invalidated by a
+ * Git fact it does not need (design R12/A24), so an unreadable main worktree is
+ * reported as `unavailable` here instead of becoming a refusal.
+ */
+function probeProcessRoot(cwd: string): { root: string | null; unavailable: string | null } {
+  try {
+    return { root: resolveProcessHarnessDir(cwd), unavailable: null };
+  } catch (error) {
+    if (error instanceof CoordinationError && error.code === "coordination.not-in-git") {
+      return { root: null, unavailable: error.message };
+    }
+    throw error;
+  }
+}
+
+/** The durable root association an entry already holds: the control harness root
+ * its own session envelope (or catalog binding) recorded. */
+export type RootAssociation = Readonly<{ root: string; source: string }>;
+
+/**
+ * Resolve the TRUSTED control root of one sparse intent, in source order:
+ *
+ * 1. `context.controlRoot` — a root the caller explicitly holds. It is
+ *    authoritative: it is never re-derived from Git, so a Git outage cannot
+ *    invalidate it and no nested harness is guessed (R12/A24).
+ * 2. `association` — the root the caller's identity already holds (its session
+ *    envelope). Also Git-independent, but cross-checked against the process
+ *    root when that probe answers: two durable statements that disagree are an
+ *    unresolved conflict, never a silent pick (§3.3).
+ * 3. The process probe from `context.cwd` — the only Git-dependent source, and
+ *    the only one that can answer "no root".
+ *
+ * A root is never guessed and no candidate list is used to choose one. A Git
+ * fact that cannot be read is a warning beside a resolved root, and an
+ * unresolved component (with every source tried) when no root was established.
+ */
+export function resolveIntentRoot(context: IntentContext, association?: RootAssociation): RootResolution {
+  const resolvedFrom: ResolutionSource[] = [];
+  const warnings: ResolutionWarning[] = [];
+  const cwd = resolve(context.cwd);
+  if (isNonEmptyString(context.controlRoot)) {
+    resolvedFrom.push({ path: "controlRoot", source: "intent.explicit" });
+    return {
+      ok: true,
+      root: canonicalizeNearestExisting(resolve(cwd, context.controlRoot)),
+      resolvedFrom,
+      warnings,
+    };
+  }
+  const associated =
+    association === undefined
+      ? null
+      : { root: canonicalizeNearestExisting(association.root), source: association.source };
+  if (associated !== null) resolvedFrom.push({ path: "controlRoot", source: associated.source });
+
+  const probe = probeProcessRoot(cwd);
+  if (probe.root !== null) {
+    const probed = canonicalizeNearestExisting(probe.root);
+    resolvedFrom.push({ path: "cwd", source: "harness.probe" });
+    if (associated === null) return { ok: true, root: probed, resolvedFrom, warnings };
+    if (probed !== associated.root) {
+      return {
+        ok: false,
+        resolvedFrom,
+        problem: {
+          component: "root",
+          path: "controlRoot",
+          code: "coordination.scope-mismatch",
+          sourcesTried: resolvedFrom.map((entry) => `${entry.path} (${entry.source})`),
+          currentFacts: [
+            `the durable association ${associated.source} names ${associated.root}`,
+            `the process root of ${cwd} is ${probed}`,
+          ],
+          needed: "which control root this intent belongs to",
+          withheldEffect:
+            "the addressed lifecycle effect - two durable root statements disagree, so nothing was read or written",
+          availableWork: [
+            "run the call from inside the recorded control root (or a checkout of it)",
+            "pass the trusted root explicitly (IntentContext.controlRoot) when the association is the intended one",
+          ],
+        },
+      };
+    }
+    return { ok: true, root: associated.root, resolvedFrom, warnings };
+  }
+  if (associated !== null) {
+    // The trusted root stands; an unreadable Git fact about the process
+    // association is reported, not promoted to a refusal (R12/A24). A probe
+    // that simply found no harness beside the association is not a warning —
+    // there is nothing to compare, exactly as before.
+    if (probe.unavailable !== null) {
+      warnings.push({
+        code: "coordination.git-unavailable",
+        path: "cwd",
+        message:
+          `the process root of ${cwd} could not be established (${probe.unavailable}); this call proceeds on the ` +
+          `trusted root ${associated.root} recorded by ${associated.source}`,
+      });
+    }
+    resolvedFrom.push({
+      path: "cwd",
+      source: probe.unavailable === null ? "harness.probe.absent" : "harness.probe.unavailable",
+    });
+    return { ok: true, root: associated.root, resolvedFrom, warnings };
+  }
+  const problem: RecoveryProblem = {
+    component: "root",
+    path: "controlRoot",
+    code: "coordination.harness-not-found",
+    sourcesTried: [...resolvedFrom.map((entry) => `${entry.path} (${entry.source})`), "cwd (harness probe)"],
+    currentFacts: [
+      probe.unavailable ?? `${cwd} holds no resolvable control harness`,
+      `${cwd} holds no durable root association for this call`,
+    ],
+    needed: "the control harness root this intent belongs to",
+    withheldEffect: "the addressed lifecycle effect - resolution stopped before any root, workflow or store was read",
+    availableWork: [
+      "pass the trusted control root explicitly (IntentContext.controlRoot)",
+      "run the call from inside the control harness's own main worktree",
+    ],
+  };
+  return { ok: false, resolvedFrom, problem };
+}
+
+/** One target selection: what the caller stated, or what its identity already holds. */
+export type TargetSelection = Readonly<{ workflowId?: string; planId?: string }>;
+
+/**
+ * The workflow ids the TRUSTED root holds, in stable order — one listing of the
+ * root's own workflow directory plus a snapshot existence check per entry. This
+ * bounded read is the whole candidate set: no repository-wide scan and no
+ * "most recent" ordering, so resolution can only ever list what it read.
+ *
+ * It is walked ONLY when the intent names no target at all, where the list IS
+ * the answer (A22). A named target is validated against its own snapshot, so
+ * naming a workflow never reads — or depends on reading — the other ones.
+ */
+function workflowIdsAt(root: string): string[] {
+  const dir = resolveWorkflowDir(root, { harnessDir: root });
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, SNAPSHOT_FILE)))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * The refusal of one unresolved TARGET component, in the standard shape: the
+ * withheld effect is always the addressed lifecycle effect, and the caller is
+ * told what is currently true and what to do next rather than handed a guess.
+ */
+function unresolvedTarget(input: {
+  code: RecoveryProblem["code"];
+  needed: string;
+  resolvedFrom: ResolutionSource[];
+  currentFacts: string[];
+  availableWork: string[];
+}): TargetResolution {
+  return {
+    ok: false,
+    resolvedFrom: input.resolvedFrom,
+    problem: {
+      component: "target",
+      path: "workflowId",
+      code: input.code,
+      sourcesTried: input.resolvedFrom.map((entry) => `${entry.path} (${entry.source})`),
+      currentFacts: input.currentFacts,
+      needed: input.needed,
+      withheldEffect:
+        "the addressed lifecycle effect - no target was guessed, so no workflow row, document or store was read for it",
+      availableWork: input.availableWork,
+    },
+  };
+}
+
+/**
+ * Resolve the ADDRESSED TARGET of one sparse intent against a trusted root, in
+ * source order: the explicit `selection`, then the durable `association` the
+ * caller's identity already holds (its session envelope or catalog link).
+ *
+ * A NAMED target is validated DIRECTLY against that one workflow's own
+ * snapshot document, so resolving it reads only the addressed workflow and can
+ * never depend on the root's other workflows. Only when neither source names a
+ * workflow is the root's own workflow directory listed — and then the listing
+ * is not a choice but the answer handed back: the candidate identities the
+ * caller must select between. Resolution never picks the sole/most-recent
+ * workflow without an association (contract § One resolver path, A22). A
+ * selector the root does not hold — or a `planId` that is not a row of the
+ * addressed workflow — is the same kind of unresolved component, reported from
+ * the addressed workflow's own facts, never a silent fallback.
+ */
+export function resolveIntentTarget(input: {
+  root: string;
+  selection?: TargetSelection;
+  association?: TargetSelection;
+}): TargetResolution {
+  const root = canonicalizeNearestExisting(input.root);
+  const explicit = isNonEmptyString(input.selection?.workflowId) ? input.selection.workflowId : undefined;
+  const associated = isNonEmptyString(input.association?.workflowId) ? input.association.workflowId : undefined;
+  const workflowId = explicit ?? associated;
+
+  if (workflowId === undefined) {
+    // Nothing names a workflow: the root's own candidate identities are the
+    // whole answer, listed for the caller to select between (never chosen from).
+    const listed: ResolutionSource = { path: "workflowId", source: "workflows.dir" };
+    const candidates = workflowIdsAt(root);
+    return unresolvedTarget({
+      code: "coordination.invalid-input",
+      needed: "which workflow this intent addresses",
+      resolvedFrom: [listed],
+      currentFacts:
+        candidates.length === 0
+          ? [`${root} holds no workflow`]
+          : candidates.map((id) => `workflow ${id} exists at ${root}`),
+      availableWork: [
+        ...(candidates.length === 0 ? ["register or select the work this intent addresses"] : []),
+        ...candidates.map((id) => `address workflow ${id} explicitly`),
+      ],
+    });
+  }
+
+  const source: ResolutionSource =
+    explicit !== undefined
+      ? { path: "workflowId", source: "intent.explicit" }
+      : { path: "workflowId", source: "target.association" };
+  const resolvedFrom: ResolutionSource[] = [source];
+  const id = safePlanId(workflowId, "workflowId");
+  // The addressed workflow's own snapshot is the only existence fact needed:
+  // one bounded check of the named workflow, never a listing of its siblings.
+  const snapshotFile = snapshotPathOf(root, id);
+  if (!existsSync(snapshotFile)) {
+    return unresolvedTarget({
+      code: "coordination.workflow-not-found",
+      needed: `the addressed workflow ${id}`,
+      resolvedFrom,
+      currentFacts: [`${root} holds no workflow ${id}`],
+      availableWork: ["address a workflow this control root holds", "register or select the work this intent addresses"],
+    });
+  }
+
+  const explicitPlan = isNonEmptyString(input.selection?.planId) ? input.selection.planId : undefined;
+  const associatedPlan = isNonEmptyString(input.association?.planId) ? input.association.planId : undefined;
+  const planId = explicitPlan ?? associatedPlan;
+  if (planId === undefined) return { ok: true, workflowId: id, resolvedFrom };
+  const plan = safePlanId(planId, "planId");
+  resolvedFrom.push({ path: "planId", source: explicitPlan !== undefined ? "intent.explicit" : "target.association" });
+  // The addressed workflow's own row set is the bounded fact read that confirms
+  // the plan id: one snapshot, never a scan of other workflows.
+  const snapshot = readSnapshot(dirname(snapshotFile));
+  if (!snapshot.plans.some((row) => rowPlanIds(row).includes(plan))) {
+    return unresolvedTarget({
+      code: "coordination.plan-not-found",
+      needed: `the addressed plan ${plan} of workflow ${id}`,
+      resolvedFrom,
+      currentFacts: [`workflow ${id} exists at ${root}`, `workflow ${id} holds no plan row ${plan}`],
+      availableWork: [`address a plan row of workflow ${id}`],
+    });
+  }
+  return { ok: true, workflowId: id, planId: plan, resolvedFrom };
+}
+
+/**
+ * The refusal of an unresolved resolution, in the frozen coordination
+ * vocabulary: the problem's `needed` is the actionable message, the problem
+ * itself is the caller's question, and the contract's sidecar travels under
+ * `details.recovery` so the refusal prose is never the whole report.
+ */
+function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly ResolutionSource[]): never {
+  const code = (COORDINATION_ERROR_CODES as readonly string[]).includes(problem.code)
+    ? (problem.code as CoordinationErrorCode)
+    : "coordination.invalid-input";
+  // The message names the unresolved fact AND the facts currently true, so a
+  // consumer that renders only prose still sees the conflict it must decide.
+  throw new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: {}, unresolved: [problem], resolvedFrom }),
+  });
 }
 
 /* ------------------------------------------------------------------------ *
@@ -756,7 +1109,20 @@ type ScopeResolutionOptions = {
   preloaded?: { snapshot: WorkflowSnapshot } | undefined;
 };
 
+/** The canonical snapshot payload, for the callers that need no phase fact. */
 function readSnapshot(dir: string): WorkflowSnapshot {
+  return readSnapshotWithPhase(dir).snapshot;
+}
+
+/**
+ * The canonical snapshot read plus the ONE phase fact a consumer cannot
+ * re-derive from the payload alone: whether the label it carries was DERIVED by
+ * the reader (`deriveLifecyclePhase`, E06a/R3) rather than declared by the
+ * document. The reader reports that through its own diagnostic, so a caller
+ * that must persist the repair knows the label was absent without duplicating
+ * the derivation rule.
+ */
+function readSnapshotWithPhase(dir: string): { snapshot: WorkflowSnapshot; phaseDerived: boolean } {
   const snapshotPath = join(dir, SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
     throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
@@ -764,8 +1130,15 @@ function readSnapshot(dir: string): WorkflowSnapshot {
     });
   }
   try {
-    return readWorkflowSnapshot(dir).snapshot;
+    const read = readWorkflowSnapshot(dir);
+    return { snapshot: read.snapshot, phaseDerived: read.diagnostics.some((entry) => entry.code === DERIVED_PHASE_CODE) };
   } catch (error) {
+    // The authority verdict is the store's own typed refusal — an ACTIVE
+    // execution authority retires this file reader, and an unreadable store
+    // cannot be re-read. Relabelling it `coordination.store` would drop the
+    // actual cause (contract: a capability failure reports its own code), so it
+    // is re-thrown verbatim; only a genuinely unusable document is wrapped.
+    if (error instanceof StoreError) throw error;
     throw new CoordinationError(
       "coordination.store",
       `workflow snapshot is unreadable or invalid at ${snapshotPath}: ${errorMessage(error)}`,
@@ -1127,26 +1500,285 @@ type RowContext = {
 };
 
 /**
- * The single locked read-check-mutate-write path for one plan row.
+ * §4.2 the effect one file-route operation's read-only admission RECOGNISED in
+ * the row it just read: the row already holds exactly the effect this intent
+ * asks for, so current state is the success the caller asked for (R6/A09/A12).
+ * `field` and `source` are the provenance a consumer reads to see WHERE the
+ * effect was found instead of where it was written.
+ */
+type RowSatisfied = Readonly<{ field: string; source: string }>;
+
+/**
+ * One operation's read-only admission of the row this call reads under its own
+ * lock. Returning nothing proceeds with the intent; returning `RowSatisfied`
+ * answers from current state without writing; THROWING is the operation's own
+ * relevant conflict (A11) — the frame turns it into the typed cause below.
+ */
+type RowAdmission = (context: RowContext) => void | RowSatisfied | Promise<void | RowSatisfied>;
+
+/**
+ * §4.1 how a mutation whose effect lands OUTSIDE this row discloses the
+ * components it commits as it goes: it reports each one the moment that commit
+ * stands, so a failure on a later component is refused as a partial boundary
+ * (the applied components enumerated, the remainder named) instead of as the
+ * "nothing moved" an atomic effect earns. A mutation that commits nothing
+ * outside simply never calls it.
+ */
+type ExternalCommitReporter = (component: string) => void;
+
+type RowFrameResult = {
+  snapshot: WorkflowSnapshot;
+  row: PlanRow;
+  /** `null` when this call applied the intent; the recognised effect otherwise. */
+  satisfied: RowSatisfied | null;
+  /** `true` when the operation's own mutation committed (its effect landed now). */
+  applied: boolean;
+  /** §4.2/§4.3 non-fatal facts beside the effect (a drifted token). */
+  warnings: readonly ResolutionWarning[];
+  recovery: RecoveryDetails;
+};
+
+/**
+ * §4.1/§4.2 the sidecar of one file-route row mutation: what this call did with
+ * the intent, the row it addressed and the commit boundary the caller can rely
+ * on. The same object shape a refusal carries under `error.details.recovery`,
+ * mirroring the DB frames' `planRecovery`.
+ *
+ * `commitState` is `committed` only when THIS call landed the effect (its own
+ * commit boundary — the row write, or the composed effect a mutation lands in
+ * another authority) and `none` when it answered an effect that was already
+ * held, because that call wrote nothing: the recorded state IS the commit.
+ */
+function rowFrameRecovery(input: {
+  scope: ResolvedPlanScope;
+  kind: string;
+  satisfied: RowSatisfied | null;
+  applied: boolean;
+  warnings: readonly ResolutionWarning[];
+}): RecoveryDetails {
+  const applied = input.satisfied === null && input.applied;
+  return {
+    outcome: applied ? "applied" : "already-satisfied",
+    target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+    applied: applied ? [`${input.kind} on plan ${input.scope.planId}`] : [],
+    unresolved: [],
+    // Where the answer came from: the request itself when this call applied it,
+    // the record the operation recognised, or — when the operation's own
+    // mutation decided nothing was left to do — that same stored row.
+    resolvedFrom: applied
+      ? [{ path: input.kind, source: "intent.request" }]
+      : input.satisfied !== null
+        ? [{ path: input.satisfied.field, source: input.satisfied.source }]
+        : [{ path: input.kind, source: "stored plan row" }],
+    warnings: [...input.warnings],
+    commitState: applied ? "committed" : "none",
+  };
+}
+
+/** §4.2 (R7/A10) the provenance fact of a token whose revision moved, never a refusal. */
+function tokenDriftedWarning(input: {
+  scope: ResolvedPlanScope;
+  kind: string;
+  readRevision: number;
+  currentRevision: number;
+}): ResolutionWarning {
+  return {
+    code: "coordination.token-drifted",
+    path: "expectedRevision",
+    message:
+      `the token carries row revision ${input.readRevision} while plan ${input.scope.planId} is at revision ` +
+      `${input.currentRevision}: the revision is transport freshness, so the ${input.kind} intent was decided against ` +
+      "the row this call read instead of being refused",
+  };
+}
+
+/**
+ * Refusal codes that name an unavailable PREREQUISITE (a capability this call
+ * genuinely needs and could not read) rather than a conflict on the row's own
+ * record: the store and the Git facts behind the operation's proofs. They keep
+ * their own code and are reported as a capability fact with the commit boundary
+ * the caller can rely on and the work that remains possible (A25).
+ */
+function isPrerequisiteRefusal(code: string): boolean {
+  return code.startsWith("store.") || code === "coordination.store" || code === "coordination.not-in-git" || code === "coordination.git-unavailable";
+}
+
+/** Attach the recovery sidecar to an existing refusal without changing its code. */
+function withRowRecoveryDetails<T>(error: T, details: Record<string, unknown>): T {
+  if (error === null || typeof error !== "object") return error;
+  // The thrown value is always one of the engine's own error classes (they all
+  // carry a mutable `details` record), and this is the same access the shared
+  // `withRecoveryDetails` performs — narrowed to a named target so the write is
+  // reachable for an error that has not been given `details` yet.
+  const target = error as { details?: Record<string, unknown> };
+  target.details = { ...(target.details ?? {}), ...details };
+  return error;
+}
+
+/**
+ * §4.1/§4.2 (A11/A13/A25) the typed cause of one refused file-route row
+ * operation: the row as this call read it, the refused operation, the commit
+ * boundary the caller can rely on (nothing moved) and the work that remains
+ * possible. The refusal keeps its own code, message and field details; the
+ * sidecar is what makes the report complete (mirrors the DB frames'
+ * conflict/prerequisite causes).
+ */
+function rowFrameRefusal(
+  error: unknown,
+  input: {
+    scope: ResolvedPlanScope;
+    kind: string;
+    context: RowContext;
+    warnings: readonly ResolutionWarning[];
+    /**
+     * §4.1 the components a mutation had ALREADY committed in another authority
+     * when it refused (`withRowCommit` collects them from the mutation's
+     * `ExternalCommitReporter`): the refusal then reports that partial boundary
+     * instead of the "nothing moved" an atomic effect earns.
+     */
+    appliedOutside?: readonly string[];
+  },
+): unknown {
+  const refusalCode = errorCode(error) ?? "coordination.invalid-input";
+  const declared = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
+  const declaredPath = isPlainObject(declared) ? declared.path : undefined;
+  // §6.2 an operation that declared its own §R5 report (a recorded decision
+  // that is genuinely absent — `missingDecision`) keeps it: the report names
+  // the one fact the caller must obtain, and this frame adds the row's own
+  // commit boundary and drift warning to it instead of replacing it with the
+  // generic problem. Both routes then report the SAME object for the same
+  // state; every other refusal keeps the generic report below.
+  const declaredReport =
+    isPlainObject(declared) && isPlainObject((declared as Record<string, unknown>).recovery)
+      ? ((declared as Record<string, unknown>).recovery as RecoveryDetails)
+      : undefined;
+  const prerequisite = isPrerequisiteRefusal(refusalCode);
+  const message = errorMessage(error);
+  const appliedOutside = input.appliedOutside ?? [];
+  const partialOutside = appliedOutside.length > 0;
+  const problem: RecoveryProblem = {
+    component: prerequisite ? "operation-prerequisite" : "plan-row",
+    path: isNonEmptyString(declaredPath) ? declaredPath : prerequisite ? input.kind : "expectedRevision",
+    code: refusalCode,
+    sourcesTried: [
+      `${input.scope.snapshotPath} as this call reads it under its own write lock`,
+      `the ${input.kind} operation's own admission rules for the facts it depends on`,
+      ...(partialOutside ? ["the issue authority this mutation had already committed in"] : []),
+    ],
+    currentFacts: [
+      `plan ${input.scope.planId} is at row revision ${input.context.revision} (status ${rowStatusOf(input.context.row) || "none"})`,
+      `the refusal reports: ${message}`,
+      ...(partialOutside
+        ? [
+            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) in the issue authority: ${appliedOutside.join("; ")}`,
+            "the components after the failing one were not attempted, and the failing component's own commit boundary is unknown \u2014 a retry must reconcile them",
+          ]
+        : []),
+    ],
+    needed: message,
+    withheldEffect: prerequisite
+      ? `the ${input.kind} operation: a prerequisite it genuinely needs could not be read, so plan ${input.scope.planId}, its ` +
+        "coordination block and every revision are exactly as they were"
+      : partialOutside
+        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} component(s) had already committed in the issue ` +
+          "authority when the call refused and they are not rolled back, so plan " +
+          `${input.scope.planId}'s snapshot is not the whole story`
+        : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
+          "revision are exactly as they were",
+    availableWork: [
+      `read plan ${input.scope.planId} and its current row state`,
+      partialOutside
+        ? `retry the ${input.kind} operation exactly as it was requested: every component it already committed is ` +
+          "operation-id idempotent, so the repeat settles those components and completes the remainder"
+        : `retry the ${input.kind} operation once the conflicting fact is resolved`,
+      "independent operations on other rows, plans and workflows continue",
+    ],
+  };
+  return withRowRecoveryDetails(error, {
+    ...(declaredReport === undefined
+      ? {
+          component: problem.component,
+          path: problem.path,
+          sources_tried: problem.sourcesTried,
+          current_facts: problem.currentFacts,
+          available_work: problem.availableWork,
+        }
+      : {}),
+    workflow_id: input.scope.workflowId,
+    plan_id: input.scope.planId,
+    current_revision: input.context.revision,
+    recovery: partlyAppliedRecovery(
+      declaredReport === undefined
+        ? unresolvedRecovery({
+            target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
+            unresolved: [problem],
+            warnings: input.warnings,
+          })
+        : { ...declaredReport, warnings: [...declaredReport.warnings, ...input.warnings] },
+      appliedOutside,
+    ),
+  });
+}
+
+/**
+ * §4.1 the recovery sidecar of a refusal that committed components in another
+ * authority before it refused: `partial` is the boundary the caller can rely on
+ * and `applied` enumerates exactly what stands. A refusal that committed
+ * nothing keeps the `unresolved`/`none` `unresolvedRecovery` reports.
+ */
+function partlyAppliedRecovery(recovery: RecoveryDetails, applied: readonly string[]): RecoveryDetails {
+  if (applied.length === 0) return recovery;
+  return { ...recovery, outcome: "partial", applied: [...applied], commitState: "partial" };
+}
+
+/**
+ * The single locked read-reconcile-mutate-write path for one plan row.
  *
  * `expectedRevision: null` means "no revision precondition" (bind only). The
- * whole section runs under the snapshot write lock, so the read, the
- * revision/assignment checks and the write are atomic against other
- * coordinated writers.
+ * whole section runs under the snapshot write lock, so the read, the semantic
+ * checks and the write are atomic against other coordinated writers.
+ *
+ * §4.2 the frame's reconciliation, mirroring the DB frames' state intents:
+ *
+ * - the row revision is TRANSPORT freshness, never business intent. A token
+ *   whose revision moved is recorded as provenance (`coordination.token-drifted`)
+ *   and the intent is decided against the row this call reads under its own
+ *   lock, so a sibling or non-semantic change recomputes instead of blocking (A10).
+ * - the operation's own read-only admission decides relevance. A fact it
+ *   depends on having moved is its own typed refusal, disclosed with the exact
+ *   fields and the one decision left — another writer's relevant work is never
+ *   overwritten (A11/A13).
+ * - an effect the fresh row ALREADY holds is current success with no byte
+ *   churn: no revision advance, no timestamp, no write at all (R6/A09/A12).
+ * - the seal's semantic re-authentication runs before all of it (A29).
  */
 async function withRowCommit(
   scope: ResolvedPlanScope,
   opts: {
+    kind: string;
     expectedRevision: number | null;
-    /** `prepare` rewrites the pin itself, so it may not re-check the old hash. */
+    /** `prepare` rewrites the pin itself, so it may not re-check the old seal. */
     freshness?: boolean;
-    precheck: (context: RowContext) => void | Promise<void>;
-    mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
+    precheck: RowAdmission;
+    /**
+     * §4.1 the mutation reports every component it commits outside this row
+     * through the second argument, so a failure on a later component refuses
+     * with the applied boundary instead of claiming nothing moved.
+     */
+    mutate: (
+      context: RowContext,
+      reportExternalCommit: ExternalCommitReporter,
+    ) => RowCommit | null | Promise<RowCommit | null>;
+    /**
+     * §4.1 a mutation whose effect lands OUTSIDE this row (the two residual verbs
+     * compose the core issue authority): it returns no row commit, yet the call
+     * did land its effect, so the sidecar reports that committed boundary.
+     */
+    effectOutsideRow?: boolean;
   },
-): Promise<{ snapshot: WorkflowSnapshot; row: PlanRow; outcome: string }> {
+): Promise<RowFrameResult> {
   localStore(scope.harnessRoot);
   assertSnapshotPath(scope.harnessRoot, scope.workflowId, scope.snapshotPath);
-  let outcome = "unchanged";
   const result = await withStatusWriteLock(scope.snapshotPath, async () => {
     const snapshot = readSnapshot(dirname(scope.snapshotPath));
     const { row, index } = findPlanRow(snapshot, scope.planId);
@@ -1159,22 +1791,46 @@ async function withRowCommit(
       coordination,
       revision: coordination?.revision ?? 0,
     };
-    // Every row mutation re-authenticates the row's pin: an Assignment edited
-    // after `prepare` invalidates the row until the coordinator re-prepares.
+    // Every row mutation re-authenticates the row's pin: the sealed Assignment
+    // is compared on its semantic projection, so an unrelated formatting change
+    // leaves the row fresh while a scope/approval change still invalidates it.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
       assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
-    await opts.precheck(context);
-    if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
-      throw new CoordinationError(
-        "coordination.version-conflict",
-        `plan ${scope.planId} is at row revision ${context.revision}, expected ${opts.expectedRevision} \u2014 re-run \`mstar plan show\` and retry`,
-        { expected: opts.expectedRevision, actual: context.revision, plan_id: scope.planId },
-      );
+    const warnings: readonly ResolutionWarning[] =
+      opts.expectedRevision !== null && context.revision !== opts.expectedRevision
+        ? [
+            tokenDriftedWarning({
+              scope,
+              kind: opts.kind,
+              readRevision: opts.expectedRevision,
+              currentRevision: context.revision,
+            }),
+          ]
+        : [];
+    let satisfied: RowSatisfied | null = null;
+    try {
+      satisfied = (await opts.precheck(context)) ?? null;
+    } catch (error) {
+      throw rowFrameRefusal(error, { scope, kind: opts.kind, context, warnings });
     }
-    const commit = await opts.mutate(context);
-    if (commit === null) return { snapshot, row, outcome };
-    outcome = "mutated";
+    if (satisfied !== null) return { snapshot, row, satisfied, applied: false, warnings };
+    let commit: RowCommit | null;
+    // §4.1 the components (if any) this mutation commits in another authority,
+    // in call order: a failure after them refuses on that partial boundary.
+    const committedOutside: string[] = [];
+    try {
+      commit = await opts.mutate(context, (component) => committedOutside.push(component));
+    } catch (error) {
+      throw rowFrameRefusal(error, {
+        scope,
+        kind: opts.kind,
+        context,
+        warnings,
+        appliedOutside: committedOutside,
+      });
+    }
+    if (commit === null) return { snapshot, row, satisfied: null, applied: false, warnings };
     const nextSnapshot: WorkflowSnapshot = {
       ...snapshot,
       ...(commit.topLevel ?? {}),
@@ -1185,15 +1841,57 @@ async function withRowCommit(
       delete (nextSnapshot as Record<string, unknown>)[key];
     }
     await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
-    return { snapshot: nextSnapshot, row: commit.row, outcome };
+    return { snapshot: nextSnapshot, row: commit.row, satisfied: null, applied: true, warnings };
   });
-  return result;
+  return {
+    ...result,
+    recovery: rowFrameRecovery({
+      scope,
+      kind: opts.kind,
+      satisfied: result.satisfied,
+      applied: result.applied || (opts.effectOutsideRow === true && result.satisfied === null),
+      warnings: result.warnings,
+    }),
+  };
 }
 
 /**
- * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
- * rule is shared with the DB transport, which re-reads the Assignment its own
- * seal records — one staleness rule for both routes, not a second tolerance.
+ * The sealed Assignment's semantic projection, in the stored shape: exactly the
+ * C1 header block `parseAssignmentFile` reads, so the seal and any later re-read
+ * compare the same semantics (A29). Exported for the DB transport, which seals
+ * the same reviewed Assignment and records the projection from this one mapping.
+ */
+export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentIntent {
+  return {
+    execution_scope: assignment.executionScope,
+    execute_as: assignment.executeAs,
+    delegation: assignment.delegation,
+    control_harness_root: assignment.controlHarnessRoot,
+    workflow_id: assignment.workflowId,
+    plan_id: assignment.planId,
+    plan_path: assignment.planPath,
+    worktree_path: assignment.worktreePath,
+    working_branch: assignment.workingBranch,
+    sdd_dir: assignment.sddDir,
+    qa_gate: assignment.qaGate,
+    findings_cleanup: assignment.findingsCleanup,
+    prepare_gate: assignment.prepareGate,
+  };
+}
+
+/**
+ * Re-verify the prepared Assignment against the row's seal. The rule is shared
+ * with the DB transport, which re-reads the Assignment its own seal records —
+ * one staleness rule for both routes, not a second tolerance.
+ *
+ * §4.2 (A29) the comparison is the Assignment's SEMANTIC projection: the
+ * document is re-parsed, so a reflowed header block, added prose, changed
+ * emphasis or reordered non-header lines leaves the row fresh, while a scope or
+ * approval change (`Worktree path`, `Working branch`, `QA gate`, …) still
+ * invalidates the dependent proof and names the exact header(s) that moved. The
+ * whole-document hash is NOT the gate for formatting: it stays the seal's byte
+ * witness, and a seal that records no projection (the DB transport's own
+ * receipt) keeps the byte comparison rather than losing the check.
  */
 export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
   if (!existsSync(assignmentPath)) {
@@ -1201,13 +1899,115 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       path: assignmentPath,
     });
   }
-  const actual = sha256Bytes(readFileSync(assignmentPath));
-  if (actual !== prepared.assignment_sha256) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-      { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-    );
+  const recorded = prepared.assignment_intent;
+  if (recorded === undefined) {
+    const actual = sha256Bytes(readFileSync(assignmentPath));
+    if (actual !== prepared.assignment_sha256) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
+        { path: assignmentPath, expected: prepared.assignment_sha256, actual },
+      );
+    }
+    return;
+  }
+  const current = currentAssignmentIntent(assignmentPath, recorded);
+  const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
+  if (changed.length === 0) return;
+  const facts = changed.map(
+    (field) => `${field}: sealed as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
+  );
+  const problem: RecoveryProblem = {
+    component: "assignment-seal",
+    path: changed[0]!,
+    code: "coordination.assignment-stale",
+    sourcesTried: [
+      `${assignmentPath} as it reads now`,
+      `the semantic projection sealed by \`prepare\` at ${prepared.prepared_at}`,
+    ],
+    currentFacts: facts,
+    needed:
+      `decide whether the changed ${changed.join(", ")} is the reviewed intent for plan ${recorded.plan_id} and re-run \`prepare\` ` +
+      "against it \u2014 the row stays sealed against the Assignment it was prepared from until then",
+    withheldEffect:
+      "the row's sealed state: neither the recorded seal, the plan document, the row's coordination block nor any revision is changed",
+    availableWork: [
+      `read plan ${recorded.plan_id} and the Assignment it was sealed against`,
+      `re-run \`prepare\` for plan ${recorded.plan_id} once the Assignment is the reviewed input again`,
+      "independent operations on other rows, plans and workflows continue",
+    ],
+  };
+  throw new CoordinationError(
+    "coordination.assignment-stale",
+    `Assignment ${assignmentPath} changed semantically after plan ${recorded.plan_id} was prepared ` +
+      `(${changed.join(", ")}) \u2014 the coordinator must re-run \`prepare\` against the reviewed input`,
+    {
+      path: assignmentPath,
+      plan_id: recorded.plan_id,
+      changed,
+      expected: changed.map((field) => recorded[field]),
+      actual: changed.map((field) => current[field] ?? null),
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
+    },
+  );
+}
+
+/**
+ * §4.2 the semantic projection of the Assignment as it reads NOW, with a
+ * document that can no longer declare the sealed header block reported as the
+ * same semantic staleness: a removed, duplicated or unparseable header IS a
+ * change of meaning, not a malformed caller input (the caller supplied no
+ * document here \u2014 the row's own seal names the path).
+ */
+function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent): AssignmentIntent {
+  try {
+    return assignmentIntentOf(parseAssignmentFile(assignmentPath));
+  } catch (error) {
+    if (error instanceof CoordinationError) {
+      const problem: RecoveryProblem = {
+        component: "assignment-seal",
+        path: "assignment",
+        code: "coordination.assignment-stale",
+        sourcesTried: [
+          `${assignmentPath} as it reads now`,
+          `the semantic projection sealed by \`prepare\` for plan ${recorded.plan_id}`,
+        ],
+        currentFacts: [`the Assignment no longer declares its sealed header block: ${error.message}`],
+        needed:
+          `restore the reviewed header block of ${assignmentPath} or decide the new intent and re-run \`prepare\` for plan ` +
+          `${recorded.plan_id}`,
+        withheldEffect:
+          "the row's sealed state: neither the recorded seal, the plan document, the row's coordination block nor any revision is changed",
+        availableWork: [
+          `read the Assignment ${assignmentPath} and plan ${recorded.plan_id}`,
+          `re-run \`prepare\` for plan ${recorded.plan_id} against the reviewed input`,
+          "independent operations on other rows, plans and workflows continue",
+        ],
+      };
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `Assignment ${assignmentPath} no longer declares the header block plan ${recorded.plan_id} was sealed against: ${error.message}`,
+        {
+          path: assignmentPath,
+          plan_id: recorded.plan_id,
+          changed: ["assignment"],
+          sources_tried: problem.sourcesTried,
+          current_facts: problem.currentFacts,
+          available_work: problem.availableWork,
+          recovery: unresolvedRecovery({
+            target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+            unresolved: [problem],
+          }),
+        },
+      );
+    }
+    throw error;
   }
 }
 
@@ -1368,15 +2168,14 @@ export async function readPlanCoordination(
     targetPlanId = own;
   }
 
-  const harnessRoot = anchor.harnessRoot;
-  const processRoot = resolveProcessHarnessDir(cwd);
-  if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `session ${session.session_id} belongs to harness root ${harnessRoot}, but this process resolves ${canonicalTarget(processRoot)}`,
-      { expected: harnessRoot, actual: canonicalTarget(processRoot) },
-    );
-  }
+  // The session envelope is this call's durable root association: the intent
+  // resolution keeps that trusted root for a Git-independent read, reports an
+  // unreadable process probe as a warning (R12/A24: a Git outage cannot
+  // invalidate an established root), and keeps a process root that answers and
+  // disagrees a conflict — now with the contract's recovery sidecar.
+  const rootResolution = resolveIntentRoot({ cwd }, { root: anchor.harnessRoot, source: "session.envelope" });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
+  const harnessRoot = rootResolution.root;
   localStore(harnessRoot);
   const snapshotPath = snapshotPathOf(harnessRoot, session.workflow_id);
   assertSnapshotPath(harnessRoot, session.workflow_id, snapshotPath);
@@ -1509,7 +2308,15 @@ function assertRootRegisterEntry(harnessRoot: string, workflowId: string): Recor
   return entry as Record<string, unknown>;
 }
 
-/** Coordinator residency (spec §C1): main worktree or recorded integration worktree. */
+/** Coordinator residency (spec §C1): main worktree or recorded integration worktree.
+ *
+ * The Git-derived checkout is READ here, so an unavailable Git fact refuses for
+ * the callers that genuinely need one. A caller for whom the checkout is only a
+ * prerequisite of some of its components reads the checkout itself and runs
+ * `assertCoordinatorCheckoutResidency` when Git answered — a local repair then
+ * proceeds on its trusted envelope root instead of adding a global environment
+ * gate (R12/A24).
+ */
 function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): MainWorktreeInfo {
   const main = readMainWorktree(cwd);
   if (main === null) {
@@ -1519,6 +2326,12 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
       { cwd: resolve(cwd) },
     );
   }
+  assertCoordinatorCheckoutResidency(main, cwd, snapshot);
+  return main;
+}
+
+/** The residency comparison itself, against a main worktree Git actually answered. */
+function assertCoordinatorCheckoutResidency(main: MainWorktreeInfo, cwd: string, snapshot: WorkflowSnapshot): void {
   const here = canonicalizeNearestExisting(cwd);
   const allowed = [canonicalTarget(main.root)];
   const integration = snapshot.integration_worktree_path;
@@ -1530,7 +2343,6 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
       { cwd: here, allowed },
     );
   }
-  return main;
 }
 
 /**
@@ -1676,6 +2488,7 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
   };
   let created = "";
   const result = await withRowCommit(scope, {
+    kind: "bind",
     expectedRevision: null,
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
@@ -1729,7 +2542,8 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     operation: "bind",
     session,
     session_file: created,
-    outcome: "claimed",
+    outcome: result.satisfied === null ? "claimed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(harnessRoot, workflowId, scope.projectId, scope, result.snapshot, result.row, session, created),
   };
 }
@@ -2325,6 +3139,7 @@ async function mutatePrepare(
     });
   }
   const result = await withRowCommit(scope, {
+    kind: "prepare",
     expectedRevision: request.expectedRevision,
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
     freshness: false,
@@ -2355,6 +3170,10 @@ async function mutatePrepare(
         plan_sha256: sha256Bytes(readFileSync(scope.planPath)),
         qa_gate: assignment.qaGate,
         findings_cleanup: assignment.findingsCleanup,
+        // §4.2 (A29) the seal records the reviewed Assignment's SEMANTIC
+        // projection, so every later re-authentication compares meaning: a
+        // reformatted document stays fresh, a scope/approval change does not.
+        assignment_intent: assignmentIntentOf(assignment),
         prepared_by: session.session_id,
         prepared_at: nowIso(),
       };
@@ -2383,7 +3202,8 @@ async function mutatePrepare(
     operation: "prepare",
     session,
     session_file: sessionPath,
-    outcome: "prepared",
+    outcome: result.satisfied === null ? "prepared" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -2397,6 +3217,74 @@ async function mutatePrepare(
   };
 }
 
+/**
+ * §4.2 (R6/R7/A09/A12) the record one progress report writes, as the row field
+ * it lives in and the value this intent asks that field to hold. The selection
+ * is the kind's OWN effect — the coordination progress block, the row status and
+ * (only when the report constrains them) the reported track branches — never the
+ * whole row, its siblings or a revision, so a change anywhere else leaves the
+ * effect genuinely held (A10) while the record itself being replaced is
+ * disclosed (A11/A13).
+ */
+function progressEffect(input: {
+  progress: PlanProgress;
+  row: PlanRow;
+  coordination: RowCoordination | undefined;
+}): { fields: readonly string[]; current: Record<string, unknown>; requested: Record<string, unknown> } {
+  const { progress } = input;
+  const record: PlanProgress = {
+    status: progress.status,
+    summary: progress.summary,
+    evidence_paths: [...progress.evidence_paths],
+    ...(progress.track_branches !== undefined ? { track_branches: [...progress.track_branches] } : {}),
+  };
+  return {
+    fields: ["coordination.progress", "plan.status", ...(progress.track_branches !== undefined ? ["plan.metadata.track_branches"] : [])],
+    current: { coordination: input.coordination ?? {}, plan: input.row },
+    requested: {
+      coordination: { progress: record },
+      plan: {
+        status: progress.status,
+        metadata: progress.track_branches !== undefined ? { track_branches: [...progress.track_branches] } : {},
+      },
+    },
+  };
+}
+
+/**
+ * §4.2 (R6/R7/A11/A13) the refusal of a progress report whose record moved
+ * since the token this call presents was read: another writer's report IS the
+ * record this operation writes, so it is disclosed with both values and the one
+ * decision left instead of being overwritten.
+ */
+function progressRecordConflict(input: {
+  progress: PlanProgress;
+  row: PlanRow;
+  coordination: RowCoordination | undefined;
+  planId: string;
+  readRevision: number;
+  currentRevision: number;
+}): CoordinationError {
+  const effect = progressEffect(input);
+  const field = effect.fields[0]!;
+  const current = stableJson(selectSemanticFields(effect.current, effect.fields));
+  const requested = stableJson(selectSemanticFields(effect.requested, effect.fields));
+  return new CoordinationError(
+    "coordination.version-conflict",
+    `plan ${input.planId} already holds a different ${field} ${current} than this report asks for ${requested}, written after ` +
+      `the token this call presents was read (row revision ${input.currentRevision}, token ${input.readRevision}) \u2014 the ` +
+      "recorded report is not overwritten; accept it, or re-read the row and express the report you still want",
+    {
+      plan_id: input.planId,
+      path: field,
+      expected: input.readRevision,
+      actual: input.currentRevision,
+      current_value: current,
+      requested_value: requested,
+    },
+  );
+}
+
 async function mutateProgress(
   scope: ResolvedPlanScope,
   session: CoordinationSession,
@@ -2407,9 +3295,34 @@ async function mutateProgress(
   assertViolationFree(validatePlanProgress(progress), "progress");
   assertEvidenceInsidePlan(scope, progress.evidence_paths);
   const result = await withRowCommit(scope, {
+    kind: "progress",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
+      // §4.2 (R6/A09/A12) the report is already recorded: current state is the
+      // success the caller asked for, so it is answered without a write even when
+      // the token (or a later transition) moved on.
+      const effect = progressEffect({ progress, row: context.row, coordination: context.coordination });
+      if (
+        stableJson(selectSemanticFields(effect.current, effect.fields)) ===
+        stableJson(selectSemanticFields(effect.requested, effect.fields))
+      ) {
+        return { field: "coordination.progress", source: "stored plan row" };
+      }
+      // §4.2 (R7/A11/A13) the row moved since the caller read it AND already
+      // carries a different report: another writer's work is disclosed, never
+      // overwritten. The token revision alone is transport freshness, so the
+      // record — not the revision — decides.
+      if (context.revision !== request.expectedRevision && context.coordination?.progress !== undefined) {
+        throw progressRecordConflict({
+          progress,
+          row: context.row,
+          coordination: context.coordination,
+          planId: scope.planId,
+          readRevision: request.expectedRevision,
+          currentRevision: context.revision,
+        });
+      }
       assertNoHandoffTransition(context.coordination, scope.planId);
       requireProgressStatus(context.row, progress.status, scope.planId);
       if (progress.track_branches !== undefined) {
@@ -2444,7 +3357,8 @@ async function mutateProgress(
     operation: "progress",
     session,
     session_file: sessionPath,
-    outcome: "progressed",
+    outcome: result.satisfied === null ? "progressed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -2495,12 +3409,14 @@ async function mutateResidualAdd(
   const context = planStoreContext(scope);
   const receipts: CoordinationIssueReceipt[] = [];
   const result = await withRowCommit(scope, {
+    kind: "residual-add",
     expectedRevision: request.expectedRevision ?? null,
+    effectOutsideRow: true,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
     },
-    mutate: async (rowContext) => {
+    mutate: async (rowContext, reportExternalCommit) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
       // Issue mutations run under the snapshot lock (lock order: workflow
       // ownership locks → SQLite transaction). The envelope authorizes the
@@ -2515,6 +3431,13 @@ async function mutateResidualAdd(
             actor: "project-manager",
             sessionFile: sessionPath,
           },
+        );
+        // §4.1 each component is disclosed the moment its own commit stands: a
+        // failure on a later entry then refuses on the boundary that already
+        // moved (these capture/link commits are in the issue authority, not the
+        // snapshot) instead of reporting that nothing changed.
+        reportExternalCommit(
+          `issue ${capture.issueId} captured for plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
         );
         // Always link, never only on `created`: the plan link is the gate's
         // authority, and a replay (or a capture that appended an occurrence)
@@ -2532,6 +3455,9 @@ async function mutateResidualAdd(
             expectedRevision: capture.revision,
           },
         );
+        reportExternalCommit(
+          `issue ${capture.issueId} linked to plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
+        );
         // The link's revision, not the capture's: the caller closes the issue
         // under the current value.
         receipts.push({ issue_id: capture.issueId, revision: link.revision, created: capture.created });
@@ -2544,7 +3470,8 @@ async function mutateResidualAdd(
     operation: "residual-add",
     session,
     session_file: sessionPath,
-    outcome: "residual-added",
+    outcome: result.satisfied === null ? "residual-added" : "already-satisfied",
+    recovery: result.recovery,
     issues: receipts,
     view: buildView(
       scope.harnessRoot,
@@ -2604,7 +3531,9 @@ async function mutateResidualClose(
   const context = planStoreContext(scope);
   let closed: CoordinationIssueReceipt | undefined;
   const result = await withRowCommit(scope, {
+    kind: "residual-close",
     expectedRevision: request.expectedRevision ?? null,
+    effectOutsideRow: true,
     precheck: (rowContext) => {
       assertRowBinding(session, sessionPath, rowContext.row, scope.planId);
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
@@ -2633,7 +3562,8 @@ async function mutateResidualClose(
     operation: "residual-close",
     session,
     session_file: sessionPath,
-    outcome: "residual-closed",
+    outcome: result.satisfied === null ? "residual-closed" : "already-satisfied",
+    recovery: result.recovery,
     issues: closed === undefined ? [] : [closed],
     view: buildView(
       scope.harnessRoot,
@@ -2652,12 +3582,131 @@ async function mutateResidualClose(
  * § Coordination request dispatch
  * ------------------------------------------------------------------------ */
 
+/** The file-route entry anchor plus the canonical envelope path it was read from. */
+type CoordinationAnchor = EntryAnchor & { sessionPath: string };
+
+/**
+ * § One resolver path (S2/E02) for the FILE route: the trusted control root, the
+ * addressed workflow/plan, then the caller's OWN session envelope under that
+ * root. A stated `sessionPath` is a constraint and short-circuits the whole
+ * resolution; a sparse call states its acquired `identity` instead and the
+ * engine computes the envelope's own path from it (`sessionFilePath`) — the
+ * caller never has to know the `sessions/` layout, and holding the path
+ * authorizes nothing: the strict frames below still re-authenticate the envelope
+ * against the addressed row's recorded binding.
+ *
+ * The authority veto is part of this boundary (spec §4.3/§5): the resolved root
+ * is checked before the target, the snapshot or any payload byte is read, so a
+ * retired file route refuses on its own. Nothing is guessed — an unresolvable
+ * root, target or envelope is refused with the sources tried and the facts
+ * currently true.
+ */
+function resolveCoordinationAnchor(request: CoordinationRequest): CoordinationAnchor {
+  const stated = isNonEmptyString(request?.sessionPath) ? request.sessionPath : undefined;
+  if (stated !== undefined) {
+    const anchor = entryAnchor(stated);
+    assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+    return { ...anchor, sessionPath: canonicalTarget(stated) };
+  }
+  const identity = request?.identity;
+  const rootResolution = resolveIntentRoot({
+    cwd: isNonEmptyString(request?.cwd) ? request.cwd : process.cwd(),
+    ...(isNonEmptyString(request?.controlRoot) ? { controlRoot: request.controlRoot } : {}),
+    ...(identity === undefined ? {} : { identity }),
+  });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
+  const root = rootResolution.root;
+  assertExecutionFileWriteAllowed({ harnessDir: root });
+  const resolvedFrom: ResolutionSource[] = [...rootResolution.resolvedFrom];
+  if (identity === undefined) {
+    refuseResolution(
+      {
+        component: "session",
+        path: "sessionPath",
+        code: "coordination.invalid-input",
+        sourcesTried: ["sessionPath (intent.explicit)", "identity (invocation association)"],
+        currentFacts: [
+          `${root} holds the workflow this call addresses`,
+          "no session envelope and no acquired identity were stated",
+        ],
+        needed: "the session this call runs under",
+        withheldEffect:
+          "the addressed coordination operation - no session was guessed, so no row, binding or revision was read for it",
+        availableWork: [
+          "pass the bound session envelope (sessionPath)",
+          "pass the acquired identity (identity) so the engine resolves that identity's own envelope",
+        ],
+      },
+      resolvedFrom,
+    );
+  }
+  // The identity is validated as the address it claims: its own workflow, role
+  // and plan are the scope it names, so the check proves the tuple itself is
+  // coherent before any part of it is used as a selector.
+  validateExecutionIdentity(identity, { workflowId: identity.workflowId, role: identity.role, planId: identity.planId });
+  const target = resolveIntentTarget({
+    root,
+    selection: {
+      workflowId: identity.workflowId,
+      ...(isNonEmptyString(request?.planId) ? { planId: request.planId } : identity.planId === null ? {} : { planId: identity.planId }),
+    },
+  });
+  if (!target.ok) refuseResolution(target.problem, [...resolvedFrom, ...target.resolvedFrom]);
+  resolvedFrom.push(...target.resolvedFrom);
+  const envelope = sessionFilePath(root, target.workflowId, identity.role, identity.sessionId);
+  if (!existsSync(envelope)) {
+    refuseResolution(
+      {
+        component: "session",
+        path: "sessionPath",
+        code: "coordination.session-not-found",
+        sourcesTried: [...resolvedFrom.map((entry) => `${entry.path} (${entry.source})`), `${envelope} (identity.sessionId)`],
+        currentFacts: [
+          `the acquired identity is session ${identity.sessionId} of workflow ${target.workflowId}`,
+          `${envelope} does not exist`,
+        ],
+        needed: `this identity's own bound session envelope at ${envelope}`,
+        withheldEffect:
+          "the addressed coordination operation - the envelope is the durable proof of the binding, so nothing was read or written for it",
+        availableWork: [
+          `bind this identity to workflow ${target.workflowId} and resume it`,
+          "pass the bound session envelope explicitly (sessionPath) when it lives elsewhere",
+        ],
+      },
+      resolvedFrom,
+    );
+  }
+  return { session: readSessionEnvelope(envelope), harnessRoot: root, sessionPath: canonicalTarget(envelope) };
+}
+
+/**
+ * §4.2 the revision `show` would have handed the caller: the addressed row's own
+ * `coordination.revision` (0 for a row that is not yet coordinated). It is
+ * transport freshness, so deriving it is exactly as valid as reading it — and a
+ * plan a coordinator addresses without naming one has no row to read, which
+ * stays the caller's own missing fact rather than an invented number.
+ */
+function resolveRowRevision(anchor: EntryAnchor, planId: string | undefined): number {
+  const addressed = isNonEmptyString(planId) ? planId : anchor.session.plan_id;
+  if (!isNonEmptyString(addressed)) {
+    throw invalidInput(
+      "expectedRevision is required here: this request names no plan row whose revision could be derived",
+      { workflow_id: anchor.session.workflow_id },
+    );
+  }
+  const snapshot = readSnapshot(dirname(snapshotPathOf(anchor.harnessRoot, anchor.session.workflow_id)));
+  const { row } = findPlanRow(snapshot, addressed);
+  return rowCoordinationOf(row)?.revision ?? 0;
+}
+
 /**
  * Run one coordinated mutation (spec §B/§D). Every call re-authenticates the
- * session from its envelope, re-checks the Assignment hash, enforces the
- * revision/register precondition under the lock, and writes through
- * `withProtectedWrite`. The operation surface is a closed discriminated union:
- * an unknown key anywhere is rejected before any state is touched.
+ * session from its envelope, re-authenticates the sealed Assignment on its
+ * semantic projection under the lock, reconciles the intent against the row it
+ * reads (§4.2: the supplied revision is freshness, the operation's own record
+ * decides relevance), and writes through `withProtectedWrite`. The operation
+ * surface is a closed discriminated union: an unknown key anywhere is rejected
+ * before any state is touched.
  *
  * Canonical authority discrimination IS the entry boundary (spec §4.3/§5):
  * `entryAnchor` reads the request's own session envelope — the anchor that
@@ -2668,17 +3717,27 @@ async function mutateResidualClose(
  * Consequence, accepted: a request that is BOTH malformed and
  * active-forbidden now reports the authority refusal instead of the payload
  * error.
+ *
+ * § One resolver path (S2/E02) the same boundary accepts the SPARSE intent: a
+ * caller that states no `sessionPath` and no `expectedRevision` has both
+ * resolved here — its own envelope through the trusted root and addressed
+ * target, the revision from the row it addresses — before the request shape,
+ * the scope and the strict frames below. An explicitly supplied value is passed
+ * through untouched, so a fully specified call is byte-for-byte unchanged.
  */
 export async function mutatePlanCoordination(request: CoordinationRequest): Promise<CoordinationResult> {
-  const anchor = entryAnchor(request?.sessionPath);
-  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+  const anchor = resolveCoordinationAnchor(request);
   const session = anchor.session;
-  assertExactKeys(request, ["sessionPath", "planId", "expectedRevision", "operation"], "coordination request");
+  assertExactKeys(
+    request,
+    ["sessionPath", "cwd", "controlRoot", "identity", "planId", "expectedRevision", "operation"],
+    "coordination request",
+  );
   if (request.planId !== undefined && !isNonEmptyString(request.planId)) {
     throw invalidInput("planId must be a non-empty string");
   }
-  assertExpectedRevision(request.expectedRevision);
-  const expectedRevision = request.expectedRevision;
+  if (request.expectedRevision !== undefined) assertExpectedRevision(request.expectedRevision);
+  const expectedRevision = request.expectedRevision ?? resolveRowRevision(anchor, request.planId);
   const operation = request.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw invalidInput("a coordination request requires an operation with a kind");
@@ -2695,7 +3754,7 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
   const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
   assertOperationRole(seat, kind);
   assertPlanAddress(seat, request.planId);
-  const sessionAbs = canonicalTarget(request.sessionPath);
+  const sessionAbs = anchor.sessionPath;
 
   switch (operation.kind) {
     case "prepare": {
@@ -3681,6 +4740,7 @@ async function mutateHandoff(
 ): Promise<CoordinationResult> {
   const input = readHandoffEvidence(request.evidence);
   const result = await withRowCommit(scope, {
+    kind: "handoff",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
@@ -3701,14 +4761,11 @@ async function mutateHandoff(
           { plan_id: scope.planId, state: previous.state, handoff_id: previous.id },
         );
       }
-      const status = rowStatusOf(context.row);
-      if (status !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `handoff requires ${scope.planId} to be InReview \u2014 it is ${status || "unstatused"}`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      // §R5 the entailed predecessor recording: a claimed row that still reads
+      // InProgress records InReview in the same commit as the seal; a row that
+      // already records InReview writes no status (A01); an unclaimed row is
+      // refused with the recorded state named.
+      entailedHandoffStatus(context.row, scope.planId);
       assertHandoffGitProof(scope.worktreePath, input, "handoff", scope.planId);
       await assertHandoffGates(scope, prepared, input);
     },
@@ -3739,8 +4796,16 @@ async function mutateHandoff(
         handoff: record,
       };
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      // §R5 the entailed recording and the seal are ONE row write: the row's
+      // InReview report commits with the handoff, and a row that already
+      // recorded InReview keeps exactly the row it had (A01).
+      const entailed = entailedHandoffStatus(context.row, scope.planId);
+      const row: PlanRow =
+        entailed === null
+          ? { ...context.row, coordination: nextCoordination }
+          : { ...context.row, status: entailed, coordination: nextCoordination };
       // The execution lease stays with the plan session: handoff is not release.
-      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
+      return { row, coordination: nextCoordination };
     },
   });
   return {
@@ -3748,7 +4813,8 @@ async function mutateHandoff(
     operation: "handoff",
     session,
     session_file: sessionPath,
-    outcome: "handed-off",
+    outcome: result.satisfied === null ? "handed-off" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -3781,24 +4847,15 @@ async function mutateAccept(
   request: AcceptRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "accept",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "submitted") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 accept requires submitted`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
-      if (rowStatusOf(context.row) !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `accept requires ${scope.planId} to still be InReview`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      // §R5 the SAME decision gate the DB route runs, so a missing acceptance is
+      // reported identically on both routes: nothing is recorded in its place.
+      requireHandoffState(handoff, ["submitted"], scope.planId, "accept");
+      requireRowStatus(context.row, "InReview", scope.planId, "accept", { still: true });
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "accept", scope.planId);
       assertEvidenceDigests(handoff);
     },
@@ -3820,7 +4877,8 @@ async function mutateAccept(
     operation: "accept",
     session,
     session_file: sessionPath,
-    outcome: "accepted",
+    outcome: result.satisfied === null ? "accepted" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -3834,17 +4892,12 @@ async function mutateReturn(
   request: ReturnRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "return",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "submitted" && handoff.state !== "accepted") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 a return requires submitted or accepted`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
+      requireHandoffState(handoff, ["submitted", "accepted"], scope.planId, "return");
     },
     mutate: (context) => {
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
@@ -3875,7 +4928,8 @@ async function mutateReturn(
     operation: "return",
     session,
     session_file: sessionPath,
-    outcome: "returned",
+    outcome: result.satisfied === null ? "returned" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
   };
 }
@@ -4090,17 +5144,12 @@ async function mutateIntegrationStart(
   request: IntegrationStartRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "integration-start",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "accepted" && handoff.state !== "integrating") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-start requires accepted (or a started attempt to re-verify)`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
+      requireHandoffState(handoff, ["accepted", "integrating"], scope.planId, "integration-start");
       assertEvidenceDigests(handoff);
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "integration-start", scope.planId);
       // The coordinator owns the row between accept and complete: integration
@@ -4148,7 +5197,9 @@ async function mutateIntegrationStart(
     operation: "integration-start",
     session,
     session_file: sessionPath,
-    outcome: result.outcome === "mutated" ? "integrating" : "already-integrating",
+    outcome:
+      result.satisfied !== null ? "already-satisfied" : result.applied ? "integrating" : "already-integrating",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -4177,24 +5228,13 @@ async function mutateIntegrationAccept(
 ): Promise<CoordinationResult> {
   let proof: IntegrationProof = { kind: "pending" };
   const result = await withRowCommit(scope, {
+    kind: "integration-accept",
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
-      if (handoff.state !== "integrating") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `plan ${scope.planId} handoff is ${handoff.state} \u2014 integration-accept requires an integrating attempt`,
-          { plan_id: scope.planId, state: handoff.state },
-        );
-      }
-      if (rowStatusOf(context.row) !== "InReview") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `integration-accept requires ${scope.planId} to still be InReview`,
-          { plan_id: scope.planId, status: context.row.status },
-        );
-      }
+      requireHandoffState(handoff, ["integrating"], scope.planId, "integration-accept");
+      requireRowStatus(context.row, "InReview", scope.planId, "integration-accept", { still: true });
       assertEvidenceDigests(handoff);
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
       assertMergeLease(context.snapshot, session, scope.planId, handoff);
@@ -4236,7 +5276,8 @@ async function mutateIntegrationAccept(
     operation: "integration-accept",
     session,
     session_file: sessionPath,
-    outcome: "merged",
+    outcome: result.satisfied === null ? "merged" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -4378,6 +5419,25 @@ export function assertStandaloneSourceGitProof(
   }
 }
 
+/**
+ * The ONE lifecycle precondition every file-route completion admission shares:
+ * a row may only be COMPLETED while its workflow is still `running`. `paused`
+ * is a valid nonterminal status, so completing a row from any other status
+ * would advance a lifecycle its own route refuses to advance. Every entry that
+ * composes a completion — the route's own `complete` (standalone and
+ * report-only) and the composed close that mirrors it — admits the row through
+ * this same function.
+ */
+function assertCompletionRunningStatus(context: RowContext, what: string): void {
+  if (context.snapshot.status !== "running") {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `${what} requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
+      { workflow_id: context.snapshot.id, status: context.snapshot.status },
+    );
+  }
+}
+
 async function assertStandaloneCompletionPrecheck(
   context: RowContext,
   scope: ResolvedPlanScope,
@@ -4385,13 +5445,7 @@ async function assertStandaloneCompletionPrecheck(
   handoff: PlanHandoff,
 ): Promise<void> {
   assertStandaloneRoute(context.snapshot, scope.planId, "complete");
-  if (context.snapshot.status !== "running") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
-      { workflow_id: context.snapshot.id, status: context.snapshot.status },
-    );
-  }
+  assertCompletionRunningStatus(context, "complete");
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
@@ -4456,13 +5510,7 @@ async function assertStandaloneReportOnlyCompletionPrecheck(
       { plan_id: scope.planId },
     );
   }
-  if (context.snapshot.status !== "running") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `complete requires workflow ${context.snapshot.id} to still be running \u2014 got ${context.snapshot.status}`,
-      { workflow_id: context.snapshot.id, status: context.snapshot.status },
-    );
-  }
+  assertCompletionRunningStatus(context, "complete");
   if (handoff.state !== "accepted") {
     throw new CoordinationError(
       "coordination.invalid-transition",
@@ -4739,6 +5787,7 @@ async function mutateRepairDeliverySource(
   request: RepairDeliverySourceRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "repair-delivery-source",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4757,7 +5806,8 @@ async function mutateRepairDeliverySource(
     operation: "repair-delivery-source",
     session,
     session_file: sessionPath,
-    outcome: "delivery-source-repaired",
+    outcome: result.satisfied === null ? "delivery-source-repaired" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -4786,34 +5836,45 @@ function completeStandaloneRow(context: RowContext, scope: ResolvedPlanScope, ha
   return { row: nextRow, coordination: nextCoordination };
 }
 
+/**
+ * §E the stored invariants of an already completed standalone row (spec §E): a
+ * completed handoff on a `Done` row with no lease and no merge lease, whose
+ * sealed evidence is unchanged. `what` names the transition in the refusal (the
+ * reconcile replay by default); `fulfilment: "pending"` is the ONE caller that
+ * does not require the recorded report-only fulfilment — a CLOSE repairing that
+ * very projection, which records it in the same commit instead of being refused
+ * by the state it repairs (the DB close's `assertCompletedReplayInvariants`).
+ */
 function assertStandaloneCompletedReplay(
   context: RowContext,
   scope: ResolvedPlanScope,
   handoff: PlanHandoff,
+  options: { what?: string; fulfilment?: "required" | "pending" } = {},
 ): void {
-  assertStandaloneRoute(context.snapshot, scope.planId, "reconcile");
+  const what = options.what ?? "reconcile";
+  assertStandaloneRoute(context.snapshot, scope.planId, what);
   if (rowStatusOf(context.row) !== "Done") {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires ${scope.planId} to be Done for a standalone completed replay`,
+      `${what} requires ${scope.planId} to be Done for a standalone completed replay`,
       { plan_id: scope.planId, status: context.row.status },
     );
   }
   if (context.row.execution_lease !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires no execution lease on ${scope.planId} for a standalone completed replay`,
+      `${what} requires no execution lease on ${scope.planId} for a standalone completed replay`,
       { plan_id: scope.planId },
     );
   }
   if (context.snapshot.integration_merge_lease !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `reconcile requires no integration merge lease for a standalone completed replay of ${scope.planId}`,
+      `${what} requires no integration merge lease for a standalone completed replay of ${scope.planId}`,
       { plan_id: scope.planId },
     );
   }
-  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "reconcile" });
+  assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what });
   const storedHandoffViolations = validatePlanHandoff(
     handoff,
     `plan ${scope.planId} coordination.handoff`,
@@ -4828,15 +5889,15 @@ function assertStandaloneCompletedReplay(
     );
   }
   if (isStandaloneReportOnlyWorkflow(context.snapshot)) {
-    assertReportOnlyCompletionEvidence(context, scope.planId, "reconcile");
+    if (options.fulfilment !== "pending") assertReportOnlyCompletionEvidence(context, scope.planId, what);
     return;
   }
   const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
-  assertStandaloneBranchIdentity(context, scope, handoff, anchors, "reconcile", false);
+  assertStandaloneBranchIdentity(context, scope, handoff, anchors, what, false);
   const repository = proofRepository([handoff.worktree_path, scope.worktreePath, scope.harnessRoot]);
   if (repository !== undefined && !gitObjectExists(repository, handoff.source_sha)) {
     throw gitProof(
-      `reconcile cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${scope.planId}`,
+      `${what} cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${scope.planId}`,
       { plan_id: scope.planId, source_sha: handoff.source_sha },
     );
   }
@@ -4937,6 +5998,7 @@ async function mutateComplete(
   request: CompleteRequest,
 ): Promise<CoordinationResult> {
   const result = await withRowCommit(scope, {
+    kind: "complete",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -4980,7 +6042,8 @@ async function mutateComplete(
     operation: "complete",
     session,
     session_file: sessionPath,
-    outcome: "completed",
+    outcome: result.satisfied === null ? "completed" : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -5136,6 +6199,7 @@ async function mutateReconcile(
 ): Promise<CoordinationResult> {
   let plan: ReconcilePlan = { outcome: "unchanged", apply: () => null };
   const result = await withRowCommit(scope, {
+    kind: "reconcile",
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
@@ -5149,7 +6213,8 @@ async function mutateReconcile(
     operation: "reconcile",
     session,
     session_file: sessionPath,
-    outcome: plan.outcome,
+    outcome: result.satisfied === null ? plan.outcome : "already-satisfied",
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -5161,6 +6226,492 @@ async function mutateReconcile(
       sessionPath,
     ),
   };
+}
+
+/* ------------------------------------------------------------------------ *
+ * §R5/§R10 the file-authority close — the same completion intent the DB route
+ * serves, on the file route's own ordered resumable steps
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R5/§R10 one file-authority close: `fulfilment → row Done → terminal →
+ * unregister` on the same facts the DB close composes from
+ * (`readEntailedRowCompletion` — E10 is this mirror's source).
+ *
+ * The steps are ORDERED and RESUMABLE, because a multi-file lifecycle
+ * completion is not one filesystem transaction (contract §4.3):
+ *
+ * 1. every owned row this close OWES is completed through the file route's own
+ *    completion rules, with the report-only fulfilment recorded in the SAME
+ *    write (contract §1: the fulfilment is recorded before the row is marked
+ *    `Done` — there it authorizes that `Done`). One atomic commit per owed row,
+ *    in row order; a row that already records its completion owes nothing and
+ *    is never rewritten.
+ * 2. the terminal snapshot is written with the requested `endedAt` by
+ *    `closeWorkflow`, the ONE terminal writer, which also re-consults the
+ *    declared kind's complete delivery evidence against the rows this call just
+ *    completed and never rewrites a committed terminal state.
+ * 3. the workflow's ACTIVE root entry is removed (`unregisterWorkflow`,
+ *    idempotent).
+ *
+ * A terminal snapshot committed before the root cleanup stays a durable
+ * completion fact: a retry reads it, writes nothing to it — the FIRST
+ * `ended_at` and the recorded outcome are preserved and no row completion is
+ * replayed as work — and only continues the cleanup the crash left. Nothing
+ * here holds a lock across the steps or calls another public operation from
+ * inside a lock, so a retry converges instead of meeting this module's own
+ * non-reentrant write locks.
+ *
+ * §R5/§R10 (QC2-F-002) WHO must present the coordinator envelope is the
+ * snapshot's own state, exactly as in the prior single-snapshot `closeWorkflow`
+ * this verb composes:
+ *
+ * - a COORDINATED snapshot (one that records a coordinator binding) is closed
+ *   only by that bound session: its owed rows are completed through
+ *   `commitCloseRow` under the presented envelope, and a bare CLI call refuses
+ *   `coordination.session-mismatch` instead of completing a lifecycle it does
+ *   not own.
+ * - an UNcoordinated snapshot with NO owed row is written straight through by
+ *   `closeWorkflow`, whose `assertCoordinatedSnapshotWriter` early-returns when
+ *   the document carries no `coordination` block — so a bare CLI close of an
+ *   uncoordinated lifecycle keeps exactly the behavior it always had. The
+ *   refusal above is about the owed-row COMPOSITION (which needs a session to
+ *   attribute the completion to), never a blanket requirement that every close
+ *   present an envelope.
+ */
+export type FileWorkflowCloseInput = Readonly<{
+  /** The control harness root holding `status.json` and the workflow directory. */
+  harnessRoot: string;
+  /** The ACTIVE lifecycle being closed. */
+  workflowId: string;
+  /** The terminal timestamp of the FIRST close; a retry never rewrites a committed one. */
+  endedAt: string;
+  /** The bound coordinator envelope (absolute) the composed completions run under. */
+  sessionPath?: string;
+}>;
+
+export type FileWorkflowCloseResult = Readonly<{
+  /** The stored snapshot after the close: terminal, or the committed one the retry found. */
+  snapshot: WorkflowSnapshot;
+  /** The rows this call completed or whose report-only projection it recorded, in row order. */
+  composed: readonly string[];
+  /** `true` when this call removed the workflow's ACTIVE root register entry. */
+  unregistered: boolean;
+  /**
+   * `completed` when this call wrote the terminal state; `already-terminal`
+   * when it finished a state already committed (the residue repair). The stored
+   * `status` is what says WHICH terminal outcome was recorded — a `failed` or
+   * `stopped` lifecycle is returned as that outcome, never relabelled.
+   */
+  outcome: "completed" | "already-terminal";
+}>;
+
+/** §R5/§R10 what one close reads from an owned row (the file route's `EntailedRowCompletion`). */
+type FileCloseDecision =
+  | { kind: "satisfied" }
+  | { kind: "projection"; fulfilment: { policy: string; evidence: string } }
+  | { kind: "standalone"; handoffId: string; fulfilment: { policy: string; evidence: string } | null }
+  | { kind: "integration"; handoffId: string; resultSha: string };
+
+/** Test-only hook observing the ordered boundaries of one composed close (a crash/retry seam). */
+let fileCloseGapForTest: ((stage: "completion" | "cleanup") => void) | undefined;
+
+/**
+ * Register (or clear) the observation point a regression uses to move the
+ * process state between two committed steps of one close: `completion` fires
+ * after a row's completion committed, `cleanup` after the terminal snapshot
+ * committed and before the root register is cleaned up. Throwing from it
+ * simulates the crash whose retry must converge.
+ */
+export function setFileCloseGapForTest(callback: ((stage: "completion" | "cleanup") => void) | undefined): void {
+  fileCloseGapForTest = callback;
+}
+
+/**
+ * §1/§R10 whether a report-only workflow still OWES the fulfilment of its
+ * registered completion policy — the file route's mirror of the DB close's
+ * `reportOnlyFulfilmentOutstanding`: true when nothing is recorded, false when
+ * the recorded fulfilment names that policy, and a recorded fulfilment of a
+ * DIFFERENT policy is refused here rather than accepted as the basis of a
+ * `Done` (a re-pointed completion is exactly the state the post-`Done` freeze
+ * refuses).
+ */
+function fileFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
+  const policy = snapshot.completion_policy;
+  const recorded = isPlainObject(snapshot.delivery) ? snapshot.delivery.completion : undefined;
+  if (recorded === undefined) return true;
+  if (!isNonEmptyString(policy) || recorded.policy !== policy) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
+        `while the lifecycle registers ${JSON.stringify(policy ?? null)} \u2014 a re-pointed completion is never the basis of a Done`,
+      { plan_id: planId, recorded: recorded.policy, registered: policy ?? null },
+    );
+  }
+  return false;
+}
+
+/**
+ * §R5/§R10 the fulfilment of a report-only completion policy, RESOLVED from the
+ * facts the workflow already records: the policy it registered at registration
+ * (contract §1) and the acceptance report its accepted decision was recorded
+ * against (the handoff's own QA report reference, sealed with its digest).
+ * Nothing is invented — a workflow that registered no policy is refused with
+ * that ONE missing decision (A18), never with a route's fields.
+ */
+function entailedFileFulfilment(
+  snapshot: WorkflowSnapshot,
+  planId: string,
+  handoff: PlanHandoff,
+  what: string,
+): { policy: string; evidence: string } | null {
+  if (!fileFulfilmentOutstanding(snapshot, planId)) return null;
+  const policy = snapshot.completion_policy;
+  if (!isNonEmptyString(policy)) {
+    throw missingDecision({
+      planId,
+      what,
+      component: "workflow-delivery",
+      path: "completion_policy",
+      currentFacts: [
+        `workflow ${String(snapshot.id)} declares delivery_kind verification/report-only`,
+        "no completion_policy is recorded and no fulfilment is recorded",
+      ],
+      needed:
+        `${what} records report-only plan ${planId}'s fulfilment of the policy the lifecycle declared at registration, and this ` +
+        "workflow records no completion_policy \u2014 declare the policy the report is accepted against, then retry",
+      availableWork: [
+        `read plan ${planId} and its recorded accepted report`,
+        "independent operations on other rows, plans and workflows continue",
+      ],
+    });
+  }
+  return { policy, evidence: handoff.qa.report.path };
+}
+
+/** §1 the delivery block one close records: the fulfilment merged into the stored evidence. */
+function deliveryWithFulfilment(
+  snapshot: WorkflowSnapshot,
+  fulfilment: { policy: string; evidence: string },
+): WorkflowDeliveryEvidence {
+  const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
+  return { ...stored, completion: fulfilment } as WorkflowDeliveryEvidence;
+}
+
+/**
+ * §R5/§R10 whether this close OWES one owned row anything at all — a pure
+ * snapshot read with NO external I/O, so the loop below never resolves a scope
+ * or touches Git for a workflow it has nothing to compose. A `Done` row owes
+ * nothing except the report-only workflow's own outstanding fulfilment
+ * projection (§R10).
+ */
+function closeOwesRow(snapshot: WorkflowSnapshot, row: PlanRow): boolean {
+  if (rowStatusOf(row) !== "Done") return true;
+  return rowValidationRoute(snapshot, row) === "standalone-report-only" && fileFulfilmentOutstanding(snapshot, String(row.id));
+}
+
+/**
+ * §R5/§R10 the decision one close reads from an owed row, INSIDE the row's own
+ * lock: the completion its recorded evidence entails, or the ONE decision it
+ * cannot supply. Mirrors the DB close's `readEntailedRowCompletion` on the file
+ * route's own facts, and runs the file route's own completion rules —
+ * `assertStandaloneCompletionPrecheck` / `assertIterationCompletionPrecheck`
+ * verbatim, and for the report-only route the same chain minus the one rule
+ * this call is about to satisfy (the recorded fulfilment) — including the
+ * shared running-status precondition every completion admission enforces.
+ */
+async function closeRowDecision(
+  context: RowContext,
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  what: string,
+): Promise<FileCloseDecision> {
+  const planId = scope.planId;
+  const handoff = context.coordination?.handoff;
+  const done = rowStatusOf(context.row) === "Done";
+  const route = rowValidationRoute(context.snapshot, context.row);
+  if (handoff === undefined) {
+    // A Done row that records no handoff is a legitimate closed shape (the
+    // snapshot validator's completed-coherence rule accepts it), so this close
+    // has nothing to compose for it; a row that still owes a completion, and a
+    // report-only row whose fulfilment is outstanding, ask for that decision
+    // instead of inventing a completion.
+    const owesFulfilment = route === "standalone-report-only" && fileFulfilmentOutstanding(context.snapshot, planId);
+    if (done && !owesFulfilment) return { kind: "satisfied" };
+    throw missingDecision({
+      planId,
+      what,
+      component: "plan-handoff",
+      path: "handoff",
+      currentFacts: [
+        `plan ${planId} records no handoff`,
+        `its row status is ${rowStatusOf(context.row) || "unstatused"}`,
+        `the lifecycle declares the ${route} delivery route`,
+      ],
+      needed:
+        `${what} composes plan ${planId}'s completion from its recorded accepted report/development evidence, and this row records ` +
+        "no handoff at all \u2014 obtain the reviewed evidence (the submission, the accepted QC verdict and the passing QA decision), then retry",
+    });
+  }
+  if (route === "standalone-report-only") {
+    assertNoIntegrationContamination({ snapshot: context.snapshot, planId, handoff, what });
+    assertEvidenceDigests(handoff);
+    const fulfilment = entailedFileFulfilment(context.snapshot, planId, handoff, what);
+    if (done) {
+      // §R10 the row already records its completion: only the workflow's own
+      // fulfilment projection is outstanding. Nothing is written to the row, so
+      // the completed shape, its sealed evidence and the absence of ownership
+      // are asserted rather than composed.
+      assertStandaloneCompletedReplay(context, scope, handoff, { what, fulfilment: "pending" });
+      assertEvidenceDigests(handoff);
+      if (fulfilment === null) return { kind: "satisfied" };
+      return { kind: "projection", fulfilment };
+    }
+    // §4.1 the row is about to be COMPLETED, so it passes the same lifecycle
+    // precondition the route's own report-only completion enforces
+    // (`assertStandaloneReportOnlyCompletionPrecheck`): a `paused` workflow,
+    // whose rows the ordinary route leaves alone, is never advanced by the
+    // close. The projection-only repair above rewrites no row byte and stays
+    // the replay `reconcile` performs, so it is not gated here.
+    assertCompletionRunningStatus(context, what);
+    const prepared = context.coordination?.prepared;
+    if (prepared === undefined) {
+      throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared in this workflow`, {
+        plan_id: planId,
+      });
+    }
+    requireHandoffState(handoff, ["accepted"], planId, what);
+    requireRowStatus(context.row, "InReview", planId, what, { still: true });
+    assertAcceptedReviewDecision(handoff, planId, what);
+    if (handoff.qa.gate !== prepared.qa_gate) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `${what} qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
+        { plan_id: planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
+      );
+    }
+    await assertFindingsClosed(scope, prepared, what);
+    assertExecutionHolder(context.row, session.session_id, planId, what);
+    return { kind: "standalone", handoffId: handoff.id, fulfilment };
+  }
+  if (route === "standalone-development") {
+    if (done) return { kind: "satisfied" };
+    requireHandoffState(handoff, ["accepted"], planId, what);
+    await assertStandaloneCompletionPrecheck(context, scope, session, handoff);
+    return { kind: "standalone", handoffId: handoff.id, fulfilment: null };
+  }
+  if (done) return { kind: "satisfied" };
+  requireHandoffState(handoff, ["merged"], planId, what);
+  await assertIterationCompletionPrecheck(context, scope, session, handoff);
+  // §E a PROVEN merge is reused, never re-run: the recorded result is re-read
+  // against the observed integration HEAD (the same proof `complete` applies).
+  const anchors = integrationAnchors(context.snapshot, planId);
+  const attempt = requireIntegration(handoff, planId);
+  const resultSha = assertRecordedResult(
+    anchors.worktreePath,
+    planId,
+    attempt,
+    handoff.source_sha,
+    assertIntegrationCheckout(anchors, planId).head,
+  );
+  return { kind: "integration", handoffId: handoff.id, resultSha };
+}
+
+/**
+ * §R5/§R10 one owed row's completion, applied inside its own locked commit from
+ * the decision the admission read: the file route's own completion delta
+ * (`completeStandaloneRow` / `completeRow`) plus the report-only fulfilment
+ * this close records in the SAME write. A projection-only repair rewrites no
+ * row byte: the terminal identity the lifecycle records stays exactly as it was.
+ */
+async function commitCloseRow(input: {
+  scope: ResolvedPlanScope;
+  session: CoordinationSession;
+  sessionPath: string;
+  expectedRevision: number;
+  what: string;
+}): Promise<boolean> {
+  const { scope, session, sessionPath, expectedRevision, what } = input;
+  let decision: FileCloseDecision = { kind: "satisfied" };
+  const result = await withRowCommit(scope, {
+    kind: "close",
+    expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      decision = await closeRowDecision(context, scope, session, what);
+      // §4.2 a sibling that completed the row between the read and this lock is
+      // current success with no byte churn — the close never replays work.
+      if (decision.kind === "satisfied") return { field: "coordination.handoff", source: "stored plan row" };
+    },
+    mutate: (context) => {
+      const current = decision;
+      switch (current.kind) {
+        case "satisfied":
+          return null;
+        case "projection":
+          return {
+            row: context.row,
+            coordination: context.coordination ?? { revision: 0 },
+            topLevel: { delivery: deliveryWithFulfilment(context.snapshot, current.fulfilment) },
+          };
+        case "integration":
+          return completeRow(context, scope, requirePlanHandoff(context.coordination, scope.planId, current.handoffId), current.resultSha);
+        case "standalone": {
+          const completed = completeStandaloneRow(
+            context,
+            scope,
+            requirePlanHandoff(context.coordination, scope.planId, current.handoffId),
+          );
+          return current.fulfilment === null
+            ? completed
+            : { ...completed, topLevel: { delivery: deliveryWithFulfilment(context.snapshot, current.fulfilment) } };
+        }
+      }
+    },
+  });
+  return result.applied;
+}
+
+/**
+ * §4.1 the refusal of a composed close that had ALREADY committed rows: the
+ * steps are ordered and resumable, so the boundary that stands is reported as
+ * `partial` instead of the "nothing moved" an atomic effect earns. The
+ * terminal step's own refusal is preserved verbatim (its code, message and
+ * details); the applied prefix is added to its recovery sidecar.
+ */
+function discloseFileClosePrefix(error: unknown, applied: readonly string[], workflowId: string): unknown {
+  if (applied.length === 0) return error;
+  const committed = applied.map((planId) => `close on plan ${planId}`);
+  const declared =
+    error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
+  const report =
+    isPlainObject(declared) && isPlainObject(declared.recovery)
+      ? (declared.recovery as RecoveryDetails)
+      : undefined;
+  const message = errorMessage(error);
+  const base =
+    report ??
+    unresolvedRecovery({
+      target: { workflowId, planId: applied[0] },
+      unresolved: [
+        {
+          component: "workflow-lifecycle",
+          path: "status",
+          code: errorCode(error) ?? "coordination.invalid-transition",
+          sourcesTried: [
+            `${workflowId} as this close wrote it`,
+            "the terminal step's own admission rules",
+          ],
+          currentFacts: [
+            message,
+            `plan(s) ${applied.join(", ")} were already completed by this close and are not rolled back`,
+          ],
+          needed: `${message} \u2014 resolve that fact, then retry the close`,
+          withheldEffect: `the terminal state of workflow ${workflowId}: the completed row(s) stand and are not replayed`,
+          availableWork: [
+            "retry this close once the named fact is resolved: the completed rows are recognised and not replayed",
+            "independent operations on other rows, plans and workflows continue",
+          ],
+        },
+      ],
+    });
+  return withRowRecoveryDetails(error, {
+    workflow_id: workflowId,
+    plans_completed: [...applied],
+    recovery: partlyAppliedRecovery(base, committed),
+  });
+}
+
+/**
+ * §R5/§R10 the file authority's close: the composition the DB route performs in
+ * one transaction, in the file route's ordered resumable steps. See the type
+ * docs above for the contract.
+ */
+export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<FileWorkflowCloseResult> {
+  // Canonical authority discrimination precedes every payload check (spec §4.3).
+  assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
+  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId must be a non-empty string");
+  if (!isCloseTimestamp(input.endedAt)) {
+    throw invalidInput(`endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp \u2014 got ${JSON.stringify(input.endedAt)}`);
+  }
+  const harnessRoot = resolve(input.harnessRoot);
+  const workflowDir = join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), input.workflowId);
+  const statusPath = join(harnessRoot, "status.json");
+  const what = "close";
+  let snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+  if (snapshot.id !== input.workflowId) {
+    throw new CoordinationError(
+      "coordination.workflow-not-found",
+      `workflow snapshot identity mismatch: expected ${input.workflowId}, got ${snapshot.id}`,
+      { expected: input.workflowId, actual: snapshot.id },
+    );
+  }
+  const alreadyTerminal = isTerminalSnapshot(snapshot);
+  const composed: string[] = [];
+  if (!alreadyTerminal) {
+    const session = input.sessionPath === undefined ? undefined : readSessionEnvelope(input.sessionPath);
+    for (const row of snapshot.plans) {
+      const planId = String(row.id);
+      if (!closeOwesRow(snapshot, row)) continue;
+      if (session === undefined || input.sessionPath === undefined) {
+        throw new CoordinationError(
+          "coordination.session-mismatch",
+          `close owes plan ${planId}'s completion and workflow ${input.workflowId} is composed only by its bound coordinator \u2014 ` +
+            "present the coordinator session envelope, or complete the row through the plan's own coordination route first",
+          { workflow_id: input.workflowId, plan_id: planId },
+        );
+      }
+      // §4.1 every step one owed row takes here — its own scope resolution, the
+      // completion it composes and the read-back of the state the next row is
+      // admitted on — is a step of THIS composed close: a refusal anywhere in it
+      // discloses the prefix already committed instead of escaping undeclared.
+      try {
+        const scope = await resolvePlanScope(
+          { workflowId: input.workflowId, planId, harnessDir: harnessRoot },
+          harnessRoot,
+        );
+        if (await commitCloseRow({ scope, session, sessionPath: input.sessionPath, expectedRevision: rowRevisionOf(row), what })) {
+          composed.push(planId);
+        }
+        snapshot = readWorkflowSnapshot(workflowDir).snapshot;
+      } catch (error) {
+        throw discloseFileClosePrefix(error, composed, input.workflowId);
+      }
+      fileCloseGapForTest?.("completion");
+    }
+    try {
+      snapshot = await closeWorkflow(input.workflowId, workflowDir, {
+        endedAt: input.endedAt,
+        ...(input.sessionPath === undefined ? {} : { sessionPath: input.sessionPath }),
+      });
+    } catch (error) {
+      throw discloseFileClosePrefix(error, composed, input.workflowId);
+    }
+    fileCloseGapForTest?.("cleanup");
+  }
+  // §R10 the root cleanup is the residue a crash between the boundaries leaves:
+  // idempotent, and the ONLY step a committed terminal snapshot still owes. Its
+  // own refusal is a step of the same composed close, so the applied prefix it
+  // left behind is disclosed with it.
+  let hadEntry = false;
+  try {
+    hadEntry = findRegisteredWorkflow(harnessRoot, input.workflowId) !== undefined;
+    if (hadEntry) await unregisterWorkflow(statusPath, input.workflowId);
+  } catch (error) {
+    throw discloseFileClosePrefix(error, composed, input.workflowId);
+  }
+  return {
+    snapshot,
+    composed,
+    unregistered: hadEntry,
+    outcome: alreadyTerminal ? "already-terminal" : "completed",
+  };
+}
+
+/** The row revision a composed close passes as transport freshness (never intent). */
+function rowRevisionOf(row: PlanRow): number {
+  const coordination = rowCoordinationOf(row);
+  return coordination?.revision ?? 0;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -5468,6 +7019,14 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
  * CLI, frozen). One approved plan row: the plan markdown that carries it plus
  * the metadata the row records. Nothing else is addressable — the verb cannot
  * edit an existing row.
+ *
+ * Only `primary_spec` names a genuinely selected governing document; every other
+ * metadata field is DERIVABLE from the amended workflow's own reviewed compass,
+ * its recorded integration anchor and the appended plan document's recognized
+ * branch declarations (§5 D), so the patch supplies it only when it holds the
+ * fact — and a supplied value is a semantic constraint the derivation must agree
+ * with. Unknown keys are custom metadata: preserved inertly on the row, never
+ * read as authority.
  */
 export type PreparePlanAppend = Readonly<{
   id: string;
@@ -5475,12 +7034,14 @@ export type PreparePlanAppend = Readonly<{
   file: string;
   metadata: Readonly<{
     primary_spec: string;
-    spec_refs: readonly string[];
-    iteration_compass: string;
-    iteration_refs: readonly string[];
-    working_branch: string;
-    spec_integration_branch: string;
-    merge_target: string;
+    spec_refs?: readonly string[];
+    iteration_compass?: string;
+    iteration_refs?: readonly string[];
+    working_branch?: string;
+    spec_integration_branch?: string;
+    merge_target?: string;
+    /** Custom keys this verb does not recognize; carried onto the row inertly. */
+    [key: string]: unknown;
   }>;
 }>;
 
@@ -5525,22 +7086,46 @@ export type PrepareWorkflowPatch = Readonly<{
 /** What a coordinator observes about one workflow before amending it. */
 export type PrepareWorkflowView = Readonly<{
   workflowId: string;
-  /** `sha256:<64 hex>` of the snapshot bytes (the amendment CAS token). */
+  /**
+   * `sha256:<64 hex>` of the snapshot bytes this read observed: the comparison
+   * basis the next amendment passes back. It is provenance, not a gate — a
+   * snapshot an unrelated writer moved in between is reported as
+   * `coordination.token-drifted` beside the amendment's own component verdicts.
+   */
   snapshotVersion: string;
-  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (CAS token). */
+  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (the same comparison basis). */
   compassVersion: string;
   /** Plan ids in row order — including this call's own appends on success. */
   planIds: readonly string[];
-  /** `true` when `amendPrepareWorkflow` is admitted with fresh tokens. */
+  /**
+   * The lifecycle phase this call reads. The document's own label when it
+   * declares one, otherwise the value `deriveLifecyclePhase` derives from the
+   * registration/execution facts it already holds (E06a authority; R3/#293) —
+   * so a manually registered iteration is in Prepare without a `persist
+   * snapshot` step and without a `not-prepare` dead end.
+   */
+  phase?: string;
+  /** `true` when `phase` is a DERIVED value rather than a recorded label. */
+  phaseDerived?: boolean;
+  /**
+   * The STAGE signal of this lifecycle: `true` while it is a registered running
+   * workflow that no execution ownership has moved off Prepare — every row still
+   * Todo, no row progress/lease/coordination block, no merge lease, no
+   * non-Prepare label. It is not a verdict on any one patch: the amendment decides
+   * per addressed component (§4.1/E07), so a local repair of one row is admitted
+   * while `allowed` is `false` and `blockers` names the sibling fact that put the
+   * stage elsewhere.
+   */
   allowed: boolean;
   /** One `<reason>: <message>` line per admission blocker; empty when allowed. */
   blockers: readonly string[];
   /**
-   * Recovery-first derivations this call resolved from pristine Prepare facts
-   * (R3/I-000243): `"phase"` when the lifecycle label was absent, and
-   * `"compass_ref"` when the stored pointer was absolute-but-in-root. A read
-   * view only reports them; the next ordinary amendment adopts them in its
-   * own locked write.
+   * The projections this surface repaired itself (R3/I-000243): `"compass_ref"`
+   * when the stored pointer was absolute-but-in-root. The phase is reported by
+   * `phase`/`phaseDerived` instead — the canonical reader already derives an
+   * absent label (E06a), so it is never a second derivation here. A read view
+   * only reports them; the next ordinary amendment adopts them in its own locked
+   * write.
    */
   derived?: readonly string[];
 }>;
@@ -5585,7 +7170,12 @@ const PREPARE_APPEND_KEYS: readonly string[] = ["id", "title", "file", "metadata
  */
 const PREPARE_CORRECTION_KEYS: readonly string[] = ["id", "expectedFile", "file"];
 
-/** Row metadata the amendment may record (spec § New API and CLI, frozen). */
+/**
+ * Row metadata keys this verb RECOGNIZES: each is validated here and, when the
+ * patch omits it, derived from the amended workflow or the appended plan
+ * document (§5: derive before validating). A key outside this set is custom
+ * metadata — preserved inertly on the row, never elevated to authority.
+ */
 const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
   "primary_spec",
   "spec_refs",
@@ -5596,8 +7186,24 @@ const PREPARE_APPEND_METADATA_KEYS: readonly string[] = [
   "merge_target",
 ];
 
-/** The only `plan_parallelism` values the approved concurrency contract names. */
-const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
+/**
+ * Row metadata the engine READS AS RECORDED AUTHORITY rather than as inert
+ * custom data: `catalog_pin` is the frozen catalog selection the execution
+ * readers trust (`executionInputSelection`, `readExecutionCatalogPin`). A
+ * Prepare append may never write one — the pin belongs to the `prepare`
+ * transition — so a patch that supplies it refuses instead of having its value
+ * promoted (§5: unknown metadata must not gain authority).
+ */
+const PREPARE_APPEND_AUTHORITY_METADATA_KEYS: readonly string[] = ["catalog_pin"];
+
+/**
+ * The only `plan_parallelism` values the approved concurrency contract names.
+ *
+ * Exported because the ACTIVE DB route's `execution-policy` transition applies
+ * the SAME closed set (E08): one rule, two authority routes, no second list to
+ * drift (`execution-workflow.ts` no longer mirrors it).
+ */
+export const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
 
 function prepareAmendmentRefusal(
   reason: PrepareAmendmentReason,
@@ -5639,35 +7245,34 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
   }
   const harnessRoot = canonicalizeNearestExisting(session.harness_root);
   localStore(harnessRoot);
-  const processRoot = resolveProcessHarnessDir(cwd);
-  if (processRoot !== null && canonicalTarget(processRoot) !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `session ${session.session_id} belongs to harness root ${harnessRoot}, but this process resolves ${canonicalTarget(processRoot)}`,
-      { expected: harnessRoot, actual: canonicalTarget(processRoot) },
-    );
-  }
+  // Same trusted-root rule as `readPlanCoordination`: the envelope's root is the
+  // association, so a Git outage in the caller's process cannot invalidate it.
+  const rootResolution = resolveIntentRoot({ cwd }, { root: harnessRoot, source: "session.envelope" });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
   const workflowId = safePlanId(session.workflow_id, "workflow_id");
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
   return { session, sessionPath: canonicalTarget(sessionPath), harnessRoot, workflowId, snapshotPath };
 }
 
 /**
- * The stored snapshot plus the byte version of the file it came from. The
- * version is the CAS token of the exact bytes on disk; the payload comes from
- * the canonical reader (strict validation, one in-memory legacy-alias
- * normalization). Both reads happen inside one locked section for a writer —
- * the snapshot lock, not an editor or power-loss transaction, is this
- * verb's boundary (spec § Admission and mutation step 7).
+ * The stored snapshot, the byte version of the file it came from, and whether
+ * the phase label it carries was DERIVED by the reader from the lifecycle facts
+ * (E06a/R3) rather than declared. The version is the CAS token of the exact
+ * bytes on disk; the payload comes from the canonical reader (strict
+ * validation, one in-memory legacy-alias normalization). Both reads happen
+ * inside one locked section for a writer — the snapshot lock, not an editor or
+ * power-loss transaction, is this verb's boundary (spec § Admission and
+ * mutation step 7).
  */
-function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string } {
+function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string; phaseDerived: boolean } {
   const bytes = readArtifactBytes(snapshotPath);
   if (bytes === undefined) {
     throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
       path: snapshotPath,
     });
   }
-  return { snapshot: readSnapshot(dirname(snapshotPath)), version: bytes.version };
+  const read = readSnapshotWithPhase(dirname(snapshotPath));
+  return { snapshot: read.snapshot, version: bytes.version, phaseDerived: read.phaseDerived };
 }
 
 /** The reviewed compass of a workflow plus the declarations it binds. */
@@ -5848,24 +7453,37 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
 
 /** Admitted, or the reason an amendment must not run. */
 type PrepareAdmission =
-  | { ok: true; /** `true` when the Prepare phase was ABSENT and is derivable (R3) — the caller's locked write adopts it. */ derivesPhase?: boolean }
+  | { ok: true }
   | { ok: false; reason: PrepareAmendmentReason; message: string; details: Record<string, unknown> };
 
 /**
- * The Prepare/no-execution admission (§ Admission and mutation step 3): the
- * lifecycle is running in `phase-1-prepare`, its root register entry is still
- * an active one, and NO execution ownership exists anywhere in the document —
- * no row lease, no row coordination block (preparation, session binding,
- * progress/QC evidence, handoff and reconcile state all live there), no row
- * that left `Todo`/progress 0, and no workflow-level merge lease. A row that
- * carries evidence refuses here; resetting it to Todo would erase nothing and
- * is exactly what this verb must not do.
+ * The Prepare amendment's own admission (§ Admission and mutation step 3,
+ * action-local since E07): the addressed lifecycle is a REGISTERED RUNNING
+ * workflow, and that is all this gate decides.
+ *
+ * Row state is deliberately NOT an admission fact. A Prepare amendment repairs
+ * registration bookkeeping — an addressed row's plan-file pointer, an approved
+ * append's projections, the recorded integration checkout or policy — and each
+ * of those reads only the facts its own component consumes (design §4.1). A
+ * sibling row that is running, progressed or leased does not block a local
+ * correction of another row, and the mere presence of executed rows never
+ * blocks adding independently authorized work: both are preserved by value and
+ * the amended projections are the addressed component's own. The one row whose
+ * state IS read is the row a correction addresses, and that check lives with
+ * the component that reads it (`assertUnstartedAddressedRow`).
+ *
+ * The recorded phase label is not an admission fact either (#293/A04): the
+ * phase is derived from the registration/execution facts (`deriveLifecyclePhase`
+ * and the reader's own derivation), so a lifecycle whose facts have moved into
+ * execution still admits the local repair its rows need, and a manually
+ * registered iteration is amendable without a `persist snapshot` step. The
+ * whole-lifecycle reading — "no execution ownership anywhere" — is the
+ * whole-document STAGE gate (`prepareStageAdmission`), not this verb's.
  */
 function prepareAdmission(
   harnessRoot: string,
   workflowId: string,
   snapshot: WorkflowSnapshot,
-  opts: { derivePhase?: boolean } = {},
 ): PrepareAdmission {
   const entry = assertRootRegisterEntry(harnessRoot, workflowId);
   if (isNonEmptyString(entry.status) && entry.status !== "running") {
@@ -5880,78 +7498,54 @@ function prepareAdmission(
     return {
       ok: false,
       reason: "not-prepare",
-      message: `workflow ${workflowId} is ${snapshot.status} \u2014 the amendment is available only in Prepare`,
+      message: `workflow ${workflowId} is ${snapshot.status} \u2014 the amendment is available only while the lifecycle runs`,
       details: { workflow_id: workflowId, status: snapshot.status },
     };
   }
-  if (snapshot.integration_merge_lease !== undefined) {
+  return { ok: true };
+}
+
+/**
+ * The whole-document Prepare STAGE gate, used by the readable Prepare view and
+ * by the JSON coordinator recovery (§3.3) — the two callers that address a
+ * lifecycle rather than one component of a patch: the addressed workflow is a
+ * REGISTERED RUNNING lifecycle, NO execution ownership exists anywhere in the
+ * document, and no non-Prepare label is recorded.
+ *
+ * Ownership is read through the ONE phase authority (`deriveLifecyclePhase`,
+ * E06a): "some row left Todo / reports progress / carries a lease or a
+ * coordination block, or the workflow carries a merge lease" IS the set of facts
+ * that moves the derived phase off Prepare. The refusal vocabulary is unchanged —
+ * ownership facts answer `execution-started`, and a recorded label that is not
+ * Prepare answers `not-prepare`.
+ *
+ * This is a STAGE signal, not the amendment's admission: the amendment repairs
+ * one addressed component and decides per component (§4.1/E07), so it is admitted
+ * while a sibling row is mid-flight and the stage gate above still reports the
+ * lifecycle as no longer pristine.
+ */
+function prepareStageAdmission(
+  harnessRoot: string,
+  workflowId: string,
+  snapshot: WorkflowSnapshot,
+  phaseDerived: boolean,
+): PrepareAdmission {
+  const lifecycle = prepareAdmission(harnessRoot, workflowId, snapshot);
+  if (!lifecycle.ok) return lifecycle;
+  const derivation = deriveLifecyclePhase(snapshot);
+  if (derivation.phase !== PREPARE_PHASE) {
     return {
       ok: false,
       reason: "execution-started",
-      message: `workflow ${workflowId} carries an integration merge lease \u2014 execution ownership already exists`,
-      details: { workflow_id: workflowId },
+      message: `workflow ${workflowId} has begun executing \u2014 ${derivation.facts.join("; ")}`,
+      details: { workflow_id: workflowId, facts: derivation.facts },
     };
   }
-  for (const row of snapshot.plans) {
-    const planId = rowPlanIds(row)[0] ?? "";
-    const status = rowStatusOf(row);
-    if (status !== "Todo") {
-      return {
-        ok: false,
-        reason: "execution-started",
-        message: `plan ${planId} is ${status} \u2014 the amendment is available only while every row is Todo`,
-        details: { workflow_id: workflowId, plan_id: planId, actual: status },
-      };
-    }
-    if (row.progress !== undefined && row.progress !== 0) {
-      return {
-        ok: false,
-        reason: "execution-started",
-        message: `plan ${planId} reports progress ${JSON.stringify(row.progress)} \u2014 the amendment must not rewrite executed work`,
-        details: { workflow_id: workflowId, plan_id: planId, actual: row.progress },
-      };
-    }
-    if (row.execution_lease !== undefined) {
-      return {
-        ok: false,
-        reason: "execution-started",
-        message: `plan ${planId} carries an execution lease \u2014 the plan has an owner and is no longer in Prepare`,
-        details: { workflow_id: workflowId, plan_id: planId, holder: isPlainObject(row.execution_lease) ? row.execution_lease.holder : null },
-      };
-    }
-    if (row.coordination !== undefined) {
-      return {
-        ok: false,
-        reason: "execution-started",
-        message: `plan ${planId} carries a coordination block \u2014 preparation or execution evidence already exists for this row`,
-        details: { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
-      };
-    }
-  }
-  // Recovery-first phase derivation (#293 / R3): the lifecycle is running,
-  // every row is pristine (checked above) and no execution ownership exists —
-  // but the registration producer declared no phase at all. ONLY an ABSENT
-  // phase is derivable, and ONLY for the callers that opt in
-  // (`show-prepare` reports it read-only; `amend-prepare` adopts it in its
-  // own locked write). The coordinator recovery keeps the strict gate: its
-  // write does not adopt the label, so it must not newly admit what it will
-  // not repair. A present phase is a lifecycle fact — the exact Prepare label
-  // admits unchanged, and any other value refuses without ever being
-  // rewritten.
-  if (snapshot.phase === undefined) {
-    if (opts.derivePhase === true) return { ok: true, derivesPhase: true };
+  if (!phaseDerived && snapshot.phase !== PREPARE_PHASE) {
     return {
       ok: false,
       reason: "not-prepare",
-      message: `workflow ${workflowId} is in no declared phase, not ${PREPARE_PHASE}`,
-      details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: null },
-    };
-  }
-  if (snapshot.phase !== PREPARE_PHASE) {
-    return {
-      ok: false,
-      reason: "not-prepare",
-      message: `workflow ${workflowId} is in ${snapshot.phase}, not ${PREPARE_PHASE}`,
+      message: `workflow ${workflowId} is in ${String(snapshot.phase)}, not ${PREPARE_PHASE}`,
       details: { workflow_id: workflowId, expected: PREPARE_PHASE, actual: snapshot.phase },
     };
   }
@@ -6016,15 +7610,124 @@ function prepareMetadataString(metadata: Record<string, unknown>, key: string, p
 }
 
 /**
+ * One metadata field the amended lifecycle can DERIVE (§5 D): the patch's own
+ * value when it supplies the fact, otherwise the declaration the workflow
+ * already holds. A supplied value is still validated as a non-empty string, and
+ * a field neither supplied nor derivable refuses as `invalid-plan` — the
+ * refusal names the field and what was looked for, never a silent empty value.
+ */
+function prepareDerivableMetadataString(
+  metadata: Record<string, unknown>,
+  key: string,
+  derived: string | undefined,
+  planId: string,
+): string {
+  if (metadata[key] !== undefined) return prepareMetadataString(metadata, key, planId);
+  if (derived === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${planId} metadata.${key} is required \u2014 the patch supplies no value and this lifecycle declares none to derive it from`,
+      { plan_id: planId, field: `metadata.${key}` },
+    );
+  }
+  return derived;
+}
+
+/**
+ * The `Working branch policy` declaration a plan document carries, if any. The
+ * identity parser's consulted header set stays closed (`plan-path.ts` owns it —
+ * a descriptive policy line is never aliased into `working branch`), so the
+ * recognized POLICY declaration is read here under the same markup and fence
+ * rules: `**Working branch policy:** value`, `**Working branch policy**: value`
+ * or a plain `Working branch policy: value` line. A fenced example is never a
+ * declaration, and a document that repeats the label with two different values
+ * declares no single policy.
+ */
+function planWorkingBranchPolicy(planPath: string): string | undefined {
+  let marker: string | undefined;
+  let markerLength = 0;
+  let declared: string | undefined;
+  for (const raw of readFileSync(planPath, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    const fence = /^(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      const run = fence[1]!;
+      if (marker === undefined) {
+        marker = run.charAt(0);
+        markerLength = run.length;
+      } else if (run.charAt(0) === marker && run.length >= markerLength) {
+        marker = undefined;
+      }
+      continue;
+    }
+    if (marker !== undefined) continue;
+    const match = /^\*{0,2}working branch policy\*{0,2}:\*{0,2}\s*(\S.*)$/i.exec(line);
+    if (match === null) continue;
+    const value = match[1]!.trim();
+    if (declared !== undefined && declared !== value) return undefined;
+    declared = value;
+  }
+  return declared;
+}
+
+/**
+ * The branch intent one appended plan DECLARES (#278/A07, §5 branch row). Two
+ * recognized declaration forms establish it, and nothing else does:
+ *
+ * - the literal `Working branch` header — its value IS the row's branch;
+ * - a `Working branch policy` that names a feature worktree — the policy
+ *   describes the plan's own feature branch, whose house spelling is
+ *   `feature/<plan id>`; the sentence is read for that ONE declared kind, never
+ *   scanned for a branch-shaped token (normalize equivalent representations,
+ *   never guess from arbitrary prose).
+ *
+ * Anything else — no declaration at all, or a policy that does not name a
+ * feature worktree — establishes no branch for this row, so the append refuses
+ * instead of inventing one. `source` names what was read, for the diagnostic.
+ */
+function planBranchIntent(
+  planPath: string,
+  headers: ReadonlyMap<string, string>,
+  planId: string,
+): { branch?: string; source: string } {
+  const declared = headers.get("working branch");
+  if (declared !== undefined) return { branch: declared, source: "declares the `Working branch` header" };
+  const policy = planWorkingBranchPolicy(planPath);
+  if (policy !== undefined && /feature worktree/i.test(policy)) {
+    return { branch: `feature/${planId}`, source: "declares a `Working branch policy` naming a feature worktree" };
+  }
+  return {
+    source:
+      policy === undefined
+        ? "declares no branch declaration"
+        : "declares a `Working branch policy` that names no feature worktree",
+  };
+}
+
+/**
  * One appended plan, validated against its own plan markdown, the workflow's
  * recorded anchors and the reviewed compass (§ Admission and mutation steps 4
  * and 6). The row is constructed here — Todo, progress 0, the project-manager
  * owner, a creation timestamp — so no runtime field can travel through the
  * patch.
+ *
+ * The row's branch is resolved from the DECLARATIONS the plan document carries
+ * (#278/A07: the literal `Working branch` header, or a `Working branch policy`
+ * naming a feature worktree) instead of demanding one literal header spelling,
+ * and the references the amended lifecycle already holds (its reviewed compass,
+ * its recorded integration anchor) are derived rather than recited. Custom
+ * metadata keys survive onto the row inertly; recorded authority never does.
  */
 function readPlanAppend(
   value: unknown,
-  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; mainWorktreeBranch: string },
+  context: {
+    harnessRoot: string;
+    snapshot: WorkflowSnapshot;
+    compass: PrepareCompass;
+    mainWorktreeBranch: string;
+    /** §5 W sink: what this append preserved without consuming it. */
+    warnings: ResolutionWarning[];
+  },
 ): PlanRow {
   if (!isPlainObject(value)) {
     throw prepareAmendmentRefusal("invalid-plan", "every appendPlans entry must be an object", { actual: value ?? null });
@@ -6096,17 +7799,48 @@ function readPlanAppend(
   if (!isPlainObject(metadata)) {
     throw prepareAmendmentRefusal("invalid-plan", `plan ${id} metadata must be an object`, { plan_id: id, actual: metadata ?? null });
   }
-  const unexpectedMetadata = Object.keys(metadata).filter((key) => !PREPARE_APPEND_METADATA_KEYS.includes(key));
-  if (unexpectedMetadata.length > 0) {
+  // §5 metadata disposition. A key the engine READS AS AUTHORITY may not be
+  // written through this verb: the catalog pin belongs to `prepare`, and
+  // promoting a caller's value into it would be exactly the authority elevation
+  // the design forbids. Every OTHER key outside the recognized set is custom
+  // metadata — carried onto the row inertly, never read back by the engine.
+  const reservedMetadata = Object.keys(metadata).filter((key) => PREPARE_APPEND_AUTHORITY_METADATA_KEYS.includes(key));
+  if (reservedMetadata.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} metadata accepts only ${PREPARE_APPEND_METADATA_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpectedMetadata.join(", ")}`,
-      { plan_id: id, allowed: [...PREPARE_APPEND_METADATA_KEYS], unexpected: unexpectedMetadata },
+      `plan ${id} metadata.${reservedMetadata.join(", metadata.")} is recorded authority, not custom metadata \u2014 it is written by the \`prepare\` transition and never by a Prepare append`,
+      { plan_id: id, reserved: reservedMetadata },
     );
   }
+  const customMetadata: Record<string, unknown> = {};
+  for (const key of Object.keys(metadata)) {
+    if (!PREPARE_APPEND_METADATA_KEYS.includes(key)) customMetadata[key] = metadata[key];
+  }
+  if (Object.keys(customMetadata).length > 0) {
+    // §5 W: preserved, and SAID so — a typo'd field must not vanish into an
+    // inert container silently.
+    context.warnings.push({
+      code: "coordination.append-custom-metadata",
+      path: `plans.${id}.metadata`,
+      message:
+        `plan ${id} records ${Object.keys(customMetadata).join(", ")} as custom metadata \u2014 carried onto the row inertly and never read as ` +
+        "authority by this engine",
+    });
+  }
+  // The governing spec is the one fact this append still selects itself; every
+  // other reference is derived from the amended workflow's own declarations and
+  // the appended plan document (§5 D — the amended lifecycle already holds
+  // them), and a supplied value stays a constraint the derivation is compared
+  // against.
   const primarySpec = prepareReferencePath(context.harnessRoot, metadata.primary_spec, "metadata.primary_spec", id);
-  const specRefs = prepareReferenceList(context.harnessRoot, metadata.spec_refs, "metadata.spec_refs", id);
-  const iterationCompass = prepareReferencePath(context.harnessRoot, metadata.iteration_compass, "metadata.iteration_compass", id);
+  const specRefs =
+    metadata.spec_refs === undefined
+      ? [primarySpec]
+      : prepareReferenceList(context.harnessRoot, metadata.spec_refs, "metadata.spec_refs", id);
+  const iterationCompass =
+    metadata.iteration_compass === undefined
+      ? context.compass.path
+      : prepareReferencePath(context.harnessRoot, metadata.iteration_compass, "metadata.iteration_compass", id);
   if (iterationCompass !== context.compass.path) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
@@ -6114,14 +7848,43 @@ function readPlanAppend(
       { plan_id: id, expected: context.compass.path, actual: iterationCompass },
     );
   }
-  const iterationRefs = prepareReferenceList(context.harnessRoot, metadata.iteration_refs, "metadata.iteration_refs", id);
-  const workingBranch = prepareMetadataString(metadata, "working_branch", id);
-  const specIntegrationBranch = prepareMetadataString(metadata, "spec_integration_branch", id);
-  const mergeTarget = prepareMetadataString(metadata, "merge_target", id);
+  const iterationRefs =
+    metadata.iteration_refs === undefined
+      ? [iterationCompass]
+      : prepareReferenceList(context.harnessRoot, metadata.iteration_refs, "metadata.iteration_refs", id);
+  const anchors: WorkflowBranchAnchors = context.snapshot.branch ?? {};
+  const intent = planBranchIntent(planPath, headers, id);
+  if (intent.branch === undefined) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} markdown ${planPath} ${intent.source} \u2014 the appended row's branch metadata cannot be verified against the reviewed plan`,
+      { plan_id: id, field: "metadata.working_branch", path: planPath, declared: intent.source },
+    );
+  }
+  const workingBranch =
+    metadata.working_branch === undefined ? intent.branch : prepareMetadataString(metadata, "working_branch", id);
+  if (workingBranch !== intent.branch) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} metadata.working_branch ${workingBranch} does not match the branch ${planPath} ${intent.source} (${intent.branch})`,
+      { plan_id: id, expected: intent.branch, actual: workingBranch, path: planPath },
+    );
+  }
+  const specIntegrationBranch = prepareDerivableMetadataString(
+    metadata,
+    "spec_integration_branch",
+    isNonEmptyString(anchors.integration) ? anchors.integration : undefined,
+    id,
+  );
+  const mergeTarget = prepareDerivableMetadataString(
+    metadata,
+    "merge_target",
+    isNonEmptyString(anchors.integration) ? anchors.integration : undefined,
+    id,
+  );
 
   // Branch metadata must match the reviewed plan and the lifecycle it joins: a
   // row never claims the main, integration or target branch as its own work.
-  const anchors: WorkflowBranchAnchors = context.snapshot.branch ?? {};
   for (const [label, branch] of [
     ["branch.base", anchors.base],
     ["branch.integration", anchors.integration],
@@ -6135,24 +7898,10 @@ function readPlanAppend(
       );
     }
   }
-  // The plan document is the reviewed authority for the branch metadata: both
-  // headers are required, and an absent one is never treated as agreement with
-  // the branches the append itself claims.
-  const declaredWorking = headers.get("working branch");
-  if (declaredWorking === undefined) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} markdown ${planPath} declares no Working branch header \u2014 the appended row's branch metadata cannot be verified against the reviewed plan`,
-      { plan_id: id, field: "metadata.working_branch", path: planPath },
-    );
-  }
-  if (declaredWorking !== workingBranch) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} metadata.working_branch ${workingBranch} does not match the Working branch declared by ${planPath} (${declaredWorking})`,
-      { plan_id: id, expected: declaredWorking, actual: workingBranch, path: planPath },
-    );
-  }
+  // The plan document remains the reviewed authority for the main-worktree
+  // anchor: this append cross-checks the branch the reviewed plan was written
+  // against, and an absent header is never treated as agreement with the
+  // branches the append itself claims.
   const declaredMain = headers.get("main worktree branch");
   if (declaredMain === undefined) {
     throw prepareAmendmentRefusal(
@@ -6206,6 +7955,10 @@ function readPlanAppend(
       working_branch: workingBranch,
       spec_integration_branch: specIntegrationBranch,
       merge_target: mergeTarget,
+      // §5 custom metadata: carried onto the row INERTLY — the engine never
+      // reads these keys, so preserving them cannot elevate a caller's value
+      // into a recorded fact.
+      ...customMetadata,
     },
   };
   const gate = validatePlanRow(row);
@@ -6308,6 +8061,16 @@ function readIntegrationWorktreePath(
 type PreparePlanFileCorrectionDelta = Readonly<{ id: string; file: string }>;
 
 /**
+ * The resolved outcome of one correction component (§4.1/A09): either the pointer
+ * delta this call commits, or the recognition that the addressed row ALREADY
+ * holds that plan's canonical file — the same intent, satisfied, so the
+ * component is held and no second mutation is spent on it.
+ */
+type PreparePlanFileCorrectionOutcome =
+  | Readonly<{ held: true; id: string }>
+  | Readonly<{ held: false; delta: PreparePlanFileCorrectionDelta }>;
+
+/**
  * The exact repository-relative spelling of a plan file, derived from this
  * control root's **configured** plan directory and the repository root that
  * owns the harness — the malformed form rows registered before P2 still hold
@@ -6332,6 +8095,48 @@ function repositoryRelativePlanPointer(harnessRoot: string, planPath: string): s
 }
 
 /**
+ * The addressed ROW's own execution ownership (E07 action-local admission): a
+ * plan-file correction repairs a registration pointer of a row that has not
+ * started executing, because that row's document identity is already sealed into
+ * its execution input. The row's status, progress, lease and coordination block
+ * are its OWN facts — reading them is reading the addressed row — while sibling
+ * rows are never consulted, so one row's preparation, lease or progress can
+ * never block a repair of another row (A06).
+ */
+function assertUnstartedAddressedRow(row: PlanRow, workflowId: string): void {
+  const planId = rowPlanIds(row)[0] ?? "";
+  const status = rowStatusOf(row);
+  if (status !== "Todo") {
+    throw prepareAmendmentRefusal(
+      "execution-started",
+      `plan ${planId} is ${status} \u2014 a plan-file correction repairs a registration pointer, never a row that has begun executing`,
+      { workflow_id: workflowId, plan_id: planId, actual: status },
+    );
+  }
+  if (row.progress !== undefined && row.progress !== 0) {
+    throw prepareAmendmentRefusal(
+      "execution-started",
+      `plan ${planId} reports progress ${JSON.stringify(row.progress)} \u2014 a plan-file correction must not rewrite executed work`,
+      { workflow_id: workflowId, plan_id: planId, actual: row.progress },
+    );
+  }
+  if (row.execution_lease !== undefined) {
+    throw prepareAmendmentRefusal(
+      "execution-started",
+      `plan ${planId} carries an execution lease \u2014 the row has an owner and its pointer is no longer a registration fact`,
+      { workflow_id: workflowId, plan_id: planId, holder: isPlainObject(row.execution_lease) ? row.execution_lease.holder : null },
+    );
+  }
+  if (row.coordination !== undefined) {
+    throw prepareAmendmentRefusal(
+      "execution-started",
+      `plan ${planId} carries a coordination block \u2014 preparation or execution evidence already exists for this row`,
+      { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
+    );
+  }
+}
+
+/**
  * One existing row's plan-file pointer correction (prerequisite contract §4.1).
  * The addressed row must be exactly one registered row of this workflow, the
  * pointer it holds now must be **exactly** the caller's `expectedFile`, that old
@@ -6353,7 +8158,7 @@ function repositoryRelativePlanPointer(harnessRoot: string, planPath: string): s
 function readPlanFileCorrection(
   value: unknown,
   context: { harnessRoot: string; snapshot: WorkflowSnapshot },
-): PreparePlanFileCorrectionDelta {
+): PreparePlanFileCorrectionOutcome {
   if (!isPlainObject(value)) {
     throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object", { actual: value ?? null });
   }
@@ -6396,6 +8201,9 @@ function readPlanFileCorrection(
     );
   }
   const row = addressed[0]!;
+  // The addressed row's own execution state is its own read set (§4.1):
+  // unstarted rows only. Sibling rows are not consulted.
+  assertUnstartedAddressedRow(row, context.snapshot.id);
   const previous = row.file;
   if (!isNonEmptyString(previous)) {
     throw prepareAmendmentRefusal(
@@ -6410,16 +8218,6 @@ function readPlanFileCorrection(
       "invalid-plan",
       `plan ${id} correction requires expectedFile as a string \u2014 got ${JSON.stringify(expectedFile ?? null)}`,
       { plan_id: id, actual: expectedFile ?? null },
-    );
-  }
-  // The exact observed value, not a normalised one: a correction applies to the
-  // pointer this patch was reviewed against, so a row that moved underneath the
-  // caller refuses instead of being repointed from a stale observation.
-  if (previous !== expectedFile) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
-      { plan_id: id, expected: expectedFile, actual: previous },
     );
   }
   const declared = value.file;
@@ -6445,6 +8243,23 @@ function readPlanFileCorrection(
     throw error;
   }
   const planPath = resolved.planPath;
+  // §5/A09/A12 the exact already-applied correction is a CURRENT SUCCESS: the
+  // addressed row already records this plan's canonical file, so the requested
+  // effect holds and this call writes nothing for it. The caller's
+  // `expectedFile` is a semantic constraint on the read set (§4.2), never a
+  // historical-byte gate: a patch re-presented after a lost response whose row
+  // already holds the target is the same intent, satisfied.
+  if (previous === planPath) return { held: true, id };
+  // The exact observed value, not a normalised one: a correction applies to the
+  // pointer this patch was reviewed against, so a row that moved underneath the
+  // caller refuses instead of being repointed from a stale observation.
+  if (previous !== expectedFile) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
+      { plan_id: id, expected: expectedFile, actual: previous },
+    );
+  }
   // The pointer being replaced must identify THIS plan: either a form the shared
   // resolver accepts, or the exact derived repository-relative spelling of the
   // same canonical target. A same-basename file, a copied document whose header
@@ -6465,229 +8280,911 @@ function readPlanFileCorrection(
       { plan_id: id, actual: expectedFile, expected: planPath },
     );
   }
-  // A correction that would not move the pointer is not a correction.
-  if (previous === planPath) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} already records ${planPath} \u2014 the correction would not change this row's pointer`,
-      { plan_id: id, path: planPath },
-    );
-  }
-  return { id, file: planPath };
+  return { held: false, delta: { id, file: planPath } };
 }
 
-/** The validated delta of one amendment. */
+/**
+ * The validated delta of one amendment, as its independent COMPONENTS. This is
+ * the partition surface the commit path (E08) consumes: each component names
+ * the facts it read, so a patch whose components are independent still lands
+ * the ones that carry no conflict, while components that share a semantic read
+ * or write — the recorded integration checkout and its policy, an appended row
+ * and the reviewed integration topology it joins — stay connected and commit
+ * together. Resolving and validating them is this verb's job; committing them
+ * is the authority-specific commit path (this verb's snapshot lock on the
+ * supported file route, the frame's own transaction on the ACTIVE DB route).
+ */
 type PrepareProposal = {
+  /** One new approved row per entry — the `append` component. */
   rows: PlanRow[];
+  /** The addressed existing rows' normalized pointers — the `correct-plan-file` component. */
   corrections: readonly PreparePlanFileCorrectionDelta[];
+  /** The recorded integration checkout — the `integration-worktree` component. */
   integrationWorktreePath?: string;
+  /** The approved concurrency key — the `execution-policy` component. */
   planParallelism?: string;
+  /** §4.1 drift this patch does NOT consume: reported as a warning, never a refusal. */
+  warnings: readonly ResolutionWarning[];
+  /** The declarations each normalized value was resolved from (provenance). */
+  resolvedFrom: readonly ResolutionSource[];
+  /** Every component this patch ADDRESSES, in stable order (once each). */
+  components: readonly string[];
 };
 
-/** Set-equality over plan ids (declaration order is never a requirement). */
-function samePlanIdSet(left: readonly string[], right: readonly string[]): boolean {
-  const leftSet = new Set(left);
-  const rightSet = new Set(right);
-  if (leftSet.size !== rightSet.size) return false;
-  for (const id of leftSet) if (!rightSet.has(id)) return false;
-  return true;
+/**
+ * The stable identity of one amendment component, as BOTH authority routes
+ * report it (`recovery.applied`, `unresolved[].component`): the transports
+ * consume ONE component vocabulary whether the effect was committed on the
+ * supported file route or on the ACTIVE DB route (E08).
+ */
+export function prepareAmendmentComponent(
+  kind: "append" | "correct-plan-file" | "integration-worktree" | "execution-policy",
+  value: string,
+): string {
+  return kind === "append" ? `append plan ${value}` : kind === "correct-plan-file" ? `correct-plan-file ${value}` : `${kind} ${value}`;
+}
+
+/**
+ * The minimum decision one component's own refusal code asks a caller for
+ * (§1.3/§6.2): the withheld effect names what is genuinely missing, never an
+ * invented field or a re-statement of a fact the caller already supplied.
+ */
+const AMENDMENT_MINIMUM: Readonly<Record<string, string>> = {
+  "coordination.prepare-amendment.duplicate-plan": "a plan id this workflow does not already hold, or the removal of that entry from the patch",
+  "coordination.prepare-amendment.invalid-plan": "an addressed existing unstarted row named by that plan's own registered file",
+  "coordination.prepare-amendment.invalid-patch": "a patch whose addressed fields are well formed",
+  "coordination.prepare-amendment.compass-mismatch": "an addressed plan, checkout or branch the reviewed compass declares",
+  "coordination.prepare-amendment.execution-started": "the addressed fact's own execution state settled, or that entry removed from the patch",
+  "coordination.prepare-amendment.invalid-worktree": "an existing distinct checkout of this repository on branch.integration",
+  "coordination.not-in-git": "a readable main worktree of the caller's checkout, or a patch whose components read no checkout fact",
+  "coordination.scope-mismatch": "a call from the main worktree of the branch the patch declares",
+};
+
+/**
+ * One component of a patch this call WITHHOLDS (§4.1/A23/§6.2): the component
+ * keeps its own refusal code, its own field details and its own typed problem,
+ * so a patch that addresses several components reports ALL of them at once
+ * (A27) — one minimum choice per withheld component, not one failed call per
+ * component — while the components that carry no conflict still land.
+ */
+type PrepareAmendmentProblem = Readonly<{
+  /** The component's stable identity (`prepareAmendmentComponent`). */
+  component: string;
+  /** The patch field the caller repairs (`appendPlans[1]`, `integrationWorktreePath`, …). */
+  path: string;
+  /** The component's own refusal code — an existing public `coordination.*` code. */
+  code: string;
+  /** The details the single-component refusal reported, kept verbatim. */
+  details: Record<string, unknown>;
+  /** The frozen typed problem (§1.3): sources tried, current facts, minimum decision. */
+  recovery: RecoveryProblem;
+}>;
+
+/** One component resolution: its resolved value, or its own typed problem. */
+type ComponentOutcome<T> = { ok: true; value: T } | { ok: false; problem: PrepareAmendmentProblem };
+
+/**
+ * The partitioned amendment: E07's admissible delta plus the per-component
+ * verdicts that make an applied/held/unresolved split explicit (§6.2/A23).
+ */
+type PrepareAmendmentPlan = Readonly<{
+  proposal: PrepareProposal;
+  /** The components whose effect this call records, once each, in stable order. */
+  applied: readonly string[];
+  /** The components already recorded before this call (recognized, never re-applied). */
+  held: readonly string[];
+  /** The components this call withholds, each with its own typed problem. */
+  unresolved: readonly PrepareAmendmentProblem[];
+}>;
+
+/** One typed problem for a component that never reached — or failed inside — its own reader. */
+function componentProblem(input: {
+  component: string;
+  path: string;
+  code: string;
+  message: string;
+  needed: string;
+  details?: Record<string, unknown>;
+  sourcesTried?: readonly string[];
+  withheldEffect?: string;
+}): PrepareAmendmentProblem {
+  return {
+    component: input.component,
+    path: input.path,
+    code: input.code,
+    details: input.details ?? {},
+    recovery: {
+      component: input.component,
+      path: input.path,
+      code: input.code,
+      sourcesTried: [...(input.sourcesTried ?? [`${input.path} (intent.request)`])],
+      currentFacts: [input.message],
+      needed: input.needed,
+      withheldEffect: input.withheldEffect ?? `${input.component} is left exactly as it was; no part of it is half-applied`,
+      availableWork: ["the unaffected components of this same patch", "reads and unrelated amendments of this lifecycle"],
+    },
+  };
+}
+
+/**
+ * Resolve one component through its own reader, converting that reader's typed
+ * refusal into this component's problem. Only a `CoordinationError` — this
+ * surface's refusal vocabulary — is converted; anything else is a real fault
+ * and travels unchanged.
+ */
+function captureComponent<T>(component: string, path: string, run: () => T): ComponentOutcome<T> {
+  try {
+    return { ok: true, value: run() };
+  } catch (error) {
+    if (!(error instanceof CoordinationError)) throw error;
+    const target = isNonEmptyString(error.details.path) ? error.details.path : undefined;
+    return {
+      ok: false,
+      problem: componentProblem({
+        component,
+        path,
+        code: error.code,
+        message: errorMessage(error),
+        needed: AMENDMENT_MINIMUM[error.code] ?? `the ${path} entry revised so this component can be applied`,
+        details: error.details,
+        sourcesTried: [...[`${path} (intent.request)`], ...(target === undefined ? [] : [`${target} (resolved target)`])],
+      }),
+    };
+  }
+}
+
+/**
+ * The ONE refusal of a patch with withheld components (§6.2/A27): the primary
+ * component's own code and details stay the refusal's classification, and the
+ * sidecar names every withheld component with its own problem. A caller reads
+ * one result rather than N failed calls, and the receipt never claims this call
+ * was mutation-free when an independent component of the same patch landed.
+ */
+function refuseAmendment(
+  problems: readonly PrepareAmendmentProblem[],
+  input: { workflowId: string; components: readonly string[]; recovery: RecoveryDetails },
+): never {
+  const primary = problems[0]!;
+  const rest = problems.slice(1);
+  const fact = String(primary.recovery.currentFacts[0] ?? primary.code);
+  const message =
+    rest.length === 0
+      ? fact
+      : `${fact} \u2014 ${rest.length} further component(s) of this patch are withheld: ${rest.map((entry) => entry.component).join(", ")}`;
+  throw new CoordinationError(primary.code as CoordinationErrorCode, message, {
+    ...primary.details,
+    workflow_id: input.workflowId,
+    withheld_components: problems.map((entry) => entry.component),
+    components: [...input.components],
+    recovery: input.recovery,
+  });
+}
+
+/**
+ * §4.2 the same append intent: the row this patch would add is the row the
+ * workflow already holds (its id, its title, its canonical file and the
+ * metadata derived for it). A stored row that differs is a different payload —
+ * a local conflict, never a silently accepted replacement.
+ */
+function sameAppendedRow(stored: PlanRow, intended: PlanRow): boolean {
+  return (
+    (rowPlanIds(stored)[0] ?? "") === (rowPlanIds(intended)[0] ?? "") &&
+    stored.title === intended.title &&
+    stored.file === intended.file &&
+    stableJson(stored.metadata ?? null) === stableJson(intended.metadata ?? null)
+  );
+}
+
+/**
+ * The reviewed compass's `integration_worktree_path` declaration against the
+ * checkout this commit would leave in place (§4.1). The declaration binds the
+ * components that CONSUME an integration projection — an appended row, which
+ * joins the reviewed integration topology, and the recorded checkout itself; a
+ * plan-file pointer correction consumes nothing and reports the same
+ * contradiction as drift instead.
+ */
+function compassCheckoutContradiction(
+  context: { snapshot: WorkflowSnapshot; compass: PrepareCompass },
+  requestedPath: unknown,
+  recordedPath: string | undefined,
+): { message: string; details: Record<string, unknown> } | undefined {
+  if (context.compass.integrationWorktreePath === undefined) return undefined;
+  const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
+  const effectivePath = isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : recordedPath;
+  if (effectivePath === declaredPath) return undefined;
+  return {
+    message:
+      `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ` +
+      `${context.compass.path} declares ${declaredPath}`,
+    details: { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
+  };
+}
+
+/**
+ * The recorded integration checkout and its policy: ONE connected component
+ * group (§4.1 — "connected path/ownership/policy changes commit together").
+ * Either both requested members land or neither does, and each withheld member
+ * names the same group problem, so a caller never observes a half-applied pair.
+ *
+ * The checkout is VALIDATED only when it would change the recording: a
+ * re-stated recorded checkout is the effect already held (§4.2/A12), and
+ * re-validating a satisfied path would turn a stale precursor into a refusal.
+ */
+function readIntegrationGroup(input: {
+  patch: Record<string, unknown>;
+  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; main: MainWorktreeInfo | null; cwd: string };
+  recordedPath: string | undefined;
+  /** The policy value the group would record, when the patch named an approved one. */
+  requestedPolicy: string | undefined;
+  /** Whether the patch addressed `planParallelism` at all — a malformed value included. */
+  policyRequested: boolean;
+  /** The identity of the policy member, naming the value the caller sent. */
+  policyIdentity: string;
+  /** A malformed `planParallelism` value: this GROUP's own problem (E08 fix round 1). */
+  policyProblem: { code: string; message: string; needed: string; details: Record<string, unknown> } | undefined;
+  recordedParallelism: unknown;
+  checkoutFact: { code: string; message: string; details: Record<string, unknown> } | undefined;
+}): {
+  /** The identity of the requested checkout component, built from its canonical effective path. */
+  pathComponent: string;
+  /** The identity of the requested policy component. */
+  policyComponent: string;
+  path?: string;
+  pathHeld: boolean;
+  policy?: string;
+  policyHeld: boolean;
+  problems: PrepareAmendmentProblem[];
+  /** The checkout this patch would leave in place (the effective value). */
+  effectivePath: string | undefined;
+} {
+  const { context } = input;
+  const requestedPath = input.patch.integrationWorktreePath;
+  const pathRequested = requestedPath !== undefined;
+  const policyRequested = input.policyRequested;
+  // §4.1/E08 the checkout component's identity is the CANONICAL effective path —
+  // the value this call records — so a lexical or symlink alias of one checkout
+  // can never be a second `recovery` component, and it is the same identity the
+  // ACTIVE route builds from `canonicalTarget(operation.path)`.
+  const pathComponent = prepareAmendmentComponent(
+    "integration-worktree",
+    isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : String(requestedPath),
+  );
+  const policyComponent = prepareAmendmentComponent("execution-policy", input.policyIdentity);
+  const effectivePath = isNonEmptyString(requestedPath) ? canonicalTarget(requestedPath) : input.recordedPath;
+  const pathHeld = pathRequested && isNonEmptyString(requestedPath) && canonicalTarget(requestedPath) === input.recordedPath;
+  // A malformed value is never the effect already held: it is this group's problem.
+  const policyHeld =
+    policyRequested && input.policyProblem === undefined && input.requestedPolicy === input.recordedParallelism;
+  const problems: PrepareAmendmentProblem[] = [];
+  const pathChanges = pathRequested && !pathHeld;
+  const policyChanges = policyRequested && !policyHeld;
+  if (!pathChanges && !policyChanges) {
+    return { pathComponent, policyComponent, pathHeld, policyHeld, problems, effectivePath };
+  }
+  const members = [
+    ...(pathRequested ? [{ component: pathComponent, path: "integrationWorktreePath" }] : []),
+    ...(policyRequested ? [{ component: policyComponent, path: "planParallelism" }] : []),
+  ];
+  // The connected group is withheld as ONE unit: each member names the same
+  // problem, so neither of them can be observed as applied on its own.
+  const withhold = (
+    code: string,
+    message: string,
+    details: Record<string, unknown>,
+    options: { sourcesTried?: readonly string[]; needed?: string } = {},
+  ): void => {
+    for (const member of members) {
+      problems.push(
+        componentProblem({
+          component: member.component,
+          path: member.path,
+          code,
+          message,
+          details,
+          needed: options.needed ?? AMENDMENT_MINIMUM[code] ?? `the ${member.path} entry revised so this component can be applied`,
+          ...(options.sourcesTried === undefined ? {} : { sourcesTried: options.sourcesTried }),
+        }),
+      );
+    }
+  };
+  // A malformed component-scoped field withholds the GROUP it belongs to: the
+  // policy value this patch addressed cannot be recorded, so the connected
+  // checkout member cannot land without it either (E08 fix round 1) — while the
+  // appends and corrections of the same patch are unaffected (A23/A27).
+  if (input.policyProblem !== undefined) {
+    withhold(input.policyProblem.code, input.policyProblem.message, input.policyProblem.details, {
+      needed: input.policyProblem.needed,
+    });
+  }
+  // §4.1 the integration OWNERSHIP is in flight: neither member may rewrite a
+  // fact the merging owner is using (A06: appends and corrections are not
+  // affected — they consume no integration ownership).
+  if (context.snapshot.integration_merge_lease !== undefined) {
+    withhold(
+      "coordination.prepare-amendment.execution-started",
+      `workflow ${context.snapshot.id} carries an integration merge lease \u2014 the integration checkout/policy this patch would record cannot be rewritten while the integration owner is merging`,
+      { workflow_id: context.snapshot.id },
+    );
+  }
+  // §4.1 the reviewed branch declaration binds the integration state this group
+  // would leave recorded.
+  if (context.compass.specIntegrationBranch !== undefined) {
+    const recordedBranch = context.snapshot.branch?.integration;
+    if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
+      withhold(
+        "coordination.prepare-amendment.compass-mismatch",
+        `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ` +
+          `${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
+        { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
+      );
+    }
+  }
+  const contradiction = compassCheckoutContradiction(
+    context,
+    pathChanges ? requestedPath : undefined,
+    input.recordedPath,
+  );
+  if (contradiction !== undefined) {
+    withhold("coordination.prepare-amendment.compass-mismatch", contradiction.message, contradiction.details);
+  }
+  // A24/A25 the checkout/branch fact this pair consumes — the same partition the
+  // appended rows obey.
+  if (input.checkoutFact !== undefined && pathRequested) {
+    withhold(input.checkoutFact.code, input.checkoutFact.message, input.checkoutFact.details, {
+      sourcesTried: [
+        "integrationWorktreePath (intent.request)",
+        `${resolve(context.cwd)} (main worktree)`,
+      ],
+    });
+  }
+  let path: string | undefined;
+  const main = context.main;
+  if (pathChanges && problems.length === 0 && main !== null) {
+    const attempt = captureComponent(pathComponent, "integrationWorktreePath", () =>
+      readIntegrationWorktreePath(requestedPath, { harnessRoot: context.harnessRoot, snapshot: context.snapshot, main }),
+    );
+    if (attempt.ok) path = attempt.value;
+    else problems.push(attempt.problem);
+  }
+  if (problems.length > 0) return { pathComponent, policyComponent, pathHeld, policyHeld, problems, effectivePath };
+  return {
+    ...(path !== undefined ? { path } : {}),
+    pathComponent,
+    policyComponent,
+    pathHeld,
+    ...(policyChanges && input.requestedPolicy !== undefined ? { policy: input.requestedPolicy } : {}),
+    policyHeld,
+    problems,
+    effectivePath,
+  };
 }
 
 /**
  * The patch, validated against the workflow, the plan files and the reviewed
- * compass (§ Admission and mutation steps 4–6): unknown keys, duplicate or
- * colliding ids, malformed metadata, escaping or missing references,
- * mismatched plan headers, a patch that changes nothing, a plan set the
- * compass does not declare, and an integration branch or checkout the
- * workflow does not own all refuse here — before anything is written. So does
- * a plan-file correction that addresses no existing row (or an ambiguous one),
- * whose `expectedFile` is not the exact pointer the row holds, whose old
- * pointer names another document, or whose corrected pointer is not that plan's
- * own registered file (prerequisite contract §4.1).
+ * compass (§ Admission and mutation steps 4–6) and PARTITIONED into independent
+ * components (§4.1/E08). Each component is resolved through the facts it alone
+ * consumes, so one component's conflict withholds that component — with its own
+ * typed problem, reported together with every other withheld component (A27) —
+ * while the components that carry no conflict still land in the same call
+ * (A23). Components connected by a shared semantic read or write (the recorded
+ * integration checkout and its policy) commit together or not at all.
+ *
+ * Only facts that invalidate the patch AS A WHOLE refuse before the partition:
+ * the patch shape (aggregated, every broken field path at once — a malformed
+ * `planParallelism` is included there only when another patch-wide reason already
+ * withholds the whole patch) and a patch that addresses nothing at all. Every
+ * other malformation is COMPONENT-scoped and is recorded against the component(s)
+ * it affects — an entry whose id another entry also declares, a policy value
+ * outside the approved set — so it is reported with the components that landed.
  */
-function readPreparePatch(
+function readPrepareAmendment(
   patch: unknown,
-  context: { harnessRoot: string; snapshot: WorkflowSnapshot; compass: PrepareCompass; main: MainWorktreeInfo },
-): PrepareProposal {
+  context: {
+    harnessRoot: string;
+    snapshot: WorkflowSnapshot;
+    compass: PrepareCompass;
+    /** The Git-derived main worktree, or `null` when the Git fact is unreadable. */
+    main: MainWorktreeInfo | null;
+    cwd: string;
+  },
+): PrepareAmendmentPlan {
   if (!isPlainObject(patch)) {
     throw prepareAmendmentRefusal("invalid-patch", "the amendment patch must be an object", { actual: patch ?? null });
   }
+  const invalidPatch = "coordination.prepare-amendment.invalid-patch";
+  const wholePatchWithheld = "the whole patch is withheld; nothing was written";
+  const shape: PrepareAmendmentProblem[] = [];
   const unexpected = Object.keys(patch).filter((key) => !PREPARE_PATCH_KEYS.includes(key));
   if (unexpected.length > 0) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `the amendment patch accepts only ${PREPARE_PATCH_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
-      { allowed: [...PREPARE_PATCH_KEYS], unexpected },
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "patch",
+        code: invalidPatch,
+        message: `the amendment patch accepts only ${PREPARE_PATCH_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+        needed: AMENDMENT_MINIMUM[invalidPatch]!,
+        details: { allowed: [...PREPARE_PATCH_KEYS], unexpected },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  const mainWorktreeBranch = patch.mainWorktreeBranch;
-  if (!isNonEmptyString(mainWorktreeBranch)) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `the amendment patch requires mainWorktreeBranch as a non-empty string \u2014 got ${JSON.stringify(mainWorktreeBranch ?? null)}`,
-      { actual: mainWorktreeBranch ?? null },
+  const branchValue = patch.mainWorktreeBranch;
+  if (!isNonEmptyString(branchValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "mainWorktreeBranch",
+        code: invalidPatch,
+        message: `the amendment patch requires mainWorktreeBranch as a non-empty string \u2014 got ${JSON.stringify(branchValue ?? null)}`,
+        needed: "the branch the caller's main worktree is on",
+        details: { actual: branchValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  // The caller's checkout identity: the Git-derived main worktree must be on
-  // the branch this patch declares. `branch.base` is a recorded anchor, not
-  // residency, so it is never the expectation here.
-  if (context.main.branch !== mainWorktreeBranch) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `the main worktree ${context.main.root} is on ${context.main.branch === "" ? "a detached HEAD" : context.main.branch}, but this amendment declares ${mainWorktreeBranch}`,
-      { expected: mainWorktreeBranch, actual: context.main.branch },
+  const appendsValue = patch.appendPlans;
+  if (!Array.isArray(appendsValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "appendPlans",
+        code: invalidPatch,
+        message: "the amendment patch requires appendPlans as an array",
+        needed: "the approved plan rows this patch appends (an empty array is a correction-only call)",
+        details: { actual: appendsValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  const rawAppends = patch.appendPlans;
-  if (!Array.isArray(rawAppends)) {
-    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires appendPlans as an array", {
-      actual: rawAppends ?? null,
-    });
-  }
-  const requestedParallelism = patch.planParallelism;
-  if (
-    requestedParallelism !== undefined &&
-    !(isNonEmptyString(requestedParallelism) && PLAN_PARALLELISM_VALUES.includes(requestedParallelism))
-  ) {
-    throw prepareAmendmentRefusal(
-      "invalid-patch",
-      `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(requestedParallelism ?? null)}`,
-      { allowed: [...PLAN_PARALLELISM_VALUES], actual: requestedParallelism ?? null },
+  const correctionsValue = patch.correctPlanFiles;
+  if (correctionsValue !== undefined && !Array.isArray(correctionsValue)) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "correctPlanFiles",
+        code: invalidPatch,
+        message: "the amendment patch requires correctPlanFiles as an array",
+        needed: "the addressed rows' pointer corrections (an empty array is an append-only call)",
+        details: { actual: correctionsValue ?? null },
+        withheldEffect: wholePatchWithheld,
+      }),
     );
   }
-  const planParallelism: string | undefined = isNonEmptyString(requestedParallelism) ? requestedParallelism : undefined;
-
-  // Duplicate ids are refused as their own reason: an id already registered in
-  // the workflow (old rows are preserved by value, never replaced) or the same
-  // id twice in one patch.
-  const existingIds = new Set(context.snapshot.plans.flatMap((row) => rowPlanIds(row)));
-  const declaredIds = new Set<string>();
-  for (const entry of rawAppends) {
-    const id = isPlainObject(entry) ? entry.id : undefined;
-    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
-    if (existingIds.has(id)) {
-      throw prepareAmendmentRefusal(
-        "duplicate-plan",
-        `plan ${id} is already a row of workflow ${context.snapshot.id} \u2014 the amendment appends new rows and never replaces existing ones`,
-        { plan_id: id, workflow_id: context.snapshot.id },
-      );
-    }
-    if (declaredIds.has(id)) {
-      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in one patch`, { plan_id: id });
-    }
-    declaredIds.add(id);
-  }
-
-  const rows = rawAppends.map((entry) =>
-    readPlanAppend(entry, {
-      harnessRoot: context.harnessRoot,
-      snapshot: context.snapshot,
-      compass: context.compass,
-      mainWorktreeBranch,
-    }),
-  );
-  // Plan-file corrections address existing rows and obey the append's own
-  // plan-file rules. An id is either new (appended) or existing (corrected),
-  // never both, and never twice in one patch.
-  const rawCorrections = patch.correctPlanFiles;
-  if (rawCorrections !== undefined && !Array.isArray(rawCorrections)) {
-    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch requires correctPlanFiles as an array", {
-      actual: rawCorrections ?? null,
-    });
-  }
-  const correctionIds = new Set<string>();
-  for (const entry of rawCorrections ?? []) {
-    const id = isPlainObject(entry) ? entry.id : undefined;
-    if (!isNonEmptyString(id)) continue; // the entry's own shape refuses below
-    if (declaredIds.has(id)) {
-      throw prepareAmendmentRefusal(
-        "duplicate-plan",
-        `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`,
-        { plan_id: id },
-      );
-    }
-    if (correctionIds.has(id)) {
-      throw prepareAmendmentRefusal("duplicate-plan", `plan ${id} appears twice in correctPlanFiles`, { plan_id: id });
-    }
-    correctionIds.add(id);
-  }
-  const corrections = (rawCorrections ?? []).map((entry) => readPlanFileCorrection(entry, context));
-  const integrationWorktreePath =
-    patch.integrationWorktreePath === undefined
+  // §4.1/E08 `planParallelism` is a COMPONENT-scoped field: its value is the
+  // `execution-policy` member of the connected integration/policy group, so a
+  // malformed value withholds that GROUP inside the partition instead of failing
+  // the whole amendment before it — an independent component of the same patch
+  // still lands. A patch that IS withheld whole for a genuinely patch-wide
+  // reason additionally names it below, so one answer still lists every broken
+  // field path (A27/§6.2).
+  const parallelismValue = patch.planParallelism;
+  const policyProblem =
+    parallelismValue === undefined || (isNonEmptyString(parallelismValue) && PLAN_PARALLELISM_VALUES.includes(parallelismValue))
       ? undefined
-      : readIntegrationWorktreePath(patch.integrationWorktreePath, context);
+      : {
+          code: invalidPatch,
+          message: `planParallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 got ${JSON.stringify(parallelismValue ?? null)}`,
+          needed: `one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`,
+          details: { allowed: [...PLAN_PARALLELISM_VALUES], actual: parallelismValue ?? null },
+        };
+  if (shape.length > 0 && policyProblem !== undefined) {
+    shape.push(
+      componentProblem({
+        component: "patch",
+        path: "planParallelism",
+        code: policyProblem.code,
+        message: policyProblem.message,
+        needed: policyProblem.needed,
+        details: policyProblem.details,
+        withheldEffect: wholePatchWithheld,
+      }),
+    );
+  }
+  // §6.2/A27: one refusal naming every broken patch-level field, not the first.
+  if (shape.length > 0) {
+    refuseAmendment(shape, {
+      workflowId: context.snapshot.id,
+      components: [],
+      recovery: unresolvedRecovery({
+        target: { workflowId: context.snapshot.id },
+        unresolved: shape.map((entry) => entry.recovery),
+      }),
+    });
+  }
+  const mainWorktreeBranch = isNonEmptyString(branchValue) ? branchValue : "";
+  const appends: readonly unknown[] = Array.isArray(appendsValue) ? appendsValue : [];
+  const correctionsIn: readonly unknown[] = Array.isArray(correctionsValue) ? correctionsValue : [];
+  const requestedPolicy = isNonEmptyString(parallelismValue) ? parallelismValue : undefined;
+  // Whether the patch ADDRESSED the policy at all, so a malformed value is a
+  // component of this patch rather than an unaddressed field. The identity names
+  // the value the caller sent, exactly as the checkout component names its path.
+  const policyRequested = parallelismValue !== undefined;
+  const policyIdentity = isNonEmptyString(parallelismValue) ? parallelismValue : String(parallelismValue);
+  const requestedPath = patch.integrationWorktreePath;
+  const warnings: ResolutionWarning[] = [];
+  // The caller's checkout identity. A component that CONSUMES an owned
+  // checkout/branch fact — an appended row's plan-document anchor, the recorded
+  // integration checkout — genuinely needs the Git-derived main worktree to be
+  // on the declared branch, and an unreadable/differing Git fact withholds THAT
+  // component as an unavailable prerequisite (A25). A local repair consumes
+  // neither, so it proceeds on its trusted envelope root and reports the same
+  // fact as a warning (R12/A24): an environment outage is never promoted into a
+  // gate over work that does not depend on it. §4.1/E08 the fact is now
+  // component-scoped, so a patch that carries both a repair and an append lands
+  // the repair and withholds the append with its own typed problem.
+  const consumesCheckoutFacts = appends.length > 0 || requestedPath !== undefined;
+  let checkoutFact: { code: string; message: string; details: Record<string, unknown> } | undefined;
+  if (context.main === null) {
+    if (consumesCheckoutFacts) {
+      checkoutFact = {
+        code: "coordination.not-in-git",
+        message:
+          `this amendment records branch ${mainWorktreeBranch} on an appended plan row or an integration checkout, but ${resolve(context.cwd)} ` +
+          "has no readable main worktree to verify it against",
+        details: { cwd: resolve(context.cwd) },
+      };
+    } else {
+      warnings.push({
+        code: "coordination.git-unavailable",
+        path: "cwd",
+        message:
+          `the main worktree of ${resolve(context.cwd)} could not be read; this amendment repairs registration facts that need no Git fact, so it ` +
+          "proceeds on the trusted envelope root and the declared branch is not verified",
+      });
+    }
+  } else if (context.main.branch !== mainWorktreeBranch) {
+    // `branch.base` is a recorded anchor, not residency, so it is never the
+    // expectation here.
+    const on = context.main.branch === "" ? "a detached HEAD" : context.main.branch;
+    if (consumesCheckoutFacts) {
+      checkoutFact = {
+        code: "coordination.scope-mismatch",
+        message: `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}`,
+        details: { expected: mainWorktreeBranch, actual: context.main.branch },
+      };
+    } else {
+      warnings.push({
+        code: "coordination.main-branch-drift",
+        path: "cwd",
+        message:
+          `the main worktree ${context.main.root} is on ${on}, but this amendment declares ${mainWorktreeBranch}; this amendment repairs registration ` +
+          "facts that no checkout fact binds, so it proceeds on the trusted envelope root and the declared branch is not enforced",
+      });
+    }
+  }
+  // §4.1 one identity per addressed plan: an id is either new (appended) or
+  // existing (corrected), never both, and never twice in one patch. The rule is
+  // enforced PER ENTRY instead of as a preflight throw (E08 fix round 1): an id
+  // that more than one entry declares names no single component, so EVERY entry
+  // carrying it is withheld with its own problem — the same public code and
+  // `plan_id` the whole-patch refusal reported — while the unrelated components
+  // of the same patch still land (A23) and one receipt aggregates them (A27).
+  const appendIdCounts = new Map<string, number>();
+  const correctionIdCounts = new Map<string, number>();
+  for (const entry of appends) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
+    appendIdCounts.set(id, (appendIdCounts.get(id) ?? 0) + 1);
+  }
+  for (const entry of correctionsIn) {
+    const id = isPlainObject(entry) ? entry.id : undefined;
+    if (!isNonEmptyString(id)) continue; // the entry's own shape becomes its problem below
+    correctionIdCounts.set(id, (correctionIdCounts.get(id) ?? 0) + 1);
+  }
+  /** The problem of one entry whose plan id no single component can name. */
+  const ambiguousIdProblem = (component: string, path: string, id: string): PrepareAmendmentProblem | undefined => {
+    const appended = appendIdCounts.get(id) ?? 0;
+    const corrected = correctionIdCounts.get(id) ?? 0;
+    if (appended + corrected <= 1) return undefined;
+    const message =
+      appended > 1 && corrected === 0
+        ? `plan ${id} appears twice in one patch`
+        : corrected > 1 && appended === 0
+          ? `plan ${id} appears twice in correctPlanFiles`
+          : `plan ${id} is both appended and corrected in one patch \u2014 a plan id is either a new row or an existing one`;
+    return componentProblem({
+      component,
+      path,
+      code: "coordination.prepare-amendment.duplicate-plan",
+      message,
+      needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+      details: { plan_id: id },
+    });
+  };
 
-  const recordedPath = isNonEmptyString(context.snapshot.integration_worktree_path)
-    ? canonicalTarget(context.snapshot.integration_worktree_path)
-    : undefined;
-  const recordedParallelism = isPlainObject(context.snapshot.execution_policy)
-    ? context.snapshot.execution_policy.plan_parallelism
-    : undefined;
-  const changesPath = integrationWorktreePath !== undefined && integrationWorktreePath !== recordedPath;
-  const changesPolicy = planParallelism !== undefined && planParallelism !== recordedParallelism;
-  if (rows.length === 0 && corrections.length === 0 && !changesPath && !changesPolicy) {
+  // A patch that addresses NOTHING is not an amendment. (§5 a patch whose
+  // components all ALREADY hold their effect is not this case: its effect is
+  // current, so it is the success below, never an artificial no-op write.)
+  if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && !policyRequested) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
       `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
       { workflow_id: context.snapshot.id },
     );
   }
-  // The reviewed declaration binds the workflow's own recorded integration
-  // branch too, and no amendment edits that anchor — so the comparison belongs
-  // here, where every patch is validated, and not only on the per-append path:
-  // an amendment that appends nothing (a policy or checkout recording) must
-  // refuse a workflow whose recorded branch contradicts the reviewed compass
-  // just the same (spec § Admission and mutation step 6).
-  if (context.compass.specIntegrationBranch !== undefined) {
-    const recordedBranch = context.snapshot.branch?.integration;
-    if (!isNonEmptyString(recordedBranch) || recordedBranch !== context.compass.specIntegrationBranch) {
-      throw prepareAmendmentRefusal(
-        "compass-mismatch",
-        `workflow ${context.snapshot.id} records integration branch ${JSON.stringify(recordedBranch ?? null)}, but the reviewed compass ${context.compass.path} declares ${context.compass.specIntegrationBranch}`,
-        { expected: context.compass.specIntegrationBranch, actual: recordedBranch ?? null },
-      );
+
+  const applied: string[] = [];
+  const held: string[] = [];
+  const unresolved: PrepareAmendmentProblem[] = [];
+  const components: string[] = [];
+  const resolvedIds: string[] = [];
+  const rows: PlanRow[] = [];
+  const corrections: PreparePlanFileCorrectionDelta[] = [];
+  const recordedPath = isNonEmptyString(context.snapshot.integration_worktree_path)
+    ? canonicalTarget(context.snapshot.integration_worktree_path)
+    : undefined;
+  const recordedParallelism = isPlainObject(context.snapshot.execution_policy)
+    ? context.snapshot.execution_policy.plan_parallelism
+    : undefined;
+
+  // (1) Appends — one independent component per entry. An appended row reads its
+  // own plan document, the reviewed compass approval of its id and the reviewed
+  // integration topology it joins, and nothing about its siblings (A06).
+  for (const [index, entry] of appends.entries()) {
+    const id = isPlainObject(entry) && isNonEmptyString(entry.id) ? entry.id : undefined;
+    const component = prepareAmendmentComponent("append", id ?? "(unnamed)");
+    const path = `appendPlans[${index}]`;
+    components.push(component);
+    // §4.1/E08 an entry whose plan id another entry also declares cannot be
+    // resolved: THIS entry is withheld with its own problem while its unrelated
+    // siblings still land (A23/A27).
+    const ambiguous = id === undefined ? undefined : ambiguousIdProblem(component, path, id);
+    if (ambiguous !== undefined) {
+      unresolved.push(ambiguous);
+      continue;
     }
-  }
-  // The reviewed declaration binds the checkout this commit would leave in
-  // place — the patch's own validated path when it names one, otherwise the
-  // recorded path the spread preserves. Comparing the *effective* path is what
-  // makes both a retained conflict (patch omits the field) and a still
-  // unrecorded declaration refuse, while an explicit correction that names the
-  // reviewed checkout in the same call stays lawful (spec § Admission and
-  // mutation step 6).
-  if (context.compass.integrationWorktreePath !== undefined) {
-    const declaredPath = canonicalTarget(context.compass.integrationWorktreePath);
-    const effectivePath = integrationWorktreePath ?? recordedPath;
-    if (effectivePath !== declaredPath) {
-      throw prepareAmendmentRefusal(
-        "compass-mismatch",
-        `workflow ${context.snapshot.id} would record integration checkout ${effectivePath ?? "(none)"}, but the reviewed compass ${context.compass.path} declares ${declaredPath}`,
-        { path: effectivePath ?? null, expected: declaredPath, actual: effectivePath ?? null },
+    if (checkoutFact !== undefined) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: checkoutFact.code,
+          message: checkoutFact.message,
+          needed: AMENDMENT_MINIMUM[checkoutFact.code] ?? `a readable checkout fact for ${path}`,
+          details: checkoutFact.details,
+          sourcesTried: [`${path} (intent.request)`, `${resolve(context.cwd)} (main worktree)`],
+        }),
       );
+      continue;
+    }
+    const attempt = captureComponent(component, path, () =>
+      readPlanAppend(entry, {
+        harnessRoot: context.harnessRoot,
+        snapshot: context.snapshot,
+        compass: context.compass,
+        mainWorktreeBranch,
+        warnings,
+      }),
+    );
+    if (!attempt.ok) {
+      unresolved.push(attempt.problem);
+      continue;
+    }
+    const row = attempt.value;
+    const rowId = rowPlanIds(row)[0] ?? "";
+    // §4.1 the reviewed compass is the APPROVAL of the ids this patch addresses.
+    if (!context.compass.planIds.includes(rowId)) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: `the reviewed compass ${context.compass.path} does not declare plan ${rowId} \u2014 an append or a correction applies only to approved work`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: { expected: [...context.compass.planIds], undeclared: [rowId] },
+        }),
+      );
+      continue;
+    }
+    const contradiction = compassCheckoutContradiction(context, requestedPath, recordedPath);
+    if (contradiction !== undefined) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: contradiction.message,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: contradiction.details,
+        }),
+      );
+      continue;
+    }
+    const existing = context.snapshot.plans.filter((candidate) => rowPlanIds(candidate).includes(rowId));
+    if (existing.length > 1) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.duplicate-plan",
+          message: `plan ${rowId} is addressed by ${existing.length} rows of workflow ${context.snapshot.id} \u2014 the appended row would be ambiguous`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+          details: { plan_id: rowId, workflow_id: context.snapshot.id, rows: existing.length },
+        }),
+      );
+      continue;
+    }
+    if (existing.length === 1) {
+      // §4.2/A09/A12 the SAME append intent is already current: the workflow
+      // holds exactly the row this patch would add, so the component is
+      // recognized as held — no second row, no second creation timestamp, no
+      // revision churn. A stored row that differs is a different payload and
+      // stays a local conflict.
+      if (sameAppendedRow(existing[0]!, row)) {
+        // `held` is deliberately NOT an `applied` entry: this call applied
+        // nothing for that component, so a replay can never double-count it —
+        // the receipt names it in `warnings` and spends no mutation on it.
+        held.push(component);
+        resolvedIds.push(rowId);
+        continue;
+      }
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.duplicate-plan",
+          message: `plan ${rowId} is already a row of workflow ${context.snapshot.id} \u2014 the amendment appends new rows and never replaces existing ones`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.duplicate-plan"]!,
+          details: { plan_id: rowId, workflow_id: context.snapshot.id },
+        }),
+      );
+      continue;
+    }
+    rows.push(row);
+    applied.push(component);
+    resolvedIds.push(rowId);
+  }
+
+  // (2) Plan-file corrections — one independent component per entry: the
+  // addressed row, the pointer it holds and that plan's canonical document.
+  for (const [index, entry] of correctionsIn.entries()) {
+    const id = isPlainObject(entry) && isNonEmptyString(entry.id) ? entry.id : undefined;
+    const component = prepareAmendmentComponent("correct-plan-file", id ?? "(unnamed)");
+    const path = `correctPlanFiles[${index}]`;
+    components.push(component);
+    // §4.1/E08 the same per-entry rule as the appends: one entry of a duplicated
+    // or cross-kind id is withheld with its own problem, never a preflight throw.
+    const ambiguous = id === undefined ? undefined : ambiguousIdProblem(component, path, id);
+    if (ambiguous !== undefined) {
+      unresolved.push(ambiguous);
+      continue;
+    }
+    const attempt = captureComponent(component, path, () => readPlanFileCorrection(entry, context));
+    if (!attempt.ok) {
+      unresolved.push(attempt.problem);
+      continue;
+    }
+    const outcome = attempt.value;
+    const addressedId = outcome.held ? outcome.id : outcome.delta.id;
+    if (!context.compass.planIds.includes(addressedId)) {
+      unresolved.push(
+        componentProblem({
+          component,
+          path,
+          code: "coordination.prepare-amendment.compass-mismatch",
+          message: `the reviewed compass ${context.compass.path} does not declare plan ${addressedId} \u2014 an append or a correction applies only to approved work`,
+          needed: AMENDMENT_MINIMUM["coordination.prepare-amendment.compass-mismatch"]!,
+          details: { expected: [...context.compass.planIds], undeclared: [addressedId] },
+        }),
+      );
+      continue;
+    }
+    resolvedIds.push(addressedId);
+    if (outcome.held) held.push(component);
+    else {
+      applied.push(component);
+      corrections.push(outcome.delta);
     }
   }
 
-  // The resulting workflow must declare exactly the plan set the reviewed
-  // compass declares: not one undeclared row, and none of the compass's plans
-  // left unregistered (spec § Admission and mutation step 6).
+  // (3) The recorded integration checkout and its policy: ONE connected group.
+  // Either both requested members land or neither does, and a withheld member
+  // carries the same group problem as its partner — never a half-applied pair.
+  const group = readIntegrationGroup({
+    patch,
+    context,
+    recordedPath,
+    requestedPolicy,
+    policyRequested,
+    policyIdentity,
+    policyProblem,
+    recordedParallelism,
+    checkoutFact,
+  });
+  // §4.1/E08 the component identities come from the group itself, built from the
+  // CANONICAL effective path, so the receipt, the recorded fact and the ACTIVE
+  // route's `canonicalTarget(operation.path)` identity are one vocabulary.
+  if (requestedPath !== undefined) components.push(group.pathComponent);
+  if (policyRequested) components.push(group.policyComponent);
+  if (group.problems.length > 0) {
+    unresolved.push(...group.problems);
+  } else {
+    // Each held member is recognized instead of re-applied: `applied` names only
+    // what this call actually recorded (§4.2/A09 — a replay of the pair spends
+    // no second mutation and reports `already-satisfied`).
+    if (requestedPath !== undefined) {
+      if (group.pathHeld) held.push(group.pathComponent);
+      else if (group.path !== undefined) applied.push(group.pathComponent);
+    }
+    if (policyRequested) {
+      if (group.policyHeld) held.push(group.policyComponent);
+      else if (group.policy !== undefined) applied.push(group.policyComponent);
+    }
+  }
+
+  // The reviewed compass is the APPROVAL of the ids this patch addresses
+  // (§4.1): the compass plan SET is not an equality gate — a declaration with no
+  // registered row is missing registration that this or a later ordinary append
+  // repairs, and a row the compass does not declare is isolated drift. Both are
+  // reported as warnings and neither is ever "repaired" by deleting a row to
+  // make the sets equal (A06).
   const proposedIds = [
     ...context.snapshot.plans.flatMap((row) => rowPlanIds(row)),
     ...rows.map((row) => rowPlanIds(row)[0] ?? ""),
   ];
-  if (!samePlanIdSet(context.compass.planIds, proposedIds)) {
-    const missing = context.compass.planIds.filter((id) => !proposedIds.includes(id));
-    const undeclared = proposedIds.filter((id) => !context.compass.planIds.includes(id));
-    throw prepareAmendmentRefusal(
-      "compass-mismatch",
-      `the amended workflow's plan ids must match the reviewed compass ${context.compass.path} exactly \u2014 missing: ${missing.join(", ") || "(none)"}; not declared by the compass: ${undeclared.join(", ") || "(none)"}`,
-      { expected: [...context.compass.planIds], actual: proposedIds, missing, undeclared },
-    );
+  const missing = context.compass.planIds.filter((id) => !proposedIds.includes(id));
+  if (missing.length > 0) {
+    warnings.push({
+      code: "coordination.compass-plan-missing",
+      path: context.compass.path,
+      message:
+        `the reviewed compass declares plan ${missing.join(", ")} with no registered row yet \u2014 missing registration is repaired by that ` +
+        "plan's own ordinary append and does not block the work this patch addresses",
+    });
   }
+  const undeclaredRows = proposedIds.filter((id) => !context.compass.planIds.includes(id));
+  if (undeclaredRows.length > 0) {
+    warnings.push({
+      code: "coordination.compass-plan-undeclared",
+      path: context.compass.path,
+      message:
+        `workflow ${context.snapshot.id} holds row ${undeclaredRows.join(", ")}, which the reviewed compass does not declare \u2014 the existing row ` +
+        "is isolated drift and is preserved by value, never deleted to make the sets equal",
+    });
+  }
+  // A patch that addresses only plan-file pointers consumes no integration fact
+  // (design §4.1: those checks do not apply to a plan-file pointer correction),
+  // so a lifecycle whose recorded integration facts contradict its compass is
+  // reported as unrelated drift instead of blocking the repair. A patch that
+  // does address the checkout/policy carries the same contradiction as that
+  // group's own problem (above), never as a silent warning.
+  const correctionOnly =
+    appends.length === 0 && correctionsIn.length > 0 && requestedPath === undefined && requestedPolicy === undefined;
+  if (correctionOnly) {
+    const recordedBranch = context.snapshot.branch?.integration;
+    const declaredPath =
+      context.compass.integrationWorktreePath === undefined ? undefined : canonicalTarget(context.compass.integrationWorktreePath);
+    if (
+      (context.compass.specIntegrationBranch !== undefined && recordedBranch !== context.compass.specIntegrationBranch) ||
+      (declaredPath !== undefined && group.effectivePath !== declaredPath)
+    ) {
+      warnings.push({
+        code: "coordination.compass-integration-drift",
+        path: context.compass.path,
+        message:
+          `workflow ${context.snapshot.id}'s recorded integration facts (branch ${JSON.stringify(recordedBranch ?? null)}, checkout ` +
+          `${group.effectivePath ?? "(none)"}) do not match the reviewed compass ${context.compass.path} \u2014 this patch repairs a plan-file pointer and ` +
+          "consumes no integration fact, so the drift is reported and left for the call that records one",
+      });
+    }
+  }
+
   return {
-    rows,
-    corrections,
-    ...(integrationWorktreePath !== undefined ? { integrationWorktreePath } : {}),
-    ...(planParallelism !== undefined ? { planParallelism } : {}),
+    proposal: {
+      rows,
+      corrections,
+      ...(group.path !== undefined ? { integrationWorktreePath: group.path } : {}),
+      ...(group.policy !== undefined ? { planParallelism: group.policy } : {}),
+      warnings,
+      resolvedFrom: [
+        ...resolvedIds.map((id) => ({ path: `plans.${id}`, source: "reviewed compass declaration" })),
+        ...(corrections.length > 0 ? [{ path: "correctPlanFiles", source: "addressed row's own pointer" }] : []),
+      ],
+      components,
+    },
+    applied,
+    held,
+    unresolved,
   };
 }
 
@@ -6736,14 +9233,11 @@ export async function showPrepareWorkflow(
   assertExactKeys(input as unknown as Record<string, unknown>, ["sessionPath", "cwd"], "prepare workflow read");
   const cwd = input.cwd ?? process.cwd();
   const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
-  const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
+  const { snapshot, version, phaseDerived } = readPrepareSnapshot(scope.snapshotPath);
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
-  const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot, { derivePhase: true });
-  const derived = [
-    admission.ok && admission.derivesPhase ? "phase" : null,
-    compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
-  ].filter((entry): entry is string => entry !== null);
+  const admission = prepareStageAdmission(scope.harnessRoot, scope.workflowId, snapshot, phaseDerived);
+  const derived = compass.canonicalCompassRef === undefined ? [] : ["compass_ref"];
   return {
     ok: true,
     operation: "show-prepare",
@@ -6754,6 +9248,8 @@ export async function showPrepareWorkflow(
       snapshotVersion: version,
       compassVersion: compass.version,
       planIds: snapshot.plans.map((row) => rowPlanIds(row)[0] ?? ""),
+      ...(isNonEmptyString(snapshot.phase) ? { phase: snapshot.phase } : {}),
+      ...(phaseDerived ? { phaseDerived: true } : {}),
       allowed: admission.ok,
       blockers: admission.ok ? [] : [`${admission.reason}: ${admission.message}`],
       derived: derived.length > 0 ? derived : undefined,
@@ -6763,12 +9259,32 @@ export async function showPrepareWorkflow(
 
 /**
  * Apply one approved Prepare structural amendment (spec § Admission and
- * mutation). The CAS read, both version comparisons, the admission, the whole
- * patch validation, the compass recheck and the single atomic write all run
- * under the canonical snapshot write lock, so two callers presenting the same
- * tokens cannot both succeed: the loser inspects the winner's bytes and
- * refuses as `stale`. Every refusal happens before any write — the protected
- * snapshot, root register, other workflows and the compass stay byte-identical.
+ * mutation). The CAS read, the patch resolution, the compass recheck and the
+ * single atomic write all run under the canonical snapshot write lock, and every
+ * component is decided against the bytes read INSIDE it.
+ *
+ * §4.1/A06/A29 the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
+ * are an OBSERVED COMPARISON BASIS for a field-level patch, not a
+ * whole-document gate: an unrelated sibling row edit or a compass prose change
+ * that happened after the caller read them is reported as provenance drift
+ * (`recovery.warnings`) and does NOT withhold an independent correction, while
+ * a change to a component's own read set — the addressed row's pointer, the
+ * plan document it reads, the reviewed compass's approval of the ids it
+ * addresses, the addressed row's execution state — still refuses through that
+ * component's own reader with its own typed problem. Raw whole-document
+ * replacement keeps its byte CAS; that is `replaceCoordinatedArtifact`, a
+ * different verb.
+ *
+ * §4.1/E08 the patch is partitioned into independent components: the components
+ * that carry no conflict land in this one locked write, while a conflicting
+ * component is withheld with its own typed problem. A refusal therefore reports
+ * every withheld component (`details.recovery.unresolved`) and does NOT claim
+ * this call was mutation-free when an independent component of the same patch
+ * landed (`details.recovery.commitState === "partial"`); a patch whose
+ * components ALL already hold their effect is the current success (§4.2/A09/
+ * A12) and writes nothing at all. Every refusal that withholds the WHOLE patch
+ * (shape, admission) still leaves the protected snapshot, root register, other
+ * workflows and the compass byte-identical.
  *
  * A lock that cannot be acquired refuses explicitly (the shared
  * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
@@ -6801,93 +9317,189 @@ export async function amendPrepareWorkflow(
   const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
   const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
-    const { snapshot, version } = readPrepareSnapshot(scope.snapshotPath);
+    const { snapshot, version, phaseDerived } = readPrepareSnapshot(scope.snapshotPath);
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
-    const main = assertCoordinatorResidency(cwd, snapshot);
-    // Both byte versions are compared against the bytes inspected inside this
-    // locked section (spec § Admission and mutation step 3).
+    // The Git-derived main worktree is READ here, but it only gates the
+    // components that consume an owned checkout/branch fact: an unreadable Git
+    // fact becomes those components' own problem inside `readPrepareAmendment`,
+    // reported as `coordination.git-unavailable` drift beside a local repair that
+    // needs nothing from Git (R12/A24). When Git answers, the coordinator's
+    // residency in the main or recorded integration worktree is enforced for
+    // every component.
+    const main = readMainWorktree(cwd);
+    if (main !== null) assertCoordinatorCheckoutResidency(main, cwd, snapshot);
+    // §4.1/A06/A10/A29 the caller's byte tokens are an OBSERVED COMPARISON BASIS,
+    // not a whole-document gate: this amendment is FIELD-LEVEL (the addressed
+    // row's pointer, the plan document it reads, the compass approval of the ids
+    // it addresses), and every component re-checks exactly those facts against
+    // the bytes read under this lock. Unrelated drift — a sibling row edit, a
+    // compass prose or ordering change — therefore lands the addressed
+    // correction and is reported as provenance below, while a change to the read
+    // set a component actually consumes still refuses through that component's
+    // own reader (pointer drift, duplicate row, compass mismatch), never
+    // silently. Raw whole-document replacement keeps its byte CAS: it is a
+    // different verb (`replaceCoordinatedArtifact`).
+    const drift: ResolutionWarning[] = [];
     if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `snapshot ${scope.snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: scope.snapshotPath, expected: expectedSnapshotVersion, actual: version },
-      );
+      drift.push({
+        code: "coordination.token-drifted",
+        path: scope.snapshotPath,
+        message:
+          `snapshot ${scope.snapshotPath} is at ${version} while this call expected ${expectedSnapshotVersion}: the caller's bytes are a ` +
+          "comparison basis, so this amendment is decided against the rows and documents it reads under the lock",
+      });
     }
     const compass = readPrepareCompass(scope.harnessRoot, snapshot);
     if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
-      );
+      drift.push({
+        code: "coordination.token-drifted",
+        path: compass.path,
+        message:
+          `compass ${compass.path} is at ${compass.version} while this call expected ${expectedCompassVersion}: the caller's bytes are a ` +
+          "comparison basis, so this amendment is decided against the compass it reads under the lock",
+      });
     }
-    const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot, { derivePhase: true });
+    const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
-    const proposal = readPreparePatch(input.patch, { harnessRoot: scope.harnessRoot, snapshot, compass, main });
-    // Recovery-first adoption (R3 / I-000243): the admission may have derived
-    // the absent Prepare phase, and the reviewed compass may carry an
-    // absolute-but-in-root pointer. This locked write is the ordinary intent
-    // that adopts both — together with the requested patch and `updated_at` —
-    // so one normal call repairs and applies. Old rows and unknown fields are
-    // taken from disk by value — only the new
-    // rows, the corrected row pointers, the requested whitelist projections and
-    // `updated_at` are new. The policy copy carries the stored object's own
-    // keys, so keys this verb may not edit survive it.
-    const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
-    if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
-    // A corrected row is rebuilt by spread, so every field but `file` survives
-    // by value and by position (prerequisite contract §4.1).
-    const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
-    const plans = [
-      ...snapshot.plans.map((row) => {
-        const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
-        return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
-      }),
-      ...proposal.rows,
-    ];
-    const derivedFields = [
-      snapshot.phase === undefined ? "phase" : null,
-      compass.canonicalCompassRef !== undefined ? "compass_ref" : null,
-    ].filter((entry): entry is string => entry !== null);
-    const next: WorkflowSnapshot = {
-      ...snapshot,
-      updated_at: nowIso(),
-      ...(snapshot.phase === undefined ? { phase: PREPARE_PHASE } : {}),
-      ...(compass.canonicalCompassRef !== undefined ? { compass_ref: compass.canonicalCompassRef } : {}),
-      plans,
-      ...(proposal.integrationWorktreePath !== undefined
-        ? { integration_worktree_path: proposal.integrationWorktreePath }
-        : {}),
-      ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
+    const plan = readPrepareAmendment(input.patch, {
+      harnessRoot: scope.harnessRoot,
+      snapshot,
+      compass,
+      main,
+      cwd,
+    });
+    const proposal = plan.proposal;
+    const writing =
+      proposal.rows.length > 0 ||
+      proposal.corrections.length > 0 ||
+      proposal.integrationWorktreePath !== undefined ||
+      proposal.planParallelism !== undefined;
+    // §6.2/§4.1 the ONE receipt of this call (§6.2 common outcome contract): the
+    // components it applied — once each, in stable order — the components it
+    // recognized as already current, the components it withheld with their own
+    // typed problem, the declarations it resolved from and the commit boundary a
+    // caller can rely on. The same object shape travels on the refusal below
+    // under `error.details.recovery`, so one contract covers both paths.
+    const recovery: RecoveryDetails = {
+      outcome: plan.unresolved.length > 0 ? (plan.applied.length > 0 ? "partial" : "unresolved") : writing ? "applied" : "already-satisfied",
+      target: { workflowId: scope.workflowId },
+      applied: [...plan.applied],
+      unresolved: plan.unresolved.map((entry) => entry.recovery),
+      resolvedFrom: [{ path: "patch", source: "intent.request" }, ...proposal.resolvedFrom],
+      warnings: [
+        ...drift,
+        ...proposal.warnings,
+        ...plan.held.map((component) => ({
+          code: "coordination.prepare-amendment.held",
+          path: component,
+          message:
+            `${component} is already recorded on workflow ${scope.workflowId} \u2014 this call recognized the current effect and wrote nothing for it`,
+        })),
+      ],
+      commitState: plan.unresolved.length > 0 ? (writing ? "partial" : "none") : writing ? "committed" : "none",
     };
-    // The reviewed declaration must still be the bytes this call inspected when
-    // the amendment lands (spec § Admission and mutation step 7).
-    const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
-    if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: compass.path, expected: compass.version, actual: rechecked.version },
-      );
+    // §4.1/A23 the admissible components of this patch commit FIRST, in this one
+    // locked write — the withheld components reported below never undo them. §6.2
+    // the resulting refusal therefore carries a receipt whose `commitState` is
+    // `partial` (or `none` when nothing was admissible), never a claim that a
+    // call which landed another component was mutation-free.
+    let snapshotVersion: string;
+    let planIds: string[];
+    let phase = snapshot.phase;
+    let derived: string[] = [];
+    if (writing) {
+      // Recovery-first adoption (R3 / I-000243): the reader may have DERIVED the
+      // absent phase from the lifecycle facts, and the reviewed compass may carry
+      // an absolute-but-in-root pointer. This locked write is the ordinary intent
+      // that adopts both — together with the requested patch and `updated_at` —
+      // so one normal call repairs and applies. Old rows and unknown fields are
+      // taken from disk by value — only the new
+      // rows, the corrected row pointers, the requested whitelist projections and
+      // `updated_at` are new. The policy copy carries the stored object's own
+      // keys, so keys this verb may not edit survive it.
+      const executionPolicy: WorkflowExecutionPolicy = { ...(snapshot.execution_policy ?? {}) };
+      if (proposal.planParallelism !== undefined) executionPolicy.plan_parallelism = proposal.planParallelism;
+      // A corrected row is rebuilt by spread, so every field but `file` survives
+      // by value and by position (prerequisite contract §4.1).
+      const correctedFiles = new Map(proposal.corrections.map((entry) => [entry.id, entry.file]));
+      const plans = [
+        ...snapshot.plans.map((row) => {
+          const address = rowPlanIds(row).find((planId) => correctedFiles.has(planId));
+          return address === undefined ? row : { ...row, file: correctedFiles.get(address)! };
+        }),
+        ...proposal.rows,
+      ];
+      const derivedFields = compass.canonicalCompassRef === undefined ? [] : ["compass_ref"];
+      const next: WorkflowSnapshot = {
+        ...snapshot,
+        updated_at: nowIso(),
+        ...(phaseDerived ? { phase: PREPARE_PHASE } : {}),
+        ...(compass.canonicalCompassRef !== undefined ? { compass_ref: compass.canonicalCompassRef } : {}),
+        plans,
+        ...(proposal.integrationWorktreePath !== undefined
+          ? { integration_worktree_path: proposal.integrationWorktreePath }
+          : {}),
+        ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
+      };
+      // The reviewed declaration must still be the bytes this call inspected when
+      // the amendment lands (spec § Admission and mutation step 7).
+      const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
+      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
+        throw prepareAmendmentRefusal(
+          "stale",
+          `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
+          { path: compass.path, expected: compass.version, actual: rechecked.version },
+        );
+      }
+      await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
+      // The returned CAS token is read from the bytes this call just wrote,
+      // inside the critical section: a version read after the lock is released
+      // could name a competing commit that landed in between, while the reported
+      // plan ids and compass version would still be this call's.
+      const written = readArtifactBytes(scope.snapshotPath);
+      if (written === undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
+          { path: scope.snapshotPath },
+        );
+      }
+      snapshotVersion = written.version;
+      planIds = next.plans.map((row) => rowPlanIds(row)[0] ?? "");
+      phase = next.phase;
+      derived = derivedFields;
+    } else {
+      // §4.2/A09/A12 every addressed component already holds its effect, so the
+      // current snapshot IS the success: no byte moves and no revision is spent.
+      // The derived phase/compass_ref repairs stay with the next ordinary write,
+      // exactly as the read-only view reports them (I-000243: the reader never
+      // writes).
+      const current = readArtifactBytes(scope.snapshotPath);
+      if (current === undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `snapshot ${scope.snapshotPath} is unreadable after this call inspected it`,
+          { path: scope.snapshotPath },
+        );
+      }
+      snapshotVersion = current.version;
+      planIds = snapshot.plans.map((row) => rowPlanIds(row)[0] ?? "");
     }
-    await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
-    // The returned CAS token is read from the bytes this call just wrote,
-    // inside the critical section: a version read after the lock is released
-    // could name a competing commit that landed in between, while the reported
-    // plan ids and compass version would still be this call's.
-    const written = readArtifactBytes(scope.snapshotPath);
-    if (written === undefined) {
-      throw new CoordinationError(
-        "coordination.store",
-        `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
-        { path: scope.snapshotPath },
-      );
+    // §6.2/A27 ONE refusal naming every withheld component and its own minimum
+    // choice — raised only after the admissible components of the same patch
+    // committed (A23), so the successes stand and the caller reads one result.
+    if (plan.unresolved.length > 0) {
+      refuseAmendment(plan.unresolved, { workflowId: scope.workflowId, components: proposal.components, recovery });
     }
     return {
-      planIds: next.plans.map((row) => rowPlanIds(row)[0] ?? ""),
+      outcome: writing ? ("amended" as const) : ("already-satisfied" as const),
+      planIds,
       compassVersion: compass.version,
-      snapshotVersion: written.version,
-      derived: derivedFields,
+      snapshotVersion,
+      derived,
+      phase,
+      phaseDerived,
+      recovery,
     };
   });
   return {
@@ -6895,7 +9507,8 @@ export async function amendPrepareWorkflow(
     operation: "amend-prepare",
     session: scope.session,
     session_file: scope.sessionPath,
-    outcome: "amended",
+    outcome: committed.outcome,
+    recovery: committed.recovery,
     // The delta only appends admissible Todo rows, corrects the addressed rows'
     // plan-file pointers and records the requested path/policy, so the workflow
     // stays admissible after the commit.
@@ -6904,6 +9517,8 @@ export async function amendPrepareWorkflow(
       snapshotVersion: committed.snapshotVersion,
       compassVersion: committed.compassVersion,
       planIds: committed.planIds,
+      ...(isNonEmptyString(committed.phase) ? { phase: committed.phase } : {}),
+      ...(committed.phaseDerived ? { phaseDerived: true } : {}),
       allowed: true,
       blockers: [],
       derived: committed.derived !== undefined && committed.derived.length > 0 ? committed.derived : undefined,
@@ -6959,8 +9574,13 @@ export type PrepareCoordinatorRecoveryReceipt = Readonly<{
   recoveredAt: string;
 }>;
 
-/** The existing `CoordinationResult` envelope plus the recovery receipt (§3.3). */
-export type RecoverPrepareCoordinatorResult = CoordinationResult & {
+/**
+ * The existing `CoordinationResult` envelope plus the recovery receipt (§3.3).
+ * This verb's `recovery` member IS that domain receipt: the identity recovery is
+ * its own public shape (§3.3), not the §4.1 frame sidecar — the verb does not
+ * run the locked row frame at all.
+ */
+export type RecoverPrepareCoordinatorResult = Omit<CoordinationResult, "recovery"> & {
   recovery: PrepareCoordinatorRecoveryReceipt;
 };
 
@@ -7163,7 +9783,7 @@ export async function showPrepareCoordinatorRecovery(
   const workflowId = safePlanId(input.workflowId, "workflowId");
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
   assertRootRegisterEntry(harnessRoot, workflowId);
-  const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+  const { snapshot, version, phaseDerived } = readPrepareSnapshot(snapshotPath);
   const coordinator = snapshot.coordination?.coordinator;
   if (coordinator === undefined) {
     throw new CoordinationError(
@@ -7173,7 +9793,7 @@ export async function showPrepareCoordinatorRecovery(
     );
   }
   const compass = readRecoveryCompass(harnessRoot, snapshot);
-  const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+  const admission = prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
   return {
     workflowId,
     priorSessionId: coordinator.session_id,
@@ -7281,7 +9901,7 @@ export async function recoverPrepareCoordinator(
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
 
   const committed = await withStatusWriteLock(snapshotPath, async () => {
-    const { snapshot, version } = readPrepareSnapshot(snapshotPath);
+    const { snapshot, version, phaseDerived } = readPrepareSnapshot(snapshotPath);
     const recorded = snapshot.coordination?.coordinator;
     if (recorded === undefined) {
       throw recoveryRefusal(
@@ -7390,8 +10010,10 @@ export async function recoverPrepareCoordinator(
     }
     // The ORIGINAL admission, over EVERY row (§3.3): no lease, no row
     // coordination block, no progress, no merge lease. A recovery never touches
-    // a workflow that has started executing.
-    const admission = prepareAdmission(harnessRoot, workflowId, snapshot);
+    // a workflow that has started executing. It is decided through the ONE phase
+    // authority (`deriveLifecyclePhase`), so the gate cannot drift from the
+    // phase every other reader reports.
+    const admission = prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
     if (!admission.ok) {
       throw recoveryRefusal(
         admission.reason === "execution-started" ? "execution-started" : "not-prepare",

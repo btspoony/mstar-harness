@@ -174,6 +174,22 @@ export {
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "./workflow.js";
+// Lifecycle-phase derivation (S3/E06a) and the terminal outcome a close records
+// (S3/E12b): the three phase labels a document's own facts derive to, the code
+// of the reader's derived-phase diagnostic, the ONE derivation the file
+// producer, the catalog journal and the derived Prepare view share, and the
+// outcome a caller names on a close. Re-exported so T03/T09 consume the sparse
+// registration intent and the derived phase instead of re-deriving either, and
+// so a transport can type the terminal outcome it passes. ADDITIVE export.
+export type { CloseWorkflowOutcome, DerivedPlanRegistration, LifecyclePhaseDerivation } from "./workflow.js";
+export {
+  CLOSE_PHASE,
+  DERIVED_PHASE_CODE,
+  EXECUTE_PHASE,
+  PREPARE_PHASE,
+  deriveLifecyclePhase,
+  derivePlanRegistration,
+} from "./workflow.js";
 export type {
   CleanupDecision,
   CleanupFacts,
@@ -555,6 +571,16 @@ export type {
   ResolvedPlanScope,
   VersionedArtifact,
 } from "./coordination.js";
+// Recovery-first resolution and the file-route close: the ONE resolution path a
+// sparse caller enters (trusted root → associated target, S2/E02), the durable
+// authority verdict a DB-route caller re-asserts before it commits, and the file
+// authority's ONE close verb (S3/E11) — fulfilment, row completion, terminal
+// membership removal and the unregister composed on the route's own journals.
+// ADDITIVE export: the transports (T02/T03) call the engine's own resolution and
+// close instead of re-deriving either; the strict module-local frames, the
+// resolution builder and the crash-gap test hook stay module-scoped.
+export type { FileWorkflowCloseInput, FileWorkflowCloseResult, RootAssociation } from "./coordination.js";
+export { closeFileWorkflow, resolveIntentRoot, resolveIntentTarget } from "./coordination.js";
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
 // Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
@@ -832,7 +858,9 @@ export {
 // carries the §5 execution-SOURCE route decision (`resolveExecutionReadRoute` /
 // `readExecutionSource`): the DB adapter answers an ACTIVE authority, the
 // pre-activation file route stays file-authoritative, and a store that exists
-// and cannot answer refuses instead of falling back. ADDITIVE export: the engine
+// and cannot answer refuses instead of falling back. `resolveCurrentAuthority`
+// is that route decision as a value (S2/E02): the durable authority generation
+// a DB-route caller re-asserts before it commits. ADDITIVE export: the engine
 // package's exports map is the only reachable surface for the CLI transport
 // (`packages/cli/src/store-read.ts`) and for the dashboard consumers; no
 // producer surface is changed.
@@ -866,6 +894,7 @@ export {
   queryDashboard,
   queryIssueFlow,
   readExecutionSource,
+  resolveCurrentAuthority,
   resolveExecutionReadRoute,
   withStoreRead,
 } from "./store-read.js";
@@ -1056,3 +1085,33 @@ export {
   previewExecutionRestore,
   restoreExecutionBackup,
 } from "./execution-recovery.js";
+// Recovery-first intent contract (S1): the sparse `IntentContext` a public
+// lifecycle operation accepts, the `RecoveryProblem`/`RecoveryDetails`
+// sidecar it reports (`recovery` on success, `error.details.recovery` on a
+// refusal) and the shared per-operation semantic selections
+// (`PLAN_OPERATION_SEMANTICS` / `WORKFLOW_OPERATION_SEMANTICS`,
+// `selectSemanticFields`) the freshness/replay frames compare instead of
+// whole-document hashes. The same module carries the resolution vocabulary a
+// sparse caller reads back — `RootResolution` / `TargetResolution` /
+// `AuthorityVerdict` and the `resolvedFrom` / `warnings` element shapes (S2/E02)
+// — while `unresolvedRecovery` stays module-scoped: only the engine constructs
+// that sidecar, a consumer reads it. Types and the selection table land here
+// before any caller widens; ADDITIVE export — the engine package's exports map
+// is the only reachable surface for consumers.
+export type {
+  AuthorityRoute,
+  AuthorityVerdict,
+  IntentContext,
+  RecoveryDetails,
+  RecoveryProblem,
+  ResolutionSource,
+  ResolutionWarning,
+  RootResolution,
+  SemanticSelection,
+  TargetResolution,
+} from "./recovery-intent.js";
+export {
+  PLAN_OPERATION_SEMANTICS,
+  selectSemanticFields,
+  WORKFLOW_OPERATION_SEMANTICS,
+} from "./recovery-intent.js";

@@ -26,11 +26,12 @@
  *   snapshot), no harness-root pollution.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
   CoordinationError,
   canonicalTarget,
+  fileClaimHolderState,
   isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
@@ -42,7 +43,7 @@ import {
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
-import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
+import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
@@ -172,6 +173,73 @@ export type WorkflowBranchAnchors = {
  * imports this module (the reverse import would create a cycle).
  */
 export const PREPARE_PHASE = "phase-1-prepare";
+
+/**
+ * The forward phase labels an iteration's ABSENT `phase` derives to once
+ * execution ownership exists (R3). They are the same stage names the iteration
+ * gate transitions to (`iteration.ts` `PhaseTransition`), so a derived label
+ * and the gate can never disagree about what stage the work is in: execution
+ * underway (`EXECUTE_PHASE`), or every row Done with the close still pending
+ * (`CLOSE_PHASE`). A genuinely unstarted iteration derives `PREPARE_PHASE`
+ * instead — never the other way round: execution facts are never reset to fit
+ * a Prepare label.
+ */
+export const EXECUTE_PHASE = "phase-2-execute";
+export const CLOSE_PHASE = "phase-3-close";
+
+/**
+ * The phase derivation for a snapshot that declares NO phase (R3 / #293).
+ *
+ * A registered iteration whose producer predates the phase declaration (or one
+ * registered by hand) carries no `phase` at all. That absence is not a
+ * lifecycle state: the state is provable from the facts the document already
+ * holds. `deriveLifecyclePhase` reads exactly those facts:
+ *
+ * - not a running `type: iteration` — a plan snapshot has no phase concept,
+ *   and a terminal document carries its own outcome — nothing is derived and
+ *   `facts` names why;
+ * - running with NO execution ownership anywhere — every row still `Todo`, no
+ *   row progress, no row `coordination` block, no row `execution_lease`, no
+ *   workflow `integration_merge_lease` — derives `PREPARE_PHASE`. A
+ *   coordinator binding is NOT execution ownership, so a bound-but-unstarted
+ *   iteration still derives Prepare;
+ * - running WITH execution ownership derives the applicable FORWARD label:
+ *   `CLOSE_PHASE` when every row is `Done`, otherwise `EXECUTE_PHASE`.
+ *
+ * The result is a pure read — no snapshot byte is touched (`facts` is the
+ * provenance a caller can report). This is the ONE definition of "what phase
+ * does this document factually sit in"; the registration producer writes
+ * `PREPARE_PHASE` at creation for the same reason this derives it for old
+ * documents.
+ */
+export type LifecyclePhaseDerivation = Readonly<{
+  /** The derived phase, or `undefined` when the facts prove none. */
+  phase: string | undefined;
+  /** The lifecycle facts the decision rests on, in stable order (provenance). */
+  facts: readonly string[];
+}>;
+
+export function deriveLifecyclePhase(snapshot: WorkflowSnapshot): LifecyclePhaseDerivation {
+  const facts: string[] = [`type=${snapshot.type}`, `status=${snapshot.status}`];
+  if (snapshot.type !== "iteration" || snapshot.status !== "running") {
+    return { phase: undefined, facts };
+  }
+  const ownership: string[] = [];
+  if (snapshot.integration_merge_lease !== undefined) ownership.push("workflow integration_merge_lease");
+  const rows = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+  for (const row of rows) {
+    const planId = typeof row.id === "string" && row.id !== "" ? row.id : "(unnamed row)";
+    if (row.status !== undefined && row.status !== "Todo") ownership.push(`plan ${planId} status=${String(row.status)}`);
+    if (row.progress !== undefined && row.progress !== 0) ownership.push(`plan ${planId} progress=${String(row.progress)}`);
+    if (row.execution_lease !== undefined) ownership.push(`plan ${planId} execution_lease`);
+    if (row.coordination !== undefined) ownership.push(`plan ${planId} coordination`);
+  }
+  if (ownership.length === 0) {
+    return { phase: PREPARE_PHASE, facts: [...facts, `plans=${rows.length}`, "every row Todo", "no execution ownership"] };
+  }
+  const allDone = rows.length > 0 && rows.every((row) => row.status === "Done");
+  return { phase: allDone ? CLOSE_PHASE : EXECUTE_PHASE, facts: [...facts, ...ownership] };
+}
 
 export type WorkflowSnapshot = {
   schema_version: 1;
@@ -773,11 +841,20 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
 export const LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
 
 /**
+ * Machine code of the read-time absent-phase derivation diagnostic
+ * (`readWorkflowSnapshot`, R3/#293): the document declared no `phase`, and the
+ * lifecycle facts derived one. Non-blocking — the derived phase is a read-time
+ * view, and the next authorized mutation persists it.
+ */
+export const DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase";
+
+/**
  * Result of the canonical snapshot read: the validated snapshot plus the
- * non-blocking diagnostics collected while reading (currently only the
- * `workflow.snapshot.legacy-control-worktree-path` migration diagnostic for
- * v1-shaped documents). A read with diagnostics is NOT write permission —
- * writers keep strict validation and emit only the canonical shape.
+ * non-blocking diagnostics collected while reading (`workflow.snapshot.
+ * legacy-control-worktree-path` for v1-shaped documents, `workflow.snapshot.
+ * derived-phase` when an absent iteration phase was derived from lifecycle
+ * facts). A read with diagnostics is NOT write permission — writers keep
+ * strict validation and emit only the canonical shape.
  */
 export type WorkflowSnapshotRead = {
   snapshot: WorkflowSnapshot;
@@ -795,6 +872,15 @@ export type WorkflowSnapshotRead = {
  * source file's bytes are never touched; legacy snapshots migrate on their
  * next authorized read-modify-write through the canonical writer. Missing
  * files, malformed JSON, and non-object documents throw.
+ *
+ * R3/#293: a running `type: iteration` document that declares NO `phase`
+ * (registered by a producer that predates the phase declaration, or by hand)
+ * is the `not-prepare` dead end this reader exists to close. The phase is
+ * DERIVED from the lifecycle facts the document already holds
+ * (`deriveLifecyclePhase`) and returned as a read-time view with the
+ * non-blocking `workflow.snapshot.derived-phase` diagnostic — the bytes stay
+ * untouched, and the next authorized mutation persists the repair. Nothing is
+ * derived for a plan snapshot (no phase concept) or a terminal document.
  */
 export class WorkflowSnapshotValidationError extends Error {
   constructor(message: string, readonly violations: ValidationResult[]) { super(message); }
@@ -829,21 +915,42 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
     const detail = blocking.map((v) => `${v.code}: ${v.message}`).join("; ");
     throw new WorkflowSnapshotValidationError(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`, blocking);
   }
+  let snapshot: WorkflowSnapshot;
   if (migration.length === 0) {
-    return { snapshot: doc as WorkflowSnapshot, diagnostics: [] };
+    snapshot = doc as WorkflowSnapshot;
+  } else {
+    // In-memory normalization of the single permitted legacy alias.
+    const raw = doc as Record<string, unknown>;
+    const { control_worktree_path: _legacy, ...rest } = raw;
+    snapshot = { ...rest, integration_worktree_path: raw.control_worktree_path } as unknown as WorkflowSnapshot;
+    const revalidated = validateWorkflowSnapshot(snapshot);
+    if (!revalidated.ok) {
+      const detail = revalidated.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
+      throw new Error(
+        `refusing to read workflow snapshot ${snapshotPath}: legacy normalization produced an invalid document: ${detail}`,
+      );
+    }
   }
-  // In-memory normalization of the single permitted legacy alias.
-  const raw = doc as Record<string, unknown>;
-  const { control_worktree_path: _legacy, ...rest } = raw;
-  const normalized = { ...rest, integration_worktree_path: raw.control_worktree_path } as unknown as WorkflowSnapshot;
-  const revalidated = validateWorkflowSnapshot(normalized);
-  if (!revalidated.ok) {
-    const detail = revalidated.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
-    throw new Error(
-      `refusing to read workflow snapshot ${snapshotPath}: legacy normalization produced an invalid document: ${detail}`,
-    );
+  const diagnostics = [...migration];
+  if (snapshot.phase === undefined) {
+    // R3/#293 — the absent phase is derived from the lifecycle facts, in
+    // memory only. A derived phase is a read-time view: it is reported, never
+    // written here, and a derived FORWARD label (execution ownership already
+    // exists) is never reset to Prepare.
+    const derivation = deriveLifecyclePhase(snapshot);
+    if (derivation.phase !== undefined) {
+      diagnostics.push(
+        violation(
+          "medium",
+          DERIVED_PHASE_CODE,
+          `snapshot ${snapshotPath} declares no phase; the lifecycle facts derive ${derivation.phase} (${derivation.facts.join("; ")})`,
+          "no action needed — the derived phase is a read-time view and the next authorized mutation persists it",
+        ),
+      );
+      return { snapshot: { ...snapshot, phase: derivation.phase }, diagnostics };
+    }
   }
-  return { snapshot: normalized, diagnostics: migration };
+  return { snapshot, diagnostics };
 }
 
 /**
@@ -1230,8 +1337,34 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
   ];
 }
 
+/**
+ * §R11/A21 the terminal outcomes a close may RECORD. A close never records a
+ * non-terminal status, and the three members are the snapshot schema's terminal
+ * set — `failed`/`stopped` are the explicit terminal intents #270 requires, and
+ * they carry NO successful-delivery precondition (contract §5).
+ */
+export type CloseWorkflowOutcome = "completed" | "failed" | "stopped";
+
 export type CloseWorkflowOptions = {
   endedAt: string;
+  /**
+   * The terminal outcome this close records (#270/R11). Default `completed` —
+   * the delivery-gated close, whose behavior is unchanged.
+   *
+   * `failed`/`stopped` record an EXPLICIT terminal intent: every plan row's
+   * `Done` state and the declared delivery kind's evidence are NOT consulted
+   * (a failure close is never treated as a delivery), and the workflow's own
+   * held claims are settled in the same locked snapshot write — a claim whose
+   * holder is no longer one of this workflow's recorded session identities AND
+   * whose stop a recorded identity-recovery attestation establishes is released
+   * (the file route's release is the lease key's absence), while a claim a live
+   * holder still holds, or one whose holder no recorded stop or transfer
+   * accounts for, refuses the outcome with that holder named.
+   * A recorded terminal outcome is never rewritten: a `failed`/`stopped` request
+   * against a lifecycle that already records a DIFFERENT terminal status is
+   * refused.
+   */
+  outcome?: CloseWorkflowOutcome;
   /**
    * Canonical coordinator session envelope path (spec §C4). Required when the
    * stored snapshot is coordinated: the close writes the snapshot, so only the
@@ -1243,7 +1376,13 @@ export type CloseWorkflowOptions = {
   sessionPath?: string;
 };
 
-function isCloseTimestamp(value: string): boolean {
+/**
+ * The timestamp form a lifecycle close accepts (`YYYY-MM-DD` or RFC3339 with a
+ * time), exported for the composed file-authority close, which validates the
+ * requested terminal timestamp BEFORE it composes anything (a malformed
+ * `endedAt` must refuse before a row is completed, not after).
+ */
+export function isCloseTimestamp(value: string): boolean {
   if (typeof value !== "string") return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(value);
   if (!match) return false;
@@ -1254,29 +1393,162 @@ function isCloseTimestamp(value: string): boolean {
 }
 
 /**
+ * §R11/A21 the failed/stopped half of one file-route close: settle the
+ * workflow's OWN held claims whose holder is no longer one of this workflow's
+ * recorded session identities AND whose stop this workflow records, and refuse
+ * the outcome on every claim it leaves.
+ *
+ * Three rules are the whole rule, and the first two are the SAME two the DB
+ * route's `releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim` apply:
+ *
+ * - OWNED means the claims this workflow's own snapshot carries — every
+ *   `plans[].execution_lease` and the top-level `integration_merge_lease`; a
+ *   claim of another lifecycle is not reachable here at all.
+ * - a claim whose holder is a LIVE session of this workflow is never released.
+ *   Liveness is the identity `fileClaimHolderState` resolves (the workflow's
+ *   coordinator binding, or the addressed plan's own plan session) — §4.2: a
+ *   stale heartbeat, an old `claimed_at` and a caller's assertion authorize
+ *   nothing, so no close infers another session's stop.
+ * - an unrecognized holder is settled only on a recorded STOP FACT — the
+ *   workflow's own identity-recovery attestation
+ *   (`coordination.identity_recoveries[].stopped_session_ids`) naming it. The
+ *   absence of a binding is not proof of a stop (the activation import refuses
+ *   exactly such a holder as an orphan claim), so anything else is `unresolved`:
+ *   the claim stays held and this close refuses it with the stop/transfer it
+ *   needs, never releasing it silently. A conservative false refusal is the
+ *   accepted worst case here; a release without a stop fact is not.
+ *
+ * The release IS the key's absence (the file route's lease release — writers
+ * delete the key, never write `null`/a tombstone), and it happens in the SAME
+ * locked whole-snapshot write that records the terminal outcome, so a crash
+ * cannot leave the outcome recorded over unsettled claims. The rest of the row
+ * — its status, its coordination block and its bindings — is preserved, so
+ * "who owned this claim" survives the close. A held lease without a holder is
+ * refused rather than released (the same rule the whole-view readers apply:
+ * never release a claim that names nobody); `readWorkflowSnapshot` refuses such
+ * a document before this writer sees it, so that branch is the invariant's
+ * backstop rather than a reachable state.
+ */
+function settleStoppedFileClaims(input: {
+  snapshot: WorkflowSnapshot;
+  workflowId: string;
+  outcome: CloseWorkflowOutcome;
+}): WorkflowSnapshot {
+  const { snapshot, workflowId, outcome } = input;
+  const coordination = snapshot.coordination;
+  const live: string[] = [];
+  const unresolved: string[] = [];
+  const plans = snapshot.plans.map((row): PlanRow => {
+    const lease = row.execution_lease;
+    if (lease === undefined) return row;
+    if (!isPlainObject(lease) || !isNonEmptyString(lease.holder)) {
+      throw new CoordinationError(
+        "coordination.store",
+        `plan ${String(row.id)} of workflow ${workflowId} carries a held execution lease without the holder it names \u2014 the ` +
+          `corrupt record is refused, never settled as a claim that names nobody`,
+        { workflow_id: workflowId, plan_id: String(row.id) },
+      );
+    }
+    const holder = lease.holder;
+    const state = fileClaimHolderState({ holder, coordination, planCoordinations: [row.coordination] });
+    if (state === "live") {
+      live.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, still a live recorded session of this workflow)`);
+      return row;
+    }
+    if (state === "unresolved") {
+      unresolved.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, no recorded stop or transfer)`);
+      return row;
+    }
+    const { execution_lease: _released, ...restOfRow } = row;
+    return restOfRow;
+  });
+  const claim = snapshot.integration_merge_lease;
+  let settled: WorkflowSnapshot = { ...snapshot, plans };
+  if (claim !== undefined) {
+    // The merge claim names no holder ROLE (`IntegrationMergeLease` carries the
+    // holder and the plan it merges), so it is decided against the strongest
+    // identity the record itself has — the workflow's coordinator binding and
+    // every plan session this workflow records — exactly as the DB route's
+    // integration half decides against any active session of the workflow.
+    const state = fileClaimHolderState({
+      holder: claim.holder,
+      coordination,
+      planCoordinations: snapshot.plans.map((row) => row.coordination),
+    });
+    if (state === "live") {
+      live.push(`the integration merge lease (holder ${claim.holder}, still a live recorded session of this workflow)`);
+    } else if (state === "unresolved") {
+      unresolved.push(`the integration merge lease (holder ${claim.holder}, no recorded stop or transfer)`);
+    } else {
+      const { integration_merge_lease: _released, ...restOfSnapshot } = settled;
+      settled = restOfSnapshot;
+    }
+  }
+  if (live.length > 0 || unresolved.length > 0) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `workflow ${workflowId} cannot become ${outcome} while it still owns ${[...live, ...unresolved].join("; ")} \u2014 this close ` +
+        `settles only the claims it owns whose holder a recorded stop or transfer has already taken out of this workflow's live ` +
+        `sessions, and every claim it leaves needs that holder's own stop or transfer (a recorded identity recovery attesting the ` +
+        `holder stopped, or the holder's own release) before this lifecycle can end`,
+      { workflow_id: workflowId, status: outcome },
+    );
+  }
+  return settled;
+}
+
+/**
  * Complete the latest snapshot under its write lock. Never releases leases.
- * A valid terminal snapshot is returned unchanged, including failed/stopped
- * (idempotent preservation — nothing is rewritten, not even the timestamp).
+ *
+ * §3/§5 the `outcome` the caller states decides which terminal write runs:
+ *
+ * - `completed` (the default, unchanged): every owned row must be `Done` and
+ *   the registered delivery kind's evidence is consulted through
+ *   `consultDeliveryEvidence` — the SAME pure function the read-only Phase-6
+ *   gate runs (contract §4g/§6 S3), so the gate's verdict and this refusal can
+ *   never disagree. An incomplete delivery throws with every missing item named
+ *   and ZERO writes: the snapshot stays `running` and the root entry stays
+ *   registered, so the workflow remains resumable. The local close never
+ *   verifies a remote merge (§4f keeps that as the PM's separate check).
+ * - `failed`/`stopped` (#270/R11/A21): an explicit terminal intent, recorded
+ *   WITHOUT any successful-delivery precondition — no row-`Done` requirement, no
+ *   delivery-evidence consultation (a failure close is never treated as a
+ *   delivery; the Phase-6 gate passes such a snapshot by the same rule). Instead
+ *   the close settles the workflow's OWN held claims whose holder a recorded
+ *   stop fact (the identity-recovery attestation) has already taken out of its
+ *   live recorded sessions, in the SAME locked whole-snapshot write
+ *   (`settleStoppedFileClaims`); a claim a LIVE holder still holds, and a claim
+ *   whose holder no recorded stop or transfer accounts for, EACH refuse the
+ *   outcome with that holder named — the file authority never infers another
+ *   session's stop (§4.2, R11's "a genuinely running foreign lease needs that
+ *   holder's stop/transfer fact"). The refusal is raised BEFORE the write, so a
+ *   refused close spends no byte.
+ *
+ * A valid terminal snapshot is returned unchanged — including `failed`/`stopped`
+ * (idempotent preservation: nothing is rewritten, not even the timestamp). Two
+ * requests behave exactly that way: the RESTATEMENT of the status the lifecycle
+ * already records (the residue a crash between the terminal write and the root
+ * cleanup leaves — the next normal close continues that cleanup without
+ * replaying work or resetting `ended_at`), and a `completed` close over a
+ * `failed`/`stopped` outcome, which is returned as THAT outcome (R10: an
+ * existing result is never rewritten as `completed`). A `failed`/`stopped`
+ * request against a lifecycle that records a different terminal status is
+ * REFUSED — a closed lifecycle is never amended (§5).
+ *
  * A coordinated snapshot is closed only by its own bound coordinator
  * (spec §C4) — the same envelope seam as `writeWorkflowSnapshot` — so a plan
- * actor or a bare CLI call can never complete a lifecycle it does not own.
- *
- * Before the terminal write the close consults the registered delivery
- * kind's evidence through `consultDeliveryEvidence` — the SAME pure function
- * the read-only Phase-6 gate runs (contract §4g/§6 S3), so the gate's verdict
- * and this refusal can never disagree. An incomplete delivery (a
- * `development` workflow without its compound disposition / PR identity /
- * verified-merge record, a `verification/report-only` workflow without the
- * fulfilment of its recorded completion policy) throws with every missing
- * item named and ZERO writes: the snapshot stays `running` and the root entry
- * stays registered, so the workflow remains resumable. The local close never
- * verifies a remote merge (§4f keeps that as the PM's separate check) and
- * never releases leases.
+ * actor or a bare CLI call can never complete a lifecycle it does not own. The
+ * authorization precedes the claim settle, so an unauthorized address releases
+ * nothing.
  */
 export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
   // Canonical authority discrimination precedes every payload check below and
   // the unchanged-snapshot shortcut (spec §4.3).
   assertExecutionFileWriteAllowed({ harnessDir: dir });
+  const outcome = opts.outcome ?? "completed";
+  if (outcome !== "completed" && outcome !== "failed" && outcome !== "stopped") {
+    throw new Error(`outcome must be one of completed | failed | stopped \u2014 got ${JSON.stringify(opts.outcome)}`);
+  }
   if (!isCloseTimestamp(opts.endedAt)) {
     throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
@@ -1292,26 +1564,42 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
     if (snapshot.id !== workflowId) {
       throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
     }
-    if (isTerminalSnapshot(snapshot)) return snapshot;
+    if (isTerminalSnapshot(snapshot)) {
+      // The restatement and the ordinary `completed` read are the no-write
+      // paths above; recording a DIFFERENT terminal status here would be
+      // amending a closed lifecycle, so it is refused before the write path.
+      if (outcome === "completed" || outcome === snapshot.status) return snapshot;
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${workflowId} is ${snapshot.status} \u2014 a closed lifecycle is never amended, and its history stays exactly as ` +
+          `it was recorded`,
+        { workflow_id: workflowId, status: snapshot.status, requested: outcome },
+      );
+    }
     // Authorization sits on the write path only: a terminal snapshot returned
     // above is never written. For a coordinated snapshot the stored payload
     // (not the normalized view) carries the `coordination` block, exactly as
     // the replacement door reads it.
     assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
-    if (snapshot.plans.some((row) => row.status !== "Done")) {
-      throw new Error("refusing to close workflow: every plan row must be Done");
+    let next: WorkflowSnapshot = snapshot;
+    if (outcome === "completed") {
+      if (snapshot.plans.some((row) => row.status !== "Done")) {
+        throw new Error("refusing to close workflow: every plan row must be Done");
+      }
+      const deliveryViolations = consultDeliveryEvidence(snapshot);
+      if (deliveryViolations.length > 0) {
+        const detail = deliveryViolations
+          .map((v) => `${v.code}: ${v.message}${v.fix !== undefined ? ` (fix: ${v.fix})` : ""}`)
+          .join("; ");
+        throw new Error(`refusing to close workflow: ${detail}`);
+      }
+    } else {
+      next = settleStoppedFileClaims({ snapshot, workflowId, outcome });
     }
-    const deliveryViolations = consultDeliveryEvidence(snapshot);
-    if (deliveryViolations.length > 0) {
-      const detail = deliveryViolations
-        .map((v) => `${v.code}: ${v.message}${v.fix !== undefined ? ` (fix: ${v.fix})` : ""}`)
-        .join("; ");
-      throw new Error(`refusing to close workflow: ${detail}`);
-    }
-    const completed: WorkflowSnapshot = { ...snapshot, status: "completed", ended_at: opts.endedAt, updated_at: opts.endedAt };
+    const closed: WorkflowSnapshot = { ...next, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
     // Strict terminal validation refuses both lease kinds without deleting them.
-    await validateAndPutWorkflowSnapshot(store, completed, snapshotPath);
-    return completed;
+    await validateAndPutWorkflowSnapshot(store, closed, snapshotPath);
+    return closed;
   });
 }
 
@@ -1363,21 +1651,26 @@ export type RecordWorkflowDeliveryResult = {
  * - a rewrite of the recorded PR identity (§4d records it once at submission:
  *   an identical re-record is idempotent, a different pair is refused);
  * - an empty patch or a malformed member: nothing is silently dropped;
- * - compound / PR identity / verified-merge record while any owned plan row
- *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` — contract §3: the delivery
- *   tail runs after every row is Done; write-time only, see below);
  * - a `completion` fulfilment that would CHANGE once an owned plan row is
  *   `Done` (`coordination.invalid-transition` — contract §1 the mirror rule:
  *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
  *   and the same stable code refuses the same state on the DB route's
  *   `applyDeliveryEvidence`).
  *
- * Grandfathering: the row-Done gate is write-time only. Snapshots that
- * already carry delivery evidence while rows are not `Done` are never
- * retro-invalidated; idempotent re-records return without consulting row
- * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged. The same
- * grandfathering covers the completion freeze: an identical re-record is the
- * idempotent return above, never a refusal.
+ * §R5/A19 the delivery tail (compound | PR identity | verified-merge record) is
+ * EXTERNAL evidence that arrives when it arrives: it is captured whenever it is
+ * observed, and the row's `Done` projection is never its ordering
+ * prerequisite — the close composes that projection from the same evidence
+ * (`closeFileWorkflow`), exactly as the DB close composes it there. The
+ * semantic boundary is the CLOSE, which still requires the declared kind's
+ * complete evidence against rows it has completed (`consultDeliveryEvidence`),
+ * so the ordering is bookkeeping rather than a caller ceremony. The DB route
+ * enforces the same rule in `applyDeliveryEvidence`.
+ *
+ * Grandfathering: the completion freeze is a write-time rule only. A snapshot
+ * that already carries delivery evidence while rows are not `Done` is never
+ * retro-invalidated; an idempotent re-record returns without consulting row
+ * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1469,40 +1762,26 @@ export async function recordWorkflowDelivery(
     if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
       return { snapshot, written: false };
     }
-    // Write-time ordering gate (contract §3): compound / PR / merge are
-    // recorded after every owned plan row is Done. Grandfathering: this check
-    // runs only when the call would mutate `delivery`; snapshots that already
-    // carry evidence while rows are not Done are never retro-invalidated on
-    // read or close — idempotent re-records above return without consulting
-    // row state, and `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
-    const tailMembers = members.filter((member) => member === "compound" || member === "pr" || member === "merge");
-    if (tailMembers.length > 0) {
-      const notDone = snapshot.plans.filter((row) => row.status !== "Done");
-      if (notDone.length > 0) {
-        const rowDetail = notDone.map((row) => `${row.id} (${JSON.stringify(row.status)})`).join(", ");
-        const detail = violation(
-          "high",
-          "PHASE6_PLAN_ROW_NOT_DONE",
-          `owned plan row(s) ${rowDetail} are not Done - every plan row must be Done before the delivery tail (${tailMembers.join(", ")}) is recorded (mstar-artifacts/references/plan-workflow-lifecycle-contract.md section 3: row Done -> compound disposition -> PR identity -> verified-merge record)`,
-          `Bring every owned plan row to Done, then record delivery evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>'`,
-        );
-        throw new Error(
-          `refusing to record delivery evidence: ${detail.code}: ${detail.message}${detail.fix !== undefined ? ` (fix: ${detail.fix})` : ""}`,
-        );
-      }
-    }
-    // Post-Done immutability of the completion fulfilment (contract §1: for a
-    // `verification/report-only` kind "the fulfilment is recorded before the
-    // row is marked Done"). The tail gate above orders compound / PR / merge
-    // AFTER every owned row is Done; `completion` is its mirror — the ONE
-    // member recorded BEFORE — so once an owned row is Done the recorded
-    // fulfilment is FROZEN: it is the basis that row's `Done` was authorized
-    // against (§4d freezes the PR identity the same way), and re-pointing it
-    // afterwards would leave the `Done` fact standing on evidence it was never
-    // accepted with. An identical re-record never reaches this point (the
-    // idempotent return above), so a retried recording stays a no-op; the
-    // refusal carries the same stable code the DB route's `applyDeliveryEvidence`
-    // uses for the same state (`coordination.invalid-transition`).
+    // §R5/A19 the delivery tail (compound / PR identity / verified-merge
+    // record) is captured whenever it is observed: the row's `Done` projection
+    // is not its ordering prerequisite, because the close composes that
+    // projection from the same evidence. There is deliberately NO write-time
+    // row-Done gate here — the semantic boundary is the close, which consults
+    // the declared kind's complete evidence (`consultDeliveryEvidence`) against
+    // the rows it has completed. The DB route's `applyDeliveryEvidence` states
+    // the same rule.
+    //
+    // The mirror rule for the ONE member recorded BEFORE the row is Done
+    // (contract §1: a report-only row "completes from an accepted handoff plus a
+    // recorded fulfilment of that policy — the fulfilment is recorded before the
+    // row is marked `Done`"). Once an owned row is Done the recorded fulfilment
+    // is FROZEN: it is the basis that row's `Done` was authorized against, so
+    // re-pointing it afterwards would leave the `Done` fact standing on evidence
+    // it was never accepted with (§4d freezes the PR identity the same way). An
+    // identical re-record never reaches this point (the idempotent return
+    // above), so a retried recording stays a no-op; the refusal carries the same
+    // stable code the DB route's `applyDeliveryEvidence` uses for the same state
+    // (`coordination.invalid-transition`).
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
         "coordination.invalid-transition",
@@ -1652,13 +1931,119 @@ export async function declareWorkflowDeliveryKind(
 // → rollback removes only the exact snapshot version this call created.
 // ---------------------------------------------------------------------------
 
+/**
+ * The plan registration one SELECTED plan document proves (R1, A02): the
+ * identity and title the document itself is the authority for. Reading a
+ * document resolves and proves facts; it never enrolls anything — no snapshot,
+ * no root entry, no catalog row is written here (R1: "research or merely
+ * reading an artifact does not enroll it into execution").
+ *
+ * - `plan.id`: the document's own `plan_id` — the pointer is resolved through
+ *   the ONE registered-plan path contract (§4), so the id, the location and
+ *   the declared header must agree before the id is used.
+ * - `plan.title`: the document's first level-1 heading — the body is the title
+ *   authority, exactly as audit promotion reads it (`audit.ts`
+ *   `readPlanFileSummary`). A document with no heading proves no title, so the
+ *   plan id is the honest fallback rather than a refusal.
+ * - `plan.file`: the canonical absolute pointer the §4 resolver returns, so
+ *   the row is addressable by the same contract that later resolves it.
+ * - `catalogRelativePath`: the same document stated plans-root-relative, which
+ *   is the catalog entity location (`catalog-registration.ts`).
+ *
+ * EVERY form proves the selected document, the fully explicit one included: the
+ * §4 resolver runs for every call, so the pointer, the location and the
+ * document's own `plan_id` header must agree before any of these values is
+ * used, and `catalogRelativePath` is always the plans-root-relative form of the
+ * resolved document — never the caller's pointer spelling (an absolute pointer
+ * is not a catalog location and is refused as one). A supplied `id`/`title` is
+ * a CONSTRAINT on the proven document, not a replacement for it: an id that
+ * names a different registered plan and a title that contradicts the document's
+ * heading refuse; an omitted one is derived from the document.
+ */
+export type DerivedPlanRegistration = Readonly<{
+  plan: Readonly<{ id: string; title: string; file: string }>;
+  /** The catalog location spelling of the same document (plans-root-relative). */
+  catalogRelativePath: string;
+  /** The facts this derivation resolved; empty when nothing had to be derived. */
+  resolvedFrom: readonly Readonly<{ path: string; source: string }>[];
+}>;
+
+export function derivePlanRegistration(input: {
+  harnessDir: string;
+  plan: { id?: string; title?: string; file: string };
+}): DerivedPlanRegistration {
+  const file = input.plan.file;
+  const declaredId = typeof input.plan.id === "string" && input.plan.id.trim() !== "" ? input.plan.id : undefined;
+  const declaredTitle =
+    typeof input.plan.title === "string" && input.plan.title.trim() !== "" ? input.plan.title : undefined;
+  if (typeof file !== "string" || file.trim() === "") {
+    throw new Error(
+      "derivePlanRegistration: the selected plan document is required — supply plan.file as the registered plan pointer " +
+        "(`{PLAN_DIR}/<id>.md` or its canonical absolute path)",
+    );
+  }
+  const harnessRoot = resolve(input.harnessDir);
+  // The plan id a pointer names is its file name without the `.md`; a supplied
+  // `id` is the CONSTRAINT instead — the §4 resolver below then proves that id,
+  // that location and the document's own `plan_id` header are the same
+  // registration identity, for the explicit form exactly as for the sparse one.
+  const planId = declaredId ?? basename(file).replace(/\.md$/, "");
+  const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
+  // The body is the title authority (the first level-1 heading); a document
+  // that declares no heading proves no title, so the plan id is the honest
+  // fallback rather than a refusal.
+  const heading = /^# (.+)$/m.exec(readFileSync(resolved.planPath, "utf8"))?.[1]?.trim();
+  const documentTitle = heading === undefined || heading === "" ? undefined : heading;
+  // A supplied title is a constraint against the document, never a replacement
+  // for it: a title that contradicts the heading the selected document states
+  // refuses. A document with no heading states no title to contradict, so there
+  // the declaration stands (the same reason it is not refused when derived).
+  if (declaredTitle !== undefined && documentTitle !== undefined && declaredTitle.trim() !== documentTitle) {
+    throw new Error(
+      `derivePlanRegistration: plan ${JSON.stringify(planId)} was declared with title ${JSON.stringify(declaredTitle)}, but the ` +
+        `selected document ${resolved.planPath} states ${JSON.stringify(documentTitle)} — the selected plan document is the ` +
+        "registration authority (R1/§4), so a supplied title is a constraint against it, never an override",
+    );
+  }
+  const title = documentTitle ?? declaredTitle ?? planId;
+  // The catalog entity location is plans-root-relative while the row keeps the
+  // §4 canonical pointer: one document, two declared location forms. The
+  // relative form is derived from the RESOLVED document for every input form —
+  // the caller's pointer spelling (which may be absolute) is never a catalog
+  // location.
+  const catalogRelativePath = relative(canonicalizeNearestExisting(resolvePlanDir(harnessRoot)), resolved.planPath)
+    .split(sep)
+    .join("/");
+  return {
+    plan: { id: planId, title, file: resolved.planPath },
+    catalogRelativePath,
+    resolvedFrom: [
+      {
+        path: "plan.file",
+        source: `registered plan document ${resolved.planPath} (declared plan_id ${resolved.declaredPlanId})`,
+      },
+      ...(declaredId === undefined ? [{ path: "plan.id", source: `registered plan document ${resolved.planPath}` }] : []),
+      ...(declaredTitle === undefined
+        ? [{ path: "plan.title", source: `plan document body of ${resolved.planPath}` }]
+        : []),
+    ],
+  };
+}
+
 /** Options for `registerPlanWorkflow`. `harnessDir` is required — the
  * snapshot and `status.json` live under the harness root. */
 export type RegisterPlanWorkflowOptions = {
   /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
   harnessDir: string;
-  /** The owned plan (contract §2: one independently owned plan per workflow on the new normal route). */
-  plan: { id: string; title: string; file: string };
+  /**
+   * The owned plan (contract §2: one independently owned plan per workflow on
+   * the new normal route). `file` is the selected plan document — the §4
+   * registered-plan pointer, the one authority every form proves; `id` and
+   * `title` are DERIVED from it when omitted (R1), and a supplied value is a
+   * CONSTRAINT on the proven document (an id or title the document does not
+   * state refuses) rather than a replacement for reading it.
+   */
+  plan: { file: string; id?: string; title?: string };
   /** Delivery kind declared at registration (contract §1). Required — never inferred. */
   deliveryKind: WorkflowDeliveryKind;
   /** Project register id recorded on the snapshot (contract §3 register row). */
@@ -1729,13 +2114,20 @@ export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): st
  * definition, no second "which registration is this" source. Timestamps are
  * outside the compared identity, so the clock a caller passes never affects
  * the comparison.
+ *
+ * The row is derived from the selected plan document (`derivePlanRegistration`,
+ * R1): an omitted `id`/`title` is resolved from the document here and a
+ * supplied one is proven against it, so the direct producer and the catalog
+ * journal derive the identical row from the identical inputs rather than each
+ * copying the caller's fields.
  */
 export function planWorkflowSnapshot(
   workflowId: string,
   options: RegisterPlanWorkflowOptions,
   startedAt: string,
 ): WorkflowSnapshot {
-  const planRow: PlanRow = { id: options.plan.id, title: options.plan.title, file: options.plan.file, status: "Todo" };
+  const plan = derivePlanRegistration({ harnessDir: options.harnessDir, plan: options.plan }).plan;
+  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
   const snapshot: WorkflowSnapshot = {
     schema_version: 1,
     id: workflowId,
@@ -1819,11 +2211,23 @@ export async function registerPlanWorkflow(
   assertSafePathComponent(workflowId, "workflow id");
   const { plan, deliveryKind } = options;
   if (!isPlainObject(plan)) {
-    throw new Error("registerPlanWorkflow: options.plan is required (the owned plan: id, title, file)");
+    throw new Error("registerPlanWorkflow: options.plan is required (the selected plan document: {PLAN_DIR}/<id>.md)");
   }
-  for (const field of ["id", "title", "file"] as const) {
-    if (typeof plan[field] !== "string" || plan[field].trim() === "") {
-      throw new Error(`registerPlanWorkflow: options.plan.${field} must be a non-empty string`);
+  if (typeof plan.file !== "string" || plan.file.trim() === "") {
+    throw new Error(
+      "registerPlanWorkflow: options.plan.file is required (the selected plan document — an omitted id/title is derived from it)",
+    );
+  }
+  // `id`/`title` are OPTIONAL intent inputs: an omitted one is derived from
+  // the selected document by `planWorkflowSnapshot` (R1), and a supplied one is
+  // a CONSTRAINT the derivation proves against that document (a value the
+  // document does not state refuses; it never replaces reading it). A supplied
+  // value is still validated here too — an empty declaration is malformed
+  // input, not an omission.
+  for (const field of ["id", "title"] as const) {
+    const value = plan[field];
+    if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`registerPlanWorkflow: options.plan.${field} must be a non-empty string when given`);
     }
   }
   if (typeof deliveryKind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) {

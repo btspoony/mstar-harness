@@ -32,6 +32,13 @@
  * - `execution-cross-domain-*`: registration accepted → catalog metadata moves →
  *   the authoritative read stays pinned → the accepted receipt and token still
  *   select that data after a source-level reopen.
+ * - `registration recovery` / `semantic replay` / `interrupted registration`
+ *   (E06b): the sparse intent resolves the omitted plan identity/title from the
+ *   selected document, an iteration registered without a phase carries the
+ *   derived Prepare, a retry that re-read the store replays the recorded receipt
+ *   (while a different intent still conflicts), an authority epoch change is
+ *   re-resolved instead of replayed stale, and an interruption at either side of
+ *   the commit boundary converges on exactly one registration.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -64,7 +71,7 @@ import {
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
-import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type RegisterPlanWorkflowOptions } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
 afterAll(() => {
@@ -140,6 +147,26 @@ async function legacyFixture(label: string): Promise<{ workspace: string; harnes
   return { workspace, harnessRoot, context };
 }
 
+/**
+ * The §4 registered plan document a reviewed registration selects: its
+ * `plan_id` header is the identity authority the resolver proves, and its first
+ * heading is the title authority the declared title must state.
+ */
+function writePlanDocument(harnessDir: string, planId: string, title: string): void {
+  const file = join(harnessDir, "plans", `${planId}.md`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+}
+
+/**
+ * One plan registration request, and the narrowed form the fixture builds: the
+ * plan producer call with its own options type, so a case that re-spells the
+ * sparse `plan` input does not have to re-prove the union member at every use.
+ */
+type PlanExecutionRequest = Omit<CatalogExecutionRequest, "workflow"> & {
+  workflow: { kind: "plan"; workflowId: string; options: RegisterPlanWorkflowOptions };
+};
+
 /** One plan registration request, exactly as a reviewed caller supplies it. */
 function planRequest(options: {
   context: StoreContext;
@@ -156,12 +183,17 @@ function planRequest(options: {
   bindingId?: string;
   /** Omit the producer's `startedAt` so the snapshot's clock is the call's own. */
   omitStartedAt?: boolean;
-}): CatalogExecutionRequest {
+}): PlanExecutionRequest {
   const workflowId = options.workflowId ?? WORKFLOW_ID;
   const planId = options.planId ?? PLAN_ID;
   const title = options.title ?? PLAN_TITLE;
-  const file = options.file ?? `${planId}.md`;
+  // The catalog entity's location is plans-root-relative; the SELECTED document
+  // is the harness-relative registered plan pointer the §4 resolver proves. One
+  // document, two declared forms — so the fixture writes the document its
+  // reviewed request registers.
+  const relativePath = options.file ?? `${planId}.md`;
   const bindingId = options.bindingId ?? planId;
+  writePlanDocument(options.context.harnessDir, planId, title);
   return {
     operationId: options.operationId,
     actor: "project-manager",
@@ -171,7 +203,7 @@ function planRequest(options: {
       workflowId,
       options: {
         harnessDir: options.context.harnessDir,
-        plan: { id: planId, title, file },
+        plan: { id: planId, title, file: `plans/${relativePath}` },
         deliveryKind: "development",
         branchSource: `feature/${workflowId}`,
         branchTarget: "main",
@@ -180,7 +212,7 @@ function planRequest(options: {
       },
     },
     delta: {
-      entities: options.entities ?? [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: file }],
+      entities: options.entities ?? [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath }],
       ...(options.links === undefined ? {} : { links: options.links }),
       binding: { catalogKind: "plan", catalogId: bindingId },
     },
@@ -504,7 +536,12 @@ describe("execution-registration", () => {
   test("execution-registration-registers-an-iteration-lifecycle-with-its-own-binding-family", async () => {
     const fixture = await activeFixture("iteration");
     const iterationId = "iter-20260921-registration";
-    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `${iterationId}-plan.md` };
+    // §4: the row's pointer is the registered plan document, spelled the way the
+    // ONE registered-plan path contract accepts it — the file producer and the
+    // legacy journal always did; the DB route now resolves it through the same
+    // seam, so one intent cannot persist two spellings (E07 fold).
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
     const receipt = await commitExecutionRegistration(
       { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
       {
@@ -540,14 +577,18 @@ describe("execution-registration", () => {
       catalog_id: iterationId,
       catalog_revision: 1,
     });
-    // The iteration snapshot's own row metadata is the sealed input, unchanged:
-    // the registration publishes catalog rows, it never rewrites the plan row.
+    // The iteration snapshot's own row metadata is the sealed input: the
+    // registration publishes catalog rows and never rewrites the plan row — but
+    // the row's POINTER is the canonical registered plan file, because §4
+    // resolves it through the one registered-plan path contract before the
+    // intent is hashed, sealed or persisted (E07 fold: the DB route used to keep
+    // the caller's spelling verbatim while the file route canonicalized it).
     const sealed = await sealedInput(fixture.context, row.id, iterationId);
     expect(JSON.parse(String(sealed?.input_json))).toMatchObject({
       plan_id: row.id,
       id: row.id,
       title: row.title,
-      file: row.file,
+      file: join(realpathSync(join(fixture.context.harnessDir, "plans")), `${row.id}.md`),
       iteration_refs: ["delivery-compass.md"],
     });
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
@@ -1087,6 +1128,262 @@ describe("execution-cross-domain", () => {
     const reopenedView = (await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID }))
       .data as ExecutionPlanView;
     expect(reopenedView.frozenInput?.entity_revision).toBe(1);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Recovery-first registration on the ACTIVE DB (E06b: A02/A04/A05/A26/A28)
+ * ------------------------------------------------------------------------ */
+
+describe("execution-registration \u2014 recovery-first registration", () => {
+  test("registration recovery \u2014 the sparse intent derives the plan row from the selected document (A02/R1)", async () => {
+    const fixture = await activeFixture("sparse-registration");
+    const reviewed = planRequest({ context: fixture.context, operationId: "op-sparse" });
+    // The sparse form the transport builds from optional inputs: the selected
+    // document, no `id`/`title` — and, because a field-by-field builder writes
+    // the keys anyway, the same intent with explicit `undefined` values.
+    const selection = { file: `plans/${PLAN_ID}.md` };
+    const sparse: CatalogExecutionRequest = {
+      ...reviewed,
+      workflow: {
+        kind: "plan",
+        workflowId: WORKFLOW_ID,
+        options: { ...reviewed.workflow.options, plan: { ...selection, id: undefined, title: undefined } },
+      },
+    };
+    expect(await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...sparse, expected: fixture.rootToken })).toMatchObject({
+      workflowId: WORKFLOW_ID,
+      recovered: false,
+    });
+
+    // The row the DB holds IS E06a's published derivation of the selected
+    // document — this route composes it, it does not read the caller's fields a
+    // second time — and the derivation names the document as the source of every
+    // omitted field, which is the provenance the sparse route reports.
+    const derived = derivePlanRegistration({ harnessDir: fixture.context.harnessDir, plan: selection });
+    const row = await one<{ state_json: string }>(
+      fixture.context,
+      "select state_json from execution_plans where workflow_id = ? and plan_id = ?",
+      WORKFLOW_ID,
+      PLAN_ID,
+    );
+    expect(JSON.parse(String(row?.state_json))).toEqual({ ...derived.plan, status: "Todo" });
+    expect(derived.resolvedFrom.map((source) => source.path)).toEqual(["plan.file", "plan.id", "plan.title"]);
+    for (const source of derived.resolvedFrom) expect(source.source).toContain(derived.plan.file);
+
+    // Exactly one registration effect, and no file-protocol byte beside it.
+    expect(await footprint(fixture.context)).toMatchObject({
+      root_revision: 3,
+      store_revision: 2,
+      catalog_revision: 1,
+      workflows: 1,
+      registry: 1,
+      plans: 1,
+      inputs: 1,
+      operations: 1,
+      entities: 1,
+      links: 0,
+      bindings: 1,
+      pending: 0,
+    });
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("registration recovery \u2014 an iteration registered without a phase derives Prepare at creation (A04/R3)", async () => {
+    const fixture = await activeFixture("iteration-phase");
+    const iterationId = "iter-20260921-phase";
+    // §4: an iteration row pointer is the registered plan document, resolved by
+    // the ONE registered-plan path contract — the same spelling the file producer
+    // and the legacy journal accept (E07 folded the DB route onto that seam).
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    // No phase is declared anywhere in this request: the producer derives the
+    // phase a genuinely unstarted iteration factually sits in.
+    await commitExecutionRegistration(
+      { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
+      {
+        operationId: "op-iteration-phase",
+        actor: "project-manager",
+        expectedCatalogRevision: 0,
+        workflow: {
+          kind: "iteration",
+          workflowId: iterationId,
+          options: {
+            harnessDir: fixture.context.harnessDir,
+            compassRef: "delivery-compass.md",
+            branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
+            rows: [row],
+            project: "_default",
+          },
+        },
+        delta: {
+          entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+          binding: { catalogKind: "iteration", catalogId: iterationId },
+        },
+        expected: fixture.rootToken,
+      },
+    );
+
+    // The header the DB stored carries the derived Prepare, and the authority
+    // read reports it — so the registered iteration is reachable in Prepare
+    // without a phase ever being written by a caller.
+    const header = await one<{ state_json: string }>(
+      fixture.context,
+      "select state_json from execution_workflows where workflow_id = ?",
+      iterationId,
+    );
+    expect(JSON.parse(String(header?.state_json)).phase).toBe(PREPARE_PHASE);
+    const state = await readExecutionState(fixture.context);
+    expect(state.data.workflows.find((workflow) => workflow.state.id === iterationId)?.state.phase).toBe(PREPARE_PHASE);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("semantic replay \u2014 a retry re-reads the store and replays the recorded receipt (A05/R6)", async () => {
+    const fixture = await activeFixture("semantic-replay");
+    const request = planRequest({ context: fixture.context, operationId: "op-semantic-replay" });
+    const accepted = await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...request, expected: fixture.rootToken });
+    const published = await footprint(fixture.context);
+
+    // The retry after a lost response: the caller re-read the store, so it
+    // presents the CURRENT root token and the catalog revision its own first
+    // attempt published. Both are transport freshness, not a new intent, so the
+    // retry converges on the recorded receipt instead of becoming a second
+    // registration.
+    const current = await readExecutionState(fixture.context);
+    const reRead = await one<{ catalog_revision: number }>(fixture.context, "select catalog_revision from store_meta where id = 1");
+    expect(
+      await commitExecutionRegistration(
+        { ...fixture.context, caller: fixture.caller },
+        { ...request, expectedCatalogRevision: reRead?.catalog_revision ?? -1, expected: current.token },
+      ),
+    ).toEqual(accepted);
+    expect(await footprint(fixture.context)).toEqual(published);
+    expect((await one<{ n: number }>(fixture.context, "select count(*) as n from execution_operations"))?.n).toBe(1);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("semantic replay \u2014 a re-read token does not launder a different registration intent (A13)", async () => {
+    const fixture = await activeFixture("semantic-conflict");
+    await registerPlanWorkflow(fixture, "op-semantic-conflict");
+    const published = await footprint(fixture.context);
+    const current = await readExecutionState(fixture.context);
+    const reRead = await one<{ catalog_revision: number }>(fixture.context, "select catalog_revision from store_meta where id = 1");
+
+    // Same operation id, current tokens — but a different reviewed producer call
+    // and delta. Transport freshness is excluded from the fingerprint, the
+    // business intent is not.
+    const refusal = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: fixture.caller },
+        {
+          ...planRequest({ context: fixture.context, operationId: "op-semantic-conflict", title: "Another plan" }),
+          expectedCatalogRevision: reRead?.catalog_revision ?? -1,
+          expected: current.token,
+        },
+      ),
+    );
+    expect(refusal.code).toBe("execution.operation-conflict");
+    expect(await footprint(fixture.context)).toEqual(published);
+  });
+
+  test("semantic replay \u2014 an authority epoch change is re-resolved, never replayed stale (A26)", async () => {
+    const fixture = await activeFixture("epoch-change");
+    const request = planRequest({ context: fixture.context, operationId: "op-epoch" });
+    await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...request, expected: fixture.rootToken });
+    const published = await footprint(fixture.context);
+    const before = await readExecutionState(fixture.context);
+
+    // The authority renumbered itself under the call: the store's own generation
+    // fence moved, so the epoch this registration was accepted under no longer
+    // exists.
+    await fixtureWrite(fixture.context, "update store_meta set authority_epoch = authority_epoch + 1 where id = 1");
+    const current = await readExecutionState(fixture.context);
+    expect(current.epoch).not.toBe(before.epoch);
+
+    // The token of the superseded generation is refused with the typed
+    // re-resolution report: nothing is written and no receipt is replayed from
+    // the old epoch.
+    let stale: { code?: unknown; details?: { recovery?: { unresolved?: Array<{ component?: unknown; path?: unknown; code?: unknown }> } } } = {};
+    try {
+      await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...request, expected: fixture.rootToken });
+      throw new Error("expected a refusal");
+    } catch (error) {
+      stale = error as typeof stale;
+    }
+    expect(stale.code).toBe("store.stale-epoch");
+    expect(stale.details?.recovery?.unresolved?.[0]).toMatchObject({ component: "authority", path: "epoch", code: "store.stale-epoch" });
+    expect(await footprint(fixture.context)).toEqual(published);
+
+    // Nor is the old-epoch receipt served under the new generation: the same
+    // operation id is simply no longer recorded there, so the retry is the
+    // honest create-only refusal — no second row, revision or receipt.
+    const reRead = await one<{ catalog_revision: number }>(fixture.context, "select catalog_revision from store_meta where id = 1");
+    const fresh = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: fixture.caller },
+        { ...request, expectedCatalogRevision: reRead?.catalog_revision ?? -1, expected: current.token },
+      ),
+    );
+    expect(fresh.code).toBe("execution.not-empty");
+    expect(await footprint(fixture.context)).toEqual(published);
+  });
+
+  test("interrupted registration \u2014 an interruption before the commit leaves nothing and the retry converges on one registration (A05/A28)", async () => {
+    const fixture = await activeFixture("interrupted-registration");
+    const reviewed = planRequest({ context: fixture.context, operationId: "op-interrupted" });
+    const before = await footprint(fixture.context);
+
+    // The observable shape of an interrupted attempt: it stops inside the
+    // transaction, which is this route's commit boundary, so it leaves no row,
+    // revision, receipt or catalog byte behind.
+    const interrupted = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: fixture.caller },
+        { ...reviewed, expectedCatalogRevision: 4, expected: fixture.rootToken },
+      ),
+    );
+    expect(interrupted.code).toBe("catalog.revision-conflict");
+    expect(await footprint(fixture.context)).toEqual(before);
+
+    // The SAME normal intent completes exactly one registration, and the
+    // creation facts are the reviewed call's own — the original timestamp, the
+    // document-derived row — not a second attempt's.
+    const accepted = await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...reviewed, expected: fixture.rootToken });
+    const registered = await footprint(fixture.context);
+    expect(registered).toMatchObject({
+      root_revision: 3,
+      store_revision: 2,
+      catalog_revision: 1,
+      workflows: 1,
+      registry: 1,
+      plans: 1,
+      inputs: 1,
+      operations: 1,
+      entities: 1,
+      bindings: 1,
+      pending: 0,
+    });
+    const header = await one<{ state_json: string }>(fixture.context, "select state_json from execution_workflows where workflow_id = ?", WORKFLOW_ID);
+    expect(JSON.parse(String(header?.state_json))).toMatchObject({ id: WORKFLOW_ID, status: "running", started_at: TS });
+
+    // No half-registered phantom: the lifecycle is addressable as exactly one
+    // workflow with exactly one plan row.
+    const state = await readExecutionState(fixture.context);
+    expect(state.data.workflows.map((workflow) => workflow.state.id)).toEqual([WORKFLOW_ID]);
+    expect(state.data.workflows[0]!.plans.map((view) => view.plan.id)).toEqual([PLAN_ID]);
+
+    // The interruption after the commit converges too: the retry replays the one
+    // recorded receipt and adds nothing.
+    const current = await readExecutionState(fixture.context);
+    const reRead = await one<{ catalog_revision: number }>(fixture.context, "select catalog_revision from store_meta where id = 1");
+    expect(
+      await commitExecutionRegistration(
+        { ...fixture.context, caller: fixture.caller },
+        { ...reviewed, expectedCatalogRevision: reRead?.catalog_revision ?? -1, expected: current.token },
+      ),
+    ).toEqual(accepted);
+    expect(await footprint(fixture.context)).toEqual(registered);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 });
 

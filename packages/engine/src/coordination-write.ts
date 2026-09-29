@@ -14,6 +14,12 @@
  *    target and the operation, never a caller-supplied boolean.
  *    `FsStore.put/delete` reject everything else with
  *    `coordination.direct-write-refused`.
+ *    The ONE writer of a coordinated snapshot is the snapshot CAS writer
+ *    (`workflow.ts#writeWorkflowSnapshot`): its field-scoped deltas
+ *    (`mergePhaseProjection` — `phase` + `updated_at` only) and its
+ *    lease-removal terminal close (`settleStoppedFileClaims`) both land the
+ *    whole payload against the stored byte version, so the field-scoped guard
+ *    is a property of that writer rather than a rule a second writer can skip.
  * 3. The stored coordination shapes and their strict validators, shared by
  *    `workflow.ts` (which refuses to persist a malformed coordination
  *    block) and `coordination.ts` (which builds them). `workflow.ts` cannot
@@ -317,6 +323,40 @@ export type PlanHandoff = {
   completed_at?: string;
 };
 
+/**
+ * The C1 header block one sealed Assignment declares, as the stored semantic
+ * projection (`AssignmentIntent`). The order is the parser's own field order
+ * (`parseAssignmentFile`), so a projection and the document it describes can
+ * never enumerate different semantics.
+ */
+export const ASSIGNMENT_INTENT_FIELDS = [
+  "execution_scope",
+  "execute_as",
+  "delegation",
+  "control_harness_root",
+  "workflow_id",
+  "plan_id",
+  "plan_path",
+  "worktree_path",
+  "working_branch",
+  "sdd_dir",
+  "qa_gate",
+  "findings_cleanup",
+  "prepare_gate",
+] as const;
+
+/**
+ * §4.2 the SEMANTIC projection of one sealed Assignment: the values
+ * `parseAssignmentFile` reads out of the document's header block, in the stored
+ * snake_case shape. A seal records it so a later re-read compares the reviewed
+ * input's MEANING — a formatting, prose, ordering or duplicate-marker change
+ * leaves the projection untouched — while a scope or approval change is
+ * disclosed with the exact header(s) that moved (A29). The document's bytes are
+ * never the projection: a whole-document hash cannot tell a reflowed paragraph
+ * from a changed `QA gate`.
+ */
+export type AssignmentIntent = Readonly<Record<(typeof ASSIGNMENT_INTENT_FIELDS)[number], string>>;
+
 /** Coordinator-recorded preparation of one plan (spec §D `prepare`). */
 export type PreparedCoordination = {
   assignment_path: string;
@@ -324,6 +364,13 @@ export type PreparedCoordination = {
   plan_sha256: string;
   qa_gate: string;
   findings_cleanup: string;
+  /**
+   * The sealed Assignment's semantic projection. Optional on the stored block
+   * because the projection is written by the route that seals the row: the file
+   * route's `prepare` always records it, and a seal that does not (the DB
+   * transport's own receipt) is compared by the whole-byte rule instead.
+   */
+  assignment_intent?: AssignmentIntent;
   prepared_by: string;
   prepared_at: string;
 };
@@ -660,6 +707,7 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     "plan_sha256",
     "qa_gate",
     "findings_cleanup",
+    "assignment_intent",
     "prepared_by",
     "prepared_at",
   ];
@@ -669,8 +717,30 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
+    // The semantic projection is optional (see `PreparedCoordination`); every
+    // other field of the seal is required at its stored shape.
+    if (key === "assignment_intent") continue;
     if (!isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.assignment_intent !== undefined) {
+    const intent = value.assignment_intent;
+    if (!isPlainObject(intent)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
+    } else {
+      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
+      const unknown = Object.keys(intent).filter((key) => !(ASSIGNMENT_INTENT_FIELDS as readonly string[]).includes(key));
+      if (missing.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`),
+        );
+      }
+      if (unknown.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`),
+        );
+      }
     }
   }
   if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
@@ -812,4 +882,107 @@ export function evidenceRefOf(filePath: string): EvidenceRef {
 /** Whether `value` is a well-formed `sha256:<64 hex>` artifact version. */
 export function isArtifactVersion(value: unknown): value is string {
   return typeof value === "string" && (value === "absent" || HASH_RE.test(value));
+}
+
+/* ------------------------------------------------------------------------ *
+ * §R11/A21 file-authority claim ownership — the holder identity one held
+ * claim names and the stop FACTS this authority records about it
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R11/A21 how the FILE authority classifies one HELD claim's holder, decided
+ * by the terminal failed/stopped close before it settles or refuses that claim.
+ */
+export type FileClaimHolderState =
+  /** A live recorded session identity of this workflow: its claim is never released. */
+  | "live"
+  /** A holder this workflow's own recorded stop attestation names: its claim is settled. */
+  | "stop-attested"
+  /** No available record establishes a stop: the close refuses it, never releases it. */
+  | "unresolved";
+
+/**
+ * §R11/A21 how the FILE authority classifies a HELD claim's holder — the mirror
+ * of the DB route's `heldLeaseHolderIsLive` (`execution-coordination.ts`), which
+ * asks the holder's own `execution_sessions` row at the current epoch instead.
+ *
+ * The file authority has no session table, no epoch and no heartbeat: its
+ * durable session record is the workflow's own role-typed binding, and a
+ * claim's holder is resolved through exactly those identities — the
+ * workflow-level `coordination.coordinator` binding (role `coordinator`) and the
+ * `coordination.session` binding of the plan row(s) the claim's scope carries
+ * (role `plan-pm`, THAT plan). The activation import resolves a held lease the
+ * same way (`insertExecutionLease`, which calls the coordinator a transfer moved
+ * the claim to, otherwise the plan's own plan session) and calls a holder that
+ * resolves to NEITHER an orphan claim with "no owner to import".
+ *
+ * So the identity is a PAIR, exactly as the DB route keys it: the role the
+ * binding is stored as (its LOCATION — the workflow block or that plan's row)
+ * plus the session id it names — never a bare session-id set (the DB route's
+ * own L2 finding: one session id can carry a live coordinator identity and a
+ * stopped plan identity at the same time), and never a session of another
+ * workflow or another plan. A holder this workflow still records is `live`, and
+ * that answer precedes every other: a recorded binding is never released on an
+ * attestation naming the same session id (a false refusal is the conservative
+ * side of this rule; a release is not).
+ *
+ * A holder that resolves to none of those identities is NOT thereby proven
+ * stopped — the absence of a binding is not a stop fact, which is exactly why
+ * the activation import refuses such a holder as an orphan instead of adopting
+ * it. So the file authority settles a claim only on a recorded STOP FACT: the
+ * workflow's `coordination.identity_recoveries[].stopped_session_ids`
+ * attestation — written only by the coordinator-identity recovery transition,
+ * after the operator authenticated the prior holder and asserted its stop or
+ * reload — naming that holder (`stop-attested`). Without it the holder is
+ * `unresolved` and the close refuses it, naming the stop/transfer it needs.
+ * §4.2 still holds: a `claimed_at` age, a heartbeat, a stale-session guess or
+ * the caller's own assertion is not a stop fact.
+ */
+export function fileClaimHolderState(
+  input: Readonly<{
+    /** The session id the held claim names (`execution_lease.holder` / `integration_merge_lease.holder`). */
+    holder: string;
+    /**
+     * The workflow's `coordination` block — the role `coordinator` identity and
+     * the recorded identity-recovery attestations.
+     */
+    coordination: unknown;
+    /**
+     * The plan `coordination` blocks the claim's scope carries: the addressed
+     * plan row's own block for a row claim, every plan row's for a workflow-wide
+     * claim (the DB route's integration half decides against ANY active session
+     * of the workflow, because that record names no holder role).
+     */
+    planCoordinations: readonly unknown[];
+  }>,
+): FileClaimHolderState {
+  if (!isNonEmptyString(input.holder)) return "unresolved";
+  const coordinator = isPlainObject(input.coordination) ? input.coordination.coordinator : undefined;
+  if (isPlainObject(coordinator) && coordinator.session_id === input.holder) return "live";
+  const boundToPlan = input.planCoordinations.some((block) => {
+    const planSession = isPlainObject(block) ? block.session : undefined;
+    return isPlainObject(planSession) && planSession.session_id === input.holder;
+  });
+  if (boundToPlan) return "live";
+  return recordedStoppedSessions(input.coordination).has(input.holder) ? "stop-attested" : "unresolved";
+}
+
+/**
+ * §R11/A21 the stop facts this file authority records: every session id the
+ * workflow's own `coordination.identity_recoveries` names among the holders an
+ * operator attested stopped or reloaded (the recovery transition's
+ * `stopped_session_ids`). Malformed entries contribute nothing — a stop fact is
+ * read, never guessed — so an unreadable audit yields the conservative
+ * `unresolved` answer rather than a release.
+ */
+function recordedStoppedSessions(coordination: unknown): ReadonlySet<string> {
+  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
+  const stopped = new Set<string>();
+  if (!Array.isArray(recoveries)) return stopped;
+  for (const entry of recoveries) {
+    const ids = isPlainObject(entry) ? entry.stopped_session_ids : undefined;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) if (isNonEmptyString(id)) stopped.add(id);
+  }
+  return stopped;
 }

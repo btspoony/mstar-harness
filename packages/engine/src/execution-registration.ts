@@ -27,9 +27,12 @@
  *   because adopting it here would mean trusting file-protocol state — a
  *   snapshot and a root entry this transaction did not write — as this store's
  *   registration;
- * - is idempotent by operation id: an identical retry returns the RECORDED
- *   receipt without re-evaluating the CAS the first attempt advanced, and a
- *   reused id with any other payload refuses `execution.operation-conflict`.
+ * - is idempotent by operation id SEMANTICALLY: a retry of the same reviewed
+ *   intent returns the RECORDED receipt without re-evaluating the CAS the first
+ *   attempt advanced and without re-reading the catalog revision, even when the
+ *   caller re-read the store and re-presented fresh tokens after a lost response
+ *   (see `REGISTRATION_SEMANTICS`), while a reused id for any other producer call
+ *   or delta refuses `execution.operation-conflict`.
  *
  * Both halves of the request are consumed through the SAME derivations as the
  * legacy route (`resolveCatalogExecutionPlan`, `workflowEntryOf`, the catalog
@@ -37,7 +40,6 @@
  * once and the two routes cannot drift into disagreeing about identity, the
  * reviewed delta, or the frozen catalog binding.
  */
-import { createHash } from "node:crypto";
 import {
   CatalogError,
   linkCatalogEntitiesOn,
@@ -52,15 +54,18 @@ import {
   resolveCatalogExecutionPlan,
   workflowEntryOf,
   writeBinding,
+  type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
+import { isPlainObject } from "./coordination-write.js";
 import {
   ExecutionError,
   assertExecutionToken,
   executionRootTokenOf,
   readOperationReplay,
   resolveCreateWorkflow,
+  semanticRequestHash,
   withExecutionTransaction,
   writeExecutionCreation,
   writeOperationReceipt,
@@ -68,42 +73,69 @@ import {
   type ExecutionContext,
   type ExecutionToken,
 } from "./execution-store.js";
-import { stableJson } from "./workflow.js";
+import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
 
 /** §3.1: the operation kind this verb hashes its request under. */
 const COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration";
 
 /**
- * §3.1 the registration's request hash: operation kind, the exact root CAS, the
- * trusted caller and the whole reviewed request (producer call, catalog delta,
- * actor, catalog expectation), in the stable canonical form the legacy journal
- * hashes its own request with. Two requests sharing an operation id collide only
- * when they are the same request — anything else is an idempotency-key misuse
- * and refuses instead of replaying a foreign receipt.
+ * §4.2 the SEMANTIC selection of one registration intent: the reviewed producer
+ * call, the reviewed catalog delta and the actor every published row is
+ * attributed to — the facts that make "which registration is this" true.
+ *
+ * Deliberately NOT selected: `operationId` is the idempotency key the receipt is
+ * looked up BY, `expected` is the root CAS the caller happened to have read, and
+ * `expectedCatalogRevision` is the catalog freshness the delta was reviewed
+ * against. A repeat after a lost response is the same intent even when the
+ * caller re-read the store and re-presented both tokens (design §4.2/R6/R7), so
+ * the fingerprint must not move with them — the same rule E06a applies to the
+ * file route's own journal fingerprint, where the reviewed expectation stays in
+ * the journal payload and is enforced at reconcile instead of being hashed as
+ * intent. A different producer call or delta still moves the fingerprint and
+ * stays an operation conflict (A13).
  */
-function registrationRequestHash(
-  caller: ExecutionCaller,
-  workflowId: string,
-  request: CatalogExecutionRequest,
-  expected: ExecutionToken,
-): string {
-  return createHash("sha256")
-    .update(
-      stableJson({
-        operation: COMMIT_REGISTRATION_OPERATION,
-        workflow_id: workflowId,
-        expected,
-        caller: {
-          session_id: caller.sessionId,
-          role: caller.role,
-          workflow_id: caller.workflowId,
-          plan_id: caller.planId,
-        },
-        request,
-      }),
-      "utf8",
-    )
-    .digest("hex");
+const REGISTRATION_SEMANTICS: SemanticSelection = ["actor", "workflow", "delta"];
+
+/**
+ * §3.1/§4.2 the canonical envelope of one semantic selection. E01's published
+ * rule for a selected path is "a path that is absent or `undefined` contributes
+ * nothing; a path present with any other value — `null` included — is part of
+ * the selection"; this applies that rule at every depth of the whole-subtree
+ * paths this verb selects.
+ *
+ * It matters on the sparse route: a transport that builds the producer call
+ * field-by-field from optional inputs (`plan.id`/`plan.title`) may pass an
+ * explicit `undefined`, and `derivePlanRegistration` derives exactly that field.
+ * Without this step the same omission would be ACCEPTED by the derivation and
+ * REFUSED by the fingerprint as `execution.canonical-value`, i.e. one route
+ * answering one intent two ways. A non-plain object and an `undefined` ARRAY
+ * element are left exactly as they are, so a class instance, a `Date` or a hole
+ * in the reviewed delta still refuses as a non-canonical value instead of being
+ * silently rewritten into a different request.
+ */
+function canonicalIntent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalIntent);
+  if (!isPlainObject(value)) return value;
+  const envelope: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) envelope[key] = canonicalIntent(entry);
+  }
+  return envelope;
+}
+
+/**
+ * §3.1/§4.2 the registration's request fingerprint: the operation kind, the
+ * workflow it registers, the trusted caller and the reviewed selection above, in
+ * the DB authority's own canonical form (`semanticRequestHash`). One fingerprint
+ * definition for the frames, so "the same intent" means one thing on this store.
+ */
+function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecutionPlan): string {
+  return semanticRequestHash({
+    operation: COMMIT_REGISTRATION_OPERATION,
+    address: { workflow_id: plan.workflowId },
+    caller,
+    intent: selectSemanticFields(canonicalIntent(plan.request), REGISTRATION_SEMANTICS),
+  });
 }
 
 /**
@@ -123,7 +155,12 @@ function registrationRequestHash(
  * `store_meta.revision` exactly once, however many catalog rows the delta
  * publishes: the catalog rows join the transaction's single advance and the
  * catalog revision advances once per published row, as it does on the file
- * route. An exact retry advances none of them.
+ * route. A retry of the same reviewed intent advances none of them, and
+ * re-evaluates neither this store's CAS nor the catalog expectation the first
+ * attempt already consumed — it returns the receipt the committed transaction
+ * recorded (A05/A28: an interruption before this call committed leaves nothing,
+ * and an interruption after it committed converges on that one recorded
+ * registration, never on a second one).
  *
  * Refusals, in the order they are evaluated:
  *
@@ -131,7 +168,7 @@ function registrationRequestHash(
  *   staged store, or a store predating the execution schema keeps the file
  *   route);
  * - `execution.operation-conflict` — this operation id is already committed for
- *   a different request;
+ *   a different reviewed intent (another producer call, delta or actor);
  * - `execution.token-kind` / `execution.scope-mismatch` / `store.stale-epoch` /
  *   `execution.stale-token` — `expected` is not this store's CURRENT root token;
  * - `catalog.revision-conflict` — the catalog moved past the revision the delta
@@ -158,7 +195,7 @@ export async function commitExecutionRegistration(
   // transaction: the identity anchors, the new/unbound/unleased requirement and
   // the plan rows' own seals are the C3 creation gates, reused verbatim.
   const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-  const requestHash = registrationRequestHash(context.caller, plan.workflowId, plan.request, request.expected);
+  const requestHash = registrationRequestHash(context.caller, plan);
 
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -168,8 +205,12 @@ export async function commitExecutionRegistration(
           `A legacy or staged store registers through the file journal until activation.`,
       );
     }
-    // Idempotent replay first: the identical retry must not be judged by a CAS
-    // its own first attempt already advanced.
+    // §4.1 semantic replay first: the retry of the same reviewed intent must not
+    // be judged by a CAS — or a catalog expectation — its own first attempt
+    // already advanced, whatever tokens the caller re-read after the lost
+    // response. Only the CURRENT epoch's committed receipt replays, so an
+    // authority that changed generation under this call is re-resolved instead
+    // of being served (or written to) under a generation that no longer exists.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
       operationId,
       requestHash,
