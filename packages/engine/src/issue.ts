@@ -223,6 +223,7 @@ export type IssueSummary = {
   registeredAt: string | null;
   lastActivity: string | null;
   revision: number;
+  milestoneId: string | null;
 };
 
 export type IssuePage = {
@@ -293,6 +294,7 @@ export type IssueDetail = {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  milestoneId: string | null;
   provider: string;
   externalId: string | null;
   url: string | null;
@@ -333,8 +335,6 @@ export type ClosureEvidence = {
 export type IssueLink =
   | { relation: "related" | "blocks" | "duplicate-of" | "superseded-by"; issueId: string }
   | { kind: "plan" | "iteration" | "pr" | "report"; target: string };
-
-
 export type IssueErrorCode =
   | "issue.not-found"
   | "issue.ambiguous-identity"
@@ -342,6 +342,11 @@ export type IssueErrorCode =
   | "issue.scope-refused"
   | "issue.revision-conflict"
   | "issue.invalid-disposition"
+  | "milestone.schema-outdated"
+  | "milestone.project-mismatch"
+  | "milestone.invalid-input"
+  | "milestone.revision-conflict"
+  | "milestone.terminal"
   | "store.not-active"
   | "store.operation-conflict";
 
@@ -1022,7 +1027,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const rows = db
       .prepare(
         `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-                issues.registered_at as registeredAt, issues.revision,
+                issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
                 (${LAST_ACTIVITY_SQL}) as lastActivity
          from issues ${where} ${order} limit ? offset ?`,
       )
@@ -1035,6 +1040,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       disposition: Disposition;
       registeredAt: string | null;
       revision: number;
+      milestoneId: string | null;
       lastActivity: string | null;
     }>;
     return {
@@ -1048,6 +1054,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
         registeredAt: row.registeredAt,
         lastActivity: row.lastActivity,
         revision: row.revision,
+        milestoneId: row.milestoneId,
       })),
       total: totalRow.n,
       storeRevision,
@@ -1066,7 +1073,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     assertIssueStoreActive(db);
     const issue = db
       .prepare(
-        "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?",
+        "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?",
       )
       .get(id) as
       | {
@@ -1085,6 +1092,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
           created_at: string;
           updated_at: string;
           revision: number;
+          milestone_id: string | null;
           provider: string;
           external_id: string | null;
           url: string | null;
@@ -1207,6 +1215,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       revision: issue.revision,
+      milestoneId: issue.milestone_id,
       provider: issue.provider,
       externalId: issue.external_id,
       url: issue.url,
@@ -1765,6 +1774,64 @@ export async function closeIssue(
   authorizeMutation(context, mutation);
   assertClosureAuthority(disposition, evidence);
   return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
+}
+
+export async function assignIssueMilestone(
+  context: StoreContext,
+  issueId: string,
+  input: { projectId: string; milestoneId: string | null; reason: string },
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<IssueReceipt> {
+  requireNonblank("projectId", input.projectId);
+  requireNonblank("reason", input.reason);
+  if (input.milestoneId !== null && (typeof input.milestoneId !== "string" || !input.milestoneId.trim())) {
+    throw new IssueError("issue.scope-refused", "milestoneId must be a nonblank identifier or null");
+  }
+  authorizeMutation(context, mutation);
+  if (!mutation.operationId?.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
+    throw new IssueError("issue.scope-refused", "operationId and expectedStoreRevision are required");
+  }
+  const hash = requestHash("assignIssueMilestone", {
+    issueId,
+    input: { projectId: input.projectId, milestoneId: input.milestoneId, reason: input.reason.trim() },
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision, expectedStoreRevision: mutation.expectedStoreRevision },
+  });
+  return withWrite(context, (handle) => {
+    const db = handle.db;
+    const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
+    if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) {
+      throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store upgrade" first.');
+    }
+    const existing = lookupOperation(db, mutation.operationId);
+    if (existing) return replayOrConflict(existing, hash);
+    const issue = db.prepare("select project_id, revision, milestone_id from issues where id=?").get(issueId) as
+      | { project_id: string; revision: number; milestone_id: string | null } | undefined;
+    if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+    if (issue.project_id !== input.projectId) throw new IssueError("milestone.project-mismatch", "Issue does not belong to the requested project");
+    if (readMeta(db).revision !== mutation.expectedStoreRevision) {
+      throw new IssueError("milestone.revision-conflict", "expectedStoreRevision does not match the current store revision");
+    }
+    requireExpectedRevision(mutation, issue.revision);
+    if (input.milestoneId !== null) {
+      const milestone = db.prepare("select status from project_milestones where milestone_id=? and project_id=?").get(input.milestoneId, input.projectId) as { status: string } | undefined;
+      if (!milestone) throw new IssueError("milestone.project-mismatch", "Milestone does not exist in the requested project");
+      if (milestone.status === "delivered" || milestone.status === "dropped") throw new IssueError("milestone.terminal", "Reopen the target milestone before assigning an issue to it");
+    }
+    if (issue.milestone_id !== null) {
+      const current = db.prepare("select status from project_milestones where milestone_id=?").get(issue.milestone_id) as { status: string } | undefined;
+      if (current?.status === "delivered" || current?.status === "dropped") throw new IssueError("milestone.terminal", "Reopen the current milestone before moving or clearing its issue");
+    }
+    const at = nowRfc3339();
+    let revision = issue.revision;
+    if (issue.milestone_id !== input.milestoneId) {
+      revision += 1;
+      db.prepare("update issues set milestone_id=?,revision=?,updated_at=? where id=?").run(input.milestoneId, revision, at, issueId);
+      bumpStoreRevision(db);
+    }
+    const receipt: IssueReceipt = { issueId, revision, storeRevision: readMeta(db).revision, created: false };
+    recordOperation(db, mutation.operationId, hash, receipt, at);
+    return receipt;
+  });
 }
 
 /**
