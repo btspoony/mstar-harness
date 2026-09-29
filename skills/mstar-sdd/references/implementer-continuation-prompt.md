@@ -48,9 +48,10 @@ Dispatch:
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence. When this task's Assignment names a PM-fixed capture request, capture the authorized check once with `mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]` and cite the retained run's record/raw logs
-    3. Commit on Working branch
-    4. Write report file with actual evidence; return short summary only
+    2. Before creating or keeping tests, apply `mstar-coding-behavior` §4 "Test admission": test product behavior or meaningful invariants/fails-first regressions; delete incidental tests rather than re-pin them
+    3. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence. When this task's Assignment names a PM-fixed capture request, capture the authorized check once with `mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]` and cite the retained run's record/raw logs
+    4. Commit on Working branch
+    5. Write report file with actual evidence; return short summary only
 
     ## When stuck
 
