@@ -154,6 +154,41 @@ describe("dashboard connection lifetime", () => {
     }
   });
 
+  test("a cancelled starter does not close a shared startup another caller is awaiting", async () => {
+    const harnessDir = await workspace("dashboard-cancel-shared-");
+    const handles: RunningDashboard[] = [];
+    const upstream = serviceEffects(handles);
+    const effects: CommandEffects = {
+      ...upstream,
+      async startDashboard(request: Parameters<CommandEffects["startDashboard"]>[0]) {
+        const handle = await upstream.startDashboard(request);
+        starterAbort.abort();
+        return handle;
+      },
+    };
+    // A starts the listener; B joins the SAME startup promise before it
+    // settles. When A observes its cancellation the slot still has B as an
+    // active waiter (and B will deliver the URL), so A must leave the
+    // listener running instead of closing it out from under B.
+    const starterAbort = new AbortController();
+    const starter = dashboardDefinition().execute({ port: 0 }, { ...context(harnessDir, effects), signal: starterAbort.signal });
+    const joiner = await dashboardDefinition().execute({ port: 0 }, context(harnessDir, effects));
+    expect(joiner).toMatchObject({ status: "ok", data: { lifetime: "connection" } });
+    const cancelled = await starter;
+    expect(cancelled).toMatchObject({ status: "error", code: "command.cancelled" });
+    expect(handles).toHaveLength(1);
+    const joinerData: unknown = joiner.data;
+    if (typeof joinerData !== "object" || joinerData === null || !("url" in joinerData) || typeof joinerData.url !== "string") {
+      throw new Error("the joiner envelope did not carry a dashboard url");
+    }
+    const url: string = joinerData.url;
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    await handles[0]!.close();
+    await expect(fetch(url)).rejects.toThrow();
+    rmSync(harnessDir, { recursive: true, force: true });
+  });
+
   test("cancellation after a reused service starts leaves the shared listener running", async () => {
     const harnessDir = await workspace("dashboard-cancel-reused-");
     const handles: RunningDashboard[] = [];
