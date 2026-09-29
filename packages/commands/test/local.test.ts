@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
@@ -32,6 +32,8 @@ import {
   resolveDshProfileDir,
   validateAgentPlugin,
 } from "../src/index.js";
+import { detectHost, resolveHarnessDir, resolveWorkflowDir } from "@mstar-harness/engine";
+import { getLocalCommandDefinitions } from "../src/index.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
@@ -399,5 +401,43 @@ describe("zcode host health", () => {
       `Missing plugin agents directory: ${path.join(harnessRepoPath, "agents")}`,
       `Missing ZCode marketplace: ${path.join(pluginsRoot, "marketplaces", "mstar-local", "marketplace.json")}`,
     ]);
+  });
+});
+describe("trusted root, author.declared ignore, and host capability", () => {
+  test("trusted root path reads resolve without Git root discovery", () => {
+    const root = fixture();
+    const nested = path.join(root, "nested");
+    const harness = path.join(root, ".mstar");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(harness);
+    expect(resolveHarnessDir(nested, { workspaceRoot: root })).toBe(harness);
+    expect(resolveWorkflowDir(nested, { workspaceRoot: root })).toBe(path.join(harness, "workflows"));
+  });
+
+  test("author.declared ignore policy is retained during scaffold", async () => {
+    const root = fixture();
+    const ignore = "# authored policy\n/.mstar/**\n";
+    writeText(root, ".gitignore", ignore);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "harness.scaffold");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const context = {
+      cwd: root, controlRoot: root,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+    const result = await definition.execute({}, context);
+    expect(result.status).toBe("ok");
+    expect(readFileSync(path.join(root, ".gitignore"), "utf8")).toBe(ignore);
+  });
+
+  test("host capability signals are explicit and resolve correctly", () => {
+    expect(detectHost(["task_agent_batch"])).toBe("omp");
   });
 });
