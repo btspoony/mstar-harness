@@ -113,6 +113,11 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **重复 owned 工作 / 超容量 primary**：重复派发 owned / running 工作，或在最后一个 primary 槽位被占时再起 primary；或用 pane idle / 终端标签当 ownership（case `phase2-owned-and-capacity` · home 指针 → **`mstar-iteration`** → `references/phase-2-worktree-lease.md` §2.4）
 - **空 ready 循环**：无 ready work 时反复自证同一事实、timer / 轮询、tick 计数或「still waiting」notice；为保持忙碌造工作（case `phase2-quiet-wait` · home 指针 → **`mstar-iteration`** → `references/phase-2-worktree-lease.md` §2.4）
 - **scoped primary 越界调度**：scoped plan primary 驱动 sibling plan、跑 integration merge 或进入 Phase 3–6（case `phase2-scoped-primary` · home 指针 → **`mstar-iteration`** → `references/phase-2-worktree-lease.md` §2.4）
+- **`recovery-policy-product-proof`**：以 live provider receipt 作 development gate，或静默转为 mandatory QA/E2E；开发验收只要求隔离层可自证的证据。
+- **`recovery-policy-isolated-proof`**：不接受 fixture / 本地构建层证据，或因未验证真实环境而阻塞开发完成；未验证行为如实记录。
+- **`recovery-policy-attribution-unknown`**：猜测 model、倒填编辑时间、将真实 provenance 写入 tracked plan，或新增机器完整性门禁。
+- **`recovery-policy-sparse-intent`**：强制 rebind / token-copy preflight、丢弃 verb 已应用的部分结果，或向 leaf 传 session credentials；实际输入仍按 CLI verb 显式提供。
+- **`recovery-policy-host-noop`**：要求重启刻意关闭的 preference、把 `preference-off` 当工具失败，或声称已做 installed-host 验证；phase-1 no-op 仅在 pending binding 存在时成立。
 
 ## 3. 迭代规则
 
