@@ -182,6 +182,10 @@ function snapshotDoc(plans: unknown[], extra: Record<string, unknown> = {}): Rec
     id: WORKFLOW_ID,
     type: "iteration",
     status: "running",
+    // The real producer stamps PREPARE_PHASE at registration; a fixture that
+    // omits it makes every reader advertise the derived-phase diagnostic on
+    // stderr instead of exercising the L1 checks silently.
+    phase: "phase-1-prepare",
     started_at: "2026-08-08",
     updated_at: "2026-08-08",
     plans,

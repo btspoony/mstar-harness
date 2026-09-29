@@ -1101,6 +1101,11 @@ export async function mutateExecutionWorkflow(
   context: ExecutionContext,
   request: ExecutionWorkflowIntent,
 ): Promise<ExecutionReceipt<ExecutionState>> {
+  // The shape gate runs BEFORE the sparse resolver: `operation` is the
+  // caller's own intent and needs no store fact, while the resolver may open
+  // the authority to derive the omitted session/token — a malformed payload
+  // must be an input-shape refusal, never a store-side diagnostic.
+  assertWorkflowOperationShape((request as { operation?: unknown }).operation);
   const strictRequest = await resolveWorkflowIntent(context, request);
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
@@ -1637,6 +1642,20 @@ export function workflowExecutionPolicyViolations(value: unknown, workflowId = "
 }
 
 function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
+  // The unknown-key refusal is the closed-vocabulary guard (`forbidden-field`,
+  // the same class the operation's own exact-keys gate raises), while a KNOWN
+  // key carrying a malformed value is an input-shape refusal.
+  if (isPlainObject(policy)) {
+    const unknown = Object.keys(policy).filter((key) => !["plan_parallelism", "worktree_mode", "push_policy"].includes(key));
+    if (unknown.length > 0) {
+      throw new CoordinationError(
+        "coordination.forbidden-field",
+        `workflow ${workflowId} execution_policy accepts only plan_parallelism, worktree_mode, push_policy ` +
+          `\u2014 unexpected key(s): ${unknown.join(", ")}`,
+        { unexpected: unknown, allowed: ["plan_parallelism", "worktree_mode", "push_policy"] },
+      );
+    }
+  }
   const violations = workflowExecutionPolicyViolations(policy, workflowId);
   if (violations.length > 0) throw invalidWorkflowInput(violations.join("; "));
   return { ...policy };

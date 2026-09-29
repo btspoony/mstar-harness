@@ -2623,17 +2623,16 @@ export async function registerIterationWorkflow(
   if (!isCloseTimestamp(startedAt)) {
     throw refuse("options.startedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
   }
-  // One registered-plan path contract (prerequisite contract §4): the snapshot
-  // persists the canonical absolute pointer the shared resolver returns, never
-  // the caller's spelling. A repository-relative `.mstar/plans/<id>.md` input
-  // therefore refuses here - before any write - instead of being stored and
-  // later reinterpreted against another base. Run AFTER the field refusals so
-  // a malformed row still reports its own domain refusal first.
-  const resolvedRows = rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    file: resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: row.id, file: row.file }).planPath,
-  }));
+  // One registered-plan path contract (prerequisite contract §4): the resolver
+  // validates the pointer BEFORE any write (a repository-relative
+  // `.mstar/plans/<id>.md` input or an escape refuses here), and the snapshot
+  // row keeps the caller's DECLARED spelling — the same rule the plan-type
+  // snapshot follows. The validation is the boundary, not a re-spelling: a
+  // stored pointer is only ever re-resolved against the same harness root.
+  const resolvedRows = rows.map((row) => {
+    resolveRegisteredPlanFile({ harnessRoot: harnessDir, planId: row.id, file: row.file });
+    return { id: row.id, title: row.title, file: row.file };
+  });
 
   const statusPath = join(harnessDir, "status.json");
   const workflowDir = join(harnessDir, "workflows", workflowId);
