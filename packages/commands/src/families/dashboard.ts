@@ -15,11 +15,11 @@ type Input = z.infer<typeof inputSchema>;
 // root/port on that connection so repeated calls reuse the same listener.
 const dashboards = new WeakMap<CommandEffects, Map<string, Promise<RunningDashboard>>>();
 
-function failure(code: string, error: unknown): CommandEnvelope<never> {
+function failure(code: string, error: unknown, status: "refused" | "error" = "refused"): CommandEnvelope<never> {
   return {
     version: 1,
     command: id,
-    status: "refused",
+    status,
     code,
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
@@ -32,7 +32,7 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
     services = new Map();
     dashboards.set(context.effects, services);
   }
-  const key = JSON.stringify([harnessDir, port]);
+  const key = JSON.stringify([harnessDir, port, projectId ?? null]);
   const existing = services.get(key);
   if (existing !== undefined) return existing;
 
@@ -47,8 +47,11 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
   services.set(key, starting);
   return starting;
 }
-
 async function execute(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
+  if (context.signal.aborted) {
+    return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+  }
+
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -74,15 +77,18 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       : "dashboard.start-failed";
     return failure(code, error);
   }
+  if (context.signal.aborted) {
+    return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+  }
 
   if (parsed.data.open === true) {
     try {
       await context.effects.openBrowser(server.url);
     } catch (error) {
       const services = dashboards.get(context.effects);
-      services?.delete(JSON.stringify([harnessDir, parsed.data.port]));
+      services?.delete(JSON.stringify([harnessDir, parsed.data.port, parsed.data.project ?? null]));
       await server.close();
-      return failure("capability.browser.unavailable", error);
+      return failure("capability.browser.unavailable", error, "error");
     }
   }
 
@@ -111,7 +117,7 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
     },
     input: inputSchema,
     output: commandEnvelopeSchema,
-    effects: ["service", "browser"],
+    effects: ["service"],
     description: "Start the read-only Morning Star dashboard on 127.0.0.1",
     execute,
   }];

@@ -58,20 +58,24 @@ type ReportInputTooLarge = {
   code: "report.input-too-large";
   exitCode: number;
   message: string;
-  details: { field: string; limit: number };
+  details: { field: string; fields: string[]; limits: { field: string; limit: number }[]; limit: number };
 };
 
-function failure(field: string, limit: number): ReportInputTooLarge {
+function failure(issues: { field: string; limit: number }[]): ReportInputTooLarge {
+  const fields = issues.map(({ field }) => field);
+  const field = fields.length === 1 ? fields[0]! : "multiple";
+  const limit = issues[0]!.limit;
   return {
     version: 1,
     command: "report",
     status: "refused",
     code: "report.input-too-large",
     exitCode: 1,
-    message: `input field ${field} exceeds ${limit} UTF-8 bytes`,
-    details: { field, limit },
+    message: `input fields ${issues.map(({ field, limit }) => `${field} (${limit} bytes)`).join(", ")} exceed their UTF-8 byte limits`,
+    details: { field, fields, limits: issues, limit },
   };
 }
+ 
 
 function redact(field: string, value: string): { value: string; count: number } {
   const result = redactSecrets(value);
@@ -95,19 +99,20 @@ function maxBacktickRun(values: Iterable<string>): number {
 
 export function createReport(input: ReportInput, versions: SurfaceVersions): ReportData {
   const fields = suppliedTextFields(input);
+  const oversizedFields: { field: string; limit: number }[] = [];
   for (const [field, value] of fields) {
     const bytes = field === "arguments" && Array.isArray(input.arguments)
       ? input.arguments.reduce((total, argument) => total + Buffer.byteLength(argument, "utf8"), 0)
       : Buffer.byteLength(value, "utf8");
-    if (bytes > FIELD_LIMIT) throw failure(field, FIELD_LIMIT);
+    if (bytes > FIELD_LIMIT) oversizedFields.push({ field, limit: FIELD_LIMIT });
   }
   const totalBytes = fields.reduce((total, [field, value]) => total + (
     field === "arguments" && Array.isArray(input.arguments)
       ? input.arguments.reduce((argumentTotal, argument) => argumentTotal + Buffer.byteLength(argument, "utf8"), 0)
       : Buffer.byteLength(value, "utf8")
   ), 0);
-  if (totalBytes > TOTAL_LIMIT) throw failure("total", TOTAL_LIMIT);
-
+  if (totalBytes > TOTAL_LIMIT) oversizedFields.push({ field: "total", limit: TOTAL_LIMIT });
+  if (oversizedFields.length > 0) throw failure(oversizedFields);
   const redactions: { field: string; count: number }[] = [];
   const sanitized = new Map<string, string>();
   for (const [field, value] of fields) {
