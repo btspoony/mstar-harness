@@ -409,10 +409,33 @@ export type PlanCoordinationOperation =
   | { kind: "repair-delivery-source"; handoffId: string }
   | { kind: "reconcile"; handoffId: string };
 
-/** One whole coordination request: one session, one operation, one precondition. */
+/**
+ * One whole coordination request: one session, one operation, one precondition.
+ *
+ * § One resolver path (S2/E02) every field but the operation is DERIVABLE, so
+ * a public caller states what it actually holds: the bound session envelope, or
+ * the acquired identity whose own envelope the engine resolves; the addressed
+ * plan; the revision `show` reported. An explicitly supplied value is a
+ * CONSTRAINT — it is validated exactly as before, never replaced — so a fully
+ * specified caller keeps this surface's behavior byte for byte.
+ */
 export type CoordinationRequest = {
-  sessionPath: string;
-  /** Required for a coordinator session; never another plan for a plan session. */
+  /** The bound coordinator/plan session envelope (absolute); omitted → the identity's own envelope. */
+  sessionPath?: string;
+  /** Sparse intent: the process context the trusted control root is resolved from. */
+  cwd?: string;
+  /** Sparse intent: the trusted control root the caller already holds (never re-derived from Git). */
+  controlRoot?: string;
+  /**
+   * Sparse intent: the caller's independently acquired identity — a SELECTOR
+   * for the workflow/plan and for its own envelope, never authority. A role
+   * string or session reference authorizes nothing on its own.
+   */
+  identity?: ExecutionIdentity;
+  /**
+   * Required for a coordinator session; never another plan for a plan session.
+   * Omitted → the addressed plan the resolved target names.
+   */
   planId?: string;
   /**
    * The selected row's `coordination.revision` from `show` (absent row = 0).
@@ -420,8 +443,10 @@ export type CoordinationRequest = {
    * moved is reported as provenance (`recovery.warnings`) and the operation's
    * own record, read under the lock, decides whether the intent is already
    * satisfied, still applicable, or in conflict with another writer's work.
+   * Omitted → the revision the addressed row carries when this call resolves
+   * it, which is the value `show` would have handed the caller.
    */
-  expectedRevision: number;
+  expectedRevision?: number;
   operation: PlanCoordinationOperation;
 };
 
@@ -3557,6 +3582,123 @@ async function mutateResidualClose(
  * § Coordination request dispatch
  * ------------------------------------------------------------------------ */
 
+/** The file-route entry anchor plus the canonical envelope path it was read from. */
+type CoordinationAnchor = EntryAnchor & { sessionPath: string };
+
+/**
+ * § One resolver path (S2/E02) for the FILE route: the trusted control root, the
+ * addressed workflow/plan, then the caller's OWN session envelope under that
+ * root. A stated `sessionPath` is a constraint and short-circuits the whole
+ * resolution; a sparse call states its acquired `identity` instead and the
+ * engine computes the envelope's own path from it (`sessionFilePath`) — the
+ * caller never has to know the `sessions/` layout, and holding the path
+ * authorizes nothing: the strict frames below still re-authenticate the envelope
+ * against the addressed row's recorded binding.
+ *
+ * The authority veto is part of this boundary (spec §4.3/§5): the resolved root
+ * is checked before the target, the snapshot or any payload byte is read, so a
+ * retired file route refuses on its own. Nothing is guessed — an unresolvable
+ * root, target or envelope is refused with the sources tried and the facts
+ * currently true.
+ */
+function resolveCoordinationAnchor(request: CoordinationRequest): CoordinationAnchor {
+  const stated = isNonEmptyString(request?.sessionPath) ? request.sessionPath : undefined;
+  if (stated !== undefined) {
+    const anchor = entryAnchor(stated);
+    assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+    return { ...anchor, sessionPath: canonicalTarget(stated) };
+  }
+  const identity = request?.identity;
+  const rootResolution = resolveIntentRoot({
+    cwd: isNonEmptyString(request?.cwd) ? request.cwd : process.cwd(),
+    ...(isNonEmptyString(request?.controlRoot) ? { controlRoot: request.controlRoot } : {}),
+    ...(identity === undefined ? {} : { identity }),
+  });
+  if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
+  const root = rootResolution.root;
+  assertExecutionFileWriteAllowed({ harnessDir: root });
+  const resolvedFrom: ResolutionSource[] = [...rootResolution.resolvedFrom];
+  if (identity === undefined) {
+    refuseResolution(
+      {
+        component: "session",
+        path: "sessionPath",
+        code: "coordination.invalid-input",
+        sourcesTried: ["sessionPath (intent.explicit)", "identity (invocation association)"],
+        currentFacts: [
+          `${root} holds the workflow this call addresses`,
+          "no session envelope and no acquired identity were stated",
+        ],
+        needed: "the session this call runs under",
+        withheldEffect:
+          "the addressed coordination operation - no session was guessed, so no row, binding or revision was read for it",
+        availableWork: [
+          "pass the bound session envelope (sessionPath)",
+          "pass the acquired identity (identity) so the engine resolves that identity's own envelope",
+        ],
+      },
+      resolvedFrom,
+    );
+  }
+  // The identity is validated as the address it claims: its own workflow, role
+  // and plan are the scope it names, so the check proves the tuple itself is
+  // coherent before any part of it is used as a selector.
+  validateExecutionIdentity(identity, { workflowId: identity.workflowId, role: identity.role, planId: identity.planId });
+  const target = resolveIntentTarget({
+    root,
+    selection: {
+      workflowId: identity.workflowId,
+      ...(isNonEmptyString(request?.planId) ? { planId: request.planId } : identity.planId === null ? {} : { planId: identity.planId }),
+    },
+  });
+  if (!target.ok) refuseResolution(target.problem, [...resolvedFrom, ...target.resolvedFrom]);
+  resolvedFrom.push(...target.resolvedFrom);
+  const envelope = sessionFilePath(root, target.workflowId, identity.role, identity.sessionId);
+  if (!existsSync(envelope)) {
+    refuseResolution(
+      {
+        component: "session",
+        path: "sessionPath",
+        code: "coordination.session-not-found",
+        sourcesTried: [...resolvedFrom.map((entry) => `${entry.path} (${entry.source})`), `${envelope} (identity.sessionId)`],
+        currentFacts: [
+          `the acquired identity is session ${identity.sessionId} of workflow ${target.workflowId}`,
+          `${envelope} does not exist`,
+        ],
+        needed: `this identity's own bound session envelope at ${envelope}`,
+        withheldEffect:
+          "the addressed coordination operation - the envelope is the durable proof of the binding, so nothing was read or written for it",
+        availableWork: [
+          `bind this identity to workflow ${target.workflowId} and resume it`,
+          "pass the bound session envelope explicitly (sessionPath) when it lives elsewhere",
+        ],
+      },
+      resolvedFrom,
+    );
+  }
+  return { session: readSessionEnvelope(envelope), harnessRoot: root, sessionPath: canonicalTarget(envelope) };
+}
+
+/**
+ * §4.2 the revision `show` would have handed the caller: the addressed row's own
+ * `coordination.revision` (0 for a row that is not yet coordinated). It is
+ * transport freshness, so deriving it is exactly as valid as reading it — and a
+ * plan a coordinator addresses without naming one has no row to read, which
+ * stays the caller's own missing fact rather than an invented number.
+ */
+function resolveRowRevision(anchor: EntryAnchor, planId: string | undefined): number {
+  const addressed = isNonEmptyString(planId) ? planId : anchor.session.plan_id;
+  if (!isNonEmptyString(addressed)) {
+    throw invalidInput(
+      "expectedRevision is required here: this request names no plan row whose revision could be derived",
+      { workflow_id: anchor.session.workflow_id },
+    );
+  }
+  const snapshot = readSnapshot(dirname(snapshotPathOf(anchor.harnessRoot, anchor.session.workflow_id)));
+  const { row } = findPlanRow(snapshot, addressed);
+  return rowCoordinationOf(row)?.revision ?? 0;
+}
+
 /**
  * Run one coordinated mutation (spec §B/§D). Every call re-authenticates the
  * session from its envelope, re-authenticates the sealed Assignment on its
@@ -3575,17 +3717,27 @@ async function mutateResidualClose(
  * Consequence, accepted: a request that is BOTH malformed and
  * active-forbidden now reports the authority refusal instead of the payload
  * error.
+ *
+ * § One resolver path (S2/E02) the same boundary accepts the SPARSE intent: a
+ * caller that states no `sessionPath` and no `expectedRevision` has both
+ * resolved here — its own envelope through the trusted root and addressed
+ * target, the revision from the row it addresses — before the request shape,
+ * the scope and the strict frames below. An explicitly supplied value is passed
+ * through untouched, so a fully specified call is byte-for-byte unchanged.
  */
 export async function mutatePlanCoordination(request: CoordinationRequest): Promise<CoordinationResult> {
-  const anchor = entryAnchor(request?.sessionPath);
-  assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
+  const anchor = resolveCoordinationAnchor(request);
   const session = anchor.session;
-  assertExactKeys(request, ["sessionPath", "planId", "expectedRevision", "operation"], "coordination request");
+  assertExactKeys(
+    request,
+    ["sessionPath", "cwd", "controlRoot", "identity", "planId", "expectedRevision", "operation"],
+    "coordination request",
+  );
   if (request.planId !== undefined && !isNonEmptyString(request.planId)) {
     throw invalidInput("planId must be a non-empty string");
   }
-  assertExpectedRevision(request.expectedRevision);
-  const expectedRevision = request.expectedRevision;
+  if (request.expectedRevision !== undefined) assertExpectedRevision(request.expectedRevision);
+  const expectedRevision = request.expectedRevision ?? resolveRowRevision(anchor, request.planId);
   const operation = request.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw invalidInput("a coordination request requires an operation with a kind");
@@ -3602,7 +3754,7 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
   const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
   assertOperationRole(seat, kind);
   assertPlanAddress(seat, request.planId);
-  const sessionAbs = canonicalTarget(request.sessionPath);
+  const sessionAbs = anchor.sessionPath;
 
   switch (operation.kind) {
     case "prepare": {
@@ -6109,6 +6261,23 @@ async function mutateReconcile(
  * here holds a lock across the steps or calls another public operation from
  * inside a lock, so a retry converges instead of meeting this module's own
  * non-reentrant write locks.
+ *
+ * §R5/§R10 (QC2-F-002) WHO must present the coordinator envelope is the
+ * snapshot's own state, exactly as in the prior single-snapshot `closeWorkflow`
+ * this verb composes:
+ *
+ * - a COORDINATED snapshot (one that records a coordinator binding) is closed
+ *   only by that bound session: its owed rows are completed through
+ *   `commitCloseRow` under the presented envelope, and a bare CLI call refuses
+ *   `coordination.session-mismatch` instead of completing a lifecycle it does
+ *   not own.
+ * - an UNcoordinated snapshot with NO owed row is written straight through by
+ *   `closeWorkflow`, whose `assertCoordinatedSnapshotWriter` early-returns when
+ *   the document carries no `coordination` block — so a bare CLI close of an
+ *   uncoordinated lifecycle keeps exactly the behavior it always had. The
+ *   refusal above is about the owed-row COMPOSITION (which needs a session to
+ *   attribute the completion to), never a blanket requirement that every close
+ *   present an envelope.
  */
 export type FileWorkflowCloseInput = Readonly<{
   /** The control harness root holding `status.json` and the workflow directory. */
@@ -6917,9 +7086,14 @@ export type PrepareWorkflowPatch = Readonly<{
 /** What a coordinator observes about one workflow before amending it. */
 export type PrepareWorkflowView = Readonly<{
   workflowId: string;
-  /** `sha256:<64 hex>` of the snapshot bytes (the amendment CAS token). */
+  /**
+   * `sha256:<64 hex>` of the snapshot bytes this read observed: the comparison
+   * basis the next amendment passes back. It is provenance, not a gate — a
+   * snapshot an unrelated writer moved in between is reported as
+   * `coordination.token-drifted` beside the amendment's own component verdicts.
+   */
   snapshotVersion: string;
-  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (CAS token). */
+  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (the same comparison basis). */
   compassVersion: string;
   /** Plan ids in row order — including this call's own appends on success. */
   planIds: readonly string[];
@@ -9085,11 +9259,21 @@ export async function showPrepareWorkflow(
 
 /**
  * Apply one approved Prepare structural amendment (spec § Admission and
- * mutation). The CAS read, both version comparisons, the admission, the whole
- * patch resolution, the compass recheck and the single atomic write all run
- * under the canonical snapshot write lock, so two callers presenting the same
- * tokens cannot both succeed: the loser inspects the winner's bytes and
- * refuses as `stale`.
+ * mutation). The CAS read, the patch resolution, the compass recheck and the
+ * single atomic write all run under the canonical snapshot write lock, and every
+ * component is decided against the bytes read INSIDE it.
+ *
+ * §4.1/A06/A29 the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
+ * are an OBSERVED COMPARISON BASIS for a field-level patch, not a
+ * whole-document gate: an unrelated sibling row edit or a compass prose change
+ * that happened after the caller read them is reported as provenance drift
+ * (`recovery.warnings`) and does NOT withhold an independent correction, while
+ * a change to a component's own read set — the addressed row's pointer, the
+ * plan document it reads, the reviewed compass's approval of the ids it
+ * addresses, the addressed row's execution state — still refuses through that
+ * component's own reader with its own typed problem. Raw whole-document
+ * replacement keeps its byte CAS; that is `replaceCoordinatedArtifact`, a
+ * different verb.
  *
  * §4.1/E08 the patch is partitioned into independent components: the components
  * that carry no conflict land in this one locked write, while a conflicting
@@ -9099,8 +9283,8 @@ export async function showPrepareWorkflow(
  * landed (`details.recovery.commitState === "partial"`); a patch whose
  * components ALL already hold their effect is the current success (§4.2/A09/
  * A12) and writes nothing at all. Every refusal that withholds the WHOLE patch
- * (shape, admission, tokens) still leaves the protected snapshot, root
- * register, other workflows and the compass byte-identical.
+ * (shape, admission) still leaves the protected snapshot, root register, other
+ * workflows and the compass byte-identical.
  *
  * A lock that cannot be acquired refuses explicitly (the shared
  * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
@@ -9144,22 +9328,36 @@ export async function amendPrepareWorkflow(
     // every component.
     const main = readMainWorktree(cwd);
     if (main !== null) assertCoordinatorCheckoutResidency(main, cwd, snapshot);
-    // Both byte versions are compared against the bytes inspected inside this
-    // locked section (spec § Admission and mutation step 3).
+    // §4.1/A06/A10/A29 the caller's byte tokens are an OBSERVED COMPARISON BASIS,
+    // not a whole-document gate: this amendment is FIELD-LEVEL (the addressed
+    // row's pointer, the plan document it reads, the compass approval of the ids
+    // it addresses), and every component re-checks exactly those facts against
+    // the bytes read under this lock. Unrelated drift — a sibling row edit, a
+    // compass prose or ordering change — therefore lands the addressed
+    // correction and is reported as provenance below, while a change to the read
+    // set a component actually consumes still refuses through that component's
+    // own reader (pointer drift, duplicate row, compass mismatch), never
+    // silently. Raw whole-document replacement keeps its byte CAS: it is a
+    // different verb (`replaceCoordinatedArtifact`).
+    const drift: ResolutionWarning[] = [];
     if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `snapshot ${scope.snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: scope.snapshotPath, expected: expectedSnapshotVersion, actual: version },
-      );
+      drift.push({
+        code: "coordination.token-drifted",
+        path: scope.snapshotPath,
+        message:
+          `snapshot ${scope.snapshotPath} is at ${version} while this call expected ${expectedSnapshotVersion}: the caller's bytes are a ` +
+          "comparison basis, so this amendment is decided against the rows and documents it reads under the lock",
+      });
     }
     const compass = readPrepareCompass(scope.harnessRoot, snapshot);
     if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
-      throw prepareAmendmentRefusal(
-        "stale",
-        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read \`workflow show-prepare\` and review again`,
-        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
-      );
+      drift.push({
+        code: "coordination.token-drifted",
+        path: compass.path,
+        message:
+          `compass ${compass.path} is at ${compass.version} while this call expected ${expectedCompassVersion}: the caller's bytes are a ` +
+          "comparison basis, so this amendment is decided against the compass it reads under the lock",
+      });
     }
     const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
@@ -9189,6 +9387,7 @@ export async function amendPrepareWorkflow(
       unresolved: plan.unresolved.map((entry) => entry.recovery),
       resolvedFrom: [{ path: "patch", source: "intent.request" }, ...proposal.resolvedFrom],
       warnings: [
+        ...drift,
         ...proposal.warnings,
         ...plan.held.map((component) => ({
           code: "coordination.prepare-amendment.held",

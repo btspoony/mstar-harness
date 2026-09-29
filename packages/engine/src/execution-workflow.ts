@@ -77,6 +77,7 @@ import {
   isNonEmptyString,
   isPlainObject,
   sha256Bytes,
+  type CoordinationErrorCode,
 } from "./coordination-write.js";
 import {
   PLAN_PARALLELISM_VALUES,
@@ -93,8 +94,10 @@ import {
   readEntailedCompletions,
   releaseStoppedExecutionLeases,
   releaseStoppedMergeClaim,
+  resolveSparseOwnSession,
   type DeliveryRoutePin,
   type EntailedRowCompletion,
+  type ExecutionMutationIntent,
 } from "./execution-coordination.js";
 import {
   ExecutionError,
@@ -144,6 +147,7 @@ import {
   type PhaseGateOptions,
 } from "./iteration.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import { readExecutionAuthority } from "./execution-read.js";
 import {
   WORKFLOW_OPERATION_SEMANTICS,
   selectSemanticFields,
@@ -193,6 +197,16 @@ export type WorkflowExecutionOperation =
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
   ExecutionMutation & { workflowId: string; operation: Operation };
+
+/**
+ * §3 one DB workflow-operation INTENT: the same request with the facts the
+ * engine can derive left out (§ One resolver path, S2/E02). `operationId` and
+ * the operation are always the caller's own intent; the coordinator session,
+ * the workflow token and the addressed workflow id are optional, and an
+ * explicitly supplied value is a CONSTRAINT rather than a prerequisite.
+ */
+export type ExecutionWorkflowIntent<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
+  ExecutionMutationIntent & { workflowId?: string; operation: Operation };
 
 /** §3 one resolved workflow operation: the validated envelope plus the authorized address. */
 type ResolvedWorkflowOperation<Operation extends WorkflowExecutionOperation> = {
@@ -993,10 +1007,75 @@ function amendmentComponentOf(operation: WorkflowExecutionOperation): string | u
 }
 
 /**
+ * § One resolver path: no workflow was stated and the trusted caller's own
+ * identity names none. The refusal is the caller's question — the one
+ * selection that would release the addressed transition — in the frozen
+ * problem shape, never a guess at the only or most recent workflow.
+ */
+function unresolvedWorkflowAddress(caller: ExecutionCaller): CoordinationError {
+  const bound =
+    caller?.role === "coordinator" || caller?.role === "plan-pm"
+      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)}`
+      : "the trusted caller carries no usable session identity";
+  const code: CoordinationErrorCode = "coordination.invalid-input";
+  const problem: RecoveryProblem = {
+    component: "target",
+    path: "workflowId",
+    code,
+    sourcesTried: ["workflowId (intent.explicit)", "the trusted caller identity (association)"],
+    currentFacts: [bound, "no workflow id was stated by this transition intent"],
+    needed: "which workflow this transition addresses",
+    withheldEffect:
+      "the addressed workflow transition - no target was guessed, so no workflow row, session or CAS token was read for it",
+    availableWork: ["address the workflow explicitly (workflowId)", "coordinate the lifecycle this transition belongs to"],
+  };
+  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
+  });
+}
+
+/**
+ * § One resolver path (S2/E02) for the workflow route: the addressed workflow
+ * (the explicit id, else the trusted coordinator's OWN workflow), the current
+ * authority route that selects the DB, the caller's OWN live coordinator
+ * binding reconstructed from its durable session row (E03/R8/A09) and the
+ * workflow token the authority read returned. An explicitly supplied value is
+ * passed through untouched, so a fully specified call keeps the strict frame's
+ * exact behavior; a caller that omits all three still resolves to the same
+ * strict request shape, and its resolved inputs stay strict.
+ */
+async function resolveWorkflowIntent<Operation extends WorkflowExecutionOperation>(
+  context: ExecutionContext,
+  request: ExecutionWorkflowIntent<Operation>,
+): Promise<WorkflowOperationRequest<Operation>> {
+  const workflowId = isNonEmptyString(request.workflowId) ? request.workflowId : context.caller?.workflowId;
+  if (!isNonEmptyString(workflowId)) throw unresolvedWorkflowAddress(context.caller);
+  if (request.session !== undefined && request.expected !== undefined) {
+    return { operationId: request.operationId, session: request.session, expected: request.expected, workflowId, operation: request.operation };
+  }
+  const session = request.session ?? (await resolveSparseOwnSession(context, "a workflow transition"));
+  const expected = request.expected ?? (await readExecutionAuthority(context, { workflowId })).token;
+  return { operationId: request.operationId, session, expected, workflowId, operation: request.operation };
+}
+
+/**
  * §3 the workflow-level transition surface of the DB authority: one coordinator
  * call carrying the §3.1 mutation envelope (operation id, coordinator session
  * reference, workflow token) and the operation itself, whose member of the closed
  * union selects the transition.
+ *
+ * § One resolver path (S2/E02) the entry point accepts the SPARSE intent: the
+ * coordinator session reference, the workflow token and even the addressed
+ * workflow id may be omitted and are resolved here before the strict frame
+ * below — the caller states only the intent it owns. A `workflowId` the token
+ * cannot be derived for (a terminal or unregistered lifecycle, whose history
+ * the ACTIVE read does not serve) is refused instead of invented: present the
+ * token the recorded operation returned.
  *
  * The frame is the plan frame's sibling and enforces the same rules: an active
  * authority, the caller's own live coordinator binding, the authority generation
@@ -1020,9 +1099,10 @@ function amendmentComponentOf(operation: WorkflowExecutionOperation): string | u
  */
 export async function mutateExecutionWorkflow(
   context: ExecutionContext,
-  request: ExecutionMutation & { workflowId: string; operation: WorkflowExecutionOperation },
+  request: ExecutionWorkflowIntent,
 ): Promise<ExecutionReceipt<ExecutionState>> {
-  const resolved = resolveWorkflowOperationRequest(context.caller, request);
+  const strictRequest = await resolveWorkflowIntent(context, request);
+  const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
   const workflowId = resolved.read.workflowId;
   let evidence: WorkflowEvidence;

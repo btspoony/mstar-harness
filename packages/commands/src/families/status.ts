@@ -124,6 +124,22 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         }
       },
     }),
+    /**
+     * §R5/§R10 one lifecycle close, routed by the CURRENT authority (§5) — never
+     * by a flag: the ACTIVE DB route takes its CAS envelope (`--session-ref`,
+     * `--expect`, `--operation` and `--reason`), and the supported
+     * pre-activation file route takes `--ended-at` with an optional `--session`
+     * envelope.
+     *
+     * The file branch calls the engine's own `closeWorkflow`, so its WHO rule is
+     * unchanged: a COORDINATED snapshot (one recording a coordinator binding)
+     * is closed only by that bound envelope, while an UNcoordinated one is
+     * written without one — a bare CLI close of an uncoordinated lifecycle is
+     * permitted here exactly as it always was (QC2-F-002). The composed
+     * owed-row close that genuinely needs an envelope to attribute each
+     * completion to is the engine's `closeFileWorkflow`, whose own JSDoc states
+     * that rule; this branch does not compose it.
+     */
     command({
       id: "status.workflow-close",
       cli: { path: ["status", "workflow-close"], aliases: [], arguments: [], options: [

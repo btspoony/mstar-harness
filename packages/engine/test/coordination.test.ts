@@ -1118,6 +1118,76 @@ describe("scope-and-revisions", () => {
     });
   });
 
+  test("a sparse intent omitting the session envelope and the revision reaches the same result (A02)", async () => {
+    // § One resolver path (S2/E02): a caller that states neither `sessionPath`
+    // nor `expectedRevision` names only its acquired identity, the plan it
+    // addresses and the operation. The engine resolves the trusted root, the
+    // addressed target and that identity's OWN envelope, and derives the
+    // revision from the row — reaching exactly the result the fully specified
+    // form reaches, with no invented revision and therefore no drift warning.
+    const specified = makeFixture();
+    await preparePlan(specified, PLAN_ID);
+    await bindPlan(specified, PLAN_ID);
+    const specifiedEvidence = join(specified.sddDir, "evidence.txt");
+    writeText(specifiedEvidence, "proof\n");
+    const specifiedView = await readPlanCoordination(specified.planSession, PLAN_ID, specified.root);
+    const specifiedResult = await mutatePlanCoordination({
+      sessionPath: specified.planSession,
+      planId: PLAN_ID,
+      expectedRevision: specifiedView.revision,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [specifiedEvidence] } },
+    });
+
+    const sparse = makeFixture();
+    await preparePlan(sparse, PLAN_ID);
+    await bindPlan(sparse, PLAN_ID);
+    const sparseEvidence = join(sparse.sddDir, "evidence.txt");
+    writeText(sparseEvidence, "proof\n");
+    const envelope = readSessionEnvelope(sparse.planSession);
+    const sparseResult = await mutatePlanCoordination({
+      cwd: sparse.root,
+      identity: {
+        source: "local",
+        sessionId: envelope.session_id,
+        workflowId: envelope.workflow_id,
+        role: "plan-pm",
+        planId: PLAN_ID,
+      },
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [sparseEvidence] } },
+    });
+
+    expect(sparseResult.session_file).toBe(sparse.planSession);
+    expect(sparseResult.outcome).toBe(specifiedResult.outcome);
+    expect(sparseResult.recovery?.outcome).toBe(specifiedResult.recovery?.outcome);
+    expect(sparseResult.recovery?.warnings).toEqual([]);
+    expect(sparseResult.view?.revision).toBe(specifiedResult.view?.revision);
+    expect(sparseResult.view?.row.status).toBe("InProgress");
+
+    // The association is what the engine resolves the session from: with no
+    // envelope AND no identity there is nothing to authenticate, so the call
+    // refuses with that problem instead of selecting a bound session.
+    const unassociated = makeFixture();
+    await preparePlan(unassociated, PLAN_ID);
+    await bindPlan(unassociated, PLAN_ID);
+    const before = readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root);
+    const unassociatedFailure = await failureOf(() =>
+      mutatePlanCoordination({
+        cwd: unassociated.root,
+        planId: PLAN_ID,
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [] } },
+      }),
+    );
+
+    // Narrow once, for the assertions below: `failureOf` hands back the thrown value.
+    const refusal = unassociatedFailure as CoordinationError;
+    expect(refusal).toBeInstanceOf(CoordinationError);
+    expect(refusal.code).toBe("coordination.invalid-input");
+    const recovery = refusal.details.recovery as RecoveryDetails;
+    expect(recovery.unresolved[0]?.needed).toBe("the session this call runs under");
+    expect(readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root).revision).toBe(before.revision);
+  });
+
   test("progress is admission-checked: evidence-scoped and transition-guarded", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
@@ -3526,50 +3596,101 @@ describe("Prepare workflow amendment", () => {
     }
   });
 
-  test("two amendments presenting the same tokens race under the lock: exactly one commits, the loser is stale", async () => {
+  test("two amendments presenting the same tokens race under the lock: one applies, the other recognizes the current effect", async () => {
+    // §4.2/A09/A12 the tokens are an observed comparison basis, never a
+    // mutual-exclusion token: the write lock serializes the two writers, so the
+    // second one reads the winner's bytes, recognizes an effect that is already
+    // current, and spends no second mutation — neither call is refused and the
+    // delta lands exactly once.
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
     const view = await prepareViewOf(fixture);
     const patch = preparePatchOf(fixture, { planParallelism: "parallel" });
     const tokens = { snapshotVersion: view.view.snapshotVersion, compassVersion: view.view.compassVersion };
 
-    const results = await Promise.allSettled([
-      amendWith(fixture, patch, tokens),
-      amendWith(fixture, patch, tokens),
-    ]);
+    const results = await Promise.all([amendWith(fixture, patch, tokens), amendWith(fixture, patch, tokens)]);
 
-    const fulfilled = results.filter((entry) => entry.status === "fulfilled");
-    const rejected = results.filter((entry): entry is PromiseRejectedResult => entry.status === "rejected");
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect((rejected[0]!.reason as CoordinationError).code).toBe("coordination.prepare-amendment.stale");
-
-    // Exactly one delta landed: the rows are the winner's, and the snapshot on
-    // disk is the version the winner returned.
-    const winner = fulfilled[0] as PromiseFulfilledResult<PrepareWorkflowResult>;
+    expect(results.map((entry) => entry.outcome).sort()).toEqual(["already-satisfied", "amended"]);
+    const settled = results.find((entry) => entry.outcome === "already-satisfied")!;
+    expect(settled.recovery?.applied).toEqual([]);
+    expect(settled.recovery?.commitState).toBe("none");
+    // Exactly one delta landed: one appended row, and the snapshot on disk is
+    // the version the applying call returned.
+    const applied = results.find((entry) => entry.outcome === "amended")!;
     expect(prepareSnapshotOf(fixture).plans.map((row) => row.id)).toEqual([PREPARE_ROW, PREPARE_APPEND]);
-    expect(winner.value.view.snapshotVersion).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
+    expect(applied.view.snapshotVersion).toBe(`sha256:${sha256OfFile(fixture.snapshotPath)}`);
   });
 
-  test("a stale snapshot or compass token refuses as stale and leaves every protected byte untouched", async () => {
-    for (const staleToken of ["snapshot", "compass"] as const) {
-      const fixture = makePrepareFixture();
-      await ensurePrepareCoordinator(fixture);
-      const view = await prepareViewOf(fixture);
-      const before = protectedBytes(fixture);
-      const stale = `sha256:${"0".repeat(64)}`;
+  test("unrelated drift after the caller's read lands the correction with provenance; a semantic change still refuses", async () => {
+    // §4.1/A06/A29 the observed byte versions are the comparison basis of a
+    // FIELD-LEVEL patch, not a whole-document gate. An unrelated sibling row
+    // edit and a reviewed-compass prose change that happened after
+    // `show-prepare` reach this call as provenance warnings, while a change to
+    // a fact the addressed component actually consumes still refuses.
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const view = await prepareViewOf(fixture);
+    const tokens = { snapshotVersion: view.view.snapshotVersion, compassVersion: view.view.compassVersion };
 
-      const refusal = await prepareRefusalOf(() =>
-        amendWith(fixture, preparePatchOf(fixture), {
-          snapshotVersion: staleToken === "snapshot" ? stale : view.view.snapshotVersion,
-          compassVersion: staleToken === "compass" ? stale : view.view.compassVersion,
+    // (a) Unrelated drift: a sibling row this correction does not address, and
+    // compass prose it does not read.
+    const drifted = prepareSnapshotOf(fixture);
+    drifted.plans.push(planRow(PREPARE_UNREVIEWED, PROJECT_ID));
+    writeJson(fixture.snapshotPath, drifted);
+    writeText(
+      fixture.compassPath,
+      [readFileSync(fixture.compassPath, "utf8"), "Reviewed prose added after the caller's read.", ""].join("\n"),
+    );
+
+    const landed = await amendWith(
+      fixture,
+      preparePatchOf(fixture, {
+        appendPlans: [],
+        correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }],
+      }),
+      tokens,
+    );
+
+    expect(landed.outcome).toBe("amended");
+    expect(landed.recovery?.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
+    expect(landed.recovery?.commitState).toBe("committed");
+    const drift = (landed.recovery?.warnings ?? []).filter((entry) => entry.code === "coordination.token-drifted");
+    expect(drift.map((entry) => basename(String(entry.path)))).toEqual(["snapshot.json", "delivery-compass.md"]);
+    // The drift withheld nothing: the addressed pointer moved, and the sibling
+    // row the caller never addressed survived by value.
+    const corrected = prepareSnapshotOf(fixture).plans;
+    expect(corrected.map((row) => row.id)).toEqual([PREPARE_ROW, PREPARE_UNREVIEWED]);
+    expect(corrected[0]!.file).toBe(join(fixture.planDir, `${PREPARE_ROW}.md`));
+
+    // (b) A semantic change to the addressed component's own read set — the
+    // pointer this correction was reviewed against — still refuses, and writes
+    // nothing at all.
+    const semantic = makePrepareFixture();
+    await ensurePrepareCoordinator(semantic);
+    const semanticView = await prepareViewOf(semantic);
+    const moved = prepareSnapshotOf(semantic);
+    moved.plans[0]!.file = `.mstar/plans/${PREPARE_UNREVIEWED}.md`;
+    writeJson(semantic.snapshotPath, moved);
+    const before = protectedBytes(semantic);
+
+    const refusal = await prepareRefusalOf(() =>
+      amendWith(
+        semantic,
+        preparePatchOf(semantic, {
+          appendPlans: [],
+          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(semantic.planDir, `${PREPARE_ROW}.md`) }],
         }),
-      );
+        { snapshotVersion: semanticView.view.snapshotVersion, compassVersion: semanticView.view.compassVersion },
+      ),
+    );
 
-      expect(refusal.code).toBe("coordination.prepare-amendment.stale");
-      expect(refusal.details.expected).toBe(stale);
-      expect(protectedBytes(fixture)).toEqual(before);
-    }
+    expect(refusal.code).toBe("coordination.prepare-amendment.invalid-plan");
+    expect(refusal.details).toMatchObject({
+      plan_id: PREPARE_ROW,
+      expected: `.mstar/plans/${PREPARE_ROW}.md`,
+      actual: `.mstar/plans/${PREPARE_UNREVIEWED}.md`,
+    });
+    expect(protectedBytes(semantic)).toEqual(before);
   });
 
   test("a plan-pm, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
@@ -4737,24 +4858,31 @@ describe("Prepare workflow amendment", () => {
     expect(duplicateRecovery.commitState).toBe("none");
     expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
 
-    // A stale byte token refuses before any pointer moves.
-    const stale = makePrepareFixture();
-    await ensurePrepareCoordinator(stale);
-    const staleView = await prepareViewOf(stale);
-    const staleBefore = protectedBytes(stale);
-    const staleRefusal = await prepareRefusalOf(() =>
-      amendWith(
-        stale,
-        preparePatchOf(stale, {
-          correctPlanFiles: [
-            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(stale.planDir, `${PREPARE_ROW}.md`) },
-          ],
-        }),
-        { snapshotVersion: `sha256:${"0".repeat(64)}`, compassVersion: staleView.view.compassVersion },
-      ),
+    // A drifted byte token is the OBSERVED COMPARISON BASIS of this field-level
+    // patch, not a gate (§4.1/A29): the same correction lands against the bytes
+    // this call reads under the lock, and the drift is reported instead of
+    // withholding it. (The unrelated-sibling and compass-prose cases, and the
+    // semantic change that still refuses, are covered by "unrelated drift after
+    // the caller's read lands the correction with provenance…".)
+    const drifted = makePrepareFixture();
+    await ensurePrepareCoordinator(drifted);
+    const driftedView = await prepareViewOf(drifted);
+    const driftedLanded = await amendWith(
+      drifted,
+      preparePatchOf(drifted, {
+        appendPlans: [],
+        correctPlanFiles: [
+          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(drifted.planDir, `${PREPARE_ROW}.md`) },
+        ],
+      }),
+      { snapshotVersion: `sha256:${"0".repeat(64)}`, compassVersion: driftedView.view.compassVersion },
     );
-    expect(staleRefusal.code).toBe("coordination.prepare-amendment.stale");
-    expect(protectedBytes(stale)).toEqual(staleBefore);
+    expect(driftedLanded.outcome).toBe("amended");
+    expect(driftedLanded.recovery?.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
+    expect(
+      (driftedLanded.recovery?.warnings ?? []).filter((entry) => entry.code === "coordination.token-drifted").map((entry) => entry.path),
+    ).toEqual([drifted.snapshotPath]);
+    expect(prepareSnapshotOf(drifted).plans[0]!.file).toBe(join(drifted.planDir, `${PREPARE_ROW}.md`));
 
     // A prepared/sealed ADDRESSED row is never repointed: the row this
     // correction names carries execution evidence of its own, so the correction

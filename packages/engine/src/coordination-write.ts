@@ -14,6 +14,12 @@
  *    target and the operation, never a caller-supplied boolean.
  *    `FsStore.put/delete` reject everything else with
  *    `coordination.direct-write-refused`.
+ *    The ONE writer of a coordinated snapshot is the snapshot CAS writer
+ *    (`workflow.ts#writeWorkflowSnapshot`): its field-scoped deltas
+ *    (`mergePhaseProjection` — `phase` + `updated_at` only) and its
+ *    lease-removal terminal close (`settleStoppedFileClaims`) both land the
+ *    whole payload against the stored byte version, so the field-scoped guard
+ *    is a property of that writer rather than a rule a second writer can skip.
  * 3. The stored coordination shapes and their strict validators, shared by
  *    `workflow.ts` (which refuses to persist a malformed coordination
  *    block) and `coordination.ts` (which builds them). `workflow.ts` cannot

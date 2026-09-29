@@ -28,6 +28,7 @@ import {
   sha256Bytes,
   validatePlanProgress,
   validatePreparedCoordination,
+  type CoordinationErrorCode,
   type PreparedCoordination,
 } from "./coordination-write.js";
 import {
@@ -144,6 +145,8 @@ import {
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
+import { resumeExecutionSession } from "./execution-session.js";
+import { resolveCurrentAuthority } from "./store-read.js";
 import {
   PLAN_OPERATION_SEMANTICS,
   selectSemanticFields,
@@ -189,15 +192,146 @@ const LEGACY_ONLY_OPERATIONS: Record<string, true> = { "repair-delivery-source":
  * plan it addresses with the token it read, and the operation itself. The
  * caller identity is NOT part of this request — it comes from
  * `ExecutionContext.caller`, so a role named here authorizes nothing.
+ *
+ * § One resolver path an explicit supplied value is a CONSTRAINT, never a
+ * prerequisite: `session`, `expected` and `planId` may be omitted, and the
+ * frame resolves each from the current authority, the trusted caller's own
+ * binding and the record it reads. A call that states all three resolves to
+ * exactly the request it already was.
  */
 export type ExecutionPlanCall = {
-  session: ExecutionSessionRef;
+  session?: ExecutionSessionRef;
   /** The addressed plan's `exec-v1` token from the current read (the CAS). */
-  expected: ExecutionToken;
-  /** The plan this operation transitions. */
-  planId: string;
+  expected?: ExecutionToken;
+  /** The plan this operation transitions; omitted for a plan-pm caller, whose own binding names it. */
+  planId?: string;
   operation: CoordinationOperation;
 };
+
+/**
+ * §3 the sparse envelope a PUBLISHED DB mutation accepts: the operation id that
+ * makes an identical retry a replay, and the two addressing facts the engine
+ * can derive (`session`, `expected`). It is the `ExecutionMutation` shape with
+ * its derivable half optional — a fully specified call is still a valid intent.
+ */
+export type ExecutionMutationIntent = {
+  operationId: string;
+  session?: ExecutionSessionRef;
+  expected?: ExecutionToken;
+};
+
+/** §3 one DB plan-operation intent: the sparse envelope plus the plan it addresses. */
+export type ExecutionPlanIntent<Operation extends CoordinationOperation = CoordinationOperation> = ExecutionMutationIntent & {
+  planId?: string;
+  operation: Operation;
+};
+
+/**
+ * § One resolver path: the plan one DB intent addresses — the explicit
+ * selection, else the plan the trusted plan-pm caller's own identity is bound
+ * to. Neither is a guess (a coordinator states the plan it addresses), so when
+ * both are absent the caller gets its own question instead of "the only plan"
+ * or "the most recent row".
+ */
+function resolvePlanAddress(caller: ExecutionCaller, stated: string | undefined, kind: string): string {
+  if (isNonEmptyString(stated)) return stated;
+  if (caller?.role === "plan-pm" && isNonEmptyString(caller.planId)) return caller.planId;
+  throw unresolvedPlanAddress(caller, kind);
+}
+
+/**
+ * § One resolver path: no plan was stated and the trusted caller's own identity
+ * names none. The refusal is the caller's question — the one selection that
+ * would release the addressed effect — in the frozen problem shape, never a
+ * guess at "the only plan" or "the most recent row".
+ */
+function unresolvedPlanAddress(caller: ExecutionCaller, kind: string): CoordinationError {
+  const bound =
+    caller?.role === "plan-pm" || caller?.role === "coordinator"
+      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)}`
+      : "the trusted caller carries no usable session identity";
+  const code: CoordinationErrorCode = "coordination.invalid-input";
+  const problem: RecoveryProblem = {
+    component: "target",
+    path: "planId",
+    code,
+    sourcesTried: ["planId (intent.explicit)", "the trusted caller identity (association)"],
+    currentFacts: [bound, `no plan id was stated by this ${kind} intent`],
+    needed: `which plan this ${kind} addresses`,
+    withheldEffect:
+      "the addressed plan operation - no target was guessed, so no plan row, session or CAS token was read for it",
+    availableWork: [
+      "address the plan explicitly (planId)",
+      ...(caller?.role === "coordinator" ? ["run the operation under the addressed plan's own plan-pm session"] : []),
+    ],
+  };
+  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
+  });
+}
+
+/**
+ * § One resolver path (S2/E02): the CURRENT authority of a sparse DB intent.
+ * The route is what selects the authority — a flag never does — and a control
+ * root whose authority is not the ACTIVE execution store has nothing to
+ * resolve a session or a CAS token from, so a sparse intent refuses here
+ * instead of falling back to the file route or to an invented binding.
+ *
+ * Module-scoped: `resolveSparseOwnSession` below is the exported half both DB
+ * entrypoints share, so no consumer can perform the route read without the
+ * own-binding read it exists for.
+ */
+async function assertSparseExecutionAuthority(context: ExecutionContext, what: string): Promise<void> {
+  const authority = await resolveCurrentAuthority(context);
+  if (authority.route === "execution") return;
+  throw new ExecutionError(
+    "execution.not-active",
+    `the control root ${context.harnessDir} answers on the ${authority.route} route, so it holds no ACTIVE execution authority for ${what} ` +
+      `to resolve its session and CAS token from. A failed or absent execution authority never falls back to the file route: migrate and ` +
+      `initialize the store, or address the same intent through the file route's own verb.`,
+  );
+}
+
+/**
+ * § One resolver path (E02/E03, R8/A09) for a sparse DB intent: the current
+ * authority route first, then the trusted caller's OWN live binding
+ * reconstructed from its durable session row. The route is read first because
+ * it is what selects the authority, and a caller whose own binding is missing
+ * gets that identity's own question instead of another holder's record.
+ *
+ * Shared by the plan and workflow entry frames of the ACTIVE route, so both
+ * resolve the same two facts the same way.
+ */
+export async function resolveSparseOwnSession(context: ExecutionContext, what: string): Promise<ExecutionSessionRef> {
+  await assertSparseExecutionAuthority(context, what);
+  return (await resumeExecutionSession(context)).data;
+}
+
+/**
+ * § One resolver path (S2/E02) for the plan route: the plan address, then the
+ * trusted caller's OWN live binding reconstructed from its durable session row
+ * (E03/R8/A09 — a projection the caller had to keep is not required), then the
+ * plan token that read returned. Every derived fact names a source the engine
+ * actually read, and an explicitly supplied value is passed through untouched.
+ */
+async function resolvePlanIntent<Operation extends CoordinationOperation>(
+  context: ExecutionContext,
+  request: ExecutionPlanIntent<Operation>,
+  operation: Operation,
+): Promise<ExecutionPlanRequest<Operation>> {
+  const planId = resolvePlanAddress(context.caller, request.planId, operation.kind);
+  if (request.session !== undefined && request.expected !== undefined) {
+    return { operationId: request.operationId, session: request.session, expected: request.expected, planId, operation };
+  }
+  const session = request.session ?? (await resolveSparseOwnSession(context, `a ${operation.kind} plan operation`));
+  const expected = request.expected ?? (await readExecutionPlan(context, session, planId)).token;
+  return { operationId: request.operationId, session, expected, planId, operation };
+}
 
 /**
  * §2.3/§3.1/§4.1 the authorization boundary of one DB plan operation.
@@ -213,6 +347,14 @@ export type ExecutionPlanCall = {
  * runs inside that transaction, after the authority-state refusal: this route's
  * order is unchanged, and only `readExecutionPlan` — which owns no transaction
  * until its request is valid — gates before the store is opened.
+ *
+ * § One resolver path (S2/E02) an omitted `session` is the trusted caller's OWN
+ * live binding reconstructed from its durable row, and an omitted `expected` is
+ * the plan token this transaction reads — the two facts the caller would
+ * otherwise copy out of a previous read. An explicit value is passed through
+ * untouched, so a fully specified call keeps this frame's exact behavior; a
+ * call that states neither still resolves *inside* the same authorization
+ * boundary, and its resolved inputs stay strict.
  *
  * A forged caller/role, a sibling plan, a revoked or stale-epoch reference, a
  * stale token and a nested call all refuse with no row, revision or receipt
@@ -230,7 +372,9 @@ export async function withExecutionPlanAuthority<T>(
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw new CoordinationError("coordination.invalid-input", "a plan operation needs an operation with a kind");
   }
-  assertPlanOperationAdmissible(context.caller, operation.kind, call.planId);
+  const planId = resolvePlanAddress(context.caller, call.planId, operation.kind);
+  assertPlanOperationAdmissible(context.caller, operation.kind, planId);
+  const session = call.session ?? (await resolveSparseOwnSession(context, `a ${operation.kind} plan operation`));
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
       throw new ExecutionError(
@@ -239,8 +383,8 @@ export async function withExecutionPlanAuthority<T>(
           `A staged store is inspectable only through migration diagnostics.`,
       );
     }
-    const witness = readExecutionPlanWitness(tx, resolvePlanRead(context.caller, call.session, call.planId));
-    assertExecutionToken(call.expected, {
+    const witness = readExecutionPlanWitness(tx, resolvePlanRead(context.caller, session, planId));
+    assertExecutionToken(call.expected ?? witness.token, {
       kind: "plan",
       storeId: tx.storeId,
       epoch: tx.epoch,
@@ -3032,6 +3176,13 @@ export async function reconcileExecutionPlan(
  * token) and the operation itself, whose member of the closed union selects the
  * verb.
  *
+ * § One resolver path (S2/E02) the entry point accepts the SPARSE intent: a
+ * caller may omit the session reference, the plan token and the addressed plan
+ * id it cannot derive, and the engine resolves them here — current authority,
+ * the trusted caller's own binding, the plan's own token — before any verb's
+ * strict frame sees the request. An explicitly supplied value is a constraint,
+ * never a prerequisite.
+ *
  * It is published HERE and only here, because the union is complete: every
  * implemented member has exactly one DB transition, and the legacy-only
  * `repair-delivery-source` — absent from primary spec §3's eleven operations —
@@ -3041,41 +3192,43 @@ export async function reconcileExecutionPlan(
  */
 export async function mutateExecutionPlan(
   context: ExecutionContext,
-  request: ExecutionMutation & { planId: string; operation: CoordinationOperation },
+  request: ExecutionPlanIntent,
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const operation = request?.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw invalidPlanInput("a plan operation needs an operation with a kind");
   }
-  switch (operation.kind) {
+  const resolved = await resolvePlanIntent(context, request, operation);
+  const strict = resolved.operation;
+  switch (strict.kind) {
     case "prepare":
-      return prepareExecutionPlan(context, { ...request, operation });
+      return prepareExecutionPlan(context, { ...resolved, operation: strict });
     case "progress":
-      return progressExecutionPlan(context, { ...request, operation });
+      return progressExecutionPlan(context, { ...resolved, operation: strict });
     case "residual-add":
-      return residualAddExecutionPlan(context, { ...request, operation });
+      return residualAddExecutionPlan(context, { ...resolved, operation: strict });
     case "residual-close":
-      return residualCloseExecutionPlan(context, { ...request, operation });
+      return residualCloseExecutionPlan(context, { ...resolved, operation: strict });
     case "handoff":
-      return handoffExecutionPlan(context, { ...request, operation });
+      return handoffExecutionPlan(context, { ...resolved, operation: strict });
     case "accept":
-      return acceptExecutionPlan(context, { ...request, operation });
+      return acceptExecutionPlan(context, { ...resolved, operation: strict });
     case "return":
-      return returnExecutionPlan(context, { ...request, operation });
+      return returnExecutionPlan(context, { ...resolved, operation: strict });
     case "integration-start":
-      return integrationStartExecutionPlan(context, { ...request, operation });
+      return integrationStartExecutionPlan(context, { ...resolved, operation: strict });
     case "integration-accept":
-      return integrationAcceptExecutionPlan(context, { ...request, operation });
+      return integrationAcceptExecutionPlan(context, { ...resolved, operation: strict });
     case "complete":
-      return completeExecutionPlan(context, { ...request, operation });
+      return completeExecutionPlan(context, { ...resolved, operation: strict });
     case "reconcile":
-      return reconcileExecutionPlan(context, { ...request, operation });
+      return reconcileExecutionPlan(context, { ...resolved, operation: strict });
     default: {
       // The union is exhaustive, so this is reachable only by a caller whose
       // request is not the typed union: the legacy-only repair, an unknown verb
       // or a staged store's older vocabulary all refuse here instead of being
       // dispatched to something that is not theirs.
-      const kind = (operation as { kind?: unknown }).kind;
+      const kind = "kind" in operation && typeof operation.kind === "string" ? operation.kind : String(operation);
       throw new CoordinationError("coordination.unknown-operation", `${String(kind)} is not a coordination operation`, {
         operation: kind,
       });

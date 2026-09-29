@@ -40,21 +40,28 @@ import {
   createExecutionWorkflow,
   executionToken,
   initializeExecutionAuthority,
+  readExecutionPlan,
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionMutation,
+  type ExecutionPlanWitness,
   type ExecutionReceipt,
   type ExecutionSessionRef,
   type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
 import {
+  mutateExecutionPlan,
+  withExecutionPlanAuthority,
+} from "../src/execution-coordination.js";
+import {
   mutateExecutionWorkflow,
   recoverExecutionCoordinator,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
+import type { PlanProgress } from "../src/coordination-write.js";
 import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
@@ -409,9 +416,12 @@ const DELIVERY_TAIL = {
  * ------------------------------------------------------------------------ */
 
 describe("execution-workflow: \u00A73 the published APIs and their verbatim signatures", () => {
-  test("exports both APIs verbatim with their \u00A73 signatures", () => {
+  test("exports both APIs verbatim with their §3 signatures", () => {
     // The compile-time pins: each binding fails to typecheck if the declared
-    // signature drifts from primary spec §3.
+    // signature drifts from primary spec §3. § One resolver path (S2/E02) the
+    // workflow intent accepts the same envelope with its derivable half
+    // (`session`, `expected`, `workflowId`) optional, so a fully specified call
+    // still satisfies the pin.
     const workflowSurface: (
       context: ExecutionContext,
       request: ExecutionMutation & { workflowId: string; operation: WorkflowExecutionOperation },
@@ -2174,5 +2184,200 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
     expect(refused.code).toBe("coordination.invalid-transition");
     expect(refused.message).toContain("never amended");
     expect(await workflowFootprint(completed.context)).toEqual(before);
+  });
+});
+/* ------------------------------------------------------------------------ *
+ * § One resolver path (S2/E02): the SPARSE intent of the published DB verbs
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A DB fixture with ONE prepared plan and its bound plan-pm seat — the state a
+ * plan-owned write needs. The reviewed Assignment is a real document the DB
+ * `prepare` transition seals, and the plan's own session binds through the real
+ * verb (so the lease the row admission requires is one the store recorded
+ * rather than one a fixture planted).
+ */
+async function preparedPlanFixture(label: string): Promise<{
+  context: StoreContext;
+  harnessRoot: string;
+  coordinatorCaller: ExecutionCaller;
+  coordinator: ExecutionSessionRef;
+  planCaller: ExecutionCaller;
+  planSession: ExecutionSessionRef;
+}> {
+  const fixture = await workflowFixture(label);
+  // The directory that owns `store.db` IS the control harness the sealed
+  // Assignment must name (the engine reads it back from the store's own path).
+  const harnessRoot = realpathSync(dirname(storeDbPath(fixture.context)));
+  const planDir = join(harnessRoot, "plans");
+  const sddDir = join(harnessRoot, "sdd", PLAN_ID);
+  const planWorktree = join(harnessRoot, "worktrees", PLAN_ID);
+  mkdirSync(planDir, { recursive: true });
+  mkdirSync(sddDir, { recursive: true });
+  const planPath = join(planDir, `${PLAN_ID}.md`);
+  writeText(planPath, `# ${PLAN_ID}\n`);
+  const assignmentPath = join(harnessRoot, "assignments", `${PLAN_ID}.md`);
+  mkdirSync(dirname(assignmentPath), { recursive: true });
+  writeText(
+    assignmentPath,
+    [
+      "**Execution scope**: plan",
+      "**Execute as**: project-manager",
+      "**Delegation**: allowed",
+      `**Control harness root**: ${harnessRoot}`,
+      `**Workflow id**: ${WORKFLOW_ID}`,
+      `**Plan id**: ${PLAN_ID}`,
+      `**Plan Path**: ${planPath}`,
+      `**Worktree path**: ${planWorktree}`,
+      `**Working branch**: ${SOURCE_BRANCH}`,
+      `**SDD dir**: ${sddDir}`,
+      "**QA gate**: mandatory",
+      "**Findings cleanup**: zero-residual",
+      "**Prepare gate**: go",
+      "",
+    ].join("\n"),
+  );
+
+  const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+  await mutateExecutionPlan(coordinatorContext, {
+    operationId: `prepare-${label}`,
+    session: fixture.coordinator,
+    expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
+    planId: PLAN_ID,
+    operation: { kind: "prepare", assignmentPath },
+  });
+  const planCaller = trustedCaller(PLAN_PM_ID, "plan-pm", PLAN_ID);
+  const bound = await bindExecutionSession(domainContext(fixture.context, planCaller), {
+    workflowId: WORKFLOW_ID,
+    planId: PLAN_ID,
+    role: "plan-pm",
+    expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
+    operationId: `bind-plan-${label}`,
+  });
+  return {
+    context: fixture.context,
+    harnessRoot,
+    coordinatorCaller: fixture.coordinatorCaller,
+    coordinator: fixture.coordinator,
+    planCaller,
+    planSession: bound.data,
+  };
+}
+
+/** One plan-progress operation, identical for the strict and the sparse call. */
+const SPARSE_PROGRESS: { kind: "progress"; progress: PlanProgress } = {
+  kind: "progress",
+  progress: { status: "InProgress", summary: "sparse intent", evidence_paths: [] },
+};
+
+describe("execution-intent-sparse: § One resolver path (S2/E02)", () => {
+  test("a sparse workflow intent omitting the session, the token and the workflow id reaches the same result (A02)", async () => {
+    // Only the intent's own operation is stated. The engine resolves the
+    // CURRENT authority route, the trusted coordinator's OWN live binding and
+    // the workflow token of the record that read returned — and the receipt's
+    // semantic fingerprint is built from the intent alone, so the same sparse
+    // call replays its own receipt instead of writing twice.
+    const specified = await workflowFixture("sparse-workflow-specified");
+    const specifiedReceipt = await workflowMutation(specified, "op-sparse-specified", {
+      kind: "phase",
+      phase: "phase-2-execute",
+      compassPath: specified.compassPath,
+    });
+
+    const sparse = await workflowFixture("sparse-workflow-resolved");
+    const sparseCall = (operationId: string) =>
+      mutateExecutionWorkflow(domainContext(sparse.context, sparse.coordinatorCaller), {
+        operationId,
+        operation: { kind: "phase", phase: "phase-2-execute", compassPath: sparse.compassPath },
+      });
+
+    const sparseReceipt = await sparseCall("op-sparse-resolved");
+
+    expect(sparseReceipt.replayed).toBe(false);
+    expect(sparseReceipt.data.workflows[0]!.state.phase).toBe(specifiedReceipt.data.workflows[0]!.state.phase);
+    expect(sparseReceipt.recovery?.outcome).toBe(specifiedReceipt.recovery?.outcome);
+    expect(sparseReceipt.recovery?.warnings).toEqual([]);
+    expect(sparseReceipt.data.workflows[0]!.workflowToken).toBe(await liveWorkflowToken(sparse));
+
+    const repeated = await sparseCall("op-sparse-resolved");
+    expect(repeated.replayed).toBe(true);
+    expect(repeated.data.workflows[0]!.state.phase).toBe("phase-2-execute");
+  });
+
+  test("a sparse plan intent omitting the session, the token and the plan id reaches the same result (A02)", async () => {
+    const specified = await preparedPlanFixture("sparse-plan-specified");
+    const specifiedReceipt = await mutateExecutionPlan(domainContext(specified.context, specified.planCaller), {
+      operationId: "op-plan-specified",
+      session: specified.planSession,
+      expected: (await readExecutionPlan(domainContext(specified.context, specified.planCaller), specified.planSession, PLAN_ID)).token,
+      planId: PLAN_ID,
+      operation: SPARSE_PROGRESS,
+    });
+
+    const sparse = await preparedPlanFixture("sparse-plan-resolved");
+    // The plan id, the session reference and the plan token are all omitted: the
+    // plan-pm identity names the plan, so the engine reads its own binding and
+    // the plan's own token.
+    const sparseReceipt = await mutateExecutionPlan(domainContext(sparse.context, sparse.planCaller), {
+      operationId: "op-plan-sparse",
+      operation: SPARSE_PROGRESS,
+    });
+
+    expect(sparseReceipt.replayed).toBe(false);
+    expect(sparseReceipt.data.plan.status).toBe(specifiedReceipt.data.plan.status);
+    expect(sparseReceipt.data.coordination?.progress?.summary).toBe(specifiedReceipt.data.coordination?.progress?.summary);
+    expect(sparseReceipt.recovery?.outcome).toBe(specifiedReceipt.recovery?.outcome);
+    expect(sparseReceipt.recovery?.warnings).toEqual([]);
+    const stored = await readExecutionPlan(domainContext(sparse.context, sparse.planCaller), sparse.planSession, PLAN_ID);
+    expect((stored.data.plan as { status?: unknown }).status).toBe("InProgress");
+  });
+
+  test("a sparse plan-authority call resolves the caller's own binding and the plan's own token (A02)", async () => {
+    const fixture = await preparedPlanFixture("sparse-authority");
+    const strict = await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID);
+    const before = await workflowFootprint(fixture.context);
+    const strictWitness = await withExecutionPlanAuthority(
+      domainContext(fixture.context, fixture.planCaller),
+      {
+        session: fixture.planSession,
+        expected: (await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID)).token,
+        planId: PLAN_ID,
+        operation: SPARSE_PROGRESS,
+      },
+      (witness) => witness,
+    );
+    const sparseWitness: ExecutionPlanWitness = await withExecutionPlanAuthority(
+      domainContext(fixture.context, fixture.planCaller),
+      { operation: SPARSE_PROGRESS },
+      (witness) => witness,
+    );
+
+    expect(sparseWitness.workflowId).toBe(strictWitness.workflowId);
+    expect(sparseWitness.planId).toBe(PLAN_ID);
+    expect(sparseWitness.token).toBe(strictWitness.token);
+    expect(sparseWitness.token).toBe(strict.token);
+    expect(sparseWitness.session).toEqual(strictWitness.session);
+    expect(sparseWitness.session.sessionId).toBe(PLAN_PM_ID);
+    // Both calls are read-only transitions: resolving the sparse intent wrote
+    // nothing — the row, its revisions and the session rows are untouched.
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    expect((await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID)).token).toBe(strict.token);
+  });
+
+  test("a sparse workflow intent on a root whose authority is not the ACTIVE store refuses without falling back", async () => {
+    // § One resolver path: the CURRENT route decides, and a control root whose
+    // authority is not the ACTIVE execution store answers on the files route —
+    // so a sparse DB intent refuses `execution.not-active` rather than falling
+    // back to the file route or inventing a binding to derive from.
+    const workspace = realpathSync(mkdtempSync(join(ROOT, "sparse-no-authority-")));
+    mkdirSync(join(workspace, ".mstar"), { recursive: true });
+    const context: StoreContext = { harnessDir: workspace };
+    const refusal = await refusalOf(() =>
+      mutateExecutionWorkflow(domainContext(context, trustedCaller(COORDINATOR_ID, "coordinator", null)), {
+        operationId: "op-sparse-uninitialized",
+        operation: { kind: "phase", phase: "phase-2-execute", compassPath: join(workspace, ".mstar", COMPASS_REF) },
+      }),
+    );
+    expect(refusal.code).toBe("execution.not-active");
   });
 });
