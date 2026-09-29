@@ -454,70 +454,131 @@ export class FakeSessionPersistence extends Service {
 }
 
 /**
+ * The cosmokit volatile-config write symbol (`Symbol.for` — the same global
+ * registry symbol the @deepseek-ai fork uses, so the harness needs no
+ * dependency on cosmokit to drive the protocol).
+ */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/** The fallbacks profile entry id (the upstream `FALLBACKS_PROFILE_ENTRY` —
+ * the settings namespace the seeds writer updates under the 0.6.x model). */
+const FALLBACKS_PROFILE_ENTRY = 'llm-fallbacks'
+
+/**
+ * A live entry-config reference: the cosmokit volatile protocol the
+ * schemastery fork hands the plugin when its `Config` schema is volatile —
+ * `get()` reads the current validated config; the write symbol swaps the
+ * underlying cell (that is how a settings edit reaches a running plugin
+ * without a fiber restart).
+ */
+interface VolatileConfigRef {
+  get(): Record<string, unknown>
+}
+
+/**
  * In-memory `settings` service for the REAL-fallbacks compositions
- * (installed-deployment e2e + the boot-order regression): the
- * upstream `dsh-llm-fallbacks` plugin writes its seed registry through the
- * `settings` service (`seedsIo.writeRoles` → `sctx.settings.update(...)`)
- * and re-points its config source through `installSection`, both of which
- * the real dsh app always provides (`dsh-settings-file` row). Without it
- * the fallbacks `declareSeeds` rejects with `seedsSettingsUnavailable` and
- * no mstar seed can land. This fake models the REAL service's consumed
- * contract (`@deepseek-ai/dsh-settings`: `installSection` base-layer
- * registration with a live source closure + synchronous/watch change
- * notification, and patch-merge `update` with section notification) —
- * mounted as the `@deepseek-ai/dsh-settings-fake` module row
+ * (installed-deployment e2e + the boot-order regression): under the 0.6.x
+ * loader-entry config model the upstream `dsh-llm-fallbacks` plugin keeps its
+ * profile config ON the loader entry — the fork hands `apply` a LIVE volatile
+ * config ref — and uses the settings service (`SettingsForms`) to edit that
+ * entry config and to announce changes. The seeds manager persists declared
+ * roles through `sctx.settings.update` on the `llm-fallbacks` profile entry,
+ * and re-reads its effective taxonomy from the live config (`source()` →
+ * `config.get()`), re-arming the role seam on the `settings/document-updated`
+ * event. The real dsh app always provides the service (`dsh-settings-file`
+ * row); without it the fallbacks seeds child never binds `writeRoles` and no
+ * mstar seed can land.
+ *
+ * This fake models that CONSUMED contract: `update` patch-merges the write
+ * into the entry's live volatile cell — resolved per write through
+ * {@link FakeSettingsRegistry.entryResolver}, which `bootApp` installs over
+ * the mounted fallbacks row's `fiber.config` (the real `SettingsForms.update`
+ * edits the entry config through the config editor) — and emits
+ * `settings/document-updated` (ns first, revision second — the real service's
+ * emit shape). Writes whose entry ref is not resolvable (a fallbacks row
+ * mounted outside `bootApp`) degrade to the store: recorded and announced,
+ * invisible to the plugin's config reads — the same shape as a write to an
+ * entry the config editor does not own. Mounted as the
+ * `@deepseek-ai/dsh-settings-fake` module row
  * (`bootApp({ settingsService: 'fake' | 'fake-deferred' })`), the same
  * structural-fake philosophy as the loader/jobs/agents/sessions fakes.
+ * (The pre-0.6 `SettingsProvider.installSection` base-layer registration is
+ * retired upstream (v0.6.0 moved the settings section onto the Loader entry
+ * Config) and is deliberately NOT modeled.)
  */
 export class FakeSettingsRegistry extends Service {
+  /**
+   * The live entry-config resolver for the current boot: returns the
+   * fallbacks row's volatile config ref (`fiber.config`). `bootApp` installs
+   * it before the row loop and resets it per boot — the resolver must be in
+   * place before the rows activate, because the seeds writes fire inside the
+   * fallbacks/settings activation window.
+   */
+  static entryResolver: (() => unknown) | undefined
+
+  private readonly app: Context
+  /** Sections written without a resolvable entry ref (spec readback only). */
   private readonly store = new Map<string, unknown>()
-  /** Registered sections (`installSection`): namespace → the consumer's
-   * change hook (the base `entry` stays closed over in the live source). */
-  private readonly sections = new Map<string, { onChange(): void }>()
 
   constructor(ctx: Context) {
     super(ctx, 'settings')
+    this.app = ctx
+  }
+
+  /** The live entry config for `namespace`, when the resolver provides one
+   * (a volatile ref: `get()` reads the current validated config). */
+  private entryConfig(namespace: string): VolatileConfigRef | undefined {
+    if (namespace !== FALLBACKS_PROFILE_ENTRY) return undefined
+    const resolved = FakeSettingsRegistry.entryResolver?.() as VolatileConfigRef | undefined
+    return resolved !== undefined && typeof resolved.get === 'function' ? resolved : undefined
   }
 
   /**
-   * Attach one optional-settings consumer — the real `installSection`
-   * contract minus schema validation and the owner-detach fallback (neither
-   * is consumed by the seeds flow): registers `ns` with `entry` as the BASE
-   * layer, hands the consumer a LIVE source closure composing
-   * `{ ...entry, ...storedSection }` per read (so later `update` writes are
-   * visible through the provider's `source()`), and calls `onChange` once
-   * synchronously after registration (later `update` writes re-notify).
+   * Stored-section descriptors (the `SettingsForms.describe()` contract):
+   * `{ ns, value }` rows over the live entry config plus any store-only
+   * namespaces.
    */
-  installSection(
-    owner: unknown,
-    namespace: string,
-    schema: unknown,
-    entry: unknown,
-    hooks: { setSource(current: unknown): void; onChange(): void },
-  ): void {
-    this.sections.set(namespace, { onChange: hooks.onChange })
-    hooks.setSource(() => {
-      const stored = this.store.get(namespace)
-      return typeof stored === 'object' && stored !== null
-        ? { ...(entry as Record<string, unknown>), ...(stored as Record<string, unknown>) }
-        : entry
-    })
-    hooks.onChange()
+  describe(): Array<{ ns: string; value: unknown }> {
+    const rows: Array<{ ns: string; value: unknown }> = []
+    const entry = this.entryConfig(FALLBACKS_PROFILE_ENTRY)
+    if (entry !== undefined) rows.push({ ns: FALLBACKS_PROFILE_ENTRY, value: entry.get() })
+    for (const [ns, value] of this.store) {
+      if (ns !== FALLBACKS_PROFILE_ENTRY) rows.push({ ns, value })
+    }
+    return rows
   }
 
-  /** Merge one namespace patch over the stored user section (the real
-   * `update` patch-merge contract) and notify the namespace's registered
-   * section, if any. */
+  /**
+   * Merge one namespace patch into the entry config (the real `update`
+   * patch-merge contract, shallow at the section boundary the seeds writer
+   * uses — the `{ roles }` payload replaces wholesale) and notify listeners
+   * through the `settings/document-updated` event. A resolvable entry edits
+   * the live volatile cell (the plugin's own config reads observe the write);
+   * an unresolvable namespace degrades to the store.
+   */
   update(namespace: string, data: unknown): Promise<void> {
-    const stored = this.store.get(namespace)
-    const base = typeof stored === 'object' && stored !== null ? (stored as Record<string, unknown>) : {}
-    this.store.set(namespace, { ...base, ...(data as Record<string, unknown>) })
-    this.sections.get(namespace)?.onChange()
+    const entry = this.entryConfig(namespace)
+    if (entry !== undefined) {
+      const current = entry.get()
+      const next =
+        typeof data === 'object' && data !== null
+          ? { ...current, ...(data as Record<string, unknown>) }
+          : current
+      ;(entry as unknown as Record<symbol, (value: Record<string, unknown>) => void>)[VOLATILE_WRITE](next)
+    } else {
+      const stored = this.store.get(namespace)
+      const base = typeof stored === 'object' && stored !== null ? (stored as Record<string, unknown>) : {}
+      this.store.set(namespace, { ...base, ...(typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}) })
+    }
+    this.app.events.emit({}, 'settings/document-updated', namespace, 0)
     return Promise.resolve()
   }
 
-  /** Read one namespace payload (spec readback — raw store, unchanged). */
+  /** Read one namespace payload (spec readback — the live entry config when
+   * resolvable, the raw store otherwise). */
   get(namespace: string): unknown {
+    const entry = this.entryConfig(namespace)
+    if (entry !== undefined) return entry.get()
     return this.store.get(namespace)
   }
 }
@@ -704,10 +765,11 @@ export interface BootOptions {
    *   binds at fallbacks apply (existing compositions are untouched).
    * - `'fake-deferred'` — mounted AFTER the `dsh-llm-fallbacks` row so the
    *   settings service becomes available to the provider only after its
-   *   apply window: the mstar declare fires on the service-provide tick with
-   *   `writeRoles` still the thrower (the live declare-vs-binding race) and
-   *   the provider's settings children settle one tick later. Requires
-   *   `fallbacksModule` (the deferred row models that race).
+   *   apply window (the realistic deployment shape the boot-order regression
+   *   pins: the provider's settings children — `writeRoles` binding, the
+   *   service provide, the preset self-declare — all settle one tick after
+   *   apply). Requires `fallbacksModule` (the deferred row models that
+   *   arrival).
    * Absent by default — existing compositions are untouched.
    */
   settingsService?: 'fake' | 'fake-deferred'
@@ -1084,6 +1146,18 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
+  // The 0.6.x entry-config seam: the fake settings service edits the
+  // fallbacks row's LIVE volatile config ref on `update` (the real
+  // SettingsForms writes the entry config through the config editor). The
+  // resolver is installed BEFORE the rows activate and captures the fallbacks
+  // fiber synchronously — the seeds writes fire inside the
+  // fallbacks/settings activation window, before the row loop's awaits
+  // settle. Reset per boot (tests boot sequentially and dispose in afterEach).
+  const fallbacksFiberBox: { fiber?: unknown } = {}
+  FakeSettingsRegistry.entryResolver =
+    options.settingsService !== undefined
+      ? () => (fallbacksFiberBox.fiber as { config?: unknown } | undefined)?.config
+      : undefined
   // Module seams, keyed by row name. The seam packages export their plugin
   // function as `default` (CJS-style); the mstar plugin is named-only.
   const modules = new Map<string, unknown>([
@@ -1149,7 +1223,12 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     const mountable = (mod as { default?: unknown }).default ?? mod
     // `ctx.plugin` validates a plain config object against the plugin's
     // schemastery `Config` (the same validation the loader applied to rows).
-    const fiber = await ctx.plugin(mountable as Parameters<Context['plugin']>[0], row.name === '@mstar-harness/dsh' && Object.keys(config).length > 0 ? config : undefined)
+    // The fiber handle is captured SYNCHRONOUSLY (the plugin call returns the
+    // wrapped fiber; the await only settles activation) — the entry-config
+    // resolver above reads it from inside the activation window.
+    const pending = ctx.plugin(mountable as Parameters<Context['plugin']>[0], row.name === '@mstar-harness/dsh' && Object.keys(config).length > 0 ? config : undefined)
+    if (row.name === 'dsh-llm-fallbacks') fallbacksFiberBox.fiber = pending
+    const fiber = await pending
     // The fallbacks row handle  the
     // e2e disposes it to model the host config-stack re-composition.
     if (row.name === 'dsh-llm-fallbacks') fallbacksFiber = fiber
