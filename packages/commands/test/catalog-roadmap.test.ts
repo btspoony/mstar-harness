@@ -166,6 +166,45 @@ describe("catalog and roadmap command families", () => {
     expect(replace.status).toBe("ok");
   });
 
+  test("quoted and bracketed roadmap titles survive export and replace", async () => {
+    const { cwd, harness } = await activeFixture("title-quoting");
+    const titles = [
+      'He said "hi" and O\'Brien said \'no\'',
+      "[Phase 1] rollout",
+      "plain title",
+    ];
+    for (const title of titles) {
+      const source = [
+        "---",
+        "project_id: proj",
+        `title: ${title.includes("'") ? `'${title.replace(/'/g, "''")}'` : title}`,
+        "status: active",
+        "created_at: 2026-09-29",
+        "---",
+        "",
+        "## Direction",
+        "",
+        "Retained prose.",
+        "",
+      ].join("\n");
+      const sourceFile = join(cwd, "title-source.md");
+      writeFileSync(sourceFile, source);
+      const seeded = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: sourceFile, expectProject: 1, expectRoadmap: "absent", operation: `title-seed-${title}`, harness }, invocation(cwd));
+      expect(seeded.status).toBe("ok");
+      const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+      expect(exported.status).toBe("ok");
+      const exportedFile = join(cwd, "roadmap-exported.md");
+      writeFileSync(exportedFile, String(exported.data));
+      const replaced = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: exportedFile, expectProject: 1, expectRoadmap: 1, operation: `title-replace-${title}`, harness }, invocation(cwd));
+      expect(replaced.status).toBe("ok");
+      const shown = await roadmap["roadmap.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+      expect(shown.status).toBe("ok");
+      if (shown.status === "ok") {
+        expect(shown.data.content.frontmatter.title).toBe(title);
+      }
+    }
+  });
+
   test("roadmap JSON export returns the v2 envelope", async () => {
     const { cwd, harness } = await activeFixture("roadmap-json-export");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));

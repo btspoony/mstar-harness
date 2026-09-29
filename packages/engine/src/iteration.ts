@@ -1049,8 +1049,20 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
     // array of trimmed string items; anything else stays a scalar (empty
     // value → null, like before).
     doc[kv[1]!] =
-      value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
-    listKey = value === "" ? kv[1] : null;
+      value === ""
+        ? null
+        : value.startsWith('"') && value.endsWith('"') && value.length >= 2
+          ? // Double-quoted scalar (e.g. from JSON.stringify in roadmap export):
+            // decode \\ and \" (placeholder pass so \" survives the \\ decode).
+            value
+              .slice(1, -1)
+              .replace(/\\\\/g, "\u0000")
+              .replace(/\\"/g, '"')
+              .replace(/\u0000/g, "\\")
+          : /^\[.*\]$/.test(value)
+            ? parseFlowArray(value, filePath)
+            : value.replace(/^["']|["']$/g, "");
+      listKey = value === "" ? kv[1] : null;
   }
   return doc;
 }

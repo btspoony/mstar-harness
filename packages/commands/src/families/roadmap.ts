@@ -85,7 +85,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
   const lines = [
     "---",
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
-    `title: ${roadmap.content?.frontmatter?.title ?? roadmap.catalog.title}`,
+    `title: ${JSON.stringify(roadmap.content?.frontmatter?.title ?? roadmap.catalog.title)}`,
     `status: ${JSON.stringify(roadmap.content?.frontmatter?.status ?? "active")}`,
     `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? roadmap.catalog.registeredAt.slice(0, 10))}`,
     "---",
