@@ -38,7 +38,7 @@ export type Fixture = {
   registerPath: string;
 };
 
-const roots: string[] = [];
+export const roots: string[] = [];
 
 export function afterEachCleanup(): void {
   setArtifactStore(undefined);
