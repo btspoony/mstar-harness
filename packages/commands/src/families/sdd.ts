@@ -13,19 +13,24 @@ import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 
+
 type SddInput = {
   planId?: string; controlRoot?: string; planFile?: string; taskNumber?: string; outfile?: string; context?: string;
   base?: string; head?: string; kind?: "source" | "artifact" | "launch"; target?: string; request?: string; argv?: string[];
   sddDir?: string; plan?: string; task?: string; run?: string;
 };
 const verbs = ["workspace", "task-brief", "review-package", "check-context", "evidence.capture", "evidence.verify"] as const;
+const sddArgvSchema = z.array(z.string());
 const inputSchemas: Record<(typeof verbs)[number], z.ZodType<SddInput>> = {
   workspace: z.object({ planId: z.string().optional(), controlRoot: z.string().optional() }) as z.ZodType<SddInput>,
   "task-brief": z.object({ planFile: z.string().optional(), taskNumber: z.string().optional(), outfile: z.string().optional(), context: z.string().optional() }) as z.ZodType<SddInput>,
   "review-package": z.object({ base: z.string().optional(), head: z.string().optional(), outfile: z.string().optional(), context: z.string().optional() }) as z.ZodType<SddInput>,
   "check-context": z.object({ context: z.string().optional(), kind: z.enum(["source", "artifact", "launch"]).optional(), target: z.string().optional() }) as z.ZodType<SddInput>,
-  "evidence.capture": z.object({ request: z.string().optional(), argv: z.array(z.string()).optional() }) as z.ZodType<SddInput>,
+  "evidence.capture": z.object({ request: z.string().optional(), argv: sddArgvSchema.optional() }) as z.ZodType<SddInput>,
   "evidence.verify": z.object({ sddDir: z.string().optional(), plan: z.string().optional(), task: z.string().optional(), run: z.string().uuid().optional(), target: z.string().optional() }) as z.ZodType<SddInput>,
+};
+const payloads: Partial<Record<(typeof verbs)[number], CommandDefinition["payloads"]>> = {
+  "evidence.capture": { argv: { schema: sddArgvSchema, help: "Literal argv passed to the admitted child process." } },
 };
 
 function ok(id: string, data: unknown): CommandEnvelope {
@@ -128,7 +133,16 @@ const contract: Record<(typeof verbs)[number], { path: string[]; arguments: { ke
 function cliDefinition(verb: (typeof verbs)[number]): CommandDefinition<SddInput, unknown> {
   const id = `sdd.${verb}`;
   const shape = contract[verb];
-  return { id, cli: { path: shape.path, aliases: [], arguments: shape.arguments, options: shape.options }, input: inputSchemas[verb], output: commandEnvelopeSchema, effects: shape.effects, description: shape.description, execute: (input, invocation) => execute(id, input, invocation) };
+  return {
+    id,
+    cli: { path: shape.path, aliases: [], arguments: shape.arguments, options: shape.options },
+    input: inputSchemas[verb],
+    ...(payloads[verb] === undefined ? {} : { payloads: payloads[verb] }),
+    output: commandEnvelopeSchema,
+    effects: shape.effects,
+    description: shape.description,
+    execute: (input, invocation) => execute(id, input, invocation),
+  };
 }
 
 export function getSddCommandDefinitions(): readonly CommandDefinition[] {

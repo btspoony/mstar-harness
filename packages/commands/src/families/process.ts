@@ -7,8 +7,10 @@ import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 type Input = { context?: string; argv?: string[]; workflow?: string; harness?: string; apply?: boolean; remote?: boolean; allWorkflows?: boolean; worktree?: string[]; verbose?: boolean; ignoreUnreadableSnapshots?: boolean; pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; targetPath?: string };
-const execInput = z.object({ context: z.string(), argv: z.array(z.string()).min(1) }) as z.ZodType<Input>;
-const cleanupInput = z.object({ workflow: z.string(), harness: z.string().optional(), apply: z.boolean().optional(), remote: z.boolean().optional(), worktree: z.array(z.string()).optional(), allWorkflows: z.boolean().optional(), verbose: z.boolean().optional(), ignoreUnreadableSnapshots: z.boolean().optional() }) as z.ZodType<Input>;
+const execArgvSchema = z.array(z.string()).min(1);
+const cleanupWorktreeSchema = z.array(z.string());
+const execInput = z.object({ context: z.string(), argv: execArgvSchema }) as z.ZodType<Input>;
+const cleanupInput = z.object({ workflow: z.string(), harness: z.string().optional(), apply: z.boolean().optional(), remote: z.boolean().optional(), worktree: cleanupWorktreeSchema.optional(), allWorkflows: z.boolean().optional(), verbose: z.boolean().optional(), ignoreUnreadableSnapshots: z.boolean().optional() }) as z.ZodType<Input>;
 const setupInput = z.object({ pr: z.string().optional(), branch: z.string().optional(), diff: z.boolean().optional(), workingTree: z.boolean().optional(), commit: z.string().optional(), targetPath: z.string().optional() }) as z.ZodType<Input>;
 
 function ok(id: string, data: unknown): CommandEnvelope { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
@@ -24,7 +26,20 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 function definitions(): readonly CommandDefinition[] {
-  const make = (id: string, input: z.ZodType<Input>, args: CommandDefinition["cli"]["arguments"], options: CommandDefinition["cli"]["options"], effects: CommandDefinition["effects"], description: string, execute: (input: Input, context: InvocationContext) => Promise<CommandEnvelope>): CommandDefinition<Input, unknown> => ({ id, cli: { path: id === "pr-review.worktree-setup" ? ["pr-review", "worktree-setup"] : id.split(".").map((part) => part.replace("-", " ")).flatMap((part) => part.split(" ")), aliases: [], arguments: args, options }, input, output: commandEnvelopeSchema, effects, description, execute });
+  const make = (id: string, input: z.ZodType<Input>, args: CommandDefinition["cli"]["arguments"], options: CommandDefinition["cli"]["options"], effects: CommandDefinition["effects"], description: string, execute: (input: Input, context: InvocationContext) => Promise<CommandEnvelope>): CommandDefinition<Input, unknown> => ({
+    id,
+    cli: { path: id === "pr-review.worktree-setup" ? ["pr-review", "worktree-setup"] : id.split(".").map((part) => part.replace("-", " ")).flatMap((part) => part.split(" ")), aliases: [], arguments: args, options },
+    input,
+    ...(id === "sdd.exec"
+      ? { payloads: { argv: { schema: execArgvSchema, help: "Literal argv admitted by the SDD execution context." } } }
+      : id === "worktree.cleanup"
+        ? { payloads: { worktree: { schema: cleanupWorktreeSchema, help: "Explicit worktree paths to consider within the named workflow scope." } } }
+        : {}),
+    output: commandEnvelopeSchema,
+    effects,
+    description,
+    execute,
+  });
   return [
     make("sdd.exec", execInput, [{ key: "argv", required: true, variadic: true }], [{ key: "context", flags: "--context <path>", required: false }], ["read", "validate", "process"], "Run an admitted literal argv child in the SDD feature worktree.", async (input, invocation) => {
       try {

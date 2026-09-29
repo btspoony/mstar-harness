@@ -48,6 +48,16 @@ import { readJson, type GateResult, type Severity, type ValidationResult } from 
 import { verifyPlanExecutionLease } from "./lease.js";
 import { WORKFLOW_DELIVERY_KINDS, WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { assertBranchAlignment, gitProbeTimeoutMs, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
+import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
+
+const SDD_CONTEXT_SEMANTICS = [
+  "planId",
+  "controlHarnessRoot",
+  "featureCwd",
+  "workingBranch",
+  "planFile",
+  "sddDir",
+] satisfies SemanticSelection;
 
 /**
  * Error carrying the ported script exit code so the CLI can map validation
@@ -1284,14 +1294,14 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
     if (!branchGate.ok) throwGateFail(branchGate.violations);
   }
 
-  return {
+  return selectSemanticFields({
     planId,
     controlHarnessRoot: canonicalControlHarnessRoot,
     featureCwd: canonicalFeatureCwd,
     workingBranch,
     planFile: realpathSync(input.planFile),
     sddDir: canonicalSddDir,
-  };
+  }, SDD_CONTEXT_SEMANTICS) as SddExecutionContext;
 }
 
 /**
