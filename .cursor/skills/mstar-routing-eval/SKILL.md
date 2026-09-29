@@ -117,7 +117,7 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **`recovery-policy-isolated-proof`**：不接受 fixture / 本地构建层证据，或因未验证真实环境而阻塞开发完成；未验证行为如实记录。
 - **`recovery-policy-attribution-unknown`**：猜测 model、倒填编辑时间、将真实 provenance 写入 tracked plan，或新增机器完整性门禁。
 - **`recovery-policy-sparse-intent`**：强制 rebind / token-copy preflight、丢弃 verb 已应用的部分结果，或向 leaf 传 session credentials；实际输入仍按 CLI verb 显式提供。
-- **`recovery-policy-host-noop`**：要求重启刻意关闭的 preference、把 `preference-off` 当工具失败，或声称已做 installed-host 验证；phase-1 no-op 仅在 pending binding 存在时成立。
+- **`recovery-policy-host-noop`**：要求重启刻意关闭的 preference、把 `preference-off` 当工具失败，或声称已做 installed-host 验证；phase-1 no-op 与 binding 状态无关；仅 preference 开启时要求 pending binding。
 
 ## 3. 迭代规则
 
