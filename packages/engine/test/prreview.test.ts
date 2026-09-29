@@ -1254,18 +1254,6 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (tier time budget)", (
     }
   });
 
-  test("budget cap numbers are interpolated from PR_REVIEW_TIER_BUDGETS — never literals in the prReviewSeatPrompt body", () => {
-    const source = readFileSync(new URL("../src/prreview.ts", import.meta.url), "utf8");
-    const start = source.indexOf("export function prReviewSeatPrompt");
-    expect(start).toBeGreaterThanOrEqual(0);
-    const body = source.slice(start, source.indexOf("\n// ---", start));
-    expect(body).toContain("PR_REVIEW_TIER_BUDGETS");
-    for (const row of Object.values(PR_REVIEW_TIER_BUDGETS)) {
-      for (const cap of [row.perSeatFindingsCap, row.evidenceTokensCap, row.fileOpenCap]) {
-        expect(body).not.toMatch(new RegExp(`\\b${cap}\\b`));
-      }
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------

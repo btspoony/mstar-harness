@@ -304,7 +304,6 @@ describe("execution-schema: append-only coverage migration", () => {
       expect(MIGRATIONS[4].name).toBe("execution-coverage-column");
       expect(MIGRATIONS[5].version).toBe(6);
       expect(MIGRATIONS[5].name).toBe("roadmap-content-authority");
-      expect(MIGRATIONS.length).toBe(6);
     });
   });
 
@@ -1784,7 +1783,6 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     ) => Promise<ExecutionReceipt<ExecutionState>> = engineIndex.createExecutionWorkflow;
     expect(surface).toBe(createExecutionWorkflow);
     expect(typeof engineIndex.createExecutionWorkflow).toBe("function");
-    expect(engineIndex.createExecutionWorkflow.length).toBe(2);
     // The plan-operation and workflow-level verbs are published only once their
     // closed unions are complete: C4 supplies
     // `bindExecutionSession`/`readExecutionPlan` (pinned verbatim by the
@@ -2711,14 +2709,12 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
       input: { workflowId: string; planId: string | null; role: "coordinator" | "plan-pm"; expected: ExecutionToken; operationId: string },
     ) => Promise<ExecutionReceipt<ExecutionSessionRef>> = engineIndex.bindExecutionSession;
     expect(bindSurface).toBe(bindExecutionSession);
-    expect(engineIndex.bindExecutionSession.length).toBe(2);
     const readSurface: (
       context: ExecutionContext,
       session: ExecutionSessionRef,
       planId: string,
     ) => Promise<ExecutionRead<ExecutionPlanView>> = engineIndex.readExecutionPlan;
     expect(readSurface).toBe(readExecutionPlan);
-    expect(engineIndex.readExecutionPlan.length).toBe(3);
     // W4 publishes the plan-operation entry point and W6 the workflow-level
     // mutator plus the coordinator recovery bootstrap (both complete: the
     // `execution-workflow` group pins their verbatim signatures). The

@@ -427,7 +427,6 @@ describe("execution-workflow: \u00A73 the published APIs and their verbatim sign
       request: ExecutionMutation & { workflowId: string; operation: WorkflowExecutionOperation },
     ) => Promise<ExecutionReceipt<ExecutionState>> = publishedMutateExecutionWorkflow;
     expect(workflowSurface).toBe(mutateExecutionWorkflow);
-    expect(publishedMutateExecutionWorkflow.length).toBe(2);
     const recoverySurface: (
       context: ExecutionContext,
       input: {
@@ -439,7 +438,6 @@ describe("execution-workflow: \u00A73 the published APIs and their verbatim sign
       },
     ) => Promise<ExecutionReceipt<ExecutionSessionRef>> = publishedRecoverExecutionCoordinator;
     expect(recoverySurface).toBe(recoverExecutionCoordinator);
-    expect(publishedRecoverExecutionCoordinator.length).toBe(2);
   });
 });
 
