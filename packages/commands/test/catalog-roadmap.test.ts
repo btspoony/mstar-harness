@@ -101,12 +101,12 @@ describe("catalog and roadmap command families", () => {
   test("milestone grouped roadmap export retains absent prose and escapes stored text", async () => {
     const { cwd, harness } = await activeFixture("milestone-roadmap-export");
     const add = getMilestoneCommandDefinitions().find(item => item.id === "milestone.add")!;
-    const added = await add.execute({ project: "proj", name: "Build | launch", ordinal: 0, expectStore: 1, operation: "milestone-add", harness }, invocation(cwd));
+    const added = await add.execute({ project: "proj", name: "Build | *[link]<tag>`code`", ordinal: 0, expectStore: 1, operation: "milestone-add", harness }, invocation(cwd));
     expect(added.status).toBe("ok");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
     expect(exported.status).toBe("ok");
     if (exported.status === "ok") {
-      expect(exported.data).toContain("Build \\| launch");
+      expect(exported.data).toContain("Build \\| \\*\\[link\\]\\<tag\\>\\`code\\`");
       expect(exported.data).toContain("No stored Direction.");
       expect(exported.data).toContain("No linked issues.");
     }

@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
@@ -22,6 +23,14 @@ test("milestone commands register and use store revision CAS with replay", async
  const replay=await call("milestone.add",base); expect(replay.data).toEqual(added.data);
  const stale=await call("milestone.add",{...base,name:"Second",operation:"add-2"}); expect(stale.status).toBe("refused"); expect(stale.code).toBe("milestone.revision-conflict");
  const list=await call("milestone.list",{project:"proj"}); expect(list.status).toBe("ok"); expect((list.data as {data:{milestones:Array<{name:string}>}}).data.milestones.map(row=>row.name)).toEqual(["First"]);
- const helpWithoutStore=await call("milestone.list",{project:"proj",harness:join(root,"missing")}); expect(helpWithoutStore.status).toBe("refused");
  const bad=await call("milestone.update",{project:"proj",id:receipt.milestoneId,expectStore:2,operation:"bad"}); expect(bad.exitCode).toBe(2);
+});
+
+test("milestone family help succeeds without opening a store", () => {
+ const cwd=join(root,"help-without-store");
+ mkdirSync(cwd,{recursive:true});
+ const result=spawnSync(process.execPath,[join(import.meta.dir,"../../cli/src/index.ts"),"milestone","--help"],{cwd,encoding:"utf8"});
+ expect(result.status).toBe(0);
+ expect(result.stdout).toContain("milestone");
+ expect(existsSync(join(cwd,".mstar","store.db"))).toBe(false);
 });

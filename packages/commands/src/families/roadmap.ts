@@ -78,14 +78,16 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
   return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } };
 }
-function escapeTable(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll("|", "\\|").replaceAll("\n", " "); }
+function escapeMarkdown(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
+}
 function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
-  const lines = ["# Roadmap", "", `Store revision: ${storeRevision}`, "", "## Direction", "", roadmap.content?.direction?.trim() || "No stored Direction.", ""];
+  const lines = ["# Roadmap", "", `Store revision: ${storeRevision}`, "", "## Direction", "", roadmap.content?.direction?.trim() ? escapeMarkdown(roadmap.content.direction) : "No stored Direction.", ""];
   for (const milestone of roadmap.milestones.milestones) {
-    lines.push(`## ${escapeTable(milestone.name)}`, "", `Target: ${milestone.target ?? "no target"} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
+    lines.push(`## ${escapeMarkdown(milestone.name)}`, "", `Target: ${escapeMarkdown(milestone.target ?? "no target")} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
     const issues = roadmap.milestones.issues.filter(issue => issue.milestoneId === milestone.milestoneId);
     if (!issues.length) lines.push("No linked issues.", "");
-    for (const issue of issues) lines.push(`- **${escapeTable(issue.id)} — ${escapeTable(issue.title)}** (${issue.disposition}): ${escapeTable(issue.acceptance) || "No acceptance prose."}`);
+    for (const issue of issues) lines.push(`- **${escapeMarkdown(issue.id)} — ${escapeMarkdown(issue.title)}** (${issue.disposition}): ${escapeMarkdown(issue.acceptance) || "No acceptance prose."}`);
     lines.push("");
   }
   lines.push(`Unassigned issues: ${roadmap.milestones.unassignedIssues}`);
