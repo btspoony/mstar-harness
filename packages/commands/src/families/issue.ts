@@ -20,6 +20,7 @@ import {
   type StoreContext,
   type TerminalDisposition,
 } from "@mstar-harness/engine";
+import type { PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -58,16 +59,24 @@ function ok<T>(id: string, data: T): CommandEnvelope<T> {
 function refused(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message };
+  const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
+    ? error.paths as string[]
+    : [];
+  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, ...(paths.length > 0 ? { details: { paths } } : {}) };
 }
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
   return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd };
 }
 function mutation(input: IssueInput, privileged: boolean): MutationContext {
-  if (input.operationId === undefined || input.actor === undefined) {
-    const error = new Error("operationId and actor are required for issue mutation") as Error & { code: string };
+  const missing = [
+    ...(input.operationId === undefined ? ["operationId"] : []),
+    ...(input.actor === undefined ? ["actor"] : []),
+  ];
+  if (missing.length > 0) {
+    const error = new Error(`${missing.join(" and ")} required for issue mutation`) as Error & { code: string; paths: string[] };
     error.code = "issue.scope-refused";
+    error.paths = missing;
     throw error;
   }
   return {
@@ -83,7 +92,10 @@ function payload<T>(input: IssueInput): T {
     try {
       value = JSON.parse(value) as unknown;
     } catch {
-      throw new Error("payload is not valid JSON");
+      const error = new Error("payload is not valid JSON") as Error & { code: string; paths: string[] };
+      error.code = "issue.invalid-payload";
+      error.paths = ["payload"];
+      throw error;
     }
   }
   if (value === undefined && input.file !== undefined) {
@@ -91,7 +103,10 @@ function payload<T>(input: IssueInput): T {
     try {
       value = JSON.parse(readFileSync(input.file, "utf8")) as unknown;
     } catch {
-      throw new Error("payload file is not valid JSON or could not be read");
+      const error = new Error("payload file is not valid JSON or could not be read") as Error & { code: string; paths: string[] };
+      error.code = "issue.invalid-payload";
+      error.paths = ["payload"];
+      throw error;
     }
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("payload must be a JSON object");
@@ -122,12 +137,12 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       return ok(id, page);
     }
     if (id === "issue.show") return ok(id, await getIssue(context, requiredId(input)));
-    if (id === "issue.add") return ok(id, await captureIssue(context, payload<CaptureInput>(input), mutation(input, false)));
-    if (id === "issue.occurrence") return ok(id, await appendOccurrence(context, requiredId(input), payload<OccurrenceInput>(input), mutation(input, false)));
-    if (id === "issue.triage") return ok(id, await triageIssue(context, requiredId(input), payload<IssueTriage>(input), mutation(input, true)));
+    if (id === "issue.add") return ok(id, await captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, mutation(input, false)));
+    if (id === "issue.occurrence") return ok(id, await appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, mutation(input, false)));
+    if (id === "issue.triage") return ok(id, await triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, mutation(input, true)));
     const disposition = terminalDisposition[id.slice("issue.".length)];
-    if (disposition !== undefined) return ok(id, await closeIssue(context, requiredId(input), disposition, payload<ClosureEvidence>(input), mutation(input, true)));
-    if (id === "issue.link") return ok(id, await linkIssue(context, requiredId(input), payload<IssueLink>(input), mutation(input, true)));
+    if (disposition !== undefined) return ok(id, await closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, mutation(input, true)));
+    if (id === "issue.link") return ok(id, await linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, mutation(input, true)));
     throw new Error(`unsupported issue command ${id}`);
   } catch (error) {
     return refused(id, error);
@@ -144,6 +159,44 @@ const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
   supersede: "ClosureEvidence",
   link: "IssueLink",
 };
+function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
+  let schema: z.ZodType;
+  if (field.type === "object") {
+    schema = z.object(Object.fromEntries(Object.entries(field.properties ?? {}).map(([name, child]) => [name, fieldSchema(child, verb)])));
+  } else if (field.type === "string[]") {
+    let array = z.array(z.string());
+    if (field.minItems !== undefined) array = array.min(field.minItems);
+    if (field.itemsNonblank) array = array.refine((items) => items.every((item) => item.trim() !== ""));
+    schema = array;
+  } else if (field.type === "string") {
+    let string = z.string();
+    if (field.values !== undefined) string = z.enum(field.values as [string, ...string[]]);
+    if (field.nonblankWhenPresent) string = string.refine((value) => value.trim() !== "");
+    schema = string;
+  } else {
+    schema = z.unknown();
+  }
+  if (field.nullable) schema = schema.nullable();
+  return field.required || field.requiredWhen?.includes(verb) ? schema : schema.optional();
+}
+
+function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: string): z.ZodType {
+  const fields = ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>;
+  return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, verb)])));
+}
+
+function validatePayload(input: IssueInput, typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: string): unknown {
+  const value = payload(input);
+  const result = payloadSchema(typeName, verb).safeParse(value);
+  if (!result.success) {
+    const paths = result.error.issues.map((issue) => `payload.${issue.path.join(".")}`);
+    const error = new Error(`invalid payload: ${paths.join(", ")}`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = paths;
+    throw error;
+  }
+  return result.data;
+}
 
 function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const verb = id.slice("issue.".length);
@@ -166,7 +219,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,
     ...(payloadType[verb] !== undefined
-      ? { payloads: { [payloadType[verb]]: { schema: z.record(z.string(), z.unknown()), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { [payloadType[verb]]: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

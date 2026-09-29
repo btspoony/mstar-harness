@@ -145,5 +145,24 @@ describe("issue command family", () => {
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
   });
+  test("payload schema exposes registry constraints and refusals identify invalid and missing paths", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const schema = command.payloads?.CaptureInput.schema;
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse(capture()).success).toBe(true);
+
+    const invalid = await command.execute({
+      payload: { ...capture(), title: 42 },
+      operationId: "invalid-payload",
+      actor: "project-manager",
+    }, context);
+    expect(invalid.status).toBe("refused");
+    if (invalid.status === "refused") expect(invalid.details?.paths).toContain("payload.title");
+
+    const missingMutation = await command.execute({ payload: capture() }, context);
+    expect(missingMutation.status).toBe("refused");
+    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["operationId", "actor"]);
+  });
 });
 
