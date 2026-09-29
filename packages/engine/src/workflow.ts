@@ -2138,10 +2138,13 @@ export function planWorkflowSnapshot(
   options: RegisterPlanWorkflowOptions,
   startedAt: string,
 ): WorkflowSnapshot {
-  // The row keeps the caller's declared pointer (the reviewed §4 spelling the
-  // caller supplied); the derived identity only fills omitted id/title.
+  // The row stores the RESOLVED canonical pointer: the caller's spelling is the
+  // INPUT the §4 resolver proves and reads, never the persisted value. One
+  // canonical form per registered plan is the E07 route-parity contract — the
+  // file producer and the DB route must seal the SAME value, so a relative
+  // spelling cannot survive into the row.
   const derived = derivePlanRegistration({ harnessDir: options.harnessDir, plan: options.plan }).plan;
-  const planRow: PlanRow = { id: options.plan.id ?? derived.id, title: options.plan.title ?? derived.title, file: options.plan.file, status: "Todo" };
+  const planRow: PlanRow = { id: options.plan.id ?? derived.id, title: options.plan.title ?? derived.title, file: derived.file, status: "Todo" };
   const snapshot: WorkflowSnapshot = {
     schema_version: 1,
     id: workflowId,
@@ -2495,10 +2498,13 @@ export function iterationWorkflowSnapshot(
     updated_at: startedAt.slice(0, 10),
     compass_ref: options.compassRef,
     branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
+    // Each row stores the RESOLVED canonical pointer (E07 parity with the plan
+    // producer): the reviewed spelling is input, and the resolver proves and
+    // reads the document it names before anything is written.
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: r.file,
+      file: derivePlanRegistration({ harnessDir: options.harnessDir, plan: r }).plan.file,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],
