@@ -8,10 +8,11 @@ export type MilestoneAdd = { projectId: string; name: string; target: string | n
 export type MilestonePatch = { name?: string; target?: string | null; ordinal?: number; status?: ProjectMilestoneStatus };
 export type MilestoneMutation = { operationId: string; expectedStoreRevision: number };
 export type MilestoneReceipt = { projectId: string; milestoneId: string; revision: number; storeRevision: number; changed: boolean };
+export type MilestoneAssignment = { projectId: string; milestoneId: string | null; reason: string };
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: "open" | "resolved" | "waived" | "duplicate" | "superseded"; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "milestone.store-not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "milestone.store-not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
@@ -38,9 +39,10 @@ function requestHash(value: unknown): string { return createHash("sha256").updat
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
   guard(db);
   if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
-  const hash = requestHash({ domain: "milestone", action: adding ? "add" : "update", projectId, milestoneId: adding ? null : milestoneId, patch, expectedStoreRevision: mutation.expectedStoreRevision });
+  const normalizedPatch = { ...patch, ...(patch.name === undefined ? {} : { name: patch.name.trim() }) };
+  const hash = requestHash({ domain: "milestone", action: adding ? "add" : "update", projectId, milestoneId: adding ? null : milestoneId, patch: normalizedPatch, expectedStoreRevision: mutation.expectedStoreRevision });
   const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
-  if (prior) { if (prior.request_hash !== hash) fail("milestone.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
+  if (prior) { if (prior.request_hash !== hash) fail("store.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
   project(db, projectId);
   const store = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
   if (store.revision !== mutation.expectedStoreRevision) fail("milestone.revision-conflict", "Store revision changed since it was observed.");

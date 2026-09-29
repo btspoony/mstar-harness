@@ -1046,12 +1046,7 @@ export type { BackupInspection } from "./store-activation.js";
 export type {
   ProjectMilestoneStatus,
   ProjectMilestoneDTO,
-  MilestoneAdd,
-  MilestonePatch,
-  MilestoneMutation,
-  MilestoneReceipt,
-  MilestoneIssueDTO,
-  MilestoneRead,
+  MilestoneAssignment,
 } from "./milestone-store.js";
 export {
   MilestoneError,
