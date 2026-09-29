@@ -31,6 +31,7 @@ import {
 } from "./execution-read.js";
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
 import { IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
+import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
@@ -237,6 +238,12 @@ export type RoadmapDTO = {
   catalog: CatalogIdentityDTO;
   authority: { state: "present"; revision: number; contentHash: string } | { state: "absent" };
   content: RoadmapContent | null;
+  /**
+   * The project's authoritative milestone grouping and issue membership
+   * (§4). Required, and independent of the stored Markdown: a project with
+   * milestones but no content answers with `content: null` and this data.
+   */
+  milestones: MilestoneRead;
 };
 
 export type IssueFlowBucket = {
@@ -681,7 +688,7 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const rows = db
     .prepare(
       `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision,
+              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`,
     )
@@ -695,6 +702,7 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
     registeredAt: string | null;
     revision: number;
     lastActivity: string | null;
+    milestoneId: string | null;
   }>;
   return {
     items: rows.map((row) => ({
@@ -707,6 +715,7 @@ function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
       registeredAt: row.registeredAt,
       lastActivity: row.lastActivity,
       revision: row.revision,
+      milestoneId: row.milestoneId,
     })),
     total: totalRow.n,
     storeRevision,
@@ -725,7 +734,7 @@ function parseEvidenceText(json: string): string[] {
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   const issue = db
     .prepare(
-      "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?",
+      "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id from issues where id = ?",
     )
     .get(id) as
     | {
@@ -748,6 +757,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
         external_id: string | null;
         url: string | null;
         identity_key: string;
+        milestone_id: string | null;
       }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
@@ -868,6 +878,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    milestoneId: issue.milestone_id,
     occurrences,
     transitions,
     relations,
@@ -1467,13 +1478,18 @@ function readRoadmap(db: StoreDb, filters: DashboardFilters): RoadmapDTO | null 
     if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found") return null;
     throw error;
   }
+  // The milestone grouping is authoritative store data read on the SAME
+  // handle/snapshot as the content authority: it never depends on the stored
+  // Markdown, so an existing project with absent content still answers it.
+  const milestones = readMilestonesOn(db, projectId);
   if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null };
+    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
   }
   return {
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
     content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    milestones,
   };
 }

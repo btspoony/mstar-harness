@@ -122,6 +122,14 @@ describe("roadmap-authority transactional domain", () => {
     const handle = await openStore(context, "write");
     handle.db.exec("begin immediate; create table prior_fixture(value text); insert into prior_fixture values('preserved');");
     handle.db.exec("delete from schema_version where version=6; drop table project_roadmaps; create table projection_roadmaps(generation integer, project_id text, direction text, goals_json text, milestones_json text, primary key(generation,project_id));");
+    // Migration 7 artifacts must go too, or the replay fails on "duplicate
+    // column/table" — the downgrade targets a genuine schema-5 store.
+    handle.db.exec("drop table if exists project_milestones");
+    const v7Residue = handle.db
+      .prepare("select type, name from sqlite_master where name like 'issues_milestone%'")
+      .all() as { type: string; name: string }[];
+    for (const artifact of v7Residue) handle.db.exec(`drop ${artifact.type} if exists ${artifact.name}`);
+    handle.db.exec("alter table issues drop column milestone_id");
     handle.db.prepare("delete from schema_version where version>5").run();
     handle.db.exec("commit");
     handle.close();

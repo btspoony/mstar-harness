@@ -86,7 +86,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 
 可追踪清单（plan `tasks` 或 Todo）；偏离时 PM 拉回；完成前须可核对证据（实现侧自检见 **`mstar-coding-behavior`**；门禁证据见 **`mstar-phase-gates`** / **`mstar-review-qc`**）。
 
-**Durable Roadmap Gate**：凡声明“分批 / 后续 / next plan / later / temporary workaround”的非热修任务，必须在 `{PLAN_DIR}` 主 plan、CreatePlan mirror、`status.json`/residual、或 PM Task Board 中写清后续路线（批次、依赖、owner/触发条件、完成定义）。只在对话或 Completion Report 里说“以后做”不算可追踪，不能进入 implement GO 或 Done。
+**Durable Roadmap Gate**：凡声明“分批 / 后续 / next plan / later / temporary workaround”的非热修任务，必须在可追踪载体写清后续路线（批次、依赖、owner/触发条件、完成定义）。可接受载体：`{PLAN_DIR}` 主 plan、CreatePlan mirror、`status.json`/residual、PM Task Board，或 `{HARNESS_DIR}/store.db` 的 milestone —— milestone ID + 关联 issue 的 acceptance/owner/dependency/trigger 证据（`mstar milestone` 家族写入与只读 rollup；规则唯一权威 → **`mstar-project-governance`「Milestone」**，本 skill 不复述）。只在对话或 Completion Report 里说“以后做”不算可追踪，不能进入 implement GO 或 Done。
 
 ## 专题 skill 索引
 
@@ -102,7 +102,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
 | `mstar-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
-| `mstar-project-governance` | 项目 roadmap 的 store 内容权威与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
+| `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Review Feedback / Goal-Driven |

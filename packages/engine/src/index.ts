@@ -707,6 +707,7 @@ export {
   linkIssue,
   listIssues,
   triageIssue,
+  assignIssueMilestone,
   ISSUE_PAYLOAD_SCHEMAS,
 } from "./issue.js";
 // Catalog authority: catalog metadata is
@@ -1082,6 +1083,24 @@ export {
 // restore paths share. ADDITIVE export — the engine package's exports map is
 // the only reachable surface for consumers.
 export type { BackupInspection } from "./store-activation.js";
+export type {
+  ProjectMilestoneStatus,
+  ProjectMilestoneDTO,
+  MilestoneAssignment,
+  MilestoneAdd,
+  MilestonePatch,
+  MilestoneMutation,
+  MilestoneReceipt,
+  MilestoneIssueDTO,
+  MilestoneRead,
+} from "./milestone-store.js";
+export {
+  MilestoneError,
+  addMilestone,
+  updateMilestone,
+  readMilestonesOn,
+  queryMilestones,
+} from "./milestone-store.js";
 export type {
   ExecutionDiagnosticExport,
   ExecutionRecoveryAuthorityDifference,

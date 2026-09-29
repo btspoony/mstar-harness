@@ -24,8 +24,9 @@ const census = [
   "audit.scaffold", "audit.promote", "audit.secret-scan", "audit.supply-chain", "compound.validate", "host.detect",
   "host.skill-root", "skill.lint", "roles.validate", "pr-review.tally", "pr-review.report-path", "pr-review.validate-report",
   "pr-review.post", "pr-review.worktree-cleanup", "pr-review.size", "pr-review.seat-prompt", "pr-review.worktree-setup",
-  "pr-review.budget", "qc.validate-report", "catalog.discover", "catalog.import", "catalog.register", "catalog.update",
-  "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile", "roadmap.import", "roadmap.replace",
+  "milestone.add", "milestone.update", "milestone.assign", "milestone.list", "milestone.status",
+  "pr-review.budget", "qc.validate-report",
+  "catalog.discover", "catalog.import", "catalog.register", "catalog.update", "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile", "roadmap.import", "roadmap.replace",
   "roadmap.show", "roadmap.export", "issue.add", "issue.list", "issue.show", "issue.occurrence", "issue.triage", "issue.close",
   "issue.waive", "issue.duplicate", "issue.supersede", "issue.link", "issue.export", "schema", "plan.bind", "plan.show",
   "plan.prepare", "plan.progress", "plan.issue-add", "plan.issue-close", "plan.residual-add", "plan.residual-close",
@@ -176,7 +177,7 @@ describe("generated CLI adapter", () => {
   test("report census accounts for every canonical identity and excludes installer init", () => {
     const ids = getCommandDefinitions().map(({ id }) => id);
     expect(new Set(ids)).toEqual(new Set(census));
-    expect(ids).toHaveLength(123);
+    expect(ids).toHaveLength(128);
     expect(ids).not.toContain("init");
     expect(ids).toContain("report");
   });
