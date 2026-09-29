@@ -1447,13 +1447,68 @@ function bindStaleAdoption(
   // are no bytes to re-pin — so `readSealedInput` raises its sealed-input
   // refusal here instead. (`prepared_by` / `prepared_at` stay exempt: they are
   // provenance, never gates, and the DB route records its own receipts.)
+  //
+  // One redirect guard on the moved bytes: when the plan DECLARES a
+  // `Working branch`, that declaration must still name the branch this bind
+  // acts under (the lease's `working_branch` comes from the Assignment scope,
+  // which the checks above re-validated). Prepare only freezes the header for
+  // appended rows, so an absent header adopts like any other body edit, and
+  // downstream L1 checks stay fail-closed against the lease regardless — this
+  // guard exists so an adopted seal can never describe a plan whose own
+  // declaration points the work somewhere else.
   const planNow = sha256Bytes(readSealedInput(scope.planPath, "plan document"));
-  const planMoved = planNow !== prepared.plan_sha256;
+  if (planNow !== prepared.plan_sha256) {
+    let planHeaders: Map<string, string>;
+    try {
+      planHeaders = planDeclaredHeaders(scope.planPath);
+    } catch (error) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `plan document ${scope.planPath} changed after preparation into a form that no longer parses (${error instanceof Error ? error.message : String(error)}) — the coordinator re-runs \`prepare\``,
+        { path: scope.planPath, expected: prepared.plan_sha256, actual: planNow },
+      );
+    }
+    const declaredWorking = planHeaders.get("working branch");
+    if (declaredWorking !== undefined && declaredWorking !== scope.workingBranch) {
+      throw new CoordinationError(
+        "coordination.assignment-stale",
+        `plan document ${scope.planPath} changed after preparation and now declares Working branch ${declaredWorking}, but this bind acts under ${scope.workingBranch} — an adopted pin never re-points a plan's branch declaration; the coordinator re-runs \`prepare\``,
+        { path: scope.planPath, expected: scope.workingBranch, actual: declaredWorking },
+      );
+    }
+    const declaredMain = planHeaders.get("main worktree branch");
+    if (declaredMain !== undefined) {
+      // The SDD execution path resolves the main-residency expectation from
+      // this header in the LIVE plan file (falling back to `branch.base`), so
+      // a declaration that disagrees with the actual main checkout would
+      // misdirect that expectation. Prepare proves the same equality against
+      // the caller's main checkout; adoption re-proves it against the repo's
+      // main worktree. An unresolvable probe refuses — fail-closed, never a
+      // skipped row. An ABSENT declaration adopts: prepare validated headers
+      // only for appended rows, and the fallback covers that shape.
+      const main = readMainWorktree(scope.harnessRoot);
+      if (main === null || main.branch === "" || main.branch !== declaredMain) {
+        throw new CoordinationError(
+          "coordination.assignment-stale",
+          `plan document ${scope.planPath} changed after preparation and declares Main worktree branch ${declaredMain}, but the main checkout ${
+            main === null ? "could not be probed" : `is on ${main.branch === "" ? "a detached HEAD" : main.branch}`
+          } — an adopted pin never re-points a plan's residency expectation; the coordinator re-runs \`prepare\``,
+          { path: scope.planPath, expected: declaredMain, actual: main?.branch ?? null },
+        );
+      }
+    }
+    return {
+      old_sha256: prepared.assignment_sha256,
+      new_sha256: read.sha256,
+      plan_old_sha256: prepared.plan_sha256,
+      plan_new_sha256: planNow,
+    };
+  }
   return {
     old_sha256: prepared.assignment_sha256,
     new_sha256: read.sha256,
-    plan_old_sha256: planMoved ? prepared.plan_sha256 : null,
-    plan_new_sha256: planMoved ? planNow : null,
+    plan_old_sha256: null,
+    plan_new_sha256: null,
   };
 }
 

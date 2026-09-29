@@ -1653,6 +1653,106 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
+  test("a moved plan that redirects its Working branch declaration refuses instead of being adopted", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Assignment drifts (adoption attempt) and the moved plan declares a
+    // different Working branch than the one this bind would claim: the seal
+    // must not describe a plan pointing the work somewhere else.
+    editAssignment(fixture, "comment-only drift, plan branch redirected.");
+    writeText(fixture.planPath, "# plan a\n\n**Working branch:** feature/somewhere-else\n\nBody.\n");
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "branch-redirect-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("declares Working branch feature/somewhere-else");
+    expect(refused?.message).toContain("feature/plan-a");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a moved plan whose Working branch declaration still names the bind's branch is adopted", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    editAssignment(fixture, "comment-only drift, plan body edited.");
+
+    // The declared branches match the scope this bind acts under and the real
+    // main checkout (`git init -b main` above), so the move is a plain §D2
+    // re-pin: the declarations are not a second refusal surface.
+    writeText(
+      fixture.planPath,
+      "# plan a\n\n**Main worktree branch:** main\n**Working branch:** feature/plan-a\n\nplan edited after prepare.\n",
+    );
+
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "matching-declaration-adopter",
+    });
+    expect(bound.outcome).toBe("claimed");
+
+    const prepared = planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>;
+    expect(prepared.plan_sha256).toBe(sha256OfFile(fixture.planPath));
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].plan_new_sha256).toBe(prepared.plan_sha256);
+  });
+
+  test("a moved plan whose Main worktree branch declaration contradicts the main checkout refuses", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Working branch declaration still matches the bind's scope, but the
+    // moved plan points the main-residency expectation at a branch the main
+    // checkout is not on: the SDD path reads this header live, so the adoption
+    // re-proves the equality prepare proved instead of sealing the lie.
+    editAssignment(fixture, "comment-only drift, plan main header moved.");
+    writeText(
+      fixture.planPath,
+      "# plan a\n\n**Main worktree branch:** trunk\n**Working branch:** feature/plan-a\n\nplan edited after prepare.\n",
+    );
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "main-redirect-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("declares Main worktree branch trunk");
+    expect(refused?.message).toContain("is on main");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
   test("a sealed input that is gone refuses structurally, and an unreadable one is a read error", async () => {
     // Framing, stated precisely: this case exercises the GONE path (and the
     // read-error normalization for a non-ENOENT failure). It does NOT reproduce
