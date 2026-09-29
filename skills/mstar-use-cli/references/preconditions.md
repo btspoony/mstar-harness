@@ -2,6 +2,8 @@
 
 Most CLI friction is a precondition, not a syntax error: the command was right, the root was wrong, the cwd answered a different question, or a token came from an earlier state. This file collects the preconditions every family shares, in the order they must be established, and what each missing one looks like when it fails.
 
+This is a diagnostic map, not a mandatory setup ladder. Invoke the intended public action first: current authority derives associated root, own binding and available CAS state, and records entailed prerequisites with that action. Provide only non-derivable actor identity, explicit target/authorization, or a real competing choice. Read an `applied`/`partial`/replay receipt before deciding whether any repair is needed; a partial result preserves committed components.
+
 ## 1. Which harness root
 
 Commands that touch harness state resolve a harness directory first. Resolution starts from an explicit value and falls through to discovery:
@@ -71,18 +73,17 @@ A harness has one execution authority, and its state selects the transport every
 
 They are not interchangeable. A row revision is not a document version, a register version is not a snapshot version, an execution token is neither, and a schema version or a timestamp is none of the three. Supplying the wrong kind fails validation or refuses; supplying a consumed one refuses as stale. The recovery is identical in both cases: read again.
 
-## 6. Order of establishment
+## 6. Diagnose an actual conflict
 
-Establish the rungs top-down. Each fails closed, so a lower rung is never silently satisfied by a guess about a higher one.
+Run the requested intent first. If it cannot establish a unique target, root, caller or foreign-holder disposition, use the refusal to identify that one missing fact; do not execute every row below as preflight. For an explicit raw replacement only, retain the byte-version comparison basis. For an action-local partial receipt, preserve applied components and resolve its named remaining conflict rather than replaying the whole sequence.
 
-| Rung | Establish by | If missing |
-|---|---|---|
-| root | path resolution, then an explicit root where discovery is ambiguous | exit `1` with the probe guidance, or worse: a successful command against the wrong root |
-| residency | run from the control checkout, or from the recorded integration checkout for integration steps | a gate refusal describing an unexpected checkout or branch |
-| cwd | neutral for Git-derived checks | a check whose verdict disagrees with the recorded snapshot |
-| identity | acquire it independently for this invocation (the active transport; the reference is a lookup, not a credential), or explicitly (`--session-id`, or the host-owned entry on a managed host) with the bound session's absolute envelope on the pre-activation route | a usage refusal naming the identity channel, or an engine refusal naming the required role or the missing identity (`coordination.identity-missing`, `coordination.identity-mismatch`) |
-| tokens | read the value the consuming command expects, immediately before it — a full execution token plus the caller's operation id on the active route; a row/register/byte version on the pre-activation route | a refusal for a missing or stale token, or a usage refusal for a revision integer where an execution token is required |
-| mutation | only then run the write | — |
+| Conflict | Operator input only when needed |
+|---|---|
+| ambiguous root or target | choose the correct associated workflow/plan or control root |
+| foreign live holder or stopped owner | authoritative stop/transfer evidence and authorization |
+| caller identity unavailable | acquire the correct independent identity; never infer it from a reference |
+| checkout/Git fact required by integration | use the recorded integration checkout or report unavailable Git fact |
+| raw replacement version conflict | read its current bytes and compare the intended replacement anew |
 
 ## 7. When a precondition cannot be met
 

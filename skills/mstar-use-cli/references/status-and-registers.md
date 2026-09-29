@@ -4,6 +4,8 @@ Two coordinated documents carry harness process state, and both are written the 
 
 Field schemas, section meanings and per-document semantics are owned by `mstar-artifacts`; the capture duty and the register's migration mapping by `mstar-project-governance`; phase and close semantics by `mstar-iteration`. What follows is the CLI face.
 
+For ordinary lifecycle intents use the owning public verb rather than replacing a snapshot as a setup step. Current authority derives coherent projections and action-local prerequisites; the raw versioned replacement protocol below is for an explicitly requested raw replacement on its supported authority only. Preserve an `applied` or `partial` receipt and resolve only its outstanding conflict; do not treat partial success as a mutation-free refusal.
+
 ## The coordinated write surfaces
 
 | Surface | Path shape | Holds | Store kind |

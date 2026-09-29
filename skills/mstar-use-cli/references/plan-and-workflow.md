@@ -4,6 +4,8 @@ This file carries the two coordination command families: scoped plan coordinatio
 
 What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belong to `mstar-artifacts`; phase semantics to `mstar-iteration`; checkout rules to `mstar-branch-worktree`. This file records only what command help cannot express — role boundaries, tokens, refusal codes, envelopes and sequence order.
 
+Normal route: choose the public intent verb from current help and inspect its receipt. The engine derives associated scope, current token and own session projection where authoritative facts exist, and commits entailed predecessors with the action. Do not interpose a manual `persist`/rebind/repair step just to replay normal progress. A `partial` result names what applied and what genuine conflict remains; only the conflicting component needs an operator decision. Explicit actor identity, ambiguous target, foreign holder or stop authorization remain real inputs; never forward credentials to a leaf.
+
 ## Transports
 
 One control harness has one execution authority, and that authority's state decides which transport every coordination verb takes. The **active DB route** is the canonical one; the file forms survive only while that authority is not active.
