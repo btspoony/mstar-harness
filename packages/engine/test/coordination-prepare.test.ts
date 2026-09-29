@@ -2592,6 +2592,8 @@ describe("prepare coordinator recovery", () => {
       ),
     );
     expect("code" in failure && typeof failure.code === "string" ? failure.code : "").toBe("execution.direct-write-refused");
+    // ... and it points at the existing DB recovery verb instead of aliasing it.
+    expect(failure.message).toContain("session recover");
     expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
     expect(protectedBytes(fixture)).toEqual(before);
   }, 60000);

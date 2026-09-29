@@ -2361,6 +2361,11 @@ describe("standalone-completion-shape", () => {
       "coordination.row.handoff-field",
       "coordination.row.handoff-field",
     ]);
+    expect(validateWorkflowSnapshot(rewritten).violations.map((v) => v.message)).toEqual([
+      expect.stringContaining('requires handoff.state "completed"'),
+      expect.stringContaining("must not carry integration for row"),
+      expect.stringContaining("must not carry integration_worktree_path"),
+    ]);
   });
 
   test("accepts an in-progress standalone row whose accepted handoff is stored (the requirement is the Done shape, F-1)", () => {
