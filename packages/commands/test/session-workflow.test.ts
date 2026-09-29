@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
@@ -54,6 +54,46 @@ describe("session and workflow command families", () => {
     expect(amendment.payloads?.input?.schema.safeParse([]).success).toBe(false);
     expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
+  });
+  test("execution.policy payload accepts engine-valid policy and rejects unsupported values", () => {
+    const payload = definition("workflow.execution-policy").payloads?.file?.schema;
+    expect(payload?.safeParse({ plan_parallelism: "parallel", worktree_mode: "required" }).success).toBe(true);
+    expect(payload?.safeParse({ plan_parallelism: "sometimes" }).success).toBe(false);
+    expect(payload?.safeParse({ plan_parallelism: "parallel", extra: true }).success).toBe(false);
+  });
+
+  test("delivery evidence payload validates complete member shapes", () => {
+    const payload = definition("workflow.evidence").payloads?.file?.schema;
+    expect(payload?.safeParse({ compound: { outcome: "created" } }).success).toBe(true);
+    expect(payload?.safeParse({ pr: { repo: "owner/repo", head: "feature/x", target: "main" } }).success).toBe(true);
+    expect(payload?.safeParse({ pr: { repo: "owner/repo", head: "feature/x" } }).success).toBe(false);
+    expect(payload?.safeParse({}).success).toBe(false);
+  });
+
+  test("evidence before Done is accepted through the workflow command", async () => {
+    const context = testContext();
+    const harnessDir = path.join(context.cwd, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    mkdirSync(path.join(harnessDir, "plans"), { recursive: true });
+    writeFileSync(path.join(harnessDir, "plans", "plan-evidence-order.md"), "**plan_id:** plan-evidence-order\n");
+    const store = await initializeStore({ harnessDir });
+    store.close();
+    const registered = await definition("workflow.register").execute({
+      workflow: "wf-evidence-order", planId: "plan-evidence-order", planTitle: "Evidence order",
+      planFile: "plans/plan-evidence-order.md", deliveryKind: "development", branchSource: "feature/evidence-order",
+      branchTarget: "main", harness: harnessDir,
+    }, context);
+    expect(registered).toMatchObject({ status: "ok" });
+
+    const evidenceFile = path.join(context.cwd, "delivery.json");
+    writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "created" } }));
+    const recorded = await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(recorded.status).toBe("ok");
+    const snapshot = JSON.parse(readFileSync(path.join(harnessDir, "workflows", "wf-evidence-order", "snapshot.json"), "utf8"));
+    expect(snapshot.delivery).toEqual({ compound: { outcome: "created" } });
+    expect(snapshot.plans[0].status).not.toBe("Done");
   });
 
 

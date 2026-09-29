@@ -1625,16 +1625,20 @@ function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
  * policy patch here, because a header patch is exactly what this route must not
  * offer.
  */
-function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
-  const declared = policy as unknown as Record<string, unknown>;
-  assertExactKeys(declared, ["plan_parallelism", "worktree_mode", "push_policy"], `workflow ${workflowId} execution_policy`);
-  const parallelism = declared.plan_parallelism;
+export function workflowExecutionPolicyViolations(value: unknown, workflowId = "workflow"): string[] {
+  if (!isPlainObject(value)) return ["execution_policy must be an object"];
+  const unknown = Object.keys(value).filter((key) => !["plan_parallelism", "worktree_mode", "push_policy"].includes(key));
+  const violations = unknown.length === 0 ? [] : [`workflow ${workflowId} execution_policy has unknown key(s) ${unknown.join(", ")}`];
+  const parallelism = value.plan_parallelism;
   if (parallelism !== undefined && (typeof parallelism !== "string" || !PLAN_PARALLELISM_VALUES.includes(parallelism))) {
-    throw invalidWorkflowInput(
-      `workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 ` +
-        `got ${JSON.stringify(parallelism ?? null)}`,
-    );
+    violations.push(`workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`);
   }
+  return violations;
+}
+
+function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
+  const violations = workflowExecutionPolicyViolations(policy, workflowId);
+  if (violations.length > 0) throw invalidWorkflowInput(violations.join("; "));
   return { ...policy };
 }
 

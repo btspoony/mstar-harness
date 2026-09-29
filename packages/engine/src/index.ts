@@ -161,6 +161,7 @@ export {
   declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
+  deliveryEvidenceViolations,
   recordWorkflowDelivery,
   registerIterationWorkflow,
   registerPlanWorkflow,
@@ -668,7 +669,7 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // ADDITIVE export: the per-kind transition bodies and the pinned-witness
 // helpers stay module-scoped.
 export type { WorkflowExecutionOperation } from "./execution-workflow.js";
-export { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
+export { mutateExecutionWorkflow, recoverExecutionCoordinator, workflowExecutionPolicyViolations } from "./execution-workflow.js";
 export type {
   CaptureInput,
   ClosureEvidence,

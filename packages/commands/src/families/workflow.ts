@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
   commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
-  executionContextFor, mutateExecutionWorkflow, readCatalogRevisions, readSessionEnvelope,
+  deliveryEvidenceViolations, executionContextFor, mutateExecutionWorkflow, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
+  workflowExecutionPolicyViolations,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -106,6 +107,14 @@ function makeDefinition(
     payloads: Object.fromEntries(keys.flatMap((key) => {
       if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
       if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
+      if (key === "file" && id === "workflow.execution-policy") {
+        return [[key, { schema: z.custom((value) => workflowExecutionPolicyViolations(value).length === 0) }]];
+      }
+      if (key === "file" && id === "workflow.evidence") {
+        return [[key, { schema: z.custom((value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value) &&
+          Object.keys(value).length > 0 && deliveryEvidenceViolations(value, "evidence").length === 0) }]];
+      }
       return [];
     })),
     output: commandEnvelopeSchema,
