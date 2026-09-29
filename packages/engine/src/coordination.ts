@@ -1464,7 +1464,7 @@ function bindStaleAdoption(
     } catch (error) {
       throw new CoordinationError(
         "coordination.assignment-stale",
-        `plan document ${scope.planPath} changed after preparation into a form that no longer parses (${error instanceof Error ? error.message : String(error)}) — the coordinator re-runs \`prepare\``,
+        `plan document ${scope.planPath} changed after preparation into a form that no longer parses (${error instanceof Error ? error.message : String(error)}) \u2014 the coordinator re-runs \`prepare\``,
         { path: scope.planPath, expected: prepared.plan_sha256, actual: planNow },
       );
     }
@@ -1472,7 +1472,7 @@ function bindStaleAdoption(
     if (declaredWorking !== undefined && declaredWorking !== scope.workingBranch) {
       throw new CoordinationError(
         "coordination.assignment-stale",
-        `plan document ${scope.planPath} changed after preparation and now declares Working branch ${declaredWorking}, but this bind acts under ${scope.workingBranch} — an adopted pin never re-points a plan's branch declaration; the coordinator re-runs \`prepare\``,
+        `plan document ${scope.planPath} changed after preparation and now declares Working branch ${declaredWorking}, but this bind acts under ${scope.workingBranch} \u2014 an adopted pin never re-points a plan's branch declaration; the coordinator re-runs \`prepare\``,
         { path: scope.planPath, expected: scope.workingBranch, actual: declaredWorking },
       );
     }
@@ -1492,7 +1492,7 @@ function bindStaleAdoption(
           "coordination.assignment-stale",
           `plan document ${scope.planPath} changed after preparation and declares Main worktree branch ${declaredMain}, but the main checkout ${
             main === null ? "could not be probed" : `is on ${main.branch === "" ? "a detached HEAD" : main.branch}`
-          } — an adopted pin never re-points a plan's residency expectation; the coordinator re-runs \`prepare\``,
+          } \u2014 an adopted pin never re-points a plan's residency expectation; the coordinator re-runs \`prepare\``,
           { path: scope.planPath, expected: declaredMain, actual: main?.branch ?? null },
         );
       }
