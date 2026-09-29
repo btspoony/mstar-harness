@@ -7,7 +7,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative5, resolve as resolve3 } from "node:path";
 
-// packages/engine/dist/engine.js
+// ../../packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash7 } from "node:crypto";
 import { createHash as createHash6 } from "node:crypto";
