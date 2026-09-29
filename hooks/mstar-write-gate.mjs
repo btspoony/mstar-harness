@@ -7,7 +7,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative5, resolve as resolve3 } from "node:path";
 
-// ../../packages/engine/dist/engine.js
+// packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash7 } from "node:crypto";
 import { createHash as createHash6 } from "node:crypto";
@@ -25,12 +25,12 @@ import {
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 import { dirname as dirname2, join as join2, resolve as resolvePath, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
@@ -39,15 +39,15 @@ import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } 
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
+import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
-import { basename as basename10, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash16 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
-import { join as join32 } from "node:path";
+import { createHash as createHash11 } from "node:crypto";
+import { appendFileSync, readFileSync as readFileSync16 } from "node:fs";
+import { join as join27 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -712,7 +712,6 @@ var require_src = __commonJS(function(exports, module) {
     module.exports = require_node();
   }
 });
-
 class CoordinationError extends Error {
   code;
   details;
@@ -730,6 +729,21 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 var writeAuthorizations = new AsyncLocalStorage;
+var ASSIGNMENT_INTENT_FIELDS = [
+  "execution_scope",
+  "execute_as",
+  "delegation",
+  "control_harness_root",
+  "workflow_id",
+  "plan_id",
+  "plan_path",
+  "worktree_path",
+  "working_branch",
+  "sdd_dir",
+  "qa_gate",
+  "findings_cleanup",
+  "prepare_gate"
+];
 var HANDOFF_STATES = [
   "submitted",
   "accepted",
@@ -975,6 +989,7 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
     "plan_sha256",
     "qa_gate",
     "findings_cleanup",
+    "assignment_intent",
     "prepared_by",
     "prepared_at"
   ];
@@ -984,8 +999,25 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
+    if (key === "assignment_intent")
+      continue;
     if (!isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.assignment_intent !== undefined) {
+    const intent = value.assignment_intent;
+    if (!isPlainObject(intent)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
+    } else {
+      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
+      const unknown = Object.keys(intent).filter((key) => !ASSIGNMENT_INTENT_FIELDS.includes(key));
+      if (missing.length > 0) {
+        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`));
+      }
+      if (unknown.length > 0) {
+        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`));
+      }
     }
   }
   if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
@@ -10894,7 +10926,8 @@ function parseCompassFrontmatterText(content3, filePath) {
       throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
     }
     const value = kv[2].trim();
-    doc[kv[1]] = value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
+    doc[kv[1]] = value === "" ? null : value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1).replace(/\\(.)/g, (_, ch) => ch === "n" ? `
+` : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`) : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
     listKey = value === "" ? kv[1] : null;
   }
   return doc;
@@ -11213,7 +11246,7 @@ function resolvePlanDir(harnessDir) {
   if (declared !== null)
     return declared;
   const dir = resolve8(harnessDir);
-  const name = basename4(dir);
+  const name = basename5(dir);
   if (name === ".plans" || name === "plans")
     return dir;
   return join13(dir, "plans");
@@ -11980,13 +12013,64 @@ create table project_roadmaps(
 );
 drop table projection_roadmaps;
 `;
+var MIGRATION_7_SQL = `
+create table project_milestones(
+  milestone_id text primary key not null,
+  project_id text not null,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  name text not null check (length(trim(name)) > 0),
+  target text check (
+    target is null or
+    (length(target) = 10 and target glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+  ),
+  status text not null default 'planned'
+    check (status in ('planned','active','delivered','dropped')),
+  ordinal integer not null check (typeof(ordinal) = 'integer' and ordinal >= 0),
+  revision integer not null default 1 check (revision > 0),
+  created_at text not null,
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+create index project_milestones_order
+  on project_milestones(project_id, ordinal, milestone_id);
+alter table issues add column milestone_id text
+  references project_milestones(milestone_id);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger project_milestones_identity_immutable
+before update of milestone_id, project_id on project_milestones
+when new.milestone_id != old.milestone_id or new.project_id != old.project_id
+begin
+  select raise(abort, 'milestone.identity-immutable');
+end;
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
-  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL }
+  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
+  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL }
 ];
 var EXECUTION_TABLE_NAMES = [
   "execution_meta",
@@ -12225,7 +12309,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve15(targetPath);
-  const name = basename10(resolved);
+  const name = basename11(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -12272,7 +12356,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename10(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -12300,7 +12384,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename10(filePath)} content must be a JSON object`
+          message: `${basename11(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -12355,7 +12439,50 @@ var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 var ownedTransactions = new AsyncLocalStorage3;
-var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+class MilestoneError extends Error {
+  code;
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
+    this.name = "MilestoneError";
+    this.code = code2;
+  }
+}
+var fail = (code2, message) => {
+  throw new MilestoneError(code2, message);
+};
+function guard(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
+    fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
+  const active = db.prepare("select authority_state from store_meta where id=1").get();
+  if (active?.authority_state !== "active")
+    fail("store.not-active", "Milestone access requires an active store.");
+}
+function project(db, projectId) {
+  if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
+    fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
+}
+function readMilestonesOn(db, projectId, milestoneId) {
+  guard(db);
+  project(db, projectId);
+  if (milestoneId !== undefined) {
+    const owner = db.prepare("select project_id from project_milestones where milestone_id=?").get(milestoneId);
+    if (!owner)
+      return fail("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
+    if (owner.project_id !== projectId)
+      fail("milestone.project-mismatch", `Milestone ${milestoneId} does not belong to project ${projectId}.`);
+  }
+  const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
+  const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
+  const milestones = rows.map((r) => {
+    const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
+    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, resolvedIssues, otherRetiredIssues };
+  });
+  const issues = db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params).map((r) => ({ id: String(r.id), title: String(r.title), acceptance: String(r.acceptance), disposition: r.disposition, revision: Number(r.revision), milestoneId: String(r.milestone_id) }));
+  const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
+  return { projectId, milestones, issues, unassignedIssues: unassigned.count };
+}
 var PROJECTION_FORMAT_VERSION = 2;
 var PROJECTION_ROOT_FILE = "status.json";
 
@@ -12367,7 +12494,7 @@ class ProjectionError extends Error {
     this.code = code2;
   }
 }
-function sourceKeyOf2(kind, rootKind, relativePath) {
+function sourceKeyOf(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
 }
 function text4(value) {
@@ -12387,7 +12514,7 @@ function churnAfterRead(spec) {
 function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync21(spec.absolutePath, "utf8");
+    content3 = readFileSync16(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -12401,7 +12528,7 @@ function readSource(spec) {
     };
   }
   churnAfterRead(spec);
-  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash11("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -12698,11 +12825,11 @@ async function captureProjectionSources(context) {
     });
   };
   const rootSpec = {
-    sourceKey: sourceKeyOf2("root", "harness", PROJECTION_ROOT_FILE),
+    sourceKey: sourceKeyOf("root", "harness", PROJECTION_ROOT_FILE),
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join32(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join27(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -12722,11 +12849,11 @@ async function captureProjectionSources(context) {
   const workflowSpecs = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
-      sourceKey: sourceKeyOf2("workflow", "harness", relativePath),
+      sourceKey: sourceKeyOf("workflow", "harness", relativePath),
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join32(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join27(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -12736,11 +12863,11 @@ async function captureProjectionSources(context) {
     const root = catalogRootDir(context, binding.rootKind);
     const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
-      sourceKey: sourceKeyOf2("workflow", binding.rootKind, relativePath),
+      sourceKey: sourceKeyOf("workflow", binding.rootKind, relativePath),
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join32(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join27(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -12762,11 +12889,11 @@ async function captureProjectionSources(context) {
   }
   for (const doc of inputs.compassDocs) {
     const spec = {
-      sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath),
+      sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join32(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join27(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -12800,7 +12927,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash16("sha256").update(payload, "utf8").digest("hex");
+  return createHash11("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -13122,20 +13249,24 @@ async function withStoreRead(context, query) {
     handle.close();
   }
 }
-async function resolveExecutionReadRoute(context) {
+async function resolveCurrentAuthority(context) {
   let handle;
   try {
     handle = await openStore(context, "read");
   } catch (error) {
     if (error instanceof StoreError && error.code === "store.not-initialized")
-      return "files";
+      return { route: "files", handle: null };
     throw error;
   }
   try {
-    return handle.execution !== null && handle.execution.authorityState === "active" ? "execution" : "files";
+    const active = handle.execution !== null && handle.execution.authorityState === "active";
+    return active ? { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } } : { route: "files", handle: null };
   } finally {
     handle.close();
   }
+}
+async function resolveExecutionReadRoute(context) {
+  return (await resolveCurrentAuthority(context)).route;
 }
 function queryDashboard(view, filters = {}) {
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
@@ -13231,7 +13362,7 @@ function readIssuePage(db, filter) {
   const storeRevision = readMeta2(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params);
   const rows = db.prepare(`select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision,
+              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`).all(...params, limit, offset);
   return {
@@ -13244,7 +13375,8 @@ function readIssuePage(db, filter) {
       disposition: row.disposition,
       registeredAt: row.registeredAt,
       lastActivity: row.lastActivity,
-      revision: row.revision
+      revision: row.revision,
+      milestoneId: row.milestoneId
     })),
     total: totalRow.n,
     storeRevision
@@ -13259,7 +13391,7 @@ function parseEvidenceText(json) {
   }
 }
 function readIssueDetail(db, id) {
-  const issue = db.prepare("select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?").get(id);
+  const issue = db.prepare("select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id from issues where id = ?").get(id);
   if (!issue)
     throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
   const occurrences = db.prepare("select id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at, imported from occurrences where issue_id = ? order by id asc").all(id).map((row) => ({
@@ -13320,6 +13452,7 @@ function readIssueDetail(db, id) {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    milestoneId: issue.milestone_id,
     occurrences,
     transitions,
     relations,
@@ -13699,16 +13832,19 @@ function readRoadmap(db, filters) {
       return null;
     throw error;
   }
+  const milestones = readMilestonesOn(db, projectId);
   if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null };
+    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
   }
   return {
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown)
+    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    milestones
   };
 }
+var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
