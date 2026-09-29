@@ -214,7 +214,9 @@ describe("mstar status workflow-close", () => {
 
         const result = runCli(closeArgs(harness));
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("every plan row must be Done");
+        // Stable code, not prose: an owed row on a composed workflow is closed
+        // only through its bound coordinator session.
+        expect(envelope(result).code).toBe("coordination.session-mismatch");
 
         expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
         expect(readFileSync(root, "utf8")).toBe(beforeRoot);
@@ -232,7 +234,10 @@ describe("mstar status workflow-close", () => {
       (harness, { snapshot }) => {
         const result = runCli(["status", "workflow-close", "--workflow", "wf-missing", "--harness", harness]);
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("workflow snapshot not found");
+        // The refusal is asserted by its STABLE code, not its prose: the
+        // coordinated-writer frame reports the unresolved target
+        // (`coordination.workflow-not-found`) and names what it withheld.
+        expect(envelope(result).code).toBe("coordination.workflow-not-found");
         // No snapshot, no dir side effect for the unknown id.
         expect(existsSync(snapshot)).toBe(false);
         expect(existsSync(join(harness, "workflows", "wf-missing"))).toBe(false);
@@ -403,7 +408,7 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("every plan row must be Done");
+      expect(envelope(result).code).toBe("coordination.not-prepared");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
@@ -417,8 +422,11 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
       writeCoordinatorSession(harness);
 
       const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
-      expect(result.exitCode).toBe(2);
-      expect(message(result)).toContain("--session must be an absolute path");
+      // The relative path is refused by the coordinated-writer frame with its
+      // stable code; the refusal is still raised before any byte is written.
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("coordination.invalid-input");
+      expect(String(envelope(result).message)).toContain("sessionPath must be an absolute path");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
     });
   });
@@ -504,7 +512,7 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness, "wf-missing"));
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("workflow snapshot not found");
+        expect(envelope(result).code).toBe("iteration.gate.snapshot-not-found");
       },
       { snapshot: null, root: null },
     );
