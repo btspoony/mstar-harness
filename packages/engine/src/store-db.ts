@@ -920,6 +920,58 @@ create table project_roadmaps(
 );
 drop table projection_roadmaps;
 `;
+/** Migration 7 — project-scoped milestones and nullable issue association. */
+export const MIGRATION_7_SQL = `
+create table project_milestones(
+  milestone_id text primary key not null,
+  project_id text not null,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  name text not null check (length(trim(name)) > 0),
+  target text check (
+    target is null or
+    (length(target) = 10 and target glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+  ),
+  status text not null default 'planned'
+    check (status in ('planned','active','delivered','dropped')),
+  ordinal integer not null check (typeof(ordinal) = 'integer' and ordinal >= 0),
+  revision integer not null default 1 check (revision > 0),
+  created_at text not null,
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+create index project_milestones_order
+  on project_milestones(project_id, ordinal, milestone_id);
+alter table issues add column milestone_id text
+  references project_milestones(milestone_id);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger project_milestones_identity_immutable
+before update of milestone_id, project_id on project_milestones
+when new.milestone_id != old.milestone_id or new.project_id != old.project_id
+begin
+  select raise(abort, 'milestone.identity-immutable');
+end;
+`;
+
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -929,6 +981,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
+  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
 ];
 
 /** Execution tables created by migration 4 — the executable form of §2.2. */

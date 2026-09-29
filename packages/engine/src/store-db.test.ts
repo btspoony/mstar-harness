@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   MIGRATIONS,
-  MIN_BUN_VERSION,
+  migrationChecksum,
   MIN_NODE_VERSION,
   StoreError,
   assertExecutionFileReadAllowed,
@@ -373,6 +373,99 @@ describe("store-db L2 fix round", () => {
         )
         .run(),
     ).toThrow();
+    handle.close();
+  });
+});
+describe("migration 7 — project_milestones", () => {
+  test("milestone fresh install and retry retain schema 7", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-fresh-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    expect(handle.schemaVersion).toBe(7);
+    const columns = handle.db.prepare("pragma table_info(issues)").all();
+    expect(columns.some((column) => "name" in column && column.name === "milestone_id")).toBe(true);
+    handle.close();
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: 7 });
+  });
+
+  test("milestone DDL scopes rows and leaves existing issue membership null", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-guards-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const projects = handle.db.prepare("select id from catalog_entities where kind='project'").all();
+    const issue = handle.db.prepare("select id from issues limit 1").get();
+    if (issue && "id" in issue) {
+      expect(handle.db.prepare("select milestone_id from issues where id=?").get(issue.id)).toEqual({ milestone_id: null });
+    }
+    if (projects.length > 0 && "id" in projects[0]!) {
+      const projectId = projects[0].id;
+      const insertMilestone = handle.db.prepare("insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at) values(?, ?, ?, ?, ?, ?)");
+      insertMilestone.run("m-one", projectId, "Milestone", 0, "now", "now");
+      expect(() => insertMilestone.run("m-bad", "missing-project", "Bad", 0, "now", "now")).toThrow();
+      expect(() => handle.db.prepare("update project_milestones set project_id='other' where milestone_id='m-one'").run())
+        .toThrow(/milestone.identity-immutable/);
+      expect(() => handle.db.prepare("delete from project_milestones where milestone_id='m-one'").run()).toThrow();
+    }
+    handle.close();
+  });
+
+  test("milestone upgrade applies versions 5 through 7 from schema 4", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-upgrade-"));
+    const db = new DatabaseSync(join(dir, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec("create table schema_version(version integer primary key, name text not null unique, checksum text not null, applied_at text not null)");
+    for (const migration of MIGRATIONS.slice(0, 4)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version values(?, ?, ?, ?)").run(migration.version, migration.name, migrationChecksum(migration), "now");
+    }
+    db.exec("commit");
+    db.close();
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: 7 });
+  });
+  test("milestone migration refusal covers checksum drift, gaps, and newer versions", async () => {
+    for (const [label, mutate, code] of [
+      ["drift", "update schema_version set checksum='bad' where version=1", "store.schema-drift"],
+      ["gap", "delete from schema_version where version=2", "store.schema-drift"],
+      ["newer", "insert into schema_version values(8, 'future', 'future', 'now')", "store.schema-unsupported"],
+    ] as const) {
+      const dir = mkdtempSync(join(ROOT, `milestone-${label}-`));
+      const handle = await initializeStore({ harnessDir: dir });
+      handle.db.exec(mutate);
+      handle.close();
+      await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
+    }
+  });
+
+  test("milestone DDL failure rolls back pending schema changes", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-ddl-failure-"));
+    const db = new DatabaseSync(join(dir, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec("create table schema_version(version integer primary key, name text not null unique, checksum text not null, applied_at text not null)");
+    for (const migration of MIGRATIONS.slice(0, 6)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version values(?, ?, ?, ?)").run(migration.version, migration.name, migrationChecksum(migration), "now");
+    }
+    db.exec("create table project_milestones(collision text)");
+    db.exec("commit");
+    db.close();
+    await expect(upgradeStore({ harnessDir: dir })).rejects.toBeDefined();
+    const check = new DatabaseSync(join(dir, "store.db"));
+    expect(check.prepare("select max(version) as version from schema_version").get()).toEqual({ version: 6 });
+    expect(check.prepare("pragma table_info(issues)").all().some((column) => "name" in column && column.name === "milestone_id")).toBe(false);
+    check.close();
+  });
+
+  test("milestone association rejects a project mismatch on insert and update", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-project-mismatch-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const projects = handle.db.prepare("select id from catalog_entities where kind='project'").all();
+    const issue = handle.db.prepare("select id, project_id from issues limit 1").get();
+    if (projects.length > 1 && "id" in projects[0]! && "id" in projects[1]! && issue && "id" in issue) {
+      const insert = handle.db.prepare("insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at) values(?, ?, ?, ?, ?, ?)");
+      insert.run("m-a", projects[0].id, "A", 0, "now", "now");
+      insert.run("m-b", projects[1].id, "B", 0, "now", "now");
+      expect(() => handle.db.prepare("update issues set milestone_id='m-b' where id=?").run(issue.id)).toThrow(/milestone.project-mismatch/);
+    }
     handle.close();
   });
 });
