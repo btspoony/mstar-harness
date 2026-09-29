@@ -1795,6 +1795,15 @@ function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): 
   return resolved;
 }
 
+/** Discover the numeric selectors available in one audit artifact directory. */
+export function listAuditPlanIds(outDir: string): string[] {
+  return [...new Set(
+    readdirSync(outDir)
+      .filter((file) => /^\d{3}-.*\.md$/.test(file))
+      .map((file) => file.slice(0, 3)),
+  )].sort();
+}
+
 /**
  * The plan row `file` value: `{PLAN_DIR}`-relative when `outDir` sits under
  * a `plans/` directory (e.g. `audit-2026-08-22/001-slug.md`), otherwise the

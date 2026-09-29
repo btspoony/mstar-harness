@@ -87,7 +87,7 @@ describe("audit command family", () => {
     ]) });
   });
 
-  test("promote registers only the selected scaffolded plan under the declared harness", async () => {
+  test("audit intent derives registration from the selected single-plan artifact", async () => {
     const root = tempRoot();
     const harness = path.join(root, ".mstar");
     mkdirSync(path.join(harness, "plans"), { recursive: true });
@@ -101,7 +101,7 @@ describe("audit command family", () => {
     const scaffolded = await command("audit.scaffold").execute({ findings, dir: auditDir, sha: "abc1234", date: "2026-09-27" }, context(root));
     expect(scaffolded.status).toBe("ok");
 
-    const promoted = await command("audit.promote").execute({ path: auditDir, plans: "001", deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded", harness }, context(root));
+    const promoted = await command("audit.promote").execute({ path: auditDir, deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded", harness }, context(root));
     expect(promoted.status).toBe("ok");
     expect(existsSync(path.join(harness, "workflows", "audit-2026-09-27", "snapshot.json"))).toBe(true);
     expect(JSON.parse(readFileSync(path.join(harness, "status.json"), "utf8")).workflows.map((workflow: { id: string }) => workflow.id)).toContain("audit-2026-09-27");
@@ -116,6 +116,24 @@ describe("audit command family", () => {
     const result = await command("audit.promote").execute({ path: auditDir, plans: "001", deliveryKind: "verification/report-only", harness: path.join(root, ".mstar") }, context(root));
     expect(result.status).toBe("refused");
     expect(result.message).toContain("001");
+    expect(existsSync(path.join(root, ".mstar", "workflows"))).toBe(false);
+  });
+  test("missing decision is preserved when an audit artifact contains multiple plans", async () => {
+    const root = tempRoot();
+    const findings = path.join(root, "findings.json");
+    const auditDir = path.join(root, "audit-2026-09-27");
+    writeFileSync(findings, JSON.stringify([
+      { title: "First finding", description: "First fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" },
+      { title: "Second finding", description: "Second fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" },
+    ]));
+    const scaffolded = await command("audit.scaffold").execute({ findings, dir: auditDir, sha: "abc1234", date: "2026-09-27" }, context(root));
+    expect(scaffolded.status).toBe("ok");
+    const result = await command("audit.promote").execute({
+      path: auditDir, deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded",
+      harness: path.join(root, ".mstar"),
+    }, context(root));
+    expect(result).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(result.message).toContain("--plans is a required decision");
     expect(existsSync(path.join(root, ".mstar", "workflows"))).toBe(false);
   });
 });

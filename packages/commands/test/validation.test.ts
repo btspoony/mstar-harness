@@ -62,7 +62,7 @@ describe("validation command family", () => {
     expect(result.code).toBe(violations[0]!.code);
   });
 
-  test("worktree L1 reports a main-checkout branch mismatch", async () => {
+  test("worktree conflict preserves the main-checkout branch mismatch", async () => {
     const cwd = tempRoot();
     const harness = path.join(cwd, ".mstar");
     const workflowDir = path.join(harness, "workflows", "wf-checkout");
@@ -85,6 +85,34 @@ describe("validation command family", () => {
     expect(violations.some((item) => item.code.includes("main") || item.message.toLowerCase().includes("main"))).toBe(true);
   });
 
+  test("derived scope uses the branch declared in the Assignment and preserves explicit conflicts", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "assignment.md");
+    writeFileSync(file, [
+      "## Assignment",
+      "**Execute as**: fullstack-dev",
+      "**Delegation**: forbidden",
+      "**Task category**: logic",
+      "**Task budget (implement / ops rounds)**: one round",
+      "**Working branch**: main",
+    ].join("\n"));
+    const derived = await definition("dispatch.validate").execute({ assignmentFile: file }, context(cwd));
+    expect(derived).toMatchObject({ status: "refused", code: "dispatch.default-branch.protected" });
+    const conflict = await definition("dispatch.validate").execute({ assignmentFile: file, branch: "feature/other" }, context(cwd));
+    expect(conflict).toMatchObject({ status: "refused", code: "dispatch.branch.conflict" });
+  });
+
+  test("role conflict preserves the invalid SDD reviewer identity", async () => {
+    const cwd = tempRoot();
+    const assignment = path.join(cwd, "assignment.md");
+    writeFileSync(assignment, "**Execution mode**: sdd\n");
+    const result = await definition("review.seats").execute(
+      { assignmentFile: assignment, mode: "sdd", reviewers: ["qc-specialist", "fullstack-dev", "qc-specialist-3"] },
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "dispatch.tri-identity.invalid" });
+  });
+
   test("QC alignment refuses unequal Assignment metadata", async () => {
     const cwd = tempRoot();
     const first = path.join(cwd, "qc.md");
@@ -103,6 +131,36 @@ describe("validation command family", () => {
     const violations = violationsOf(result);
     expect(violations.length > 0).toBe(true);
     expect(result.code).toBe(violations[0]!.code);
+  });
+  test("document validation derives a document type for the selected artifact", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "SKILL.md");
+    writeFileSync(file, "---\nname: valid-skill\ndescription: A fixture skill for validating documents.\n---\nA valid skill.\n");
+    const result = await definition("lint").execute({ target: file }, context(cwd));
+    expect(result.status).toBe("ok");
+  });
+
+  test("unknown optional validator type is classified as usage", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "SKILL.md");
+    writeFileSync(file, "---\nname: valid-skill\n---\nA valid skill.\n");
+    const result = await definition("lint").execute({ target: file, type: "unknown" }, context(cwd));
+    expect(result).toMatchObject({ status: "usage", exitCode: 2, code: "usage" });
+  });
+
+  test("aggregate diagnostics retain each selected document path", async () => {
+    const cwd = tempRoot();
+    const first = path.join(cwd, "one", "SKILL.md");
+    const second = path.join(cwd, "two", "SKILL.md");
+    mkdirSync(path.dirname(first), { recursive: true });
+    mkdirSync(path.dirname(second), { recursive: true });
+    writeFileSync(first, "---\nname: Bad Name\n---\nBody\n");
+    writeFileSync(second, "---\nname: Also Bad\n---\nBody\n");
+    const result = await definition("lint").execute({ target: cwd }, context(cwd));
+    expect(result).toMatchObject({ status: "refused", details: { results: expect.arrayContaining([
+      expect.objectContaining({ file: first, violations: expect.any(Array) }),
+      expect.objectContaining({ file: second, violations: expect.any(Array) }),
+    ]) } });
   });
 
   test("artifact validators run against small local fixtures", async () => {

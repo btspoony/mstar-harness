@@ -50,7 +50,7 @@ describe("pr-review command family", () => {
     expect(validation.details).toMatchObject({ violations: expect.arrayContaining([expect.objectContaining({ code: expect.any(String) })]) });
   });
 
-  test("refuses unauthorized and wrong-target posts, and limits authorized writes to the gh API fixture", async () => {
+  test("post admission preserves target authorization before any review write", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md"); writeFileSync(bodyFile, "Review summary");
     const post = command("pr-review.post");
@@ -89,6 +89,34 @@ describe("pr-review command family", () => {
     expect(result.status).toBe("error");
     expect(result.message).toContain("local report is not saved");
     expect(calls).toHaveLength(0);
+  });
+  test("review context derives the worktree from the invocation directory", async () => {
+    const { cwd, context } = fixture();
+    const result = await command("pr-review.seat-prompt").execute(
+      { stage: "1", domain: "audit", seat: "code-reviewer" },
+      context,
+    );
+    expect(result.status).toBe("ok");
+    expect(JSON.stringify(result)).toContain(cwd);
+  });
+
+  test("unknown outcome after posting does not claim success or retry", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") {
+        return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      }
+      return { exitCode: 1, signal: null, stdout: "", stderr: "connection reset after request" };
+    };
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile }, context);
+    expect(result).toMatchObject({
+      status: "error", code: "pr-review.post.unknown-outcome",
+      details: { outcome: "unknown", pr: 42, commitId: "abcdef0123456" },
+    });
+    expect(calls).toHaveLength(2);
   });
 
 });
