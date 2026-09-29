@@ -56,3 +56,5 @@ L2 independently judges whether affected executable behavior has meaningful prod
 ## Minor findings
 
 Task reviewer Minor → `{SDD_DIR}/progress.md` § Minor. Plan QC Minor → `{SDD_DIR}/review/qcN.md` + optional residual via PM.
+
+QC review and QA gate dispositions must not demand real-environment evidence for development plans: live API/provider receipts, named or authenticated hosts or accounts, installed plugins or deployed artifacts, real browser or device interaction, or deployed-environment output are **not** acceptable gate conditions for code-level deliverables. Each layer proves itself with isolated unit/integration tests and built-command smoke; real-environment verification only occurs in a separately requested `mstar-e2e` workflow.
