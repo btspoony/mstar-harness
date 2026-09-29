@@ -4,9 +4,10 @@
  * The edges this suite checks — filter defaults/round-trip, history
  * derived strictly from recorded events, unknown dates, and the authority
  * split between the catalog and the execution projection with its honest
- * stale/unavailable disclosure — are asserted against real DTO shapes.
- * Rendering is exercised by the actual local browser smoke; no test asserts a
- * mocked HTML string.
+ * stale/unavailable disclosure, plus the roadmap's store-authoritative
+ * milestone grouping and freshness — are asserted against real DTO shapes.
+ * Rendering is exercised by the actual local browser smoke; the only render
+ * assertions here walk the real Preact vnode tree the view produces.
  */
 import { describe, expect, test } from "bun:test";
 import type {
@@ -16,6 +17,9 @@ import type {
   IterationDTO,
   IterationListDTO,
   IterationPlanDTO,
+  MilestoneIssueDTO,
+  MilestoneRead,
+  ProjectMilestoneDTO,
   ReadProjection,
   RoadmapDTO,
   WorkflowDTO,
@@ -23,7 +27,7 @@ import type {
 } from "@mstar-harness/engine";
 
 import type { Envelope, LoadState } from "./components";
-import { dataBadgeText, disclosureLines, pinState, pinText } from "./components";
+import { dataBadgeText, disclosureLines, pinState, pinText, projectionDisclosure } from "./components";
 import { UNKNOWN_DATE, evidenceText, externalLinkHref, formatDate, migrationNote } from "./format";
 import {
   DEFAULT_ISSUE_FILTERS,
@@ -39,7 +43,17 @@ import {
 } from "./views/issues";
 import { chartModel, chartSummary, flowNotes, flowPanelState, originLabel, yAxisTicks } from "./views/issue-flow";
 import { compassState, iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
-import { roadmapProject, roadmapState } from "./views/roadmap";
+import {
+  MilestoneCard,
+  milestoneCountsLine,
+  milestoneGroups,
+  milestoneTargetText,
+  projectionStateLine,
+  roadmapPanel,
+  roadmapProject,
+  roadmapState,
+  unassignedIssuesLine,
+} from "./views/roadmap";
 import { workflowDetailState, workflowListState } from "./views/workflows";
 
 type IssueOccurrence = IssueDetail["occurrences"][number];
@@ -556,6 +570,45 @@ function iterationPlan(overrides: Partial<IterationPlanDTO> = {}): IterationPlan
   };
 }
 
+function milestone(overrides: Partial<ProjectMilestoneDTO> = {}): ProjectMilestoneDTO {
+  return {
+    milestoneId: "m-1",
+    projectId: "engine",
+    name: "Phase 1",
+    target: "2026-10-01",
+    status: "active",
+    ordinal: 0,
+    revision: 1,
+    createdAt: RECORDED_AT,
+    updatedAt: RECORDED_AT,
+    totalIssues: 0,
+    openIssues: 0,
+    resolvedIssues: 0,
+    otherRetiredIssues: 0,
+    ...overrides,
+  };
+}
+
+function linkedIssue(
+  id: string,
+  milestoneId: string,
+  overrides: Partial<MilestoneIssueDTO & { milestoneId: string }> = {},
+): MilestoneIssueDTO & { milestoneId: string } {
+  return {
+    id,
+    title: `${id} stored title`,
+    acceptance: `${id} acceptance`,
+    disposition: "open",
+    revision: 1,
+    milestoneId,
+    ...overrides,
+  };
+}
+
+function milestoneRead(overrides: Partial<MilestoneRead> = {}): MilestoneRead {
+  return { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0, ...overrides };
+}
+
 function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
   return {
     projectId: "engine",
@@ -576,6 +629,7 @@ function roadmap(overrides: Partial<RoadmapDTO> = {}): RoadmapDTO {
       milestones: ["Phase 1"],
       sections: [{ level: 2, heading: "Direction", body: "One local store." }],
     },
+    milestones: milestoneRead(),
     ...overrides,
   };
 }
@@ -584,7 +638,7 @@ const EMPTY_WORKFLOWS: WorkflowListDTO = { items: [], total: 0 };
 const EMPTY_ITERATIONS: IterationListDTO = { items: [], total: 0 };
 
 describe("projection disclosure", () => {
-  test("stale projection disclosures remain on execution views, not authoritative roadmap content", () => {
+  test("stale projection disclosures appear on execution views, and the roadmap discloses freshness without calling its content stale", () => {
     const views = [
       workflowListState(envelope({ items: [workflow()], total: 1 }, STALE_PROJECTION)),
       iterationListState(envelope({ items: [iteration()], total: 1 }, STALE_PROJECTION)),
@@ -599,7 +653,10 @@ describe("projection disclosure", () => {
       expect(copy).toContain(`Last successful build: ${BUILT_AT}.`);
       expect(copy).toContain(`Last checked: ${CHECKED_AT}.`);
     }
-    expect(roadmapState(envelope(roadmap(), STALE_PROJECTION)).disclosure).toBeNull();
+    // The roadmap now discloses the projection state too — but as execution
+    // freshness only, never as a claim on its store-authoritative content
+    // (covered further in the milestone tests below).
+    expect(projectionDisclosure(roadmapState(envelope(roadmap(), STALE_PROJECTION)).freshness.projection)).not.toBeNull();
   });
 
   test("a current projection leaves execution views nothing to disclose", () => {
@@ -743,38 +800,233 @@ describe("catalog and projection authority", () => {
   });
 });
 
-describe("roadmap", () => {
-  test("roadmap presence is authoritative even when the execution projection is unavailable", () => {
+/**
+ * A hostile stored value, used to prove the render path treats milestone data
+ * as text. Preact escapes string children; the only way such a value could
+ * become markup is a `dangerouslySetInnerHTML` prop, so the assertions are:
+ * the raw value arrives verbatim as a text child and no such prop exists.
+ */
+const HOSTILE_NAME = '<img src=x onerror="alert(1)">';
+
+/** The part of a Preact vnode these assertions walk: the template's own props. */
+type VNodeLike = { type?: unknown; props: { children?: unknown; dangerouslySetInnerHTML?: unknown } };
+
+function isVNode(node: unknown): node is VNodeLike {
+  return node !== null && typeof node === "object" && "props" in node;
+}
+
+/**
+ * Every string/number the tree paints as text, walking the REAL `html` output.
+ * Hook-free function components (Field, Badge, the milestone rows) are invoked
+ * so their labels and values are included; no HTML string is built or mocked.
+ */
+function renderedText(node: unknown): string[] {
+  if (typeof node === "string" || typeof node === "number") return [String(node)];
+  if (Array.isArray(node)) return node.flatMap(renderedText);
+  if (!isVNode(node)) return [];
+  const body = typeof node.type === "function" ? node.type(node.props) : node.props.children;
+  return renderedText(body);
+}
+
+/** The vnodes that would bypass text escaping by injecting raw HTML. */
+function markupSinks(node: unknown): unknown[] {
+  if (Array.isArray(node)) return node.flatMap(markupSinks);
+  if (!isVNode(node)) return [];
+  const own = node.props.dangerouslySetInnerHTML === undefined ? [] : [node.props.dangerouslySetInnerHTML];
+  const body = typeof node.type === "function" ? node.type(node.props) : node.props.children;
+  return [...own, ...markupSinks(body)];
+}
+
+function cardText(group: Parameters<typeof MilestoneCard>[0]["group"]): string {
+  return renderedText(MilestoneCard({ group })).join("\n");
+}
+
+function readyLoad(data: RoadmapDTO | null, projection: ReadProjection = CURRENT_PROJECTION): LoadState<RoadmapDTO | null> {
+  return { status: "ready", envelope: envelope(data, projection), message: null };
+}
+
+/** The ready-envelope state, for tests that need the state rather than the panel. */
+function readyState(data: RoadmapDTO | null, projection: ReadProjection = CURRENT_PROJECTION) {
+  return roadmapState(envelope(data, projection));
+}
+
+describe("milestone grouping", () => {
+  test("milestone grouping keeps the read's ordinal/ID order and attaches every issue to its own milestone", () => {
+    const groups = milestoneGroups(
+      milestoneRead({
+        milestones: [
+          milestone({ milestoneId: "m-2", name: "Phase 2", ordinal: 1, target: null, status: "planned" }),
+          milestone({ milestoneId: "m-1", name: "Phase 1", ordinal: 0 }),
+        ],
+        issues: [
+          linkedIssue("I-2", "m-1"),
+          linkedIssue("I-1", "m-1", { disposition: "resolved" }),
+          linkedIssue("I-3", "m-2"),
+        ],
+        unassignedIssues: 2,
+      }),
+    );
+    expect(groups.groups.map((group) => group.milestone.milestoneId)).toEqual(["m-1", "m-2"]);
+    expect(groups.groups[0]!.issues.map((issue) => issue.id)).toEqual(["I-2", "I-1"]);
+    expect(groups.groups[1]!.issues.map((issue) => issue.id)).toEqual(["I-3"]);
+    // Unassigned issues are counted on their own, never folded into a group.
+    expect(groups.unassignedIssues).toBe(2);
+    expect(milestoneTargetText(groups.groups[0]!.milestone.target)).toBe("2026-10-01");
+    expect(milestoneTargetText(groups.groups[1]!.milestone.target)).toBe("No target");
+  });
+
+  test("milestone grouping breaks an ordinal tie by milestone id, regardless of the delivered row order", () => {
+    const groups = milestoneGroups(
+      milestoneRead({
+        milestones: [
+          milestone({ milestoneId: "m-zeta", name: "Zeta", ordinal: 0 }),
+          milestone({ milestoneId: "m-alpha", name: "Alpha", ordinal: 0 }),
+          milestone({ milestoneId: "m-mid", name: "Mid", ordinal: 0 }),
+        ],
+      }),
+    );
+    expect(groups.groups.map((group) => group.milestone.milestoneId)).toEqual(["m-alpha", "m-mid", "m-zeta"]);
+  });
+
+  test("milestone counts keep resolved and other-retired separate so retired never reads as delivered", () => {
+    const group = {
+      milestone: milestone({
+        totalIssues: 4,
+        openIssues: 1,
+        resolvedIssues: 2,
+        otherRetiredIssues: 1,
+      }),
+      issues: [],
+    };
+    const text = cardText(group);
+    expect(text).toContain("Resolved issues\n2");
+    expect(text).toContain("waived, duplicate, superseded");
+    expect(text).toContain("Retired without resolution (waived, duplicate, superseded)\n1");
+    expect(text).toContain("Open issues\n1");
+    expect(text).toContain("Linked issues total\n4");
+    // Retired obligations are not delivered work, so no line may claim completion.
+    expect(text).not.toContain("done");
+    expect(text).not.toContain("delivered");
+  });
+
+  test("milestone grouping: an empty milestone keeps its zero counts and an empty project keeps its unassigned count", () => {
+    const emptyMilestone = milestoneGroups(
+      milestoneRead({ milestones: [milestone({ milestoneId: "m-empty", name: "Empty phase" })] }),
+    );
+    expect(emptyMilestone.groups).toHaveLength(1);
+    expect(emptyMilestone.groups[0]!.issues).toEqual([]);
+    expect(emptyMilestone.groups[0]!.milestone.totalIssues).toBe(0);
+
+    const noMilestones = milestoneGroups(milestoneRead({ unassignedIssues: 3 }));
+    expect(noMilestones.groups).toEqual([]);
+    expect(noMilestones.unassignedIssues).toBe(3);
+    expect(unassignedIssuesLine(1)).toBe("1 issue in this project is not assigned to any milestone.");
+    expect(unassignedIssuesLine(3)).toContain("3 issues");
+  });
+
+  test("milestone names render as text children, never as markup", () => {
+    const group = {
+      milestone: milestone({ name: HOSTILE_NAME, target: null }),
+      issues: [linkedIssue("I-9", "m-1", { title: HOSTILE_NAME })],
+    };
+    const tree = MilestoneCard({ group });
+    const text = renderedText(tree).join("\n");
+    // The hostile value survives verbatim as displayable text…
+    expect(text).toContain(HOSTILE_NAME);
+    // …and nothing in the subtree injects raw HTML.
+    expect(markupSinks(tree)).toEqual([]);
+  });
+});
+
+describe("milestone view states", () => {
+  test("milestone view states: the address bar selects exactly one explicit project", () => {
     expect(roadmapProject("")).toBeNull();
     expect(roadmapProject("?project=")).toBeNull();
     expect(roadmapProject("?project=%20")).toBeNull();
     expect(roadmapProject("?project=engine")).toBe("engine");
+    // No project is a panel state of its own, never a read.
+    expect(roadmapPanel(null, { status: "loading", envelope: null, message: null })).toEqual({ kind: "no-project" });
+  });
 
-    const absent = roadmapState(envelope(roadmap({ authority: { state: "absent" }, content: null }), UNAVAILABLE_PROJECTION));
-    expect(absent.content.kind).toBe("absent");
-    expect(absent.disclosure).toBeNull();
-    expect(absent.content.kind === "absent" ? absent.content.roadmap.catalog : null).toMatchObject({
-      title: "Engine",
-      relativePath: "engine",
-      lifecycle: "active",
-      revision: 5,
-    });
-
-    const missingProject = roadmapState(envelope(null, UNAVAILABLE_PROJECTION));
-    expect(missingProject.content.kind).toBe("not-found");
-    expect(missingProject.disclosure).toBeNull();
-
-    const ready = roadmapState(envelope(roadmap(), UNAVAILABLE_PROJECTION));
+  test("milestone view states: ready, absent prose and not found stay distinct, and a refusal is never an empty result", () => {
+    const ready = readyState(roadmap());
     expect(ready.content.kind).toBe("ready");
-    expect(ready.disclosure).toBeNull();
-    expect(ready.content.kind === "ready" ? ready.content.roadmap.catalog : null).toMatchObject({
-      title: "Engine",
-      relativePath: "engine",
-      lifecycle: "active",
-      revision: 5,
+    expect(ready.milestones).not.toBeNull();
+
+    // Absent Markdown is not absent milestones: the structured grouping still answers.
+    const absentProse = readyState(
+      roadmap({ authority: { state: "absent" }, content: null, milestones: milestoneRead({ milestones: [milestone()] }) }),
+    );
+    expect(absentProse.content.kind).toBe("absent");
+    expect(absentProse.milestones?.groups).toHaveLength(1);
+
+    const missingProject = readyState(null, UNAVAILABLE_PROJECTION);
+    expect(missingProject.content.kind).toBe("not-found");
+    expect(missingProject.milestones).toBeNull();
+    const missingPanel = roadmapPanel("missing", readyLoad(null, UNAVAILABLE_PROJECTION));
+    expect(missingPanel.kind).toBe("ready");
+    if (missingPanel.kind === "ready") {
+      expect(missingPanel.state.content.kind).toBe("not-found");
+      expect(missingPanel.state.milestones).toBeNull();
+    }
+
+    // A structured refusal keeps its own message and never becomes an empty roadmap.
+    const refusal = "store.not-initialized: no store — initialize the issue store with the CLI, then reload.";
+    expect(roadmapPanel("engine", { status: "error", envelope: null, message: refusal })).toEqual({
+      kind: "refused",
+      message: refusal,
     });
-    expect(ready.content.kind === "ready" ? ready.content.roadmap.content?.goals : []).toEqual([
-      { ordinal: 0, parentOrdinal: null, checked: false, title: "Ship phase 1", body: "- [ ] Ship phase 1" },
-    ]);
+    expect(roadmapPanel("engine", { status: "loading", envelope: null, message: null })).toEqual({ kind: "loading" });
+    expect(roadmapPanel("engine", readyLoad(roadmap())).kind).toBe("ready");
+  });
+});
+
+describe("milestone freshness disclosure", () => {
+  test("milestone freshness names the current projection state explicitly and shows the authoritative revisions", () => {
+    const state = readyState(roadmap());
+    expect(state.freshness.storeRevision).toBe(12);
+    expect(state.freshness.catalogRevision).toBe(5);
+    expect(state.freshness.projection.freshness).toBe("current");
+    expect(projectionDisclosure(state.freshness.projection)).toBeNull();
+    const line = projectionStateLine(state.freshness.projection);
+    expect(line).toContain("current");
+    expect(line).toContain("generation 4");
+    expect(line).toContain(BUILT_AT);
+    expect(line).toContain(CHECKED_AT);
+    expect(milestoneCountsLine(12)).toBe(
+      "Milestone grouping and counts come from store revision 12; execution projection freshness does not change them.",
+    );
+  });
+
+  test("milestone counts stay store-authoritative while execution data is stale or unavailable", () => {
+    for (const projection of [STALE_PROJECTION, UNAVAILABLE_PROJECTION]) {
+      const state = readyState(roadmap(), projection);
+      const disclosure = projectionDisclosure(state.freshness.projection);
+      expect(disclosure).not.toBeNull();
+      expect(disclosure!.freshness).toBe(projection.freshness);
+      // The projection is named for what it is — and only the projection.
+      expect(projectionStateLine(state.freshness.projection)).toContain(projection.freshness);
+      expect(milestoneCountsLine(state.freshness.storeRevision)).not.toContain(projection.freshness);
+      expect(milestoneCountsLine(state.freshness.storeRevision)).toContain("store revision 12");
+    }
+    // Unavailable stays a freshness fact, never an empty roadmap or a refusal.
+    expect(readyState(roadmap(), UNAVAILABLE_PROJECTION).content.kind).toBe("ready");
+  });
+
+  test("milestone freshness never imputes a missing build or check time", () => {
+    const noTimes: ReadProjection = {
+      generation: 7,
+      freshness: "current",
+      builtAt: null,
+      checkedAt: "",
+      diagnostics: [],
+    };
+    const line = projectionStateLine(noTimes);
+    expect(line).toContain("none recorded");
+    expect(line).toContain("check time unknown");
+    // An unavailable generation names the missing generation instead of a number.
+    expect(projectionStateLine({ ...noTimes, generation: null, freshness: "unavailable" })).toContain(
+      "no valid generation is published",
+    );
   });
 });

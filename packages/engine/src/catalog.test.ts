@@ -31,6 +31,31 @@ import {
 } from "./store-db.js";
 import { getCatalog as getCatalogFromIndex } from "./index.js";
 
+// Mirroring the issues table definition in MIGRATION_1_SQL for the v1 fixture.
+const MIGRATION_1_ISSUES_SQL = `
+create table issues(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','info')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique
+);
+`;
+
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-test-"));
 
 afterAll(() => {
@@ -583,6 +608,17 @@ describe("migration 2", () => {
       if (existingTables.has(table)) handle.db.exec(`drop table ${table}`);
     }
     handle.db.prepare("delete from schema_version where version > 1").run();
+    // Migration 7 ALTERs issues and creates named indexes/triggers. Clear those
+    // artifacts, then rebuild issues in its exact migration-1 shape: SQLite
+    // cannot drop milestone_id while its REFERENCES clause remains.
+    const residue = handle.db
+      .prepare("select type, name from sqlite_master where name like 'issues_milestone%'")
+      .all() as { type: string; name: string }[];
+    for (const artifact of residue) handle.db.exec(`drop ${artifact.type} if exists ${artifact.name}`);
+    handle.db.exec("drop table issues");
+    handle.db.exec(MIGRATION_1_ISSUES_SQL);
+    handle.db.exec("create unique index issues_external_identity on issues(provider, external_id) where external_id is not null");
+    handle.db.exec("create index issues_disposition on issues(project_id, disposition, severity)");
     handle.close();
     expect((await openStore(context, "read")).schemaVersion).toBe(1);
 

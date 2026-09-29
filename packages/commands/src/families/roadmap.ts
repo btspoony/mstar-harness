@@ -4,10 +4,13 @@ import {
   RoadmapError,
   importRoadmapAuthority,
   parseRoadmapContent,
+  queryDashboard,
   readRoadmapAuthority,
   replaceRoadmapAuthority,
   resolveProcessHarnessDir,
   reviewRoadmapImport,
+  withStoreRead,
+  type RoadmapDTO,
   type RoadmapExpected,
   type RoadmapImportReview,
   type StoreContext,
@@ -27,7 +30,7 @@ const descriptions: Record<(typeof verbs)[number], string> = {
   import: "Preview a roadmap import read-only or apply a saved reviewed source using engine drift checks.",
   replace: "Replace the complete roadmap using observed project and roadmap revisions.",
   show: "Show the project/catalog revisions, roadmap record and parsed content.",
-  export: "Export the stored roadmap as Markdown or versioned JSON transport.",
+  export: "Export composed milestone roadmap as JSON v2 or grouped Markdown; reporting only, not backup/restore. The grouped Markdown frontmatter mirrors the stored roadmap content (title/status from the stored document; catalog defaults apply when no content exists) — it is regenerated on each export. import/replace/show modify Markdown content only.",
 };
 const cliFlags: Record<keyof Input, string> = {
   project: "--project <id>", file: "--file <absolute-md>", review: "--review <absolute-json>", apply: "--apply", operation: "--operation <id>",
@@ -75,6 +78,37 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
   return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } };
 }
+function escapeMarkdown(value: string): string {
+  return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
+}
+function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
+  const lines = [
+    "---",
+    `project_id: ${JSON.stringify(roadmap.projectId)}`,
+    `title: ${JSON.stringify(roadmap.content?.frontmatter?.title ?? roadmap.catalog.title)}`,
+    `status: ${JSON.stringify(roadmap.content?.frontmatter?.status ?? "active")}`,
+    `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? roadmap.catalog.registeredAt.slice(0, 10))}`,
+    "---",
+    "",
+    "# Roadmap",
+    "",
+    `Store revision: ${storeRevision}`,
+    "",
+    "## Direction",
+    "",
+    roadmap.content?.direction?.replace(/^\n+|\n+$/g, "") || "No stored Direction.",
+    "",
+  ];
+  for (const milestone of roadmap.milestones.milestones) {
+    lines.push(`## ${escapeMarkdown(milestone.name)}`, "", `Target: ${escapeMarkdown(milestone.target ?? "no target")} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
+    const issues = roadmap.milestones.issues.filter(issue => issue.milestoneId === milestone.milestoneId);
+    if (!issues.length) lines.push("No linked issues.", "");
+    for (const issue of issues) lines.push(`- **${escapeMarkdown(issue.id)} — ${escapeMarkdown(issue.title)}** (${issue.disposition}): ${escapeMarkdown(issue.acceptance) || "No acceptance prose."}`);
+    lines.push("");
+  }
+  lines.push("## Unassigned", "", `Unassigned issues: ${roadmap.milestones.unassignedIssues}`);
+  return lines.join("\n");
+}
 async function execute(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {
     const context = storeContext(input, invocation);
@@ -110,11 +144,16 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
     }
     if (verb === "export") {
       if (input.format === undefined) throw new UsageError("--format is required");
-      const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
-      if (read.roadmap === null) throw Object.assign(new Error("roadmap.absent: project has no stored roadmap content"), { code: "roadmap.absent" });
-      const data = input.format === "markdown" ? read.roadmap.contentMarkdown : {
-        version: 1, projectId: read.projectId, revision: read.roadmap.revision, contentHash: read.roadmap.contentHash, contentMarkdown: read.roadmap.contentMarkdown,
-      };
+      const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: usage(input.project, "--project") }));
+      const roadmap = envelope.data;
+      if (roadmap === null) throw new RoadmapError("roadmap.project-not-found", `Catalog project ${usage(input.project, "--project")} does not exist.`);
+      const data = input.format === "markdown"
+        ? exportMarkdown(roadmap, envelope.storeRevision)
+        : {
+          version: 2, projectId: roadmap.projectId, storeRevision: envelope.storeRevision, catalogRevision: envelope.catalogRevision,
+          projection: envelope.projection, contentMarkdown: roadmap.content?.contentMarkdown ?? null, direction: roadmap.content?.direction ?? null,
+          milestones: roadmap.milestones,
+        };
       return success(id, data);
     }
     throw new Error(`unsupported roadmap command ${id}`);
