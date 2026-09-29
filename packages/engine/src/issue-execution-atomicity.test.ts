@@ -33,6 +33,7 @@ import {
   type ClosureEvidence,
   type IssueError,
 } from "./issue.js";
+import { deriveResidualEntries } from "./execution-coordination.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-atomicity-"));
@@ -136,7 +137,7 @@ const waivedEvidence: ClosureEvidence = {
 };
 
 describe("execution-issue-atomicity: the composers of the DB residual transaction", () => {
-  test("a refusal between the capture and its link leaves no issue, occurrence, link or revision", async () => {
+  test("atomic issue capture rolls back when plan linking refuses", async () => {
     const context = await activeStore("capture-then-refused-link");
     const before = await issueFacts(context);
 
@@ -167,6 +168,82 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(next.issueId).toBe("I-000001");
     expect(next.created).toBe(true);
   });
+  test("indexed validation reports every invalid issue entry before capture", () => {
+    const derived = deriveResidualEntries([baseInput({ projectId: "caller-project", occurrenceKey: "event-17" })], "plan-project");
+    expect(derived[0]).toMatchObject({ projectId: "plan-project", occurrenceKey: "event-17" });
+
+    let failure: unknown;
+    try {
+      deriveResidualEntries(
+        [{ title: "first", occurrenceKey: "event-18" }, { title: "second", occurrenceKey: "event-19" }],
+        "plan-project",
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+    });
+  });
+  test("indexed residual validation rejects sparse holes", () => {
+    let mixedFailure: unknown;
+    try {
+      deriveResidualEntries(
+        [baseInput({ occurrenceKey: "event-18" }), , baseInput({ occurrenceKey: "event-20" })],
+        "plan-project",
+      );
+    } catch (error) {
+      mixedFailure = error;
+    }
+    expect(mixedFailure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[1]" }] },
+    });
+
+    let allHolesFailure: unknown;
+    try {
+      deriveResidualEntries([, ,], "plan-project");
+    } catch (error) {
+      allHolesFailure = error;
+    }
+    expect(allHolesFailure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+    });
+  });
+
+
+  test("occurrence replay retains the same event identity across capture and plan-link retries", async () => {
+    const context = await activeStore("occurrence-replay");
+    const input = baseInput({ occurrenceKey: "event-17" });
+    const first = await inTransaction(context, (db) => {
+      const captured = captureIssueOn(db, input, { operationId: "capture-event-17", actor: ACTOR });
+      linkIssueOn(
+        db,
+        captured.issueId,
+        { kind: "plan", target: "p-1" },
+        { operationId: "link-event-17", actor: ACTOR, expectedRevision: captured.revision },
+      );
+      return captured;
+    });
+    const beforeReplay = await issueFacts(context);
+    const replay = await inTransaction(context, (db) => {
+      const captured = captureIssueOn(db, input, { operationId: "capture-event-17", actor: ACTOR });
+      linkIssueOn(
+        db,
+        captured.issueId,
+        { kind: "plan", target: "p-1" },
+        { operationId: "link-event-17", actor: ACTOR, expectedRevision: captured.revision },
+      );
+      return captured;
+    });
+
+    expect(replay.issueId).toBe(first.issueId);
+    expect(await issueFacts(context)).toEqual(beforeReplay);
+    expect((await getIssue(context, first.issueId)).occurrences.map(({ occurrenceKey }) => occurrenceKey)).toEqual(["event-17"]);
+  });
+
 
   test("an issue transition written in a caller's transaction is rolled back with the step that fails after it", async () => {
     const context = await activeStore("close-then-refused-step");

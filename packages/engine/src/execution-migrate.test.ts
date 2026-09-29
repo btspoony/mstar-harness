@@ -1992,6 +1992,26 @@ describe("execution-activation", () => {
     expect(storeFootprint(fixture.dbPath)).toEqual(activated);
   });
 
+  test("execution-activation-derives-the-cas-tokens-from-the-staged-record-when-omitted", async () => {
+    const fixture = await coreWorkspace("activate-derive");
+    const manifest = await stageCore(fixture, "derive");
+
+    // The staged record IS the authority, so both CAS tokens are optional: an
+    // omitted token is derived from it rather than being a required caller fact.
+    const receipt = await activateExecutionMigration({
+      ...migrationInput(fixture, "op-activate-derive"),
+      manifestId: manifest.id,
+      manifestHash: executionManifestHash(manifest),
+      attestation: migrationAttestation(),
+    });
+    expect(receipt).toMatchObject({ manifestId: manifest.id, phase: "active", replayed: false });
+    expect(migrationPhaseOf(fixture.dbPath)).toBe("active");
+    // The barrier still holds its derived CAS: the CAS was taken on the staged
+    // epoch (1), so activation advances it exactly once rather than refusing.
+    expect(authorityOf(fixture.dbPath).authority_epoch).toBe(manifest.epoch + 1);
+    expect(syncRefusalOf(() => assertExecutionFileWriteAllowed(fixture.context)).code).toBe("execution.direct-write-refused");
+  });
+
   test("execution-activation-refuses-a-staged-graph-edited-since-the-import", async () => {
     // §6 item 3 "recheck ... every identity/pin", through the migration diagnostic
     // path: the staged rows are re-read and compared with the reviewed import, so

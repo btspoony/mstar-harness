@@ -102,6 +102,8 @@ export type {
   StatusV2Doc,
   WorkflowEntry,
 } from "./status.js";
+export { STATUS_V2_PAYLOAD_SCHEMA } from "./status.js";
+
 export {
   normalizeSeverity,
   registerWorkflow,
@@ -161,6 +163,7 @@ export {
   declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
+  deliveryEvidenceViolations,
   recordWorkflowDelivery,
   registerIterationWorkflow,
   registerPlanWorkflow,
@@ -174,6 +177,8 @@ export {
   validateWorkflowSnapshot,
   writeWorkflowSnapshot,
 } from "./workflow.js";
+export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow.js";
+
 // Lifecycle-phase derivation (S3/E06a) and the terminal outcome a close records
 // (S3/E12b): the three phase labels a document's own facts derive to, the code
 // of the reader's derived-phase diagnostic, the ONE derivation the file
@@ -507,7 +512,11 @@ export {
 } from "./prreview.js";
 export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
+export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
+
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
+export { PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
+
 export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
 export { collectActiveLifecycleBranches, scanActiveLifecycleBranches, type ActiveLifecycleScan } from "./lifecycle-branches.js";
@@ -668,7 +677,7 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // ADDITIVE export: the per-kind transition bodies and the pinned-witness
 // helpers stay module-scoped.
 export type { WorkflowExecutionOperation } from "./execution-workflow.js";
-export { mutateExecutionWorkflow, recoverExecutionCoordinator } from "./execution-workflow.js";
+export { mutateExecutionWorkflow, recoverExecutionCoordinator, workflowExecutionPolicyViolations } from "./execution-workflow.js";
 export type {
   CaptureInput,
   ClosureEvidence,

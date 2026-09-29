@@ -85,9 +85,33 @@ function makePilot() {
 }
 
 describe("versioned judgment contracts", () => {
-  test("accepts exactly bound review/A05 pack and explicitly authorized native shadow pilot", () => {
+  test("pack validation accepts exactly bound review/A05 packs and an authorized native shadow pilot", () => {
     expect(validatePack(makePack()).tasks[0]?.subjectIds).toEqual(["finding-left", "finding-right"]);
     expect(validatePilot(makePilot()).model).toBe(NATIVE_MODEL);
+  });
+
+  test("derived pack fields and ordered subject bindings use current contract facts", () => {
+    const pack = makePack();
+    delete (pack as Partial<typeof pack>).schema;
+    delete (pack as Partial<typeof pack>).contractRevision;
+    delete (pack as Partial<typeof pack>).profile;
+    delete (pack.scope as Partial<typeof pack.scope>).kind;
+    delete (pack.recipient as Partial<typeof pack.recipient>).phase;
+    delete (pack.tasks[0] as Partial<typeof pack.tasks[number]>).useCase;
+    delete (pack.tasks[0] as Partial<typeof pack.tasks[number]>).subjectIds;
+
+    const validated = validatePack(pack);
+    expect(validated.schema).toBe(PACK_SCHEMA);
+    expect(validated.tasks[0]?.subjectIds).toEqual(["finding-left", "finding-right"]);
+    expect(pack.tasks[0]).not.toHaveProperty("subjectIds");
+  });
+
+  test("aggregate problems preserve independently missing pack paths", () => {
+    const pack = makePack();
+    delete (pack as Partial<typeof pack>).runId;
+    delete (pack.scope as Partial<typeof pack.scope>).reviewId;
+
+    expect(() => validatePack(pack)).toThrow("pack.runId: required field missing; pack.scope.reviewId: required field missing");
   });
 
   test("rejects superseded revisions, profile/recipient/use-case drift and extra wire fields", () => {

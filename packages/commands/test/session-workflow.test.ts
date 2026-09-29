@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
@@ -47,6 +47,53 @@ describe("session and workflow command families", () => {
       "workflow.integration-worktree", "iteration.register", "session.recover", "session.run",
     ]));
   });
+  test("workflow family sparse payload decode validates object and array intent payloads", () => {
+    const amendment = definition("workflow.amend-prepare");
+    const iteration = definition("iteration.register");
+    expect(amendment.payloads?.input?.schema.safeParse({ append: [] }).success).toBe(true);
+    expect(amendment.payloads?.input?.schema.safeParse([]).success).toBe(false);
+    expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
+    expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
+  });
+  test("pathname fields carry no payload descriptor, so a file path is never parsed as JSON", () => {
+    // `--file` is an absolute pathname on every workflow verb. A descriptor
+    // bound to it would make the shared CLI decoder `JSON.parse` the path and
+    // reject ordinary paths as invalid JSON, so the field must not appear —
+    // while the genuine document-valued fields keep theirs.
+    for (const id of ["workflow.evidence", "workflow.execution-policy"]) {
+      const command = definition(id);
+      expect(command.payloads).toBeDefined();
+      expect(command.payloads).not.toHaveProperty("file");
+      expect(command.cli.options.some((option) => option.key === "file")).toBe(true);
+    }
+  });
+
+  test("evidence before Done is accepted through the workflow command", async () => {
+    const context = testContext();
+    const harnessDir = path.join(context.cwd, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    mkdirSync(path.join(harnessDir, "plans"), { recursive: true });
+    writeFileSync(path.join(harnessDir, "plans", "plan-evidence-order.md"), "**plan_id:** plan-evidence-order\n");
+    const store = await initializeStore({ harnessDir });
+    store.close();
+    const registered = await definition("workflow.register").execute({
+      workflow: "wf-evidence-order", planId: "plan-evidence-order", planTitle: "Evidence order",
+      planFile: "plans/plan-evidence-order.md", deliveryKind: "development", branchSource: "feature/evidence-order",
+      branchTarget: "main", harness: harnessDir,
+    }, context);
+    expect(registered).toMatchObject({ status: "ok" });
+
+    const evidenceFile = path.join(context.cwd, "delivery.json");
+    writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "created" } }));
+    const recorded = await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(recorded.status).toBe("ok");
+    const snapshot = JSON.parse(readFileSync(path.join(harnessDir, "workflows", "wf-evidence-order", "snapshot.json"), "utf8"));
+    expect(snapshot.delivery).toEqual({ compound: { outcome: "created" } });
+    expect(snapshot.plans[0].status).not.toBe("Done");
+  });
+
 
   test("session.run launches argv without a shell and preserves child output and exit status", async () => {
     const context = testContext();

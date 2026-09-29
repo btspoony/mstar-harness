@@ -54,6 +54,9 @@ export function getReportCommandDefinitions(): readonly CommandDefinition<Report
     effects: ["validate"],
     description: "Create an offline, redacted issue-report draft.",
     async execute(input, context) {
+      if (context.signal.aborted) {
+        return { version: 1, command: "report", status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+      }
       try {
         return { version: 1, command: "report", status: "ok", code: "report.ok", exitCode: 0, data: createReport(input, context.versions) };
       } catch (error) {

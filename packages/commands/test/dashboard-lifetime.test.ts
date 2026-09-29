@@ -50,7 +50,7 @@ function serviceEffects(handles: RunningDashboard[], onOpen?: (url: string) => P
 }
 
 describe("dashboard connection lifetime", () => {
-  test("serves a real loopback response and reuses one same-root/port handle until close", async () => {
+  test("service lifetime reuses one same-root/port handle until connection close", async () => {
     const harnessDir = await workspace("dashboard-lifetime-");
     const handles: RunningDashboard[] = [];
     const effects = serviceEffects(handles);
@@ -97,7 +97,35 @@ describe("dashboard connection lifetime", () => {
     }
   });
 
-  test("refuses an unavailable opener and closes the partially started service", async () => {
+  test("optional browser capability is not used unless requested", async () => {
+    const harnessDir = await workspace("dashboard-optional-browser-");
+    const handles: RunningDashboard[] = [];
+    try {
+      const result = await dashboardDefinition().execute({ port: 0 }, context(harnessDir, serviceEffects(handles)));
+      expect(result).toMatchObject({ status: "ok", data: { lifetime: "connection" } });
+      expect(handles).toHaveLength(1);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+  test("cancellation before service start performs no service effect", async () => {
+    const harnessDir = await workspace("dashboard-cancel-");
+    const handles: RunningDashboard[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    try {
+      const invocation = { ...context(harnessDir, serviceEffects(handles)), signal: controller.signal };
+      const result = await dashboardDefinition().execute({ port: 0, open: true }, invocation);
+      expect(result).toMatchObject({ status: "error", code: "command.cancelled" });
+      expect(handles).toHaveLength(0);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("optional browser failure is typed and closes its unrequested service", async () => {
     const harnessDir = await workspace("dashboard-opener-");
     const handles: RunningDashboard[] = [];
     const effects = serviceEffects(handles, async () => {
@@ -105,7 +133,7 @@ describe("dashboard connection lifetime", () => {
     });
     try {
       const result = await dashboardDefinition().execute({ port: 0, open: true }, context(harnessDir, effects));
-      expect(result).toMatchObject({ status: "refused", code: "capability.browser.unavailable", exitCode: 1 });
+      expect(result).toMatchObject({ status: "error", code: "capability.browser.unavailable", exitCode: 1 });
       expect(handles).toHaveLength(1);
       await expect(fetch(handles[0]!.url)).rejects.toThrow();
     } finally {

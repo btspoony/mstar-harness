@@ -24,6 +24,27 @@ async function run(input: unknown) {
 }
 
 describe("report command", () => {
+  test("report input aggregates every oversized field without echoing values and stays offline without a control root", async () => {
+    const title = `secret-title-${"x".repeat(8192)}`;
+    const actual = `secret-actual-${"y".repeat(8192)}`;
+    const result = await run({ title, actual });
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "report.input-too-large",
+      details: { fields: ["title", "actual"], limit: 8192 },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-title");
+    expect(JSON.stringify(result)).not.toContain("secret-actual");
+
+    const offline = await run({ title: "offline draft" });
+    expect(offline.status).toBe("ok");
+  });
+  test("cancellation returns a typed outcome without creating an external report", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await definition!.execute({}, { ...context, signal: controller.signal });
+    expect(result).toMatchObject({ status: "error", code: "command.cancelled" });
+  });
   test("no-argument report uses unknown surface versions and absent narratives", () => {
     const result = createReport({}, versions);
     expect(result.issueUrl).toBe("https://github.com/btspoony/mstar-harness/issues/new");

@@ -32,7 +32,7 @@ const failureEnvelopeSchema = z.object({
   exitCode: z.number().int().refine((code) => code !== 0),
   message: z.string(),
   details: z.record(z.string(), z.unknown()).optional(),
-});
+}).passthrough();
 
 export const commandEnvelopeSchema = z.discriminatedUnion("status", [
   z.object({
@@ -42,7 +42,7 @@ export const commandEnvelopeSchema = z.discriminatedUnion("status", [
     code: z.string().min(1),
     exitCode: z.literal(0),
     data: z.unknown(),
-  }),
+  }).passthrough(),
   failureEnvelopeSchema,
   z.object({
     version: z.literal(1),
@@ -52,7 +52,7 @@ export const commandEnvelopeSchema = z.discriminatedUnion("status", [
     exitCode: z.literal(2),
     message: z.string(),
     details: z.record(z.string(), z.unknown()).optional(),
-  }),
+  }).passthrough(),
 ]);
 
 export class CommandDefinitionError extends Error {

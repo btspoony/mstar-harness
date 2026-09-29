@@ -37,6 +37,7 @@
  */
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { lines_missing_fence, parseReportFrontmatter } from "./prreview.js";
+export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
 
 /**
  * Verdict 词表 —— 逐字取自 `report-template.md` § Report body template。
@@ -56,6 +57,8 @@ const REPORT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** `## Summary` 四行计数与 `## Findings` 四个 severity 分区，模板顺序。 */
 const REPORT_SEVERITIES = ["Critical", "Warning", "Suggestion", "Unconfirmed"] as const;
 type ReportSeverity = (typeof REPORT_SEVERITIES)[number];
+/** The public payload schema lives in a leaf module to keep imports acyclic. */
+
 
 /**
  * 正文 verdict 行：`**Verdict**: X`、`**Verdict: X**`、`## Verdict: X`，以及

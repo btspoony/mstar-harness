@@ -263,7 +263,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Resolve harness, specs, workflow, and project directories from a start directory.",
       async execute(input, context) {
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
-        const harnessDir = resolveHarnessDir(startDir);
+        const pathOptions = context.controlRoot === null ? {} : { workspaceRoot: context.controlRoot };
+        const harnessDir = resolveHarnessDir(startDir, pathOptions);
         if (harnessDir === null) {
           return refused("path.resolve", "path.harness-not-found", `no harness dir found from ${startDir}`, {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null,
@@ -273,8 +274,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           startDir,
           harnessDir,
           specsDir: resolveSpecsDir(harnessDir, { create: false }),
-          workflowDir: resolveWorkflowDir(startDir),
-          projectDir: resolveProjectDir(startDir),
+          workflowDir: resolveWorkflowDir(startDir, pathOptions),
+          projectDir: resolveProjectDir(startDir, pathOptions),
         });
       },
     }),

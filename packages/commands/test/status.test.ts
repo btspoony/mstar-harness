@@ -48,6 +48,41 @@ describe("status command family", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  test("status close sparse intent derives the date and composes terminal cleanup", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-close-sparse-"));
+    try {
+      const workflow = "wf-sparse";
+      const workflowDir = path.join(dir, "workflows", workflow);
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(path.join(dir, "status.json"), JSON.stringify({
+        version: 2,
+        updated_at: "2026-08-19",
+        workflows: [{ id: workflow, type: "plan", started_at: "2026-08-01", dir: `workflows/${workflow}` }],
+      }));
+      writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({
+        schema_version: 1,
+        id: workflow,
+        type: "plan",
+        status: "running",
+        started_at: "2026-08-01",
+        updated_at: "2026-08-19",
+        delivery_kind: "development",
+        branch: { source: "feature/plan-a", target: "main" },
+        delivery: {
+          compound: { outcome: "created" },
+          pr: { repo: "example/project", head: "feature/plan-a", target: "main" },
+          merge: { provider: "github", evidence: "PR merged" },
+        },
+        plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
+      }));
+      const result = await statusDefinition("status.workflow-close").execute({ workflow, harness: dir }, context(dir));
+      expect(result).toMatchObject({ status: "ok", data: { snapshot: { status: "completed" }, unregistered: true } });
+      expect(JSON.parse(readFileSync(path.join(dir, "status.json"), "utf8")).workflows).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 
   test("a refused active workflow-close carries the engine's typed details and recovery sidecar", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-close-details-"));

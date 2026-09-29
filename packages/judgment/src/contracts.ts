@@ -164,8 +164,62 @@ function validateIdentity(value: Record<string, unknown>, schema: string, path: 
   if (value.contractRevision !== CONTRACT_REVISION) fail(`${path}.contractRevision`, `unsupported revision; expected ${CONTRACT_REVISION}`);
 }
 
+function derivePackFields(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const pack = value as Record<string, unknown>;
+  const scope = pack.scope !== null && typeof pack.scope === "object" && !Array.isArray(pack.scope)
+    ? pack.scope as Record<string, unknown>
+    : null;
+  const recipient = pack.recipient !== null && typeof pack.recipient === "object" && !Array.isArray(pack.recipient)
+    ? pack.recipient as Record<string, unknown>
+    : null;
+  const state = pack.state !== null && typeof pack.state === "object" && !Array.isArray(pack.state)
+    ? pack.state as Record<string, unknown>
+    : null;
+  const subjects = state?.subjects;
+  const subjectIds = Array.isArray(subjects)
+    ? subjects.flatMap((subject) => subject !== null && typeof subject === "object" && !Array.isArray(subject)
+      ? [(subject as Record<string, unknown>).id]
+      : [])
+    : undefined;
+  const tasks = Array.isArray(pack.tasks)
+    ? pack.tasks.map((task) => {
+      if (task === null || typeof task !== "object" || Array.isArray(task)) return task;
+      const entry = task as Record<string, unknown>;
+      return {
+        ...entry,
+        ...(!("useCase" in entry) ? { useCase: "JEV-A05" } : {}),
+        ...(!("subjectIds" in entry) && subjectIds !== undefined ? { subjectIds } : {}),
+      };
+    })
+    : pack.tasks;
+  return {
+    ...pack,
+    ...(!("schema" in pack) ? { schema: PACK_SCHEMA } : {}),
+    ...(!("contractRevision" in pack) ? { contractRevision: CONTRACT_REVISION } : {}),
+    ...(!("profile" in pack) ? { profile: "review" } : {}),
+    ...(scope ? { scope: { ...scope, ...(!("kind" in scope) ? { kind: "review" } : {}) } } : {}),
+    ...(recipient ? { recipient: { ...recipient, ...(!("phase" in recipient) ? { phase: "synthesis" } : {}) } } : {}),
+    ...(Array.isArray(pack.tasks) ? { tasks } : {}),
+  };
+}
+
 export function validatePack(value: unknown): ReviewDecisionPack {
-  const p = record(value, "pack");
+  const normalized = derivePackFields(value);
+  const p = record(normalized, "pack");
+  const missing = ["runId", "packId", "concernId", "scope", "recipient", "sources", "state", "tasks", "rubricVersion", "builderVersion"]
+    .filter((key) => !(key in p))
+    .map((key) => `pack.${key}: required field missing`);
+  if (p.scope !== null && typeof p.scope === "object" && !Array.isArray(p.scope)) {
+    const scope = p.scope as Record<string, unknown>;
+    for (const key of ["reviewId", "snapshotSha256", "diffSha256", "tier"]) {
+      if (!(key in scope)) missing.push(`pack.scope.${key}: required field missing`);
+    }
+  }
+  if (p.recipient !== null && typeof p.recipient === "object" && !Array.isArray(p.recipient) && !("id" in p.recipient)) {
+    missing.push("pack.recipient.id: required field missing");
+  }
+  if (missing.length) fail("pack", `aggregate problems: ${missing.join("; ")}`);
   exactKeys(p, ["schema", "contractRevision", "runId", "packId", "concernId", "profile", "scope", "recipient", "sources", "state", "tasks", "rubricVersion", "builderVersion"], "pack");
   validateIdentity(p, PACK_SCHEMA, "pack");
   for (const key of ["runId", "packId", "concernId", "rubricVersion", "builderVersion"]) string(p[key], `pack.${key}`);
@@ -251,7 +305,7 @@ export function validatePack(value: unknown): ReviewDecisionPack {
     integer(unit.revision, `${path}.workUnit.revision`, 0);
     return task;
   });
-  return value as ReviewDecisionPack;
+  return normalized as ReviewDecisionPack;
 }
 
 export function validatePilot(value: unknown): JudgmentPilot {
