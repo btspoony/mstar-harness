@@ -130,6 +130,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       if (input.format === undefined) throw new UsageError("--format is required");
       const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: usage(input.project, "--project") }));
       const roadmap = envelope.data;
+      if (roadmap === null) throw new RoadmapError("roadmap.project-not-found", `Catalog project ${usage(input.project, "--project")} does not exist.`);
       const data = input.format === "markdown"
         ? exportMarkdown(roadmap, envelope.storeRevision)
         : {
