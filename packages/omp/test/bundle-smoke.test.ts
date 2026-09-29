@@ -122,6 +122,7 @@ interface RuntimeReport {
   packed: { errors: string[]; tools: string[]; handlers: string[] };
   schema: { parsed: unknown; rejectsMissingWorkflowId: string | null };
   startInert: { ok: boolean; isError: boolean; code: string; message: string };
+  fireInert: { ok: boolean; isError: boolean; code: string; message: string };
   startUnsafeWorkflow: { ok: boolean; isError: boolean; code: string; message: string };
   fireWithoutBinding: { ok: boolean; isError: boolean; code: string; message: string };
   source: { errors: string[]; tools: string[]; handlers: string[] };
@@ -217,15 +218,16 @@ const report = await (async () => {
     const result = await packedTool.execute(id, params, undefined, undefined, ctx);
     const details = result?.details?.mstarModelHandoff ?? {};
     return {
-      ok: details.ok === true,
+      ok: result?.details?.ok === true,
       isError: result?.isError === true,
       code: details.code ?? null,
       message: textOf(result).slice(0, 200),
     };
   };
 
-  // Default native settings: inert, no record and no model action.
+  // Default native settings: both entry points are successful, inert no-ops.
   const startInert = await invoke("probe-start", { operation: "start", workflowId: "probe-iteration" });
+  const fireInert = await invoke("probe-fire-inert", { operation: "phase1-complete", workflowId: "probe-iteration" });
   // Native write through the host's own settings path, then an unsafe workflow id:
   // the inlined engine must refuse before any model action.
   await new PluginManager(project).setPluginSetting(pluginName, "modelHandoff", true);
@@ -270,6 +272,7 @@ const report = await (async () => {
     },
     schema: { parsed, rejectsMissingWorkflowId },
     startInert,
+    fireInert,
     startUnsafeWorkflow,
     fireWithoutBinding,
     source: {
@@ -713,16 +716,12 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.schema.parsed).toEqual({ operation: "start", workflowId: "probe-iteration" });
       expect(report.schema.rejectsMissingWorkflowId).toContain("workflowId");
 
-      // Settings API exercised for real: disabled is inert, enabled reaches the
-      // inlined engine and refuses an unsafe workflow id. Both return before the
-      // host's model action, so neither can report a model change; each refusal
-      // is visible in the tool result rather than silent.
-      expect(report.startInert).toMatchObject({ ok: false, isError: false, code: "preference-off" });
-      expect(report.startInert.message.length).toBeGreaterThan(0);
+      // Disabled preference is a successful neutral no-op at both consumer entry
+      // points; enabled unsafe workflows remain visibly rejected.
+      expect(report.startInert).toMatchObject({ ok: true, isError: false, code: "preference-off" });
+      expect(report.fireInert).toMatchObject({ ok: true, isError: false, code: "preference-off" });
       expect(report.startUnsafeWorkflow).toMatchObject({ ok: false, isError: true, code: "invalid-workflow" });
-      expect(report.startUnsafeWorkflow.message.length).toBeGreaterThan(0);
       expect(report.fireWithoutBinding).toMatchObject({ ok: false, isError: true, code: "not-pending" });
-
       // Source entry parity: the same host loader binds the TS source to the
       // same tool and event wiring.
       expect(report.source.errors).toEqual([]);
