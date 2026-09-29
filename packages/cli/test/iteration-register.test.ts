@@ -209,8 +209,12 @@ describe("mstar iteration register", () => {
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
 
+      // R1/R6/A09: the repeat of a registration that already fully holds is a
+      // successful no-op — the recorded receipt, no byte churn. The create-only
+      // refusal stays reserved for a genuinely DIFFERENT registration of the
+      // same workflow id.
       const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(1);
+      expect(duplicate.exitCode).toBe(0);
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
@@ -285,14 +289,21 @@ describe("mstar iteration register", () => {
       expect(existsSync(root)).toBe(false);
       expect(existsSync(snapshot)).toBe(false);
 
-      // Stale root: an entry whose snapshot is missing refuses fail-loud.
+      // Stale root: a foreign entry replaced the root register. The journal
+      // still records the committed registration, so a replay that ignored the
+      // file-route effect would answer success while the workflow is NOT
+      // registered — the replay refuses the diverged journal and points at
+      // `catalog reconcile`; no byte is invented or rewritten.
       const first = runCli(registerArgs(harness));
       expect(first.exitCode).toBe(0);
       const goodSnapshot = readFileSync(snapshot, "utf8");
-      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [{ id: "ghost", type: "iteration", started_at: "2026-09-01", dir: "workflows/ghost" }] }, null, 2));
+      const ghostRoot = JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [{ id: "ghost", type: "iteration", started_at: "2026-09-01", dir: "workflows/ghost" }] }, null, 2);
+      writeFileSync(root, ghostRoot);
       const staleRoot = runCli(registerArgs(harness));
       expect(staleRoot.exitCode).toBe(1);
+      expect(message(staleRoot)).toContain("reconcile");
       expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
+      expect(readFileSync(root, "utf8")).toBe(ghostRoot);
 
       // Malformed root refuses without replacing bytes.
       writeFileSync(root, "{ not json");

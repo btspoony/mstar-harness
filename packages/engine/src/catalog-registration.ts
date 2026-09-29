@@ -969,6 +969,25 @@ function hasExecutionBytes(plan: CatalogExecutionPlan): boolean {
   return existsSync(plan.snapshotPath) || findRegisteredWorkflow(plan.harnessDir, plan.workflowId) !== undefined;
 }
 
+/**
+ * A09 the replay no-op answers only while the committed registration's
+ * file-route EFFECT is still held: BOTH the snapshot and the root register
+ * entry a successful registration materialized must survive. A root that lost
+ * the entry (overwritten by a foreign register, truncated) is a diverged
+ * journal, not an already-satisfied intent — answering success would leave the
+ * workflow unregistered while the journal claims it committed. The caller
+ * repairs the divergence through `catalog reconcile`.
+ */
+function assertRegistrationEffectHeld(plan: CatalogExecutionPlan): void {
+  if (existsSync(plan.snapshotPath) && findRegisteredWorkflow(plan.harnessDir, plan.workflowId) !== undefined) return;
+  throw new CatalogRegistrationError(
+    "catalog.registration-conflict",
+    `workflow ${JSON.stringify(plan.workflowId)} is committed in the registration journal, but its registered ` +
+      `effect no longer holds under ${plan.harnessDir} (the snapshot or the root register entry is missing): ` +
+      `the journal and the registered bytes diverged. Run "mstar catalog reconcile" to repair or abort the operation.`,
+  );
+}
+
 type ExecutionWrite = FileVersions & { recovered: boolean };
 
 /**
@@ -1306,7 +1325,10 @@ export async function registerCatalogExecution(
           "The same operationId was reused with a different request; the original registration is retained.",
         );
       }
-      if (existing.phase === "committed") return { kind: "replayed" as const, receipt: receiptOfRow(existing) };
+      if (existing.phase === "committed") {
+        assertRegistrationEffectHeld(plan);
+        return { kind: "replayed" as const, receipt: receiptOfRow(existing) };
+      }
       if (existing.phase === "aborted") {
         throw new CatalogRegistrationError(
           "catalog.registration-aborted",
@@ -1333,7 +1355,12 @@ export async function registerCatalogExecution(
       const view = journalView(row);
       return view.identity === plan.identity && stableJson(view.catalog) === stableJson(validated.delta);
     });
-    if (replayRow !== undefined) return { kind: "replayed" as const, receipt: receiptOfRow(replayRow) };
+    if (replayRow !== undefined) {
+      // A09 the no-op answers only while the committed registration's
+      // file-route EFFECT is still held (see assertRegistrationEffectHeld).
+      assertRegistrationEffectHeld(plan);
+      return { kind: "replayed" as const, receipt: receiptOfRow(replayRow) };
+    }
 
     const versions = readJournalVersions(db);
     if (versions.catalogRevision !== validated.expectedCatalogRevision) {

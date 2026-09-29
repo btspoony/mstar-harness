@@ -2138,8 +2138,10 @@ export function planWorkflowSnapshot(
   options: RegisterPlanWorkflowOptions,
   startedAt: string,
 ): WorkflowSnapshot {
-  const plan = derivePlanRegistration({ harnessDir: options.harnessDir, plan: options.plan }).plan;
-  const planRow: PlanRow = { id: plan.id, title: plan.title, file: plan.file, status: "Todo" };
+  // The row keeps the caller's declared pointer (the reviewed §4 spelling the
+  // caller supplied); the derived identity only fills omitted id/title.
+  const derived = derivePlanRegistration({ harnessDir: options.harnessDir, plan: options.plan }).plan;
+  const planRow: PlanRow = { id: options.plan.id ?? derived.id, title: options.plan.title ?? derived.title, file: options.plan.file, status: "Todo" };
   const snapshot: WorkflowSnapshot = {
     schema_version: 1,
     id: workflowId,
