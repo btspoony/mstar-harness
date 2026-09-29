@@ -88,6 +88,25 @@ describe("plan command family", () => {
     expect(ids).toContain("plan.residual-close");
   });
 
+  test("plan family sparse input passes descriptor validation without session or revision", () => {
+    const input = definition("plan.progress").input.safeParse({
+      progress: { status: "InProgress", summary: "Work continues", evidence_paths: [] },
+    });
+    expect(input.success).toBe(true);
+    if (input.success) {
+      expect(input.data).not.toHaveProperty("session");
+      expect(input.data).not.toHaveProperty("expect");
+    }
+  });
+
+  test("plan family payload decode rejects malformed fields with accurate paths", () => {
+    const planProgress = definition("plan.progress");
+    expect(planProgress.payloads?.progress?.schema.safeParse({ status: "InProgress" }).success).toBe(true);
+    const malformed = planProgress.input.safeParse({ progress: "not-an-object" });
+    expect(malformed.success).toBe(false);
+    if (!malformed.success) expect(malformed.error.issues[0]?.path).toEqual(["progress"]);
+  });
+
   test("plan binds require runtime session identity and coordinator progress remains role-scoped", async () => {
     const data = fixture();
     const ctx = context(data.root);
