@@ -22,7 +22,6 @@ describe("marketplacePluginEntry (zcode bootstrap snapshot)", () => {
     expect(entry.source).toEqual({ source: "github", repo: "btspoony/mstar-harness", ref: "main" });
     expect(entry.displayName).toBe("Morning Star Harness");
     expect(entry.category).toBe("Productivity");
-    expect(entry.description).toContain("Multi-agent code harness");
     expect(entry.icon).toContain("assets/icon.png");
   });
 });

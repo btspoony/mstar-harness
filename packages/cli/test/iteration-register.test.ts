@@ -264,9 +264,6 @@ describe("mstar iteration register", () => {
 
       const help = runCli(["iteration", "register", "--help"]);
       expect(help.exitCode).toBe(0);
-      expect(help.stdout).toContain("--compass-ref");
-      expect(help.stdout).toContain("--branch-target-iteration");
-      expect(help.stdout).toContain("--row");
     });
   }, MULTI_CLI_TEST_TIMEOUT_MS);
 

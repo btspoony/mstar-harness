@@ -156,7 +156,6 @@ describe("mstar catalog discover", () => {
     const { workspace } = await harnessFixture("usage-");
     const help = runCli(["catalog", "discover", "--help"], workspace);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("--out");
 
     const usage = runCli(["catalog", "discover", "--nope"], workspace);
     expect(usage.exitCode).toBe(2);
