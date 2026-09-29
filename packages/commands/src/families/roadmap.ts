@@ -33,13 +33,44 @@ const cliFlags: Record<keyof Input, string> = {
   project: "--project <id>", file: "--file <absolute-md>", review: "--review <absolute-json>", apply: "--apply", operation: "--operation <id>",
   expectProject: "--expect-project <n>", expectRoadmap: "--expect-roadmap <n|absent>", format: "--format <markdown|json>", harness: "--harness <root>",
 };
-class UsageError extends Error {}
+/**
+ * A refusal names every irreducible fact this call cannot derive, in one
+ * result (A27): the verb's own minimum requirement set, never the first
+ * missing field alone. Each entry is the CLI flag plus what must be supplied.
+ */
+class UsageError extends Error {
+  readonly paths: string[];
+  constructor(message: string, paths: readonly string[]) {
+    super(message);
+    this.paths = [...paths];
+  }
+}
+const REPLACE_REQUIREMENTS: Readonly<Record<string, { flag: string; need: string }>> = {
+  project: { flag: "--project", need: "the catalog project the roadmap belongs to" },
+  file: { flag: "--file", need: "the absolute Markdown candidate to publish" },
+  operation: { flag: "--operation", need: "the operation id this write is journalled under" },
+};
+const REVIEW_REQUIREMENTS: Readonly<Record<string, { flag: string; need: string }>> = {
+  review: { flag: "--review", need: "the saved reviewed source (absolute JSON)" },
+  operation: { flag: "--operation", need: "the operation id this write is journalled under" },
+};
+function requireAll(input: Input, requirements: Readonly<Record<string, { flag: string; need: string }>>): void {
+  const missing = Object.entries(requirements).filter(([key]) => {
+    const value = input[key as keyof Input];
+    return typeof value !== "string" || value.trim() === "";
+  });
+  if (missing.length === 0) return;
+  throw new UsageError(
+    missing.map(([, entry]) => `${entry.flag} is required: ${entry.need}`).join("; "),
+    missing.map(([key]) => key),
+  );
+}
 function usage(value: string | undefined, flag: string): string {
-  if (value === undefined || value.trim() === "") throw new UsageError(`${flag} is required`);
+  if (value === undefined || value.trim() === "") throw new UsageError(`${flag} is required`, [flag]);
   return value.trim();
 }
 function absolute(value: string, flag: string): string {
-  if (!path.isAbsolute(value)) throw new UsageError(`${flag} must be an absolute path`);
+  if (!path.isAbsolute(value)) throw new UsageError(`${flag} must be an absolute path`, [flag]);
   return value;
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
@@ -48,13 +79,13 @@ function storeContext(input: Input, invocation: InvocationContext): StoreContext
 }
 function reviewInput(value: unknown): RoadmapImportReview {
   const candidate = typeof value === "object" && value !== null && "data" in value ? (value as { data?: unknown }).data : value;
-  if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) throw new UsageError("review must contain a RoadmapImportReview object");
+  if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) throw new UsageError("review must contain a RoadmapImportReview object", ["review"]);
   const review = candidate as Partial<RoadmapImportReview>;
   if (
     review.version !== 1 || typeof review.projectId !== "string" || !Number.isSafeInteger(review.expectedProjectRevision) ||
     (review.expectedRoadmapRevision !== "absent" && (!Number.isSafeInteger(review.expectedRoadmapRevision) || (review.expectedRoadmapRevision as number) < 1)) ||
     typeof review.sourcePath !== "string" || !path.isAbsolute(review.sourcePath) || typeof review.sourceHash !== "string" || !/^[a-f0-9]{64}$/.test(review.sourceHash)
-  ) throw new UsageError("review has invalid RoadmapImportReview fields");
+  ) throw new UsageError("review has invalid RoadmapImportReview fields", ["review"]);
   return review as RoadmapImportReview;
 }
 function readReviewFile(value: string): unknown {
@@ -62,7 +93,7 @@ function readReviewFile(value: string): unknown {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as unknown;
   } catch (error) {
-    throw new UsageError(`--review could not be read as JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new UsageError(`--review could not be read as JSON: ${error instanceof Error ? error.message : String(error)}`, ["review"]);
   }
 }
 function success(id: string, data: unknown): CommandEnvelope {
@@ -70,7 +101,9 @@ function success(id: string, data: unknown): CommandEnvelope {
 }
 function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id } };
+  if (error instanceof UsageError) {
+    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id, paths: error.paths } };
+  }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
   return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } };
@@ -81,19 +114,35 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
     const verb = id.slice("roadmap.".length);
     if (verb === "show") {
       const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
+      // The parsed projections are DERIVED from the stored body, never a
+      // second authority: the roadmap record above stays the source the
+      // content came from (the parse is a read of it, A02).
       const content = read.roadmap === null ? null : parseRoadmapContent(read.roadmap.contentMarkdown);
       return success(id, { projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content });
     }
     if (verb === "import") {
       if (input.apply) {
-        if (input.project !== undefined || input.file !== undefined || input.review === undefined) throw new UsageError("apply mode requires --review and rejects --project/--file");
-        return success(id, await importRoadmapAuthority(context, reviewInput(readReviewFile(input.review)), { operationId: usage(input.operation, "--operation") }));
+        if (input.project !== undefined || input.file !== undefined || input.review === undefined) {
+          throw new UsageError(
+            "apply mode reads the reviewed source only: --review and --operation are the irreducible inputs, and --project/--file are rejected",
+            ["review"],
+          );
+        }
+        requireAll(input, REVIEW_REQUIREMENTS);
+        return success(id, await importRoadmapAuthority(context, reviewInput(readReviewFile(input.review!)), { operationId: input.operation! }));
       }
-      if (input.review !== undefined || input.operation !== undefined) throw new UsageError("preview mode accepts only --project and --file; use --review --apply --operation to commit");
-      return success(id, await reviewRoadmapImport(context, usage(input.project, "--project"), absolute(usage(input.file, "--file"), "--file")));
+      if (input.review !== undefined || input.operation !== undefined) throw new UsageError("preview mode accepts only --project and --file; use --review --apply --operation to commit", ["review", "operation"]);
+      requireAll(input, { project: { flag: "--project", need: "the catalog project to preview against" }, file: { flag: "--file", need: "the absolute Markdown source to review" } });
+      return success(id, await reviewRoadmapImport(context, input.project!, absolute(input.file!, "--file")));
     }
     if (verb === "replace") {
-      const bytes = readFileSync(absolute(usage(input.file, "--file"), "--file"));
+      // The observed revisions are DERIVED inside the write transaction when
+      // omitted: a caller that just read the authority states nothing and the
+      // engine still compares against the state it actually observed. What
+      // stays irreducible is the target, the candidate bytes and the operation
+      // id — all three are aggregated in one refusal (A27).
+      requireAll(input, REPLACE_REQUIREMENTS);
+      const bytes = readFileSync(absolute(input.file!, "--file"));
       let contentMarkdown: string;
       try {
         contentMarkdown = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new Uint8Array(bytes));
@@ -101,18 +150,18 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
         if (error instanceof TypeError) throw new RoadmapError("roadmap.invalid-content", "Replacement file is not valid UTF-8.");
         throw error;
       }
-      if (input.expectProject === undefined) throw new UsageError("--expect-project is required");
-      if (input.expectRoadmap === undefined) throw new UsageError("--expect-roadmap is required");
-      const expectedRoadmapRevision: RoadmapExpected = input.expectRoadmap;
       return success(id, await replaceRoadmapAuthority(context, {
-        projectId: usage(input.project, "--project"), expectedProjectRevision: input.expectProject, expectedRoadmapRevision, contentMarkdown,
-      }, { operationId: usage(input.operation, "--operation") }));
+        projectId: input.project!,
+        ...(input.expectProject === undefined ? {} : { expectedProjectRevision: input.expectProject }),
+        ...(input.expectRoadmap === undefined ? {} : { expectedRoadmapRevision: input.expectRoadmap as RoadmapExpected }),
+        contentMarkdown,
+      }, { operationId: input.operation! }));
     }
     if (verb === "export") {
-      if (input.format === undefined) throw new UsageError("--format is required");
+      const format = input.format ?? "markdown";
       const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
       if (read.roadmap === null) throw Object.assign(new Error("roadmap.absent: project has no stored roadmap content"), { code: "roadmap.absent" });
-      const data = input.format === "markdown" ? read.roadmap.contentMarkdown : {
+      const data = format === "markdown" ? read.roadmap.contentMarkdown : {
         version: 1, projectId: read.projectId, revision: read.roadmap.revision, contentHash: read.roadmap.contentHash, contentMarkdown: read.roadmap.contentMarkdown,
       };
       return success(id, data);
@@ -129,8 +178,14 @@ const optionsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
   show: ["project", "harness"],
   export: ["project", "format", "harness"],
 };
+/**
+ * Only facts that can never be derived stay CLI-required: the target project
+ * and the candidate/reviewed bytes. `--operation` is declared here too where
+ * the engine journals the write, so the CLI help states the same irreducible
+ * set the handler aggregates.
+ */
 const requiredOptions: Record<(typeof verbs)[number], (keyof Input)[]> = {
-  import: [], replace: ["project", "file", "expectProject", "expectRoadmap", "operation"], show: ["project"], export: ["project", "format"],
+  import: [], replace: ["project", "file", "operation"], show: ["project"], export: ["project"],
 };
 export function getRoadmapCommandDefinitions(): readonly CommandDefinition[] {
   return verbs.map((verb) => {

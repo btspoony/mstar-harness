@@ -228,17 +228,41 @@ async function withWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Prom
   }
 }
 
+/**
+ * The one roadmap write (contract §6). `expected` carries the caller's
+ * comparison claims; an omitted claim is DERIVED from the authority read under
+ * this same `begin immediate`, so it states the state the write actually
+ * observed rather than a value the caller had to reconstruct. A supplied claim
+ * is a constraint: a disagreement is `roadmap.revision-conflict` and nothing is
+ * written. Derivation is not a second authority — the same row the readers
+ * resolve is the one compared and rewritten here.
+ *
+ * The request hash covers the DECLARED intent, not the resolved comparison: a
+ * replay (same operation id, same body, same declared claims) is the same
+ * request, while the semantic comparison against current state is what makes it
+ * a no-op or a conflict. Hashing the observed basis instead would make an
+ * identical replay hash differently once the first write moved the revision,
+ * turning a legitimate retry into `roadmap.operation-conflict` (A09).
+ */
 function writeAuthority(
   db: StoreDb,
-  input: { projectId: string; expectedProjectRevision: number; expectedRoadmapRevision: RoadmapExpected; contentMarkdown: string },
+  input: { projectId: string; contentMarkdown: string },
   operation: RoadmapOperation,
   provenance?: { sourcePath: string; sourceHash: string },
   requestHashOverride?: string,
+  expected?: { projectRevision?: number; roadmapRevision?: RoadmapExpected },
 ): RoadmapWriteReceipt {
   requireRoadmapSchema(db);
   requireActive(db);
   const hash = sha256(input.contentMarkdown);
-  const requestHash = requestHashOverride ?? sha256(JSON.stringify({ domain: "roadmap-content-authority", ...input, contentHash: hash, provenance: provenance ?? null }));
+  const requestHash = requestHashOverride ?? sha256(JSON.stringify({
+    domain: "roadmap-content-authority",
+    projectId: input.projectId,
+    declaredProjectRevision: expected?.projectRevision ?? null,
+    declaredRoadmapRevision: expected?.roadmapRevision ?? null,
+    contentHash: hash,
+    provenance: provenance ?? null,
+  }));
   const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(operation.operationId) as
     | { request_hash: string; result_json: string }
     | undefined;
@@ -249,8 +273,16 @@ function writeAuthority(
   const project = projectRow(db, input.projectId);
   const current = db.prepare("select revision from project_roadmaps where project_id=?").get(input.projectId) as { revision?: unknown } | undefined;
   const currentExpected: RoadmapExpected = current ? Number(current.revision) : "absent";
-  if (project.revision !== input.expectedProjectRevision || currentExpected !== input.expectedRoadmapRevision) {
-    throw new RoadmapError("roadmap.revision-conflict", "Catalog project or roadmap revision changed since it was observed.");
+  const observed = {
+    projectRevision: expected?.projectRevision ?? project.revision,
+    roadmapRevision: expected?.roadmapRevision ?? currentExpected,
+  };
+  if (project.revision !== observed.projectRevision || currentExpected !== observed.roadmapRevision) {
+    throw new RoadmapError(
+      "roadmap.revision-conflict",
+      `Catalog project ${input.projectId} is at project revision ${project.revision} / roadmap revision ${String(currentExpected)}, ` +
+        `not the expected ${observed.projectRevision} / ${String(observed.roadmapRevision)}; nothing was written.`,
+    );
   }
   validateContent(input.projectId, input.contentMarkdown);
   const revision = current ? Number(current.revision) + 1 : 1;
@@ -270,12 +302,39 @@ function writeAuthority(
   return receipt;
 }
 
+/**
+ * Replace the whole roadmap body (contract §6 "raw replacement still requires
+ * an observed comparison basis"). `expectedProjectRevision` /
+ * `expectedRoadmapRevision` are a CONSTRAINT on the semantic read set when
+ * supplied: each is compared against the current authority inside the write
+ * transaction and a disagreement is `roadmap.revision-conflict`. An omitted
+ * one is DERIVED from the current authority read under that same lock — the
+ * observed comparison basis is the state this replacement actually applied to,
+ * so a caller that just read the authority supplies nothing and still cannot
+ * silently overwrite a concurrent change (A02/A11). What an omitted revision
+ * never becomes is a second authority: the stored `project_roadmaps` row this
+ * call writes is the same one every reader resolves.
+ */
 export async function replaceRoadmapAuthority(
   context: StoreContext,
-  input: { projectId: string; expectedProjectRevision: number; expectedRoadmapRevision: RoadmapExpected; contentMarkdown: string },
+  input: {
+    projectId: string;
+    expectedProjectRevision?: number;
+    expectedRoadmapRevision?: RoadmapExpected;
+    contentMarkdown: string;
+  },
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
-  return withWrite(context, (db) => writeAuthority(db, input, operation));
+  return withWrite(context, (db) =>
+    writeAuthority(
+      db,
+      { projectId: input.projectId, contentMarkdown: input.contentMarkdown },
+      operation,
+      undefined,
+      undefined,
+      { projectRevision: input.expectedProjectRevision, roadmapRevision: input.expectedRoadmapRevision },
+    ),
+  );
 }
 
 export async function importRoadmapAuthority(
@@ -305,12 +364,16 @@ export async function importRoadmapAuthority(
     const source = sourceBytes(review.sourcePath);
     if (source.hash !== review.sourceHash) throw new RoadmapError("roadmap.source-drift", "Reviewed roadmap source changed before import; no content was published.");
     validateContent(review.projectId, source.content);
-    return writeAuthority(db, {
-      projectId: review.projectId,
-      expectedProjectRevision: review.expectedProjectRevision,
-      expectedRoadmapRevision: review.expectedRoadmapRevision,
-      contentMarkdown: source.content,
-    }, operation, { sourcePath: source.sourcePath, sourceHash: source.hash }, requestHash);
+    // A reviewed import keeps the basis its preview OBSERVED: the review object
+    // is the caller's saved comparison, so neither revision is derived here.
+    return writeAuthority(
+      db,
+      { projectId: review.projectId, contentMarkdown: source.content },
+      operation,
+      { sourcePath: source.sourcePath, sourceHash: source.hash },
+      requestHash,
+      { projectRevision: review.expectedProjectRevision, roadmapRevision: review.expectedRoadmapRevision },
+    );
   });
 }
 
