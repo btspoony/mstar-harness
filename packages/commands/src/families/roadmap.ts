@@ -82,7 +82,23 @@ function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
 }
 function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
-  const lines = ["# Roadmap", "", `Store revision: ${storeRevision}`, "", "## Direction", "", roadmap.content?.direction?.trim() ? escapeMarkdown(roadmap.content.direction) : "No stored Direction.", ""];
+  const lines = [
+    "---",
+    `project_id: ${JSON.stringify(roadmap.projectId)}`,
+    `title: ${JSON.stringify(roadmap.catalog.title)}`,
+    "status: active",
+    `created_at: ${roadmap.catalog.registeredAt.slice(0, 10)}`,
+    "---",
+    "",
+    "# Roadmap",
+    "",
+    `Store revision: ${storeRevision}`,
+    "",
+    "## Direction",
+    "",
+    roadmap.content?.direction?.trim() ? escapeMarkdown(roadmap.content.direction) : "No stored Direction.",
+    "",
+  ];
   for (const milestone of roadmap.milestones.milestones) {
     lines.push(`## ${escapeMarkdown(milestone.name)}`, "", `Target: ${escapeMarkdown(milestone.target ?? "no target")} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
     const issues = roadmap.milestones.issues.filter(issue => issue.milestoneId === milestone.milestoneId);

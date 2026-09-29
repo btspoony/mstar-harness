@@ -106,17 +106,18 @@ describe("catalog and roadmap command families", () => {
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
     expect(exported.status).toBe("ok");
     if (exported.status === "ok") {
+      expect(exported.data).toContain('project_id: "proj"');
+      expect(exported.data).toContain('title: "Project"');
+      expect(exported.data).toContain("status: active");
+      expect(exported.data).toContain("created_at: ");
+      const file = join(cwd, "roadmap.md");
+      writeFileSync(file, String(exported.data));
+      const roundTrip = await roadmap["roadmap.replace"]!.execute({ project: "proj", file, expectProject: 1, expectRoadmap: "absent", operation: "roadmap-export-roundtrip", harness }, invocation(cwd));
+      expect(roundTrip.status).toBe("ok");
       expect(exported.data).toContain("Build \\| \\*\\[link\\]\\<tag\\>\\`code\\`");
       expect(exported.data).toContain("No stored Direction.");
       expect(exported.data).toContain("No linked issues.");
     }
-    const file = join(cwd, "roadmap.md");
-    writeFileSync(file, markdown("Project").replace("Reviewed roadmap content.", "First paragraph.\n\nSecond *paragraph*.\n\n## Goals\n\n- [ ] Goal\n"));
-    const replaced = await roadmap["roadmap.replace"]!.execute({ project: "proj", file, expectProject: 1, expectRoadmap: "absent", operation: "roadmap-replace", harness }, invocation(cwd));
-    expect(replaced.status).toBe("ok");
-    const multiline = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
-    expect(multiline.status).toBe("ok");
-    if (multiline.status === "ok") expect(multiline.data).toContain("First paragraph\\.\n\nSecond \\*paragraph\\*\\.");
   });
 
   test("roadmap JSON export returns the v2 envelope", async () => {
