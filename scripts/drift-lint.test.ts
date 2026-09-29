@@ -35,7 +35,7 @@
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 49 Engine-check callouts / 50 CLI citations against the
+ *   yields exactly 49 Engine-check callouts / 51 CLI citations against the
  *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
  *   to canonical pointers);
  *   corpus drift goes red.
@@ -68,6 +68,7 @@ import {
   readRolesCorpus,
   readTrackedFiles,
   readUseCliSkillMarkdown,
+  findOversizedTestFiles,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -1307,6 +1308,19 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
       const { tracked, failures } = readTrackedFiles(dir);
       expect(failures).toEqual([]);
       expect(tracked).toEqual(new Set([filename]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("advisory inventory reports only test files over 2000 lines", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-oversized-tests-"));
+    try {
+      const testDir = join(dir, "packages", "sample", "test");
+      mkdirSync(testDir, { recursive: true });
+      writeFileSync(join(testDir, "over.test.ts"), `${"x\n".repeat(2000)}x`);
+      writeFileSync(join(testDir, "under.test.ts"), `${"x\n".repeat(1998)}x`);
+      const rows = findOversizedTestFiles(dir);
+      expect(rows).toEqual([{ file: "packages/sample/test/over.test.ts", lines: 2001 }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

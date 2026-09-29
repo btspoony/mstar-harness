@@ -962,6 +962,42 @@ export function checkProvenanceScan(files: Array<{ rel: string; text: string }>)
   return { filesScanned, citationsFound, failures };
 }
 
+/** Advisory inventory of oversized test suites; this never contributes failure rows. */
+export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
+  const candidates: string[] = [];
+  for (const pkg of readdirSync(join(repoRoot, "packages"), { withFileTypes: true })) {
+    if (!pkg.isDirectory()) continue;
+    for (const subdir of ["test", "src"]) {
+      const base = join(repoRoot, "packages", pkg.name, subdir);
+      try {
+        const visit = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name === "node_modules" || entry.name === "dist") continue;
+            const path = join(dir, entry.name);
+            if (entry.isDirectory()) visit(path);
+            else if (entry.isFile() && entry.name.endsWith(".test.ts")) candidates.push(path);
+          }
+        };
+        visit(base);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return candidates.flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    const lines = text.split(/\r?\n/).length - (text.endsWith("\n") ? 1 : 0);
+    return lines > 2000 ? [{ file: relative(repoRoot, file), lines }] : [];
+  });
+}
+
+function reportOversizedTests(): void {
+  for (const { file, lines } of findOversizedTestFiles(root)) {
+    console.warn(`advisory: oversized test file ${file} (${lines} lines; threshold 2000)`);
+  }
+}
+
+
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
  /* Engine export inventory (packages/engine/src/index.ts) */
@@ -1296,6 +1332,7 @@ if (import.meta.main) {
 
   const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
 
+  reportOversizedTests();
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);

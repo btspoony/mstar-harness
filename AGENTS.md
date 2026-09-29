@@ -9,6 +9,7 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 - Use tools actually available in the session. Continue authorized work through verification; ask only when a material decision or required authorization remains unresolved. Do not add a separate human approval gate for every diff.
 - Respect existing assignments and write ownership. Preserve other contributors' changes; do not reset or clean their work.
 - Do not edit user secrets or credential files. Changes to global host configuration or security-sensitive defaults require explicit user authorization.
+- **Test layout.** Module-unit suites colocate as `src/<module>.test.ts` (unit mirror of one module); cross-module behavior suites live in `test/`. Test-support helpers live with the package that owns them. Engine note: the engine build compiles `src/**`, so colocated suites are typechecked and their declarations land in `dist/`.
 
 ## Git and local artifacts
 
