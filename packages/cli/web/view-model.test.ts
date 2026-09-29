@@ -876,6 +876,19 @@ describe("milestone grouping", () => {
     expect(milestoneTargetText(groups.groups[1]!.milestone.target)).toBe("No target");
   });
 
+  test("milestone grouping breaks an ordinal tie by milestone id, regardless of the delivered row order", () => {
+    const groups = milestoneGroups(
+      milestoneRead({
+        milestones: [
+          milestone({ milestoneId: "m-zeta", name: "Zeta", ordinal: 0 }),
+          milestone({ milestoneId: "m-alpha", name: "Alpha", ordinal: 0 }),
+          milestone({ milestoneId: "m-mid", name: "Mid", ordinal: 0 }),
+        ],
+      }),
+    );
+    expect(groups.groups.map((group) => group.milestone.milestoneId)).toEqual(["m-alpha", "m-mid", "m-zeta"]);
+  });
+
   test("milestone counts keep resolved and other-retired separate so retired never reads as delivered", () => {
     const group = {
       milestone: milestone({

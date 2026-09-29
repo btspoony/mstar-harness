@@ -16,7 +16,6 @@ import type {
   MilestoneIssueDTO,
   MilestoneRead,
   ProjectMilestoneDTO,
-  ProjectMilestoneStatus,
   ReadProjection,
   RoadmapDTO,
 } from "@mstar-harness/engine";
