@@ -1429,6 +1429,44 @@ describe("admission self-claim and orphan adoption", () => {
     expect((planRowOf(fixture, PLAN_ID).execution_lease as Record<string, unknown>).holder).toBe("claimant");
   });
 
+  test("a gate edited after the pre-lock read is still refused as a contract change", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const before = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The TOCTOU the reviewers found: the edit lands AFTER the bind has already
+    // parsed the Assignment pre-lock, so only a same-read decision inside the
+    // lock can see it. The hook fires exactly in that window.
+    setBindPreInterleaveForTest(() => {
+      setBindPreInterleaveForTest(undefined);
+      writeText(
+        fixture.assignmentPath,
+        readFileSync(fixture.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+      );
+    });
+
+    try {
+      expect(
+        await errorCodeOf(() =>
+          bindPlanSession({
+            scope: { assignmentPath: fixture.assignmentPath },
+            cwd: fixture.root,
+            sessionId: "late-gate-adopter",
+          }),
+        ),
+      ).toBe("coordination.assignment-stale");
+    } finally {
+      setBindPreInterleaveForTest(undefined);
+    }
+
+    // Nothing written: no pin refresh, no audit entry, no lease.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(before);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
     const fixture = makeFixture();
     const leaf = join(fixture.workflowDir, "sessions", "leaf.json");

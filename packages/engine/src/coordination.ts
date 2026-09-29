@@ -624,7 +624,34 @@ export function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
   if (!existsSync(abs)) {
     throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
   }
-  const text = readFileSync(abs, "utf8");
+  return parseAssignmentBytes(abs, readFileSync(abs));
+}
+
+/**
+ * One Assignment read: the bytes as read, the digest of exactly those bytes and
+ * the headers parsed from them. A lock must never mix two reads of the same file
+ * — the pin a mutation records and the headers it decides on have to describe
+ * one snapshot of the file, or an edit landing between them is measured against
+ * itself (the adopt gate check, which compares declared gates to the prepared
+ * block, is the reason this pair exists).
+ */
+export function readAssignmentInput(assignmentPath: string): {
+  path: string;
+  bytes: Buffer;
+  sha256: string;
+  headers: AssignmentHeaders;
+} {
+  const abs = resolve(assignmentPath);
+  if (!existsSync(abs)) {
+    throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
+  }
+  const bytes = readFileSync(abs);
+  return { path: abs, bytes, sha256: sha256Bytes(bytes), headers: parseAssignmentBytes(abs, bytes) };
+}
+
+/** Parse one already-read Assignment body (the read's own bytes, never a second read). */
+function parseAssignmentBytes(abs: string, bytes: Buffer): AssignmentHeaders {
+  const text = bytes.toString("utf8");
   const values = new Map<string, string>();
   let fenced = false;
   for (const raw of text.split(/\r?\n/)) {
@@ -1159,7 +1186,7 @@ async function withRowCommit(
      */
     freshness?: boolean;
     /** Spec §D2 the one mutation allowed to adopt a stale pin: `bind`. */
-    staleAdoption?: { sessionId: string; addressed: AssignmentHeaders };
+    staleAdoption?: { sessionId: string };
     precheck: (context: RowContext) => void | Promise<void>;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
   },
@@ -1193,7 +1220,6 @@ async function withRowCommit(
           coordination.prepared,
           coordination,
           opts.staleAdoption.sessionId,
-          opts.staleAdoption.addressed,
         );
       } else {
         assertPreparedFresh(scope.assignmentPath, coordination.prepared);
@@ -1244,15 +1270,22 @@ function stalePrepared(
   }
   const actual = sha256Bytes(readFileSync(assignmentPath));
   if (actual === prepared.assignment_sha256) return null;
-  return {
-    old_sha256: prepared.assignment_sha256,
-    new_sha256: actual,
-    refusal: new CoordinationError(
-      "coordination.assignment-stale",
-      `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-      { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-    ),
-  };
+  return { old_sha256: prepared.assignment_sha256, new_sha256: actual, refusal: staleRefusal(assignmentPath, prepared, actual) };
+}
+
+/**
+ * The terminal `coordination.assignment-stale` refusal for one MEASURED digest.
+ * Callers that already hold the bytes (the adopt check, which hashes and parses
+ * one read) build the refusal from their own measurement instead of reading the
+ * file a second time, so the message and the decision always describe the same
+ * snapshot.
+ */
+function staleRefusal(assignmentPath: string, prepared: PreparedCoordination, actual: string): CoordinationError {
+  return new CoordinationError(
+    "coordination.assignment-stale",
+    `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
+    { path: assignmentPath, expected: prepared.assignment_sha256, actual },
+  );
 }
 
 /**
@@ -1275,16 +1308,26 @@ function bindStaleAdoption(
   prepared: PreparedCoordination,
   coordination: RowCoordination | undefined,
   adopter: string,
-  addressed: AssignmentHeaders,
 ): { old_sha256: string; new_sha256: string } | null {
-  const stale = stalePrepared(assignmentPath, prepared);
+  // (PR #309 second review) ONE read decides both halves: the drift the pin
+  // measurement sees and the gates compared against the prepared block come from
+  // the same bytes. Parsing the headers outside the lock (as this once did) left
+  // a window where a gate edit landing between the two reads was compared as its
+  // OLD value while the pin was refreshed to the NEW one — a contract change
+  // adopted as if it were byte-level. The read happens here, inside the lock, and
+  // nothing but these bytes drives the decision.
+  const input = readAssignmentInput(assignmentPath);
+  const stale = input.sha256 === prepared.assignment_sha256 ? null : {
+    old_sha256: prepared.assignment_sha256,
+    new_sha256: input.sha256,
+  };
   if (stale === null) return null;
   const holder = coordination?.session;
   const adoptable =
     coordination?.prepared !== undefined &&
     coordination.handoff === undefined &&
     (holder === undefined || holder.session_id === adopter);
-  if (!adoptable) throw stale.refusal;
+  if (!adoptable) throw staleRefusal(assignmentPath, prepared, input.sha256);
   // (PR #309-1) The pin may only move under the SAME executed contract. The gate
   // pair is that contract half — `qa_gate` picks the acceptance gate and
   // `findings_cleanup` the residual policy — so a drift that also changes either
@@ -1293,14 +1336,15 @@ function bindStaleAdoption(
   // (path, plan hash, author, time) is deliberately not compared here: the path
   // is the resolver's guarantee, and a plan-document edit is caught by the
   // execution-input pin.
-  if (addressed.qaGate !== prepared.qa_gate || addressed.findingsCleanup !== prepared.findings_cleanup) {
+  const { qaGate, findingsCleanup } = input.headers;
+  if (qaGate !== prepared.qa_gate || findingsCleanup !== prepared.findings_cleanup) {
     throw new CoordinationError(
       "coordination.assignment-stale",
       `Assignment ${assignmentPath} changed its contract after preparation (qa_gate ${prepared.qa_gate} \u2192 ` +
-        `${addressed.qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${addressed.findingsCleanup}) \u2014 a gate ` +
+        `${qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${findingsCleanup}) \u2014 a gate ` +
         "change belongs to the coordinator's `prepare`, which re-seals the reviewed contract; only a byte-level drift " +
         "within the same gates may be adopted",
-      { path: assignmentPath, expected: prepared.qa_gate, actual: addressed.qaGate },
+      { path: assignmentPath, expected: prepared.qa_gate, actual: qaGate },
     );
   }
   return stale;
@@ -1849,9 +1893,10 @@ async function bindPlanSessionForPlan(
   let envelopeOwned = false;
   const result = await withRowCommit(scope, {
     expectedRevision: null,
-    // Spec §D2: this mutation owns the whole pin decision, for this adopter — and
-    // only within the contract the addressed Assignment declares.
-    staleAdoption: { sessionId: adopter, addressed: assignment },
+    // Spec §D2: this mutation owns the whole pin decision, for this adopter —
+    // and only within the contract the addressed Assignment declares, which the
+    // locked section re-reads for itself (never the pre-lock parse below).
+    staleAdoption: { sessionId: adopter },
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared`, { plan_id: planId });
