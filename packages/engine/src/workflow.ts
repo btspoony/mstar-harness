@@ -2681,14 +2681,28 @@ export async function registerIterationWorkflow(
       // keeps its raw spelling on both sides and compares verbatim.
       const identityProjection = (candidate: WorkflowSnapshot): WorkflowSnapshot => {
         if (!isNonEmptyString(candidate.compass_ref)) return candidate;
+        let normalized: string;
         try {
-          return {
-            ...candidate,
-            compass_ref: normalizeIterationCompassRef(candidate.compass_ref, harnessDir, (detail) => new Error(detail)),
-          };
+          normalized = normalizeIterationCompassRef(candidate.compass_ref, harnessDir, (detail) => new Error(detail));
         } catch {
           return candidate;
         }
+        return {
+          ...candidate,
+          compass_ref: normalized,
+          plans: candidate.plans.map((row) => {
+            const metadata = row.metadata as Record<string, unknown> | undefined;
+            const refs = metadata?.iteration_refs;
+            if (!Array.isArray(refs) || !refs.includes(candidate.compass_ref)) return row;
+            return {
+              ...row,
+              metadata: {
+                ...metadata,
+                iteration_refs: refs.map((entry) => (entry === candidate.compass_ref ? normalized : entry)),
+              },
+            };
+          }),
+        };
       };
       if (
         existing.snapshot.id !== workflowId ||

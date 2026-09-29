@@ -13,7 +13,17 @@ type Input = z.infer<typeof inputSchema>;
 
 // The effects object is connection-scoped by the host. Keep one live handle per
 // root/port on that connection so repeated calls reuse the same listener.
-const dashboards = new WeakMap<CommandEffects, Map<string, Promise<RunningDashboard>>>();
+// Each slot tracks whether ANY call has already delivered its URL (a success
+// return hands the listener to the connection, so no later cancellation may
+// tear it down) and how many calls are still awaiting the shared startup —
+// the starter that gets cancelled must not close the listener out from under
+// a concurrent caller that is awaiting the same startup.
+type DashboardSlot = {
+  server: Promise<RunningDashboard>;
+  delivered: boolean;
+  waiters: number;
+};
+const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
 function failure(code: string, error: unknown, status: "refused" | "error" = "refused"): CommandEnvelope<never> {
   return {
@@ -26,7 +36,7 @@ function failure(code: string, error: unknown, status: "refused" | "error" = "re
   };
 }
 
-function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { server: Promise<RunningDashboard>; reused: boolean } {
+function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {
   let services = dashboards.get(context.effects);
   if (services === undefined) {
     services = new Map();
@@ -34,9 +44,12 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
   }
   const key = JSON.stringify([harnessDir, port, projectId ?? null]);
   const existing = services.get(key);
-  if (existing !== undefined) return { server: existing, reused: true };
+  if (existing !== undefined) return { slot: existing, reused: true };
 
-  const starting = context.effects.startDashboard({
+  const slot = {} as DashboardSlot;
+  slot.delivered = false;
+  slot.waiters = 0;
+  slot.server = context.effects.startDashboard({
     harnessDir,
     port,
     ...(projectId === undefined ? {} : { projectId }),
@@ -44,8 +57,8 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
     services!.delete(key);
     throw error;
   });
-  services.set(key, starting);
-  return { server: starting, reused: false };
+  services.set(key, slot);
+  return { slot, reused: false };
 }
 /** Drop one started handle from the connection cache by its own key. */
 function forget(context: InvocationContext, harnessDir: string, port: number, projectId?: string): void {
@@ -74,28 +87,32 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
 
   let server: RunningDashboard;
   let reused: boolean;
+  const started = serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
+  reused = started.reused;
+  started.slot.waiters++;
   try {
-    const started = serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
-    reused = started.reused;
-    server = await started.server;
+    server = await started.slot.server;
   } catch (error) {
     const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
       ? error.code
       : "dashboard.start-failed";
     return failure(code, error);
+  } finally {
+    started.slot.waiters--;
   }
   if (context.signal.aborted) {
-    // Cancellation arrived while this call was starting a listener: stop the
-    // handle THIS call created and drop it from the cache, so the aborted
-    // request leaves no connection-scoped service behind. A handle another
-    // call already owns is reused, never stopped, because the connection still
-    // holds it.
-    if (!reused) {
+    // Cancellation arrived while this call was starting a listener. Tear the
+    // handle down ONLY when this call is the sole owner of an undelivered
+    // startup: no concurrent caller is awaiting the same slot and no call has
+    // already handed the URL to the connection (lifetime "connection" outlives
+    // any single call). A shared or delivered listener is left running.
+    if (!reused && !started.slot.delivered && started.slot.waiters === 0) {
       forget(context, harnessDir, parsed.data.port, parsed.data.project);
       await server.close();
     }
     return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
   }
+  started.slot.delivered = true;
 
   if (parsed.data.open === true) {
     try {

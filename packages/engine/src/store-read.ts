@@ -680,15 +680,26 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
+function issuesMilestoneColumn(db: StoreDb): boolean {
+  // A store that predates migration 7 ("project-milestones") has no
+  // issues.milestone_id column; the issue reads must still serve that store
+  // instead of failing with a SQLite column error (the schema is KNOWN —
+  // 1..MIGRATIONS.length — so this is a supported read, not a downgrade).
+  return (db.prepare("pragma table_info(issues)").all() as Array<{ name?: unknown }>).some(
+    (row) => row.name === "milestone_id",
+  );
+}
+
 function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const { limit, offset } = paging(filter.limit, filter.offset);
   const { where, params } = bindIssueFilter(filter);
   const storeRevision = readMeta(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
+  const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db
     .prepare(
       `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
+              issues.registered_at as registeredAt, issues.revision, ${milestoneExpr},
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`,
     )
@@ -732,9 +743,11 @@ function parseEvidenceText(json: string): string[] {
 }
 
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
+  // Same pre-migration-7 tolerance as the page read above.
+  const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
   const issue = db
     .prepare(
-      "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id from issues where id = ?",
+      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`,
     )
     .get(id) as
     | {
@@ -878,7 +891,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
-    milestoneId: issue.milestone_id,
+    milestoneId: issue.milestone_id ?? null,
     occurrences,
     transitions,
     relations,
