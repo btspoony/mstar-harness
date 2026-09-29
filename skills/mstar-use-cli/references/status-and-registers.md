@@ -8,6 +8,28 @@ For ordinary lifecycle intents use the owning public verb rather than replacing 
 
 For the open-issue store, discover JSON shapes with `mstar-harness schema CaptureInput`, `OccurrenceInput`, `IssueTriage`, `ClosureEvidence`, and `IssueLink` before `issue add|occurrence|triage|close|waive|duplicate|supersede|link` (the corresponding verb help owns flags). `ClosureEvidence` has disposition-specific required fields; use the schema rather than guessing from a prior refusal. Store reads/export need no write payload. Plan-scoped `issue-add` and `issue-close` are separate authority routes, not substitutes for the unscoped actor's explicit operation and issue-revision inputs.
 
+Complete synthetic `CaptureInput` example (adapt evidence, timestamp and semantic keys to the observed finding; do not copy this observation into a live store):
+
+```json
+{
+  "projectId": "example-project",
+  "title": "Example failed boundary",
+  "kind": "bug",
+  "severity": "medium",
+  "impact": "A user cannot finish the example operation",
+  "acceptance": "The operation succeeds for the valid boundary input",
+  "sourceIdentity": "example-report:case-1",
+  "rootCauseKey": "example-boundary-handling",
+  "acceptanceKey": "valid-boundary-operation",
+  "occurrenceKey": "example-run-1",
+  "sourceKind": "review",
+  "location": "src/example.ts:42",
+  "observedBehavior": "Valid boundary input was rejected",
+  "evidence": ["example scoped observation"],
+  "discoveredAt": "2026-01-01T00:00:00Z"
+}
+```
+
 ## The coordinated write surfaces
 
 | Surface | Path shape | Holds | Store kind |
