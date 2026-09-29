@@ -76,6 +76,18 @@ export const WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"] as const;
  */
 export const WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"] as const;
 
+/** Public field contract used by persist payload discovery; validation remains `validateWorkflowSnapshot`. */
+export const WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
+  version: { required: true, type: "number", description: "Root artifact version." },
+  schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
+  id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
+  type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
+  status: { required: true, type: "string", description: "Current lifecycle status." },
+  started_at: { required: true, type: "string", description: "Workflow start timestamp." },
+  updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
+  plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." },
+} as const;
+
 export type WorkflowDeliveryKind = (typeof WORKFLOW_DELIVERY_KINDS)[number];
 
 /**

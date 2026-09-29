@@ -147,7 +147,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, STATUS_V2_PAYLOAD_SCHEMA, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
@@ -183,13 +183,32 @@ import {
   stableJson,
   validateWorkflowSnapshot,
   PREPARE_PHASE,
-  WORKFLOW_TERMINAL_STATUSES,
+  WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
   type WorkflowDeliveryEvidence,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
+import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
+
+/**
+ * Persist payload contracts are owned by their validating domains. `json` is
+ * intentionally syntax-only: arbitrary JSON has no domain validator; use the
+ * status, snapshot, or review kind for governed documents.
+ */
+export const PERSIST_PAYLOAD_CONTRACTS = {
+  status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
+  snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
+  review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
+  json: {
+    schema: null,
+    validation: "parse-only",
+    reason: "Arbitrary JSON has no declared domain shape.",
+    alternative: "Use status, snapshot, or review for governed artifacts.",
+  },
+} as const;
+
 /* ------------------------------------------------------------------------ *
  * § Types — public surface
  * ------------------------------------------------------------------------ */

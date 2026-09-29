@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  PERSIST_PAYLOAD_CONTRACTS,
   createFsStore,
   getArtifactStore,
   guardInjectedStore,
@@ -20,6 +21,20 @@ import type { CommandDefinition, CommandEnvelope } from "../types.js";
 const kinds = ["status", "snapshot", "review", "json"] as const;
 const kindSchema = z.enum(kinds);
 type PersistKind = (typeof kinds)[number];
+function payloadSchema(fields: Readonly<Record<string, { readonly required: boolean; readonly type: string }>>): z.ZodType {
+  const shape = Object.fromEntries(Object.entries(fields).map(([name, field]) => {
+    const value = field.type === "string" ? z.string() : field.type === "number" ? z.number() : field.type === "array" ? z.array(z.unknown()) : field.type === "object" ? z.record(z.string(), z.unknown()) : z.unknown();
+    return [name, field.required ? value : value.optional()];
+  }));
+  return z.object(shape).passthrough();
+}
+
+const payloadSchemas = {
+  status: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.status.schema), help: "Status v2 root payload; required fields and full invariants are validated by the engine." },
+  snapshot: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.snapshot.schema), help: "Workflow snapshot payload; conditional lifecycle, row and lease rules are validated by the engine." },
+  review: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
+  json: { schema: z.unknown(), help: `${PERSIST_PAYLOAD_CONTRACTS.json.reason} ${PERSIST_PAYLOAD_CONTRACTS.json.alternative}` },
+} as const;
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "persist.ok", exitCode: 0, data };
@@ -109,6 +124,10 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         ],
       },
       input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional(), expectVersion: z.string().optional(), session: z.string().optional() }),
+      payloads: Object.fromEntries(Object.entries(payloadSchemas).map(([kind, descriptor]) => [
+        kind,
+        { schema: descriptor.schema, help: descriptor.help },
+      ])),
       output, effects: ["write"], description: "Persist one JSON coordination document.",
       async execute(input, context) {
         const id = "persist.write";

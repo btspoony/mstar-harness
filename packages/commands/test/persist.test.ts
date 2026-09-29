@@ -138,4 +138,25 @@ describe("persist command family", () => {
     const missing = await definition("persist.get").execute({ kind: "json", key: join(root, "missing.json") }, context);
     expect(missing).toMatchObject({ status: "refused", code: "persist.not-found" });
   });
+  test("aggregate validation declares governed schemas and arbitrary JSON as parse-only", async () => {
+    const { root, context } = setup();
+    const write = definition("persist.write");
+    expect(Object.keys(write.payloads ?? {}).sort()).toEqual(["json", "review", "snapshot", "status"]);
+    expect(write.payloads?.json?.help).toContain("no declared domain shape");
+    expect(write.payloads?.status?.schema.safeParse(STATUS).success).toBe(true);
+
+    const invalid = await write.execute({ kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }), expectVersion: "absent" }, context);
+    expect(invalid).toMatchObject({ status: "refused", code: "persist.write-refused" });
+    expect(invalid.message).toContain("updated_at");
+    expect(invalid.message).toContain("workflows");
+    const invalidReview = await write.execute({ kind: "review", key: "review", input: "{}" }, context);
+    expect(invalidReview.status).toBe("refused");
+    expect(invalidReview.message).toContain("schema");
+    expect(invalidReview.message).toContain("findings");
+    const arbitraryPath = join(root, "opaque.json");
+    const stored = await write.execute({ kind: "json", key: arbitraryPath, input: JSON.stringify({ anything: [1, true] }) }, context);
+    expect(stored.status).toBe("ok");
+    const checked = await definition("persist.get").execute({ kind: "json", key: arbitraryPath, validate: true }, context);
+    expect(checked).toMatchObject({ status: "ok", data: { validation: "parse-only", payload: { anything: [1, true] } } });
+  });
 });
