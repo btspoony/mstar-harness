@@ -1386,7 +1386,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   const fire = async (params: ToolParams, ctx: ExtensionContext): Promise<ToolOutcome> => {
     const sessionId = sessionIdOf(ctx);
     const generation = gate.generation;
-    const decision = reconstruct(ctx);
+    let decision = reconstruct(ctx);
 
     if (attemptIsRunning(decision)) {
       return outcome(
@@ -1394,6 +1394,46 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         true,
         "a model action from a previous handoff invocation is still running in this session; nothing was changed and no attempt was recorded.",
         { code: "in-flight", state: "attempting" },
+      );
+    }
+
+    // Read the preference before requiring a direction-lock binding, matching
+    // armOnce: deliberately opting out is a successful no-op at either anchor.
+    const settings = await readHandoffSettings(ctx.cwd);
+    const afterSettings = suspensionReason(ctx, sessionId, generation);
+    if (afterSettings !== null) return suspend(afterSettings, decision.kind === "pending" ? "pending" : "none");
+    decision = reconstruct(ctx);
+    if (attemptIsRunning(decision)) {
+      return outcome(
+        false,
+        true,
+        "a model action from a previous handoff invocation is still running in this session; nothing was changed and no attempt was recorded.",
+        { code: "in-flight", state: "attempting" },
+      );
+    }
+    if (!settings.ok) {
+      return outcome(false, true, `the model-handoff preference could not be read at fire time: ${settings.message}. Nothing was switched; the handoff stays pending.`, {
+        code: "settings-read-failed",
+        ...(decision.kind === "pending" ? { state: "pending" } : {}),
+      });
+    }
+    if (!settings.value.modelHandoff) {
+      if (decision.kind === "pending") {
+        notifySkipped(
+          decision.record.binding,
+          "modelHandoff is off in native settings",
+          `${SLOW_SPEC} stays in place. Re-enabling it before Phase 1 completes can still fire this binding.`,
+        );
+        return outcome(false, false, "modelHandoff is off in native settings; the automatic target switch was skipped and the binding stays pending.", {
+          code: "preference-off",
+          state: "pending",
+        });
+      }
+      return outcome(
+        false,
+        false,
+        "modelHandoff is off in native settings; this session is not armed and its model is unchanged. Enabling it later does not retro-arm an in-flight iteration.",
+        { code: "preference-off" },
       );
     }
     if (decision.kind !== "pending") {
@@ -1444,31 +1484,6 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
-    // Fire-time preference re-read (spec §Full Phase 1 handoff).
-    const settings = await readHandoffSettings(ctx.cwd);
-    const afterSettings = suspensionReason(ctx, sessionId, generation);
-    if (afterSettings !== null) return suspend(afterSettings, "pending");
-    const afterSettingsLedger = stillPending();
-    if (afterSettingsLedger !== null) return afterSettingsLedger;
-    if (!settings.ok) {
-      return outcome(
-        false,
-        true,
-        `the model-handoff preference could not be read at fire time: ${settings.message}. Nothing was switched; the handoff stays pending.`,
-        { code: "settings-read-failed", state: "pending" },
-      );
-    }
-    if (!settings.value.modelHandoff) {
-      // Bound site with a pending binding: title from the own-workflow snapshot
-      // sample (presentation only), falling back when it is not readable.
-      notifySkipped(record.binding, "modelHandoff is off in native settings", `${SLOW_SPEC} stays in place. Re-enabling it before Phase 1 completes can still fire this binding.`);
-      return outcome(
-        false,
-        false,
-        "modelHandoff is off in native settings; the automatic target switch was skipped and the binding stays pending.",
-        { code: "preference-off", state: "pending" },
-      );
-    }
 
     // E2 readiness checkpoint (frozen contract; read-only).
     const readiness = await handoffSeams.inspectReadiness(record.binding, completion);
