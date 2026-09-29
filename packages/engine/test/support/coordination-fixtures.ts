@@ -267,12 +267,6 @@ export async function resumePlan(fixture: Fixture, planId: string): Promise<Coor
   return bindPlanSession({ resumePath: sessionPath, cwd: fixture.root });
 }
 
-/**
- * An issue capture entry as the scoped `residual-add` operation now takes it
- * (G2a): the core `CaptureInput` minus `projectId` — the plan scope supplies
- * the project. No disposition is recorded at capture time (contract §6).
- */
-
 export type GitFixture = Fixture & { integrationPath: string; baseSha: string; planSha: string };
 
 export function headOf(cwd: string): string {
@@ -559,3 +553,43 @@ export async function sealStoreForReaders(fixture: Fixture): Promise<void> {
   handle.close();
 }
 
+/**
+ * An issue capture entry as the scoped `residual-add` operation now takes it
+ * (G2a): the core `CaptureInput` minus `projectId` — the plan scope supplies
+ * the project. No disposition is recorded at capture time (contract §6).
+ */
+export function finding(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: `Finding ${id}`,
+    kind: "review-obligation",
+    severity: "medium",
+    impact: "blocks plan approval",
+    acceptance: "fixed or explicitly dispositioned",
+    owner: "@fullstack-dev",
+    sourceIdentity: `qc:report:${id}`,
+    rootCauseKey: `root-cause:${id}`,
+    acceptanceKey: "fix-verified",
+    occurrenceKey: `occ-${id}`,
+    sourceKind: "qc-report",
+    location: "packages/engine",
+    observedBehavior: `finding ${id} observed`,
+    evidence: ["review/qc1.md"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+    ...overrides,
+  };
+}
+/** The open issues the issue store links to a plan (the authority the gate reads). */
+export async function linkedOpenIssues(fixture: Fixture, planId: string): Promise<Array<{ id: string; severity: string; disposition: string }>> {
+  const handle = await openStore({ harnessDir: fixture.harness }, "read");
+  try {
+    return handle.db
+      .prepare(
+        "select issues.id as id, issues.severity as severity, issues.disposition as disposition from issues " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "where issues.disposition = 'open' order by issues.id asc",
+      )
+      .all(planId) as Array<{ id: string; severity: string; disposition: string }>;
+  } finally {
+    handle.close();
+  }
+}
