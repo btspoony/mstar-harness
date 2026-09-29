@@ -149,7 +149,20 @@ try {
       if (!tools.has(name)) throw new Error(`MCP registry missing ${name}`);
     }
     const mcpResults: Array<{ name: string; result: Envelope }> = [];
-    for (const { scenario } of cliResults) mcpResults.push({ name: scenario.name, result: await peer.call(scenario) });
+    for (const { scenario } of cliResults) {
+      const result = await peer.call(scenario);
+      mcpResults.push({ name: scenario.name, result });
+      if (scenario.id === "dashboard") {
+        const url = (result.data as { url?: unknown } | undefined)?.url;
+        if (typeof url !== "string") throw new Error("dashboard service did not return its loopback URL");
+        const response = await fetch(new URL("/api/workflows", url));
+        const body = await response.json() as { error?: { code?: unknown } };
+        if (response.status !== 503 || body.error?.code !== "store.not-initialized") {
+          throw new Error(`dashboard status endpoint returned unexpected HTTP ${response.status}: ${JSON.stringify(body)}`);
+        }
+        console.log(`dashboard status: HTTP ${response.status}/store.not-initialized`);
+      }
+    }
     for (let index = 0; index < cliResults.length; index++) {
       const { scenario, result: cliResult } = cliResults[index]!;
       const mcpResult = mcpResults[index]!.result;
