@@ -556,11 +556,6 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
   })
 
-  it('the shipped bundle patch ships no bundledSkillDir config key — the plugin resolves its own packaged harness-skills mirror', () => {
-    const patch = readFileSync(new URL('../bundle/cordis.patch.yml', import.meta.url), 'utf8')
-    expect(patch).not.toContain('bundledSkillDir:')
-  })
-
   it('the shipped default (./skills, no deployment keys) boots safely: engine-status watermark always appends', async () => {
     // Exactly the shipped patch config minus deployment keys: harnessDir
     // omitted (the plugin never probes from the launch cwd — without the

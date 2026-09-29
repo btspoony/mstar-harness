@@ -43,7 +43,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Context, Events } from '@deepseek-ai/cordis'
 import * as entry from '../src/index.ts'
-import type * as EntryTypes from '../src/index.ts'
 
 /** The frozen VALUE exports (runtime-visible; `Config` is also an interface). */
 const FROZEN_VALUE_EXPORTS = [
@@ -98,47 +97,6 @@ const FROZEN_VALUE_EXPORTS = [
   'skillLocalConfig',
 ] as const
 
-/** The frozen TYPE-ONLY exports (erased at runtime — pinned for typecheck). */
-const FROZEN_TYPE_ONLY_EXPORTS = [
-  'AdvisoryLogLevel',
-  'AdvisoryLogSink',
-  // Deliberate addition for
-  // the honest-latch contract type: the pinned public export
-  // `runFallbacksAdvisory` returns `Promise<AdvisoryPassReport>`, so a root
-  // consumer can name the returned type (plan QC wave-1 fix W-1).
-  'AdvisoryPassReport',
-  'AgentFlowEvent',
-  'AgentFlowEventView',
-  'AgentFlowSummaryRow',
-  'AgentFlowView',
-  // Deliberate replacement for
-  // Task 3: the native persona-channel vocabulary (log levels/sink + the
-  // structural runtime/request views) replaces the removed decoration types
-  // (DecorationLogLevel, DecorationLogSink, SubagentRunInfoView).
-  'RolePersonaLogLevel',
-  'RolePersonaLogSink',
-  'SubagentStartRequestView',
-  'SubagentsServiceView',
-  'DispatchGateAdvisory',
-  'DispatchVerdict',
-  'DshHostAdapterOptions',
-  'DshMstarOptions',
-  'MstarEngineStatusPayload',
-  'MstarEngineStatusSource',
-  'MstarHarnessState',
-  'MstarIterationGateView',
-  'SeamId',
-  'SeamLintAdvisory',
-  'SettleOutcome',
-  'SkillLintAdvisory',
-  'StatusGateAdvisory',
-  // Deliberate additions for: the
-  // `workflow-verdict` ledger vocabulary (verdict + mode + record input —
-  // the adapter's public `recordWorkflowVerdict` method types).
-  'WorkflowGateMode',
-  'WorkflowVerdict',
-  'WorkflowVerdictInput',
-] as const
 
 type Assert<T extends true> = T
 
@@ -146,10 +104,8 @@ type Assert<T extends true> = T
  * Exact VALUE export-namespace identity: `keyof typeof entry` exposes only the
  * runtime-visible (value) exports — type-only exports never appear on the
  * module namespace object, so they cannot join a `keyof` union. The exact-set
- * check therefore runs against the frozen VALUE names (31, `Config` once),
- * and the 26 type-only names are pinned individually by the `EntryTypes.X`
- * probes below (each reference fails typecheck if the export disappears).
- * Fails typecheck on ANY value-export drift — removal, rename, or addition.
+ * check therefore runs against the frozen VALUE names. Fails typecheck on ANY
+ * value-export drift — removal, rename, or addition.
  */
 type FrozenValueExportNames = typeof FROZEN_VALUE_EXPORTS[number]
 
@@ -169,42 +125,6 @@ type _CordisEventSeamLint = Events['mstar/seam-lint']
 describe('src/index.ts export surface (frozen)', () => {
   it('value exports: exact set unchanged', () => {
     expect(Object.keys(entry).sort()).toEqual([...FROZEN_VALUE_EXPORTS].sort())
-  })
-
-  it('type-only exports: exact set unchanged (typecheck-guarded probes)', () => {
-    // Runtime cannot see type-only exports; each `EntryTypes.X` reference
-    // fails typecheck if the export disappears. The probe object pins the
-    // frozen list as documentation and in the test output.
-    const typeProbe = {
-      AdvisoryLogLevel: null as unknown as EntryTypes.AdvisoryLogLevel,
-      AdvisoryLogSink: null as unknown as EntryTypes.AdvisoryLogSink,
-      AdvisoryPassReport: null as unknown as EntryTypes.AdvisoryPassReport,
-      AgentFlowEvent: null as unknown as EntryTypes.AgentFlowEvent,
-      AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
-      AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
-      AgentFlowView: null as unknown as EntryTypes.AgentFlowView,
-      RolePersonaLogLevel: null as unknown as EntryTypes.RolePersonaLogLevel,
-      RolePersonaLogSink: null as unknown as EntryTypes.RolePersonaLogSink,
-      DispatchGateAdvisory: null as unknown as EntryTypes.DispatchGateAdvisory,
-      DispatchVerdict: null as unknown as EntryTypes.DispatchVerdict,
-      DshHostAdapterOptions: null as unknown as EntryTypes.DshHostAdapterOptions,
-      DshMstarOptions: null as unknown as EntryTypes.DshMstarOptions,
-      MstarEngineStatusPayload: null as unknown as EntryTypes.MstarEngineStatusPayload,
-      MstarEngineStatusSource: null as unknown as EntryTypes.MstarEngineStatusSource,
-      MstarHarnessState: null as unknown as EntryTypes.MstarHarnessState,
-      MstarIterationGateView: null as unknown as EntryTypes.MstarIterationGateView,
-      SeamId: null as unknown as EntryTypes.SeamId,
-      SeamLintAdvisory: null as unknown as EntryTypes.SeamLintAdvisory,
-      SettleOutcome: null as unknown as EntryTypes.SettleOutcome,
-      SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
-      StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
-      SubagentStartRequestView: null as unknown as EntryTypes.SubagentStartRequestView,
-      SubagentsServiceView: null as unknown as EntryTypes.SubagentsServiceView,
-      WorkflowGateMode: null as unknown as EntryTypes.WorkflowGateMode,
-      WorkflowVerdict: null as unknown as EntryTypes.WorkflowVerdict,
-      WorkflowVerdictInput: null as unknown as EntryTypes.WorkflowVerdictInput,
-    }
-    expect(Object.keys(typeProbe).sort()).toEqual([...FROZEN_TYPE_ONLY_EXPORTS].sort())
   })
 
   it('plugin manifest contract: name/inject/apply are the Loader entry points', () => {

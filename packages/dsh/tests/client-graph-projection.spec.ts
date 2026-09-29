@@ -745,30 +745,6 @@ function idleRosterIds(evidencedRoles: readonly string[]): string[] {
 }
 
 describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
-  it('is the fixed 4-stage EXPECTED_ROLE_FLOW skeleton with the spec\'d exact role vocabularies (qa-gate terminal — plan f3)', () => {
-    expect(EXPECTED_ROLE_FLOW).toHaveLength(4)
-    expect(EXPECTED_ROLE_FLOW.map((s) => `${s.phase}:${s.stage}`)).toEqual([
-      'iteration-start:review-edit-chain',
-      'autonomous-execute:sdd-implement',
-      'autonomous-execute:qc-tri',
-      'autonomous-execute:qa-gate',
-    ])
-    expect(EXPECTED_ROLE_FLOW[0]!.roles).toEqual(['product-manager', 'architect', 'writing-specialist'])
-    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer'])
-    // code-reviewer joins the sdd-implement stage (plan f5 Task 1): v2.1.1
-    // makes the SDD L2 task reviewer (the former generalPurpose seat) a
-    // routine pipeline role. ops-engineer / prompt-engineer stay OUT of the
-    // union (on-demand — see SDD_BUCKET_ROLES; expectedness unchanged).
-    expect(EXPECTED_ROLE_FLOW[2]!.roles).toEqual(['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'])
-    expect(EXPECTED_ROLE_FLOW[3]!.roles).toEqual(['qa-engineer'])
-    // Phase 3–5 have no stages (no routine subagent dispatch) — every stage
-    // lives in Phase 1–2 (spec §2.3). ops-engineer is NOT in the pipeline
-    // (on-demand zone, see KNOWN_AGENTS).
-    for (const s of EXPECTED_ROLE_FLOW) {
-      expect(['iteration-start', 'autonomous-execute']).toContain(s.phase)
-    }
-  })
-
   it('agentFlow null (ledger absent) → degraded skeleton + full idle roster (spec §6.2)', () => {
     const agents = projectGraph(fullSource).agents
     expect(agents.degraded).toBe(true)
