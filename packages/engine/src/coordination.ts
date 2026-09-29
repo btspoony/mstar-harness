@@ -183,6 +183,7 @@ import {
   stableJson,
   validateWorkflowSnapshot,
   PREPARE_PHASE,
+  WORKFLOW_TERMINAL_STATUSES,
   WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
@@ -190,7 +191,7 @@ import {
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
-import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
+import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
 
 /**
  * Persist payload contracts are owned by their validating domains. `json` is

@@ -80,8 +80,8 @@ function mutation(input: IssueInput, privileged: boolean): MutationContext {
     throw error;
   }
   return {
-    operationId: input.operationId,
-    actor: input.actor,
+    operationId: input.operationId!,
+    actor: input.actor!,
     ...(privileged && input.session !== undefined ? { sessionFile: input.session } : {}),
     ...(privileged && input.expect !== undefined ? { expectedRevision: input.expect } : {}),
   };
@@ -169,9 +169,10 @@ function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
     if (field.itemsNonblank) array = array.refine((items) => items.every((item) => item.trim() !== ""));
     schema = array;
   } else if (field.type === "string") {
-    let string = z.string();
-    if (field.values !== undefined) string = z.enum(field.values as [string, ...string[]]);
-    if (field.nonblankWhenPresent) string = string.refine((value) => value.trim() !== "");
+    let string: z.ZodType = field.values === undefined
+      ? z.string()
+      : z.enum(field.values as [string, ...string[]]);
+    if (field.nonblankWhenPresent) string = string.refine((value) => typeof value === "string" && value.trim() !== "");
     schema = string;
   } else {
     schema = z.unknown();

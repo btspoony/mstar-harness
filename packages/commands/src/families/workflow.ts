@@ -104,7 +104,7 @@ function makeDefinition(
       }),
     },
     input,
-    payloads: Object.fromEntries(keys.flatMap((key) => {
+    payloads: Object.fromEntries(keys.flatMap((key): [string, { schema: z.ZodType }][] => {
       if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
       if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
       if (key === "file" && id === "workflow.execution-policy") {

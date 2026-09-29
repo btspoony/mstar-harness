@@ -37,6 +37,7 @@
  */
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { lines_missing_fence, parseReportFrontmatter } from "./prreview.js";
+export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
 
 /**
  * Verdict 词表 —— 逐字取自 `report-template.md` § Report body template。
@@ -56,15 +57,7 @@ const REPORT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** `## Summary` 四行计数与 `## Findings` 四个 severity 分区，模板顺序。 */
 const REPORT_SEVERITIES = ["Critical", "Warning", "Suggestion", "Unconfirmed"] as const;
 type ReportSeverity = (typeof REPORT_SEVERITIES)[number];
-/** Public field contract for the `mstar.review/v1` envelope. */
-export const MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
-  schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
-  verdict: { required: true, type: "string", description: "Harness PR verdict." },
-  summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
-  findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
-  tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated." },
-  target: { required: false, type: "object", description: "Optional target identity." },
-} as const;
+/** The public payload schema lives in a leaf module to keep imports acyclic. */
 
 
 /**
