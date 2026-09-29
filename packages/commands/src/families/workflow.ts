@@ -102,7 +102,15 @@ function makeDefinition(
         };
       }),
     },
-    input, output: commandEnvelopeSchema, effects: [effect], description,
+    input,
+    payloads: Object.fromEntries(keys.flatMap((key) => {
+      if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
+      if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
+      return [];
+    })),
+    output: commandEnvelopeSchema,
+    effects: [effect],
+    description,
     async execute(raw, context) { const parsed = input.safeParse(raw); if (!parsed.success) return usage(id, parsed.error.message); return execute(parsed.data, context); },
   };
 }

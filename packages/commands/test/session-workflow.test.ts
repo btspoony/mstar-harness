@@ -47,6 +47,15 @@ describe("session and workflow command families", () => {
       "workflow.integration-worktree", "iteration.register", "session.recover", "session.run",
     ]));
   });
+  test("workflow family sparse payload decode validates object and array intent payloads", () => {
+    const amendment = definition("workflow.amend-prepare");
+    const iteration = definition("iteration.register");
+    expect(amendment.payloads?.input?.schema.safeParse({ append: [] }).success).toBe(true);
+    expect(amendment.payloads?.input?.schema.safeParse([]).success).toBe(false);
+    expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
+    expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
+  });
+
 
   test("session.run launches argv without a shell and preserves child output and exit status", async () => {
     const context = testContext();
