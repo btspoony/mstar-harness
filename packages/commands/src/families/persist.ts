@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  PERSIST_PAYLOAD_CONTRACTS,
+  persistPayloadContracts,
   createFsStore,
   getArtifactStore,
   guardInjectedStore,
@@ -29,11 +29,13 @@ function payloadSchema(fields: Readonly<Record<string, { readonly required: bool
   return z.object(shape).passthrough();
 }
 
+const payloadContracts = persistPayloadContracts();
+
 const payloadSchemas = {
-  status: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.status.schema), help: "Status v2 root payload; required fields and full invariants are validated by the engine." },
-  snapshot: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.snapshot.schema), help: "Workflow snapshot payload; conditional lifecycle, row and lease rules are validated by the engine." },
-  review: { schema: payloadSchema(PERSIST_PAYLOAD_CONTRACTS.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
-  json: { schema: z.unknown(), help: `${PERSIST_PAYLOAD_CONTRACTS.json.reason} ${PERSIST_PAYLOAD_CONTRACTS.json.alternative}` },
+  status: { schema: payloadSchema(payloadContracts.status.schema), help: "Status v2 root payload; required fields and full invariants are validated by the engine." },
+  snapshot: { schema: payloadSchema(payloadContracts.snapshot.schema), help: "Workflow snapshot payload; conditional lifecycle, row and lease rules are validated by the engine." },
+  review: { schema: payloadSchema(payloadContracts.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
+  json: { schema: z.unknown(), help: `${payloadContracts.json.reason} ${payloadContracts.json.alternative}` },
 } as const;
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {

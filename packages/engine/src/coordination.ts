@@ -199,18 +199,35 @@ import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
  * Persist payload contracts are owned by their validating domains. `json` is
  * intentionally syntax-only: arbitrary JSON has no domain validator; use the
  * status, snapshot, or review kind for governed documents.
+ *
+ * READ as a function, never captured at module evaluation: the payload schema of
+ * `snapshot` lives in `workflow.ts`, which imports `path.js` → `catalog.js` →
+ * this module, so a top-level read of that binding executes while the cycle is
+ * mid-evaluation. Import order decides whether the binding is initialized yet —
+ * a spec file that enters the graph at `workflow.ts` (e.g. `test/workflow.test
+ * .ts`) would evaluate this module first and die on the TDZ. Deferring the read
+ * to the first call makes the contract order-independent, which every consumer
+ * already is: `packages/commands` reads it inside command construction, long
+ * after the graph is live.
  */
-export const PERSIST_PAYLOAD_CONTRACTS = {
-  status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
-  snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
-  review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
-  json: {
-    schema: null,
-    validation: "parse-only",
-    reason: "Arbitrary JSON has no declared domain shape.",
-    alternative: "Use status, snapshot, or review for governed artifacts.",
-  },
-} as const;
+export function persistPayloadContracts(): {
+  readonly status: { readonly schema: typeof STATUS_V2_PAYLOAD_SCHEMA; readonly validation: "status-v2" };
+  readonly snapshot: { readonly schema: typeof WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA; readonly validation: "workflow-snapshot" };
+  readonly review: { readonly schema: typeof MSTAR_REVIEW_V1_PAYLOAD_SCHEMA; readonly validation: "mstar.review/v1" };
+  readonly json: { readonly schema: null; readonly validation: "parse-only"; readonly reason: string; readonly alternative: string };
+} {
+  return {
+    status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
+    snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
+    review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
+    json: {
+      schema: null,
+      validation: "parse-only",
+      reason: "Arbitrary JSON has no declared domain shape.",
+      alternative: "Use status, snapshot, or review for governed artifacts.",
+    },
+  };
+}
 
 /* ------------------------------------------------------------------------ *
  * § Types — public surface
