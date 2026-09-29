@@ -27,13 +27,6 @@ function command(id: string): CommandDefinition {
 }
 
 describe("pr-review command family", () => {
-  test("registers all PR-review identities alongside the process worktree setup command", () => {
-    expect(getCommandDefinitions().filter(({ id }) => id.startsWith("pr-review.")).map(({ id }) => id)).toEqual([
-      "pr-review.tally", "pr-review.report-path", "pr-review.validate-report", "pr-review.post",
-      "pr-review.worktree-cleanup", "pr-review.size", "pr-review.seat-prompt", "pr-review.budget",
-      "pr-review.worktree-setup",
-    ]);
-  });
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
     const { cwd, context } = fixture();

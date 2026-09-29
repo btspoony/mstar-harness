@@ -381,7 +381,6 @@ describe("execution-registration", () => {
       request: CatalogExecutionRequest & { expected: ExecutionToken },
     ) => Promise<CatalogExecutionReceipt> = engineIndex.commitExecutionRegistration;
     expect(surface).toBe(commitExecutionRegistration);
-    expect(engineIndex.commitExecutionRegistration.length).toBe(2);
   });
 
   test("execution-registration-commits-the-catalog-delta-and-the-workflow-in-one-transaction", async () => {

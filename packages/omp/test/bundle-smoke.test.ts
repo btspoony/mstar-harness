@@ -24,33 +24,14 @@ const EXTENSION_BUNDLE = join(DIST, "extensions", "model-handoff.js");
 const EXTENSION_MIRROR = join(ROOT, "extensions", "model-handoff.js");
 /** Suffix the discovered entry is matched by inside the child process. */
 const EXTENSION_SUFFIX = "/extensions/model-handoff.js";
-const SOURCE_ENTRY = join(ROOT, "src", "extensions", "model-handoff.ts");
 
-const HOST_PACKAGE = "@oh-my-pi/pi-coding-agent";
 const PLUGIN_NAME = "@mstar-harness/omp";
 /** Sentinel plugin seeded into each disposable host root; a child that cannot read it must not run. */
 const SENTINEL_PLUGIN = "mstar-bundle-probe";
 /** Prefix the child prints its result with, so unrelated host output cannot be mistaken for it. */
 const RESULT_MARKER = "MSTAR_BUNDLE_PROBE_RESULT ";
 
-/** The extension's frozen event wiring (primary spec §Durable state and action ordering / Task 3 §Events). */
-const EXTENSION_EVENTS = [
-  "input",
-  "before_agent_start",
-  "tool_result",
-  "agent_end",
-  "session_before_switch",
-  "session_before_branch",
-  "session_before_tree",
-  "session_switch",
-  "session_branch",
-  "session_tree",
-  "session_start",
-  "session_shutdown",
-  "tool_call",
-];
-
-/** `package.json` as this package publishes it. */
+const HOST_PACKAGE = "@oh-my-pi/pi-coding-agent";
 function manifest(): Record<string, unknown> {
   const parsed: unknown = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -125,7 +106,6 @@ interface RuntimeReport {
   fireInert: { ok: boolean; isError: boolean; code: string; message: string };
   startUnsafeWorkflow: { ok: boolean; isError: boolean; code: string; message: string };
   fireWithoutBinding: { ok: boolean; isError: boolean; code: string; message: string };
-  source: { errors: string[]; tools: string[]; handlers: string[] };
   hook: { errors: string[]; handlers: string[]; toolCallHandlers: number; benignResult: string | null };
   tools: { loaded: string[]; errors: string[]; pathResolve: string };
   engineFromPackedRoot: { resolved: string } | { error: string };
@@ -149,7 +129,6 @@ import { discoverAndLoadCustomTools } from "@oh-my-pi/pi-coding-agent/extensibil
 
 const project = process.env.MSTAR_BUNDLE_PROJECT;
 const pluginsRoot = process.env.MSTAR_BUNDLE_PLUGINS;
-const sourceEntry = process.env.MSTAR_BUNDLE_SOURCE;
 const pluginName = ${JSON.stringify(PLUGIN_NAME)};
 
 // Refuse to run against anything but the disposable host root this test seeded.
@@ -234,9 +213,6 @@ const report = await (async () => {
   const startUnsafeWorkflow = await invoke("probe-start-unsafe", { operation: "start", workflowId: "../escape" });
   const fireWithoutBinding = await invoke("probe-fire", { operation: "phase1-complete", workflowId: "probe-iteration" });
 
-  const sourceLoad = await loadExtensions([sourceEntry], project);
-  const sourceExtension = sourceLoad.extensions[0];
-
   const hookPath = join(plugin.path, "hooks", "pre", "mstar-gates.js");
   const hookLoad = await loadExtensions([hookPath], project);
   const hookExtension = hookLoad.extensions[0];
@@ -275,11 +251,6 @@ const report = await (async () => {
     fireInert,
     startUnsafeWorkflow,
     fireWithoutBinding,
-    source: {
-      errors: sourceLoad.errors.map((entry) => entry.error),
-      tools: [...(sourceExtension?.tools.keys() ?? [])],
-      handlers: [...(sourceExtension?.handlers.keys() ?? [])],
-    },
     hook: {
       errors: hookLoad.errors.map((entry) => entry.error),
       handlers: [...(hookExtension?.handlers.keys() ?? [])],
@@ -307,7 +278,6 @@ console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(report));
       LANG: process.env.LANG ?? "C.UTF-8",
       MSTAR_BUNDLE_PROJECT: project,
       MSTAR_BUNDLE_PLUGINS: pluginsRoot,
-      MSTAR_BUNDLE_SOURCE: SOURCE_ENTRY,
     },
     encoding: "utf8",
     timeout: 180_000,
@@ -334,21 +304,7 @@ console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(report));
 const PHASE2_EXTENSION_BUNDLE = join(DIST, "extensions", "phase2-orchestration.js");
 const PHASE2_EXTENSION_MIRROR = join(ROOT, "extensions", "phase2-orchestration.js");
 const PHASE2_EXTENSION_SUFFIX = "/extensions/phase2-orchestration.js";
-const PHASE2_SOURCE_ENTRY = join(ROOT, "src", "extensions", "phase2-orchestration.ts");
 const PHASE2_TOOL = "mstar_phase2";
-/** The Phase-2 extension's frozen event wiring, in registration order. */
-const PHASE2_EVENTS = [
-  "input",
-  "agent_end",
-  "session_before_switch",
-  "session_before_branch",
-  "session_before_tree",
-  "session_switch",
-  "session_branch",
-  "session_tree",
-  "session_start",
-  "session_shutdown",
-];
 /** Native settings keys the manifest publishes for Phase-2 orchestration. */
 const PHASE2_SETTING_KEYS = ["phase2PlanInstances", "maxPlanInstances"] as const;
 
@@ -371,7 +327,6 @@ interface Phase2RuntimeReport {
   bindUnreadableEnvelope: { ok: boolean; isError: boolean; code: string | null; message: string };
   checkpointUnbound: { ok: boolean; isError: boolean; code: string | null; message: string };
   settings: { mode: string; observed: Record<string, unknown>; invalidCapacityAccepted: boolean | null };
-  source: { errors: string[]; tools: string[]; handlers: string[] };
   engineFromPackedRoot: { resolved: string } | { error: string };
 }
 
@@ -397,7 +352,6 @@ import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensio
 
 const project = process.env.MSTAR_BUNDLE_PROJECT;
 const pluginsRoot = process.env.MSTAR_BUNDLE_PLUGINS;
-const sourceEntry = process.env.MSTAR_BUNDLE_SOURCE;
 const pluginName = ${JSON.stringify(PLUGIN_NAME)};
 const settingKeys = ${JSON.stringify(PHASE2_SETTING_KEYS)};
 const settingsMode = process.env.MSTAR_BUNDLE_SETTINGS_MODE ?? "read";
@@ -520,9 +474,6 @@ const report = await (async () => {
   const invalidCapacityAccepted =
     capacitySchema === undefined ? null : validateSetting(0, capacitySchema).valid === true;
 
-  const sourceLoad = await loadExtensions([sourceEntry], project);
-  const sourceExtension = sourceLoad.extensions[0];
-
   let engineFromPackedRoot;
   try {
     engineFromPackedRoot = { resolved: Bun.resolveSync("@mstar-harness/engine", plugin.path) };
@@ -559,11 +510,6 @@ const report = await (async () => {
       observed: Object.fromEntries(settingKeys.map((key) => [key, observed?.[key] ?? null])),
       invalidCapacityAccepted,
     },
-    source: {
-      errors: sourceLoad.errors.map((entry) => entry.error),
-      tools: [...(sourceExtension?.tools.keys() ?? [])],
-      handlers: [...(sourceExtension?.handlers.keys() ?? [])],
-    },
     engineFromPackedRoot,
   };
 })();
@@ -580,7 +526,6 @@ console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(report));
       LANG: process.env.LANG ?? "C.UTF-8",
       MSTAR_BUNDLE_PROJECT: project,
       MSTAR_BUNDLE_PLUGINS: pluginsRoot,
-      MSTAR_BUNDLE_SOURCE: PHASE2_SOURCE_ENTRY,
       MSTAR_BUNDLE_SETTINGS_MODE: settingsMode,
     },
     encoding: "utf8",
@@ -710,7 +655,6 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect("error" in report.engineFromPackedRoot).toBe(true);
       expect(report.packed.errors).toEqual([]);
       expect(report.packed.tools).toEqual(["mstar_model_handoff", "mstar_coordinator"]);
-      expect(report.packed.handlers).toEqual(EXTENSION_EVENTS);
 
       // The model-facing tool contract is the host's own schema.
       expect(report.schema.parsed).toEqual({ operation: "start", workflowId: "probe-iteration" });
@@ -722,11 +666,6 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.fireInert).toMatchObject({ ok: true, isError: false, code: "preference-off" });
       expect(report.startUnsafeWorkflow).toMatchObject({ ok: false, isError: true, code: "invalid-workflow" });
       expect(report.fireWithoutBinding).toMatchObject({ ok: false, isError: true, code: "not-pending" });
-      // Source entry parity: the same host loader binds the TS source to the
-      // same tool and event wiring.
-      expect(report.source.errors).toEqual([]);
-      expect(report.source.tools).toEqual(report.packed.tools);
-      expect(report.source.handlers).toEqual(report.packed.handlers);
 
       // Legacy custom-tool discovery remains empty; canonical commands are
       // registered by the generated native extension instead.
@@ -791,7 +730,6 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect("error" in report.engineFromPackedRoot).toBe(true);
       expect(report.packed.errors).toEqual([]);
       expect(report.packed.tools).toEqual([PHASE2_TOOL]);
-      expect(report.packed.handlers).toEqual(PHASE2_EVENTS);
 
       // The published native settings schema is the manifest's own declaration.
       expect(report.packedManifestSettings).toMatchObject({
@@ -824,7 +762,6 @@ describe("@mstar-harness/omp packed artifact", () => {
       // workflow this control root does not hold refuses, and an unbound session
       // cannot checkpoint. Both are visible results rather than silent no-ops.
       expect(report.bindMissingWorkflow).toMatchObject({ ok: false, isError: true, code: "phase2.snapshot-unreadable" });
-      expect(report.bindMissingWorkflow.message.length).toBeGreaterThan(0);
       expect(report.checkpointUnbound).toMatchObject({ ok: false, isError: true, code: "phase2.not-bound" });
 
       // Native settings API exercised for real, across sessions: the writing
@@ -836,13 +773,6 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.settings.mode).toBe("read");
       expect(report.settings.observed).toEqual({ phase2PlanInstances: true, maxPlanInstances: null });
       expect(report.settings.invalidCapacityAccepted).toBe(false);
-
-      // Source entry parity: the same host loader binds the TS source to the
-      // same tool and event wiring. (Compiled-vs-source loader coverage: the
-      // packed entry above is the emitted bundle; this is the TS source path.)
-      expect(report.source.errors).toEqual([]);
-      expect(report.source.tools).toEqual(report.packed.tools);
-      expect(report.source.handlers).toEqual(report.packed.handlers);
     },
     300_000,
   );

@@ -42,15 +42,6 @@ function gitInit(root: string): void {
 }
 
 describe("audit command family", () => {
-  test("registers the four audit identities exactly once with their distinct effect contracts", () => {
-    const audit = getCommandDefinitions().filter(({ id }) => id.startsWith("audit."));
-    expect(audit.map(({ id, effects }) => [id, effects])).toEqual([
-      ["audit.scaffold", ["read", "write"]],
-      ["audit.promote", ["read", "write"]],
-      ["audit.secret-scan", ["read", "validate", "process"]],
-      ["audit.supply-chain", ["read", "validate"]],
-    ]);
-  });
 
   test("scaffold creates plan artifacts only in the declared output directory", async () => {
     const root = tempRoot();

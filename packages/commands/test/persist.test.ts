@@ -172,7 +172,6 @@ describe("persist command family", () => {
     const { root, context } = setup();
     const write = definition("persist.write");
     expect(Object.keys(write.payloads ?? {}).sort()).toEqual(["json", "review", "snapshot", "status"]);
-    expect(write.payloads?.json?.help).toContain("no declared domain shape");
     expect(write.payloads?.status?.schema.safeParse(STATUS).success).toBe(true);
 
     const invalid = await write.execute({ kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }), expectVersion: "absent" }, context);

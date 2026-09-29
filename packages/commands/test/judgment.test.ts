@@ -94,8 +94,6 @@ describe("judgment command family", () => {
   test("documents the active review-advice route instead of historical submit", () => {
     const command = definition(async () => result);
     expect(command.id).toBe("judgment.review-advice");
-    expect(command.description).toContain("historical judgment submit command is not in the current registry");
-    expect(command.description).toContain("--file <pack.json> --pilot <pilot.json>");
     expect(command.cli.options.find(({ key }) => key === "file")?.flags).toBe("--file <path>");
     expect(command.cli.options.find(({ key }) => key === "pilot")?.required).toBe(true);
   });

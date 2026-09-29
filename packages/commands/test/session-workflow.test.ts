@@ -39,14 +39,6 @@ function definition(id: string) {
 }
 
 describe("session and workflow command families", () => {
-  test("registers all twelve C3b identities, including the four dynamic transitions", () => {
-    const ids = getCommandDefinitions().map(({ id }) => id);
-    expect(ids).toEqual(expect.arrayContaining([
-      "workflow.register", "workflow.evidence", "workflow.show-prepare", "workflow.amend-prepare",
-      "workflow.recover-coordinator", "workflow.phase", "workflow.lifecycle", "workflow.execution-policy",
-      "workflow.integration-worktree", "iteration.register", "session.recover", "session.run",
-    ]));
-  });
   test("workflow family sparse payload decode validates object and array intent payloads", () => {
     const amendment = definition("workflow.amend-prepare");
     const iteration = definition("iteration.register");

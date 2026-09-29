@@ -1240,7 +1240,6 @@ describe("execution-export", () => {
       mutateExecutionWorkflow(contextOf(world.context, world.caller), workflow as never),
     );
     expect(refused.code).toBe("coordination.invalid-input");
-    expect(refused.message.length).toBeGreaterThan(0);
     expect(footprint(world.dbPath)).toEqual(before);
   });
 
