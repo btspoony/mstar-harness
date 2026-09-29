@@ -133,4 +133,17 @@ describe("issue command family", () => {
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
   });
+  test("payload JSON strings decode and expose domain schema links", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const result = await command.execute({
+      payload: JSON.stringify(capture()), operationId: "capture-json", actor: "project-manager",
+    }, context);
+    expect(result.status).toBe("ok");
+    expect(command.description).toContain("mstar schema CaptureInput");
+    expect(command.payloads).toHaveProperty("CaptureInput");
+    expect(command.effects).toEqual(["write"]);
+    expect(definition("issue.export").effects).toEqual(["read"]);
+  });
 });
+

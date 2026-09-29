@@ -5,6 +5,7 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
   resolveProcessHarnessDir,
@@ -64,7 +65,11 @@ function storeContext(input: IssueInput, invocation: InvocationContext): StoreCo
   return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd };
 }
 function mutation(input: IssueInput, privileged: boolean): MutationContext {
-  if (input.operationId === undefined || input.actor === undefined) throw new Error("operationId and actor are required for issue mutation");
+  if (input.operationId === undefined || input.actor === undefined) {
+    const error = new Error("operationId and actor are required for issue mutation") as Error & { code: string };
+    error.code = "issue.scope-refused";
+    throw error;
+  }
   return {
     operationId: input.operationId,
     actor: input.actor,
@@ -74,11 +79,22 @@ function mutation(input: IssueInput, privileged: boolean): MutationContext {
 }
 function payload<T>(input: IssueInput): T {
   let value = input.payload;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      throw new Error("payload is not valid JSON");
+    }
+  }
   if (value === undefined && input.file !== undefined) {
     if (!path.isAbsolute(input.file)) throw new Error("file must be an absolute path");
-    value = JSON.parse(readFileSync(input.file, "utf8")) as unknown;
+    try {
+      value = JSON.parse(readFileSync(input.file, "utf8")) as unknown;
+    } catch {
+      throw new Error("payload file is not valid JSON or could not be read");
+    }
   }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("payload must be an object");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("payload must be a JSON object");
   return value as T;
 }
 function requiredId(input: IssueInput): string {
@@ -118,6 +134,17 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
   }
 }
 
+const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
+  add: "CaptureInput",
+  occurrence: "OccurrenceInput",
+  triage: "IssueTriage",
+  close: "ClosureEvidence",
+  waive: "ClosureEvidence",
+  duplicate: "ClosureEvidence",
+  supersede: "ClosureEvidence",
+  link: "IssueLink",
+};
+
 function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const verb = id.slice("issue.".length);
   const optionFlags: Record<string, string> = {
@@ -126,26 +153,24 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     session: "--session <path>", expect: "--expect <n>", payload: "--payload <json>",
   };
-  const options = Object.keys(inputSchema.shape).map((key) => ({ key, flags: optionFlags[key]!, required: false }));
+  const options = Object.keys(inputSchema.shape).map((key) => ({
+    key,
+    flags: optionFlags[key]!,
+    required: payloadType[verb] !== undefined && (key === "operationId" || key === "actor"),
+  }));
   return {
     id,
     cli: { path: ["issue", verb], aliases: [], arguments: [], options },
     input: inputSchema,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    description: verb === "close"
-      ? "Close as resolved (acceptance evidence in references plus the acceptance authority in alignmentRef)"
-      : verb === "waive"
-        ? "Close as waived"
-        : verb === "duplicate"
-          ? "Close as duplicate of a canonical issue"
-          : verb === "supersede"
-            ? "Close as superseded by a replacement issue"
-            : `Issue ${verb} operation; engine enforces authority, lifecycle and concurrency guards.`,
+    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,
+    ...(payloadType[verb] !== undefined
+      ? { payloads: { [payloadType[verb]]: { schema: z.record(z.string(), z.unknown()), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      : {}),
     execute: (input, context) => execute(id, input, context),
   };
 }
-
 export function getIssueCommandDefinitions(): readonly CommandDefinition[] {
   return verbs.map((verb) => cliDefinition(`issue.${verb}`));
 }
