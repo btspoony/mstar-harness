@@ -1501,8 +1501,7 @@ export async function recordWorkflowDelivery(
     // afterwards would leave the `Done` fact standing on evidence it was never
     // accepted with. An identical re-record never reaches this point (the
     // idempotent return above), so a retried recording stays a no-op; the
-    // refusal carries the same stable code the DB route's `applyDeliveryEvidence`
-    // uses for the same state (`coordination.invalid-transition`).
+    // refusal carries the dedicated completion-frozen code shared with the DB route.
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
         "coordination.completion-frozen",

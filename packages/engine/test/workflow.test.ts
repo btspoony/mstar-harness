@@ -2356,10 +2356,11 @@ describe("standalone-completion-shape", () => {
       handoff: { ...standaloneCompletedHandoff(), state: "accepted", integration: integrationRecord },
       overrides: { integration_worktree_path: "/tmp/integration" },
     });
-    const messages = validateWorkflowSnapshot(rewritten).violations.map((v) => v.message).join(" | ");
-    expect(messages).toContain('requires handoff.state "completed"');
-    expect(messages).toContain("must not carry integration");
-    expect(messages).toContain("must not carry integration_worktree_path");
+    expect(validateWorkflowSnapshot(rewritten).violations.map((v) => v.code)).toEqual([
+      "coordination.row.handoff-field",
+      "coordination.row.handoff-field",
+      "coordination.row.handoff-field",
+    ]);
   });
 
   test("accepts an in-progress standalone row whose accepted handoff is stored (the requirement is the Done shape, F-1)", () => {

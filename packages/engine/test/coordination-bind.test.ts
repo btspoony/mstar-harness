@@ -1218,13 +1218,12 @@ describe("admission self-claim and orphan adoption", () => {
         });
         throw new Error("expected the bind to refuse");
       } catch (error) {
-        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+        return error instanceof CoordinationError ? { code: error.code, message: error.message, details: error.details } : null;
       }
     })();
 
     expect(refused?.code).toBe("coordination.assignment-stale");
-    expect(refused?.message).toContain("plan document");
-    expect(refused?.message).toContain("changed or is gone");
+    expect(refused?.details).toMatchObject({ path: fixture.planPath });
     expect(refused?.message).not.toMatch(/ENOENT|EISDIR/);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
@@ -1253,13 +1252,12 @@ describe("admission self-claim and orphan adoption", () => {
         });
         throw new Error("expected the bind to refuse");
       } catch (error) {
-        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+        return error instanceof CoordinationError ? { code: error.code, message: error.message, details: error.details } : null;
       }
     })();
 
     expect(refused?.code).toBe("coordination.assignment-stale");
-    expect(refused?.message).toContain("declares Working branch feature/somewhere-else");
-    expect(refused?.message).toContain("feature/plan-a");
+    expect(refused?.details).toMatchObject({ path: fixture.planPath, expected: "feature/plan-a", actual: "feature/somewhere-else" });
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
@@ -1319,13 +1317,12 @@ describe("admission self-claim and orphan adoption", () => {
         });
         throw new Error("expected the bind to refuse");
       } catch (error) {
-        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+        return error instanceof CoordinationError ? { code: error.code, message: error.message, details: error.details } : null;
       }
     })();
 
     expect(refused?.code).toBe("coordination.assignment-stale");
-    expect(refused?.message).toContain("declares Main worktree branch trunk");
-    expect(refused?.message).toContain("is on main");
+    expect(refused?.details).toMatchObject({ path: fixture.planPath, expected: "trunk", actual: "main" });
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
@@ -1394,13 +1391,12 @@ describe("admission self-claim and orphan adoption", () => {
         });
         throw new Error("expected the mutation to refuse");
       } catch (error) {
-        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+        return error instanceof CoordinationError ? { code: error.code, message: error.message, details: error.details } : null;
       }
     })();
 
     expect(assignmentRefusal?.code).toBe("coordination.assignment-stale");
-    expect(assignmentRefusal?.message).toContain("Assignment");
-    expect(assignmentRefusal?.message).toContain("changed or is gone");
+    expect(assignmentRefusal?.details).toMatchObject({ path: assignmentHalf.assignmentPath });
     expect(assignmentRefusal?.message).not.toMatch(/ENOENT/);
     expect(readFileSync(assignmentHalf.snapshotPath, "utf8")).toBe(assignmentSnapshotBefore);
   });
