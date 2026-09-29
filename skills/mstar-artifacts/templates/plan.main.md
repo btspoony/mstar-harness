@@ -16,6 +16,8 @@
 
 [Project requirements — version floors, naming, exact values — copied verbatim from spec. Every task includes them. Verification scope follows `mstar-harness-core` § 定向执行与验证边界: only changed behavior and direct contracts; no local full suites without explicit user permission. Never assign real-browser/device/installed-deployment E2E evidence as a task or a gate of a development plan; each layer proves itself with its own unit/integration tests. Real-environment verification lives only in a separately requested `mstar-e2e` workflow, whose named scenarios are that workflow's own plan rows.]
 
+Development AC boundary: [For every task, replace any requirement for live API/provider receipts, a named/authenticated host/account, installed plugin/artifact, real browser/device, or deployed-environment proof with isolated fixtures, unit/component/integration checks, or locally built CLI/MCP evidence. Record real-environment behavior as unverified when applicable; only a separately authorized operational/E2E workflow owns real scenarios.]
+
 ## Engine lifecycle
 
 Who advances this plan row's engine state, and what records each transition:

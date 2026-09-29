@@ -17,6 +17,8 @@ Extension of `references/project-manager.md`. Use when choosing **`QA gate`** an
 
 All modes keep QA execution **unit-only**. Scope/authorization → `mstar-harness-core` § 定向执行与验证边界. No `full` QA mode: user-authorized full suites go to a separate implementer/ops action; QA reuses its evidence. Real browser/device/E2E goes to separately requested `mstar-e2e`, not an iteration QA gate.
 
+Before setting or closing a development QA gate, reject ACs requiring live API/provider receipts, named/authenticated host/account, installed plugin/artifact, browser/device or deployed-environment proof; correct them during Prepare to isolated fixtures, relevant unit/component/integration checks, or locally built CLI/MCP evidence. Do not silently route such ACs to mandatory QA. Separately requested operational/E2E verification is independent.
+
 Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) and keep it consistent through QC closure unless scope/risk changes force an upgrade to `mandatory`.
 
 ## Trigger matrix (default)

@@ -13,6 +13,8 @@ Read `mstar-harness-core` first. PM follows `mstar-roles` → `references/projec
 
 This is an explicitly requested verification workflow, separate from development iterations and routine QA. Trigger phrases include “run these E2E scenarios”, “verify on this device”, “check the installed deployment”, and `/amazing-e2e-check`. A UI diff, missing screenshot, failed unit test, or reviewer suggestion does not authorize it.
 
+External-dependency language in a development AC (live API, provider receipt, authenticated/named host or account, installed plugin/artifact, real browser/device, deployed environment) does not itself trigger this skill. Prepare rewrites that AC to isolated/local proof; only the user's separate explicit scenario authorization triggers real-environment verification.
+
 ## Workflow
 
 1. **PM scopes the request.** Record the existing user authorization, build/ref, environment/device, named scenarios and expected results, permitted side effects, capability, and report path. Ask only for missing required inputs; never infer production, accounts, or devices. Reuse relevant knowledge without a new global scan.
