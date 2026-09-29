@@ -85,7 +85,8 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 - Flaky CI disposition belongs to PM / QA after recorded evidence — QC does not chase flakes with local suite runs.
 
 ## Evidence rules
-
+- Independently state any concrete cross-task test-quality gap in Findings with the affected behavior and why cited L1/L2 evidence does not protect it; adequate existing evidence is not a finding. Do not turn absent fresh tests or docs/policy prose into automatic test findings (`mstar-coding-behavior` § Test admission).
+- For touched planning documents, cite the local edit and missing seat/model/timestamp/iteration attribution as a finding when demonstrable. Explicit `unknown` for an unavailable model is acceptable; never claim to know another seat's model from this report's Runtime Model field.
 - **If you cannot state a verifiable cross-check, do not report the finding** (prefer omission to fabrication)
 - **A failed evidence channel is not "no problem"** — when the review-package is missing, the diff cannot be parsed, or a referenced file is unreadable, mark the affected scope **Unconfirmed**; never default to "no findings"
 - Critical findings: trigger condition, impact scope, fix suggestion (from source reasoning)
