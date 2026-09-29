@@ -278,7 +278,7 @@ export function RoadmapView() {
     ${state !== null && roadmap !== null
       ? html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`
       : null}
-    ${state !== null
+    ${state !== null && roadmap !== null
       ? html`<${DetailSection} title="Milestones">
           <p class="hint">Milestones are stored records grouped with the issues assigned to them; a milestone's status and an issue's disposition come from the store, never from the historical document.</p>
           ${state.milestones === null || state.milestones.groups.length === 0

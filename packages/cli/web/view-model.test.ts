@@ -966,6 +966,12 @@ describe("milestone view states", () => {
     const missingProject = readyState(null, UNAVAILABLE_PROJECTION);
     expect(missingProject.content.kind).toBe("not-found");
     expect(missingProject.milestones).toBeNull();
+    const missingPanel = roadmapPanel("missing", readyLoad(null, UNAVAILABLE_PROJECTION));
+    expect(missingPanel.kind).toBe("ready");
+    if (missingPanel.kind === "ready") {
+      expect(missingPanel.state.content.kind).toBe("not-found");
+      expect(missingPanel.state.milestones).toBeNull();
+    }
 
     // A structured refusal keeps its own message and never becomes an empty roadmap.
     const refusal = "store.not-initialized: no store — initialize the issue store with the CLI, then reload.";

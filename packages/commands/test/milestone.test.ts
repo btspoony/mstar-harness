@@ -34,3 +34,14 @@ test("milestone family help succeeds without opening a store", () => {
  expect(result.stdout).toContain("milestone");
  expect(existsSync(join(cwd,".mstar","store.db"))).toBe(false);
 });
+
+test("unknown milestone command and malformed flags do not open a store", () => {
+ const cwd=join(root,"invalid-without-store");
+ mkdirSync(cwd,{recursive:true});
+ const cli=join(import.meta.dir,"../../cli/src/index.ts");
+ const unknown=spawnSync(process.execPath,[cli,"milestone","unknown"],{cwd,encoding:"utf8"});
+ expect(unknown.status).not.toBe(0);
+ const malformed=spawnSync(process.execPath,[cli,"milestone","add","--project"],{cwd,encoding:"utf8"});
+ expect(malformed.status).not.toBe(0);
+ expect(existsSync(join(cwd,".mstar","store.db"))).toBe(false);
+});

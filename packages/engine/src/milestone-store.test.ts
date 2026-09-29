@@ -24,6 +24,7 @@ describe("milestone store", () => {
       await expect(addMilestone(context,{projectId,name,target,ordinal},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"milestone.invalid-input"});
     }
     await expect(addMilestone(context,{projectId:"missing",name:"Valid",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"milestone.project-not-found"});
+    await expect(addMilestone(context,{projectId,name:42 as unknown as string,target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({name:"MilestoneError",code:"milestone.invalid-input"});
   });
   test("adds and updates with replay, conflict, delivery guards and single revision advances", async () => {
     const before=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
@@ -66,6 +67,10 @@ describe("milestone store", () => {
     const empty=await addMilestone(context,{projectId,name:"Empty",target:null,ordinal:1},{operationId:crypto.randomUUID(),expectedStoreRevision:full.storeRevision});
     issue("I-MILESTONE-2","resolved",full.milestoneId); issue("I-MILESTONE-3","waived",full.milestoneId); issue("I-MILESTONE-4","duplicate",full.milestoneId); issue("I-MILESTONE-5","superseded",full.milestoneId); issue("I-MILESTONE-6","open",null);
     const result=readMilestonesOn(db,projectId);
+    for (const milestone of result.milestones) {
+      expect(milestone.totalIssues).toBe(milestone.openIssues + milestone.doneIssues);
+      expect(milestone.doneIssues).toBe(milestone.resolvedIssues + milestone.otherRetiredIssues);
+    }
     expect(result.milestones.map(milestone => [milestone.milestoneId,milestone.totalIssues,milestone.openIssues,milestone.resolvedIssues,milestone.otherRetiredIssues,milestone.doneIssues])).toEqual([[full.milestoneId,4,0,1,3,4],[empty.milestoneId,0,0,0,0,0],[(db.prepare("select milestone_id from project_milestones where project_id=? and name='Release'").get(projectId) as {milestone_id:string}).milestone_id,1,0,1,0,1]]);
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones).toHaveLength(1);
     await expect(updateMilestone(context,projectId,full.milestoneId,{name:"x"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toBeInstanceOf(MilestoneError);

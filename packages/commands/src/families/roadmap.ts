@@ -79,7 +79,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } };
 }
 function escapeMarkdown(value: string): string {
-  return value.replace(/\s+/g, " ").replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
+  return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
 }
 function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
   const lines = ["# Roadmap", "", `Store revision: ${storeRevision}`, "", "## Direction", "", roadmap.content?.direction?.trim() ? escapeMarkdown(roadmap.content.direction) : "No stored Direction.", ""];

@@ -12,14 +12,14 @@ export type MilestoneAssignment = { projectId: string; milestoneId: string | nul
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: "open" | "resolved" | "waived" | "duplicate" | "superseded"; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "milestone.store-not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
   const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
   const active = db.prepare("select authority_state from store_meta where id=1").get() as { authority_state?: string } | undefined;
-  if (active?.authority_state !== "active") fail("milestone.store-not-active", "Milestone access requires an active store.");
+  if (active?.authority_state !== "active") fail("store.not-active", "Milestone access requires an active store.");
 }
 function project(db: StoreDb, projectId: string): void {
   if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId)) fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
@@ -39,6 +39,7 @@ function requestHash(value: unknown): string { return createHash("sha256").updat
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
   guard(db);
   if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
+  if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
   const normalizedPatch = { ...patch, ...(patch.name === undefined ? {} : { name: patch.name.trim() }) };
   const hash = requestHash({ domain: "milestone", action: adding ? "add" : "update", projectId, milestoneId: adding ? null : milestoneId, patch: normalizedPatch, expectedStoreRevision: mutation.expectedStoreRevision });
   const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
