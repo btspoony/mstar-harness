@@ -33,6 +33,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
+import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { refreshProjections } from "./projection.js";
 import { importRoadmapAuthority, replaceRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
@@ -97,6 +98,9 @@ type SeedIssue = {
   kind?: string;
   severity?: Severity;
   disposition?: Disposition;
+  acceptance?: string;
+  /** The migration-7 association column; `null` is the unassigned default. */
+  milestoneId?: string | null;
   registeredAt?: string | null;
   closedAt?: string | null;
   /** A migrated record: the imported capture occurrence carries the import marker. */
@@ -107,8 +111,8 @@ type SeedIssue = {
 
 function seedIssue(db: StoreDb, seed: SeedIssue): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, closed_at, created_at, updated_at, revision, identity_key) " +
-      "values (?, ?, ?, ?, ?, ?, 'impact', 'acceptance', ?, ?, ?, ?, 1, ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, closed_at, created_at, updated_at, revision, identity_key, milestone_id) " +
+      "values (?, ?, ?, ?, ?, ?, 'impact', ?, ?, ?, ?, ?, 1, ?, ?)",
   ).run(
     seed.id,
     seed.projectId ?? "proj-a",
@@ -116,11 +120,13 @@ function seedIssue(db: StoreDb, seed: SeedIssue): void {
     seed.kind ?? "bug",
     seed.severity ?? "medium",
     seed.disposition ?? "open",
+    seed.acceptance ?? "acceptance",
     seed.registeredAt ?? null,
     seed.closedAt ?? null,
     RECORDED_AT,
     RECORDED_AT,
     `identity-${seed.id}`,
+    seed.milestoneId ?? null,
   );
   if (seed.importedOccurrence === true) {
     db.prepare(
@@ -334,6 +340,331 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
   if (report.generation === null) throw new Error(`fixture: projection not published (${report.freshness})`);
   return { ...fixture, generation: report.generation, planRevision: plan.entity.revision };
 }
+
+/** A project's milestone row, inserted directly: the read side is what this suite proves. */
+function seedMilestone(
+  db: StoreDb,
+  seed: { id: string; name: string; projectId?: string; target?: string | null; status?: string; ordinal?: number },
+): void {
+  db.prepare(
+    "insert into project_milestones(milestone_id, project_id, name, target, status, ordinal, revision, created_at, updated_at) " +
+      "values (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+  ).run(
+    seed.id,
+    seed.projectId ?? "proj-a",
+    seed.name,
+    seed.target ?? null,
+    seed.status ?? "planned",
+    seed.ordinal ?? 0,
+    RECORDED_AT,
+    RECORDED_AT,
+  );
+}
+
+async function registerProject(context: StoreContext, id: string): Promise<void> {
+  await registerCatalogEntity(
+    context,
+    { kind: "project", id, title: id, rootKind: "projects", relativePath: id },
+    op(`proj-${id}`),
+  );
+}
+
+function milestoneRows(read: MilestoneRead): unknown[] {
+  return read.milestones.map((milestone) => [
+    milestone.milestoneId,
+    milestone.projectId,
+    milestone.name,
+    milestone.ordinal,
+    milestone.totalIssues,
+    milestone.openIssues,
+    milestone.resolvedIssues,
+    milestone.otherRetiredIssues,
+    milestone.doneIssues,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+
+describe("milestone views", () => {
+  test("milestones query groups each project's milestones without cross-project bleed or row multiplication", async () => {
+    const { context } = await workspace("milestone-scope-");
+    await registerProject(context, "proj-a");
+    await registerProject(context, "proj-b");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-A1", name: "A first", ordinal: 0 });
+      seedMilestone(db, { id: "M-A2", name: "A second", ordinal: 1, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-B1", name: "B only", projectId: "proj-b", ordinal: 0 });
+      // Three issues on one milestone: the join must multiply neither the
+      // milestone rows nor the counts.
+      seedIssue(db, { id: "I-A1", title: "a1", milestoneId: "M-A1", disposition: "open" });
+      seedIssue(db, { id: "I-A2", title: "a2", milestoneId: "M-A1", disposition: "resolved", acceptance: "a2 done" });
+      seedIssue(db, { id: "I-A3", title: "a3", milestoneId: "M-A1", disposition: "waived" });
+      seedIssue(db, { id: "I-A4", title: "a4" });
+      seedIssue(db, { id: "I-B1", title: "b1", projectId: "proj-b", milestoneId: "M-B1", disposition: "resolved" });
+    });
+
+    const envelope = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(envelope.data.projectId).toBe("proj-a");
+    expect(milestoneRows(envelope.data)).toEqual([
+      ["M-A1", "proj-a", "A first", 0, 3, 1, 1, 1, 2],
+      ["M-A2", "proj-a", "A second", 1, 0, 0, 0, 0, 0],
+    ]);
+    expect(envelope.data.issues.map((issue) => [issue.id, issue.milestoneId, issue.disposition])).toEqual([
+      ["I-A1", "M-A1", "open"],
+      ["I-A2", "M-A1", "resolved"],
+      ["I-A3", "M-A1", "waived"],
+    ]);
+    expect(envelope.data.issues.find((issue) => issue.id === "I-A2")?.acceptance).toBe("a2 done");
+    expect(envelope.data.unassignedIssues).toBe(1);
+    expect(JSON.stringify(envelope.data)).not.toContain("M-B1");
+
+    // The other project's grouping is its own, and an absent project refuses
+    // instead of answering an empty one.
+    const other = await withStoreRead(context, queryMilestones("proj-b"));
+    expect(milestoneRows(other.data)).toEqual([["M-B1", "proj-b", "B only", 0, 1, 0, 1, 0, 1]]);
+    expect(other.data.unassignedIssues).toBe(0);
+    await expect(withStoreRead(context, queryMilestones("proj-absent"))).rejects.toMatchObject({ code: "milestone.project-not-found" });
+  });
+
+  test("a milestone status query filters one milestone and refuses without its project or id", async () => {
+    const { context } = await workspace("milestone-status-");
+    await registerProject(context, "proj-a");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "One", ordinal: 0 });
+      seedMilestone(db, { id: "M-2", name: "Two", ordinal: 1 });
+      seedIssue(db, { id: "I-1", title: "first", milestoneId: "M-1" });
+      seedIssue(db, { id: "I-2", title: "second", milestoneId: "M-2" });
+      seedIssue(db, { id: "I-3", title: "unassigned" });
+    });
+
+    const one = await withStoreRead(context, queryMilestones("proj-a", "M-1"));
+    expect(milestoneRows(one.data)).toEqual([["M-1", "proj-a", "One", 0, 1, 1, 0, 0, 0]]);
+    expect(one.data.issues.map((issue) => issue.id)).toEqual(["I-1"]);
+    // The unassigned count is the project's, not the filtered milestone's.
+    expect(one.data.unassignedIssues).toBe(1);
+
+    // A well-formed but unknown id answers an empty result, not another
+    // milestone's data; a missing project or id is a usage refusal.
+    const unknown = await withStoreRead(context, queryMilestones("proj-a", "M-missing"));
+    expect(unknown.data.milestones).toEqual([]);
+    expect(unknown.data.issues).toEqual([]);
+    // The standalone query is a real view request: it refuses to run outside
+    // the boundary's single read transaction.
+    await expect(withStoreRead(context, { view: "milestones", needsProjection: false } as never)).rejects.toMatchObject({ exitCode: 2 });
+  });
+
+  test("milestone reads neither refresh nor consume the projection, and disclose its health", async () => {
+    const { context, harness } = await workspace("milestone-freshness-");
+    await registerProject(context, "proj-a");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "One" });
+      seedIssue(db, { id: "I-1", title: "first", milestoneId: "M-1" });
+    });
+    writeFile(join(harness, "status.json"), "{ not json");
+    const unavailable = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(unavailable.projection.generation).toBeNull();
+    expect(unavailable.projection.freshness).toBe("unavailable");
+    expect(unavailable.data.milestones).toHaveLength(1);
+    expect(unavailable.data.milestones[0]?.totalIssues).toBe(1);
+
+    // A project with no milestones at all is a successful empty result.
+    await registerProject(context, "proj-empty");
+    const empty = await withStoreRead(context, queryMilestones("proj-empty"));
+    expect(empty.data).toEqual({ projectId: "proj-empty", milestones: [], issues: [], unassignedIssues: 0 });
+    expect(empty.projection.freshness).toBe("unavailable");
+  });
+
+  test("milestone assignment and disposition updates are visible without a projection refresh", async () => {
+    const { context, harness, generation } = await projectedWorkspace("milestone-live-");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "Live", ordinal: 0 });
+      seedIssue(db, { id: "I-1", title: "unassigned yet" });
+    });
+    const before = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(before.projection.generation).toBe(generation);
+    expect(before.data?.milestones.milestones[0]?.totalIssues).toBe(0);
+    expect(before.data?.milestones.unassignedIssues).toBe(1);
+
+    await withWrite(context, (db) => {
+      db.prepare("update issues set milestone_id = 'M-1', revision = revision + 1 where id = 'I-1'").run();
+      db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    });
+    const assigned = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(assigned.projection.generation).toBe(generation);
+    expect(assigned.data?.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 1, doneIssues: 0 });
+    expect(assigned.data?.milestones.unassignedIssues).toBe(0);
+    expect(assigned.storeRevision).toBe(before.storeRevision + 1);
+
+    await withWrite(context, (db) => {
+      db.prepare("update issues set disposition = 'resolved', closed_at = ?, revision = revision + 1 where id = 'I-1'").run(RECORDED_AT);
+      db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    });
+    const resolved = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(resolved.projection.generation).toBe(generation);
+    const resolvedData = resolved.data;
+    if (resolvedData === null) throw new Error("fixture: the roadmap view must answer for proj-a");
+    expect(resolvedData.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 0, resolvedIssues: 1, doneIssues: 1 });
+
+    // The same membership answers through the standalone view at the same
+    // revision: a milestone-only read answers from committed rows, and the
+    // source I/O that changed after publication does not move them.
+    const standalone = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(standalone.storeRevision).toBe(resolved.storeRevision);
+    expect(standalone.data).toEqual(resolvedData.milestones);
+    writeFile(join(harness, "status.json"), "{ not json");
+    const afterSourceChange = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(afterSourceChange.projection).toEqual(standalone.projection);
+    expect(afterSourceChange.projection.freshness).toBe("current");
+    expect(afterSourceChange.data).toEqual(standalone.data);
+    // The view that does need projections refreshes and discloses the change;
+    // the milestone grouping is unchanged either way.
+    const refreshed = await withStoreRead(context, queryDashboard("workflows"));
+    expect(refreshed.projection.freshness).toBe("stale");
+    const stale = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(stale.projection.freshness).toBe("stale");
+    expect(stale.projection.generation).toBe(generation);
+    expect(stale.data?.milestones).toEqual(standalone.data);
+  });
+
+  test("a concurrent assignment cannot change the milestone counts or revisions one read reports", async () => {
+    const { context } = await workspace("milestone-snapshot-");
+    await registerProject(context, "proj-a");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "Snapshot" });
+      seedIssue(db, { id: "I-1", title: "counted", milestoneId: "M-1" });
+    });
+    const dbPath = storeDbPath(context);
+    const beforeRevision = (await withStoreRead(context, queryMilestones("proj-a"))).storeRevision;
+    const base = queryMilestones("proj-a");
+
+    const envelope = await withStoreRead(context, {
+      view: base.view,
+      needsProjection: base.needsProjection,
+      run: (handle) => {
+        const first = base.run(handle);
+        // A writer on its own connection commits an assignment while this
+        // read transaction is open: the counts, issue rows and revisions this
+        // request answers must all still describe the pre-write snapshot.
+        const writer: StoreDb = new DatabaseSync(dbPath);
+        try {
+          seedIssue(writer, { id: "I-2", title: "late", milestoneId: "M-1" });
+          writer.exec("update store_meta set revision = revision + 3 where id = 1");
+        } finally {
+          writer.close();
+        }
+        return { first, second: base.run(handle) };
+      },
+    });
+    expect(envelope.storeRevision).toBe(beforeRevision);
+    expect(envelope.data.first.milestones[0]?.totalIssues).toBe(1);
+    expect(envelope.data.second.milestones[0]?.totalIssues).toBe(1);
+    expect(envelope.data.first.issues.map((issue) => issue.id)).toEqual(["I-1"]);
+    expect(envelope.data.first).toEqual(envelope.data.second);
+
+    const later = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(later.data.milestones[0]?.totalIssues).toBe(2);
+    expect(later.storeRevision).toBe(beforeRevision + 3);
+  });
+
+  test("a store below schema 7 discloses the milestone upgrade refusal on both milestone reads", async () => {
+    const { context } = await workspace("milestone-outdated-");
+    await registerProject(context, "proj-a");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "One" });
+      // A store whose recorded history stops at 6 (T01's pre-upgrade state):
+      // the read path neither migrates nor guesses -- it refuses with the
+      // explicit upgrade instruction.
+      db.prepare("delete from schema_version where version >= 7").run();
+    });
+    const failure = await withStoreRead(context, queryMilestones("proj-a")).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "milestone.schema-outdated" });
+    expect((failure as Error).message).toContain("mstar store upgrade");
+    await expect(withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }))).rejects.toMatchObject({
+      code: "milestone.schema-outdated",
+    });
+    // Nothing was applied: the recorded history is exactly what it was.
+    expect(await withStoreRead(context, queryDashboard("issues"))).toMatchObject({ data: { total: 0 } });
+  });
+
+  test("the roadmap view carries the milestone grouping even with absent Markdown, and answers null for an unknown project", async () => {
+    const { context, harness, generation } = await projectedWorkspace("milestone-roadmap-");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-2", name: "Dashboard", ordinal: 1 });
+      seedIssue(db, { id: "I-1", title: "read store", milestoneId: "M-1", acceptance: "read proof" });
+      seedIssue(db, { id: "I-2", title: "render", milestoneId: "M-2" });
+      seedIssue(db, { id: "I-3", title: "loose" });
+    });
+    const present = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(present.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
+    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.target, milestone.status, milestone.ordinal])).toEqual([
+      ["Read boundary", "2026-10-01", "active", 0],
+      ["Dashboard", null, "planned", 1],
+    ]);
+    expect(present.data?.milestones.issues.map((issue) => [issue.id, issue.milestoneId])).toEqual([
+      ["I-1", "M-1"],
+      ["I-2", "M-2"],
+    ]);
+    expect(present.data?.milestones.unassignedIssues).toBe(1);
+
+    // The stored source text is gone (and the projection row was tampered
+    // with), yet the milestone grouping is still answered: it is store data,
+    // not Markdown-derived, and needs no refresh.
+    rmSync(join(harness, "projects/proj-a/roadmap.md"), { force: true });
+    await withWrite(context, (db) => {
+      db.prepare("update projection_meta set format_version = 1 where id = 1").run();
+    });
+    const absent = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(absent.data).toEqual(present.data);
+    // Neither read refreshed the projection: the published generation and its
+    // health are exactly what the first read reported.
+    expect(absent.projection).toEqual(present.projection);
+    expect(absent.projection.generation).toBe(generation);
+
+    // A registered project with no roadmap authority and no milestones still
+    // answers empty content AND empty milestone data -- never null.
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-known-empty", title: "Known empty", rootKind: "projects", relativePath: "proj-known-empty" },
+      op("known-empty"),
+    );
+    const noContent = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-known-empty" }));
+    expect(noContent.data).toEqual({
+      projectId: "proj-known-empty",
+      catalog: expect.anything(),
+      authority: { state: "absent" },
+      content: null,
+      milestones: { projectId: "proj-known-empty", milestones: [], issues: [], unassignedIssues: 0 },
+    });
+    expect((await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-absent" }))).data).toBeNull();
+  });
+
+  test("a milestone-only read of a project without roadmap authority keeps the absent-content roadmap contract", async () => {
+    const { context } = await workspace("milestone-absent-");
+    await registerProject(context, "proj-solo");
+    await withWrite(context, (db) => {
+      seedMilestone(db, { id: "M-S1", name: "Solo milestone", projectId: "proj-solo", ordinal: 0 });
+      seedIssue(db, { id: "I-S1", title: "solo issue", projectId: "proj-solo", milestoneId: "M-S1", disposition: "duplicate", acceptance: "dup" });
+      seedIssue(db, { id: "I-S2", title: "loose", projectId: "proj-solo" });
+    });
+    const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-solo" }));
+    expect(envelope.data?.authority).toEqual({ state: "absent" });
+    expect(envelope.data?.content).toBeNull();
+    expect(envelope.data?.milestones.milestones[0]).toMatchObject({ name: "Solo milestone", totalIssues: 1, otherRetiredIssues: 1, doneIssues: 1 });
+    expect(envelope.data?.milestones.issues[0]).toMatchObject({ id: "I-S1", disposition: "duplicate", acceptance: "dup" });
+    expect(envelope.data?.milestones.unassignedIssues).toBe(1);
+    expect(envelope.data?.milestones.projectId).toBe("proj-solo");
+    // A milestone belongs to exactly one project: the other project's view
+    // cannot observe it even by id.
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-other", title: "Other", rootKind: "projects", relativePath: "proj-other" },
+      op("proj-other"),
+    );
+    const other = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-other" }));
+    expect(other.data?.milestones).toEqual({ projectId: "proj-other", milestones: [], issues: [], unassignedIssues: 0 });
+  });
+});
 
 // ---------------------------------------------------------------------------
 
