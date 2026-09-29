@@ -1,4 +1,5 @@
-// Engine scoped-plan coordination — bind, admission, scope/revisions and issue-authority families.
+// Engine scoped-plan coordination — bind, admission, scope/revisions and issue-authority families
+// (including the findings-gate issue-authority cases).
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
