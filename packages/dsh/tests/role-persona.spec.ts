@@ -67,7 +67,7 @@ const EXECUTE_AS = 'fullstack-dev'
 /** The configured persona text for `fullstack-dev`. */
 const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
 
-/** The 0.5.2 fallbacks-declared persona competing for the SAME native slot (AC-7). */
+/** The fallbacks-declared persona competing for the SAME native slot (AC-7). */
 const FALLBACKS_PERSONA = 'You are the fallbacks-declared executor persona.'
 
 /** A declared-role id OUTSIDE mstar's taxonomy — isolates the fallbacks delivery path. */
@@ -179,27 +179,33 @@ async function bootWithProvider(
 }
 
 /**
- * Declare fallback roles through the REAL settings seam (0.5.2 composes its
- * live config from `settings.installSection` — base row + stored section, so
- * a stored `roles` payload is what an operator's settings.yaml would carry:
- * the competing role-identity source). The plugin re-reads the section live,
- * so a declaration made after the row applied takes effect.
+ * Declare fallback roles through the REAL settings seam (the 0.6.x plugin
+ * composes its live config from the `llm-fallbacks` profile entry:
+ * `SettingsForms.describe()` reports the stored section and the plugin
+ * merges it over its row entry, re-armed by `settings/document-updated` —
+ * so a stored `roles` payload is what an operator's entry config carries:
+ * the competing role-identity source). The plugin re-reads the composed
+ * config on every update event, so a declaration made after the row applied
+ * takes effect.
  */
 async function declareFallbacksRoles(app: BootResult, roles: Array<{ id: string; persona: string }>): Promise<void> {
   const settings = app.ctx.get('settings') as FakeSettingsRegistry | undefined
   if (settings === undefined) throw new Error('settings seam unavailable in the fallbacks composition')
-  await settings.update('fallbacks', { roles: { list: roles, rules: [] } })
+  await settings.update('llm-fallbacks', { roles: { list: roles, rules: [] } })
 }
 
 /**
- * {@link declareFallbacksRoles}, then mount the 0.5.2 `dsh-llm-fallbacks` row
- * as a plain plugin row (the Task 1 probe test's entry-shape cast) with no
- * config argument — the composition where the mstar row mounts FIRST.
+ * Mount the real `dsh-llm-fallbacks` row as a plain plugin row (the Task 1
+ * probe test's entry-shape cast) with the declared roles AS the entry config
+ * — the 0.6.x loader-entry model, where the operator's `roles.list` lives on
+ * the entry config the fork validates into the plugin's live volatile ref
+ * (a late mount cannot receive post-boot `settings.update` writes through a
+ * ref that did not exist yet, so the declared roles ride the mount config).
+ * The composition where the mstar row mounts FIRST.
  */
 async function applyFallbacksRow(app: BootResult, roles: Array<{ id: string; persona: string }>): Promise<void> {
-  await declareFallbacksRoles(app, roles)
   const fallbacksPlugin = fallbacks as unknown as Parameters<Context['plugin']>[0]
-  await app.ctx.plugin(fallbacksPlugin)
+  await app.ctx.plugin(fallbacksPlugin, { roles: { list: roles, rules: [] } })
   expect(fallbacksMounted(app.ctx)).toBe(true)
 }
 
@@ -298,7 +304,7 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   })
 
   it('(e) composition with dsh-llm-fallbacks applied → persona still merged (seeds + advisory stay the fallbacks surface)', async () => {
-    // 0.5.2 provides `llm-fallbacks` inside `ctx.inject(["settings"], …)`:
+    // The 0.6.x plugin provides `llm-fallbacks` inside `ctx.inject(["settings"], …)`:
     // without the settings seam the plugin applies but registers no service,
     // so the composition would not actually be a fallbacks composition. Same
     // seam the probe test boots (the real dsh app always composes
@@ -440,10 +446,10 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
     }
   })
 
-  // ---- AC-7 : caller-set persona under the real dsh-llm-fallbacks 0.5.2 composition ----
+  // ---- AC-7 : caller-set persona under the real dsh-llm-fallbacks composition ----
 
-  it('(q) real dsh-llm-fallbacks 0.5.2 row + settings seam → an explicit caller persona still wins (AC-7)', async () => {
-    // 0.5.2's dispatch seam competes for the SAME native slot: it resolves
+  it('(q) real dsh-llm-fallbacks row + settings seam → an explicit caller persona still wins (AC-7)', async () => {
+    // The fallbacks dispatch seam competes for the SAME native slot: it resolves
     // the declared role from this Assignment and merges that role's declared
     // `persona` when the slot is free. Declaring a persona for the SAME role
     // id makes that competing delivery live; the caller's value must win.
@@ -461,10 +467,10 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
     }
   })
 
-  it('(r) the same 0.5.2 composition delivers the declared fallbacks persona when the slot is free (AC-7 control)', async () => {
+  it('(r) the same composition delivers the declared fallbacks persona when the slot is free (AC-7 control)', async () => {
     // Same row + settings seam, but the Assignment declares a role OUTSIDE
     // mstar's taxonomy: the mstar channel resolves nothing, so the observed
-    // persona can only come from the fallbacks seam. This shows the 0.5.2
+    // persona can only come from the fallbacks seam. This shows the fallbacks
     // role-identity path really fills the native slot on this composition —
     // (q)'s caller-wins assertion is not vacuous.
     const { app, provider } = await bootWithProvider('fake-spawn', { personaCapability: true }, { settingsService: 'fake' })
@@ -499,7 +505,7 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
   it('(v) reversed composition (the fallbacks row BEFORE the mstar row): the operator Config.rolePersonas persona still wins — the wrapper order never displaces it', async () => {
     // (q)/(r)/(u) pin the DEFAULT profile order (mstar row first), where the
     // mstar wrapper is registered first and therefore runs first. This case
-    // pins the RE-ORDERED composition: the real 0.5.2 row applies first — the
+    // pins the RE-ORDERED composition: the real fallbacks row applies first — the
     // non-default profile order / a re-applied plugin row — so the fallbacks
     // wrapper would otherwise claim the native slot before the harness
     // channel ever sees the request. The operator's `rolePersonas` override is
@@ -536,7 +542,7 @@ describe('native persona channel — SubagentStartRequest.persona merge', () => 
 
       // Liveness control: on THIS composition the fallbacks seam really does
       // own the slot for a role the harness channel resolves nothing for —
-      // so the assertion above is not vacuous (the 0.5.2 role-identity path
+      // so the assertion above is not vacuous (the fallbacks role-identity path
       // is live and would have filled the same slot first).
       await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT.replace(EXECUTE_AS, FALLBACKS_ONLY_ROLE)))
       expect(provider.starts[1]!.request.persona).toBe(FALLBACKS_PERSONA)

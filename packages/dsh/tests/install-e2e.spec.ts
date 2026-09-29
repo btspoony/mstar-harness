@@ -205,7 +205,8 @@ async function waitFor(label: string, predicate: () => boolean, timeoutMs = 20_0
 }
 
 /** The `roles.list` the fallbacks seed manager persisted through the
- * settings seam (the `fallbacks` namespace), narrowed from the seam store.
+ * settings seam (the `llm-fallbacks` profile-entry namespace — the 0.6.x
+ * `SettingsForms` update target), narrowed from the seam store.
  * `undefined` until the first seed declaration lands. */
 function settingsRolesList(): unknown[] | undefined {
   return settingsRolesPayload()?.list
@@ -215,7 +216,7 @@ function settingsRolesList(): unknown[] | undefined {
 function settingsRolesPayload(): { list: unknown[]; rules: unknown[] } | undefined {
   const settings = booted?.ctx.get('settings') as FakeSettingsRegistry | undefined
   if (settings === undefined) return undefined
-  const raw = settings.get('fallbacks')
+  const raw = settings.get('llm-fallbacks')
   if (typeof raw !== 'object' || raw === null || !('roles' in raw)) return undefined
   const roles = raw.roles
   if (typeof roles !== 'object' || roles === null || !('list' in roles) || !('rules' in roles)) return undefined

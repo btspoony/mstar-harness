@@ -2032,7 +2032,7 @@ export function normalizeIterationCompassRef(
     const resolved = resolve(ref);
     if (!contained(resolved)) {
       throw refuse(
-        `options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` +
+        `options.compassRef resolves outside the harness root \u2014 the reviewed compass_ref must address a ` +
           `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
       );
     }
@@ -2056,7 +2056,7 @@ export function normalizeIterationCompassRef(
   }
   if (!contained(resolve(harnessRoot, ref))) {
     throw refuse(
-      `options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` +
+      `options.compassRef escapes the harness root \u2014 the reviewed compass_ref must address a document inside ` +
         `${harnessRoot}; store the harness-relative pointer of that compass instead`,
     );
   }
