@@ -156,7 +156,7 @@ test("schema-4 stores list and read issue details without milestone columns", as
   // pre-migration-7 store too (no milestone_id column, no SQLite column error).
   expect(await withStoreRead(oldContext, queryDashboard("issues"))).toMatchObject({ data: { total: 1 } });
   expect(
-    await withStoreRead(oldContext, queryDashboard("issue-detail", { issue: { id: "old-issue" } })),
+    await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
   ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });
   rmSync(oldHarness, { recursive: true, force: true });
 });
