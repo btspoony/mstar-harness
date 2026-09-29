@@ -1047,6 +1047,12 @@ export type {
   ProjectMilestoneStatus,
   ProjectMilestoneDTO,
   MilestoneAssignment,
+  MilestoneAdd,
+  MilestonePatch,
+  MilestoneMutation,
+  MilestoneReceipt,
+  MilestoneIssueDTO,
+  MilestoneRead,
 } from "./milestone-store.js";
 export {
   MilestoneError,
