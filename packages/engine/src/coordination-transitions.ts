@@ -256,7 +256,7 @@ export function assertNoHandoffTransition(coordination: RowCoordination | undefi
   const handoff = coordination?.handoff;
   if (handoff === undefined || handoff.state === "returned") return;
   throw new CoordinationError(
-    "coordination.invalid-transition",
+    "coordination.handoff-state",
     `plan ${planId} is handed off (state ${String(handoff.state)}) \u2014 the plan session owns no transition until the coordinator returns or completes it`,
     { plan_id: planId, state: handoff.state },
   );
@@ -276,13 +276,13 @@ export function requirePlanHandoff(
 ): PlanHandoff {
   const handoff = coordination?.handoff;
   if (handoff === undefined) {
-    throw new CoordinationError("coordination.invalid-transition", `plan ${planId} has no handoff to transition`, {
+    throw new CoordinationError("coordination.handoff-missing", `plan ${planId} has no handoff to transition`, {
       plan_id: planId,
     });
   }
   if (handoff.id !== namedHandoffId) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.handoff-pin",
       `plan ${planId} handoff ${handoff.id} is not the handoff this command named (${namedHandoffId}) \u2014 a replaced handoff is a different attempt`,
       { plan_id: planId, expected: namedHandoffId, actual: handoff.id },
     );
@@ -299,7 +299,7 @@ export function requireExecutionLease(row: PlanRow, planId: string, what: string
   const gate = validateExecutionLease(row.execution_lease);
   if (!gate.ok) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.execution-lease-required",
       `${what} requires ${planId} to hold an active execution lease \u2014 ${summarize(gate.violations)}`,
       { plan_id: planId, violations: gate.violations.map((entry) => entry.code) },
     );
@@ -352,21 +352,21 @@ export function assertPrepareAdmission(input: {
   const { planId, row, coordination } = input;
   if (coordination?.prepared !== undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.prepare-already-prepared",
       `plan ${planId} is already prepared from ${coordination.prepared.assignment_path}`,
       { plan_id: planId },
     );
   }
   if (input.sessionBound && input.rowClaimant !== true) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.prepare-session-bound",
       `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,
       { plan_id: planId },
     );
   }
   if (coordination?.handoff !== undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.prepare-handoff-active",
       `plan ${planId} is handed off \u2014 preparation precedes the handoff`,
       { plan_id: planId },
     );
@@ -383,7 +383,7 @@ export function assertPrepareAdmission(input: {
   }
   if (!isClaimableStatus(rowStatusOf(row))) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.prepare-status",
       `plan ${planId} is ${rowStatusOf(row)} \u2014 prepare requires Todo or Blocked`,
       { plan_id: planId, status: row.status },
     );
@@ -407,14 +407,14 @@ export function requireProgressStatus(row: PlanRow, target: string, planId: stri
   const allowed = PROGRESS_TRANSITIONS[status];
   if (allowed === undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.progress-phase",
       `plan ${planId} is ${status || "unstatused"} \u2014 progress is reported only while executing (${Object.keys(PROGRESS_TRANSITIONS).join(", ")})`,
       { plan_id: planId, status: row.status },
     );
   }
   if (!allowed.includes(target)) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.progress-transition",
       `plan ${planId} cannot move ${status} \u2192 ${target} (allowed: ${allowed.join(", ")})`,
       { plan_id: planId, from: status, to: target },
     );
@@ -714,7 +714,7 @@ export function requireRowStatus(
   const current = rowStatusOf(row);
   if (current !== status) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.plan-status",
       `${what} requires ${planId} to ${options.still === true ? "still be" : "be"} ${status} \u2014 it is ${current || "unstatused"}`,
       { plan_id: planId, status: row.status },
     );

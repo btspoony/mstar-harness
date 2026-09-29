@@ -501,7 +501,7 @@ describe("binding", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
     // A plan-pm envelope that is NOT this row's holder keeps `session-role`.
     const outsider = join(fixture.workflowDir, "sessions", "plan-pm-outsider.json");
     writeJson(outsider, {
@@ -763,7 +763,7 @@ describe("admission self-claim and orphan adoption", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
 
     // §D/§D4 the prepared-but-unleased window advertises NO lease-gated
     // operation: identity is not ownership, and the mutation guards require the
@@ -1593,7 +1593,7 @@ describe("admission self-claim and orphan adoption", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
     expect(view.outcome).toBe("prepared");
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
@@ -1751,7 +1751,7 @@ describe("scope-and-revisions", () => {
       operation: { kind: "progress", progress: { status: "InReview", summary: "resume out of order", evidence_paths: [evidence] }},
     }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.progress-transition");
   });
 
   test("a plan session can only address its own plan", async () => {

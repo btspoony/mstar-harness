@@ -1505,7 +1505,7 @@ export async function recordWorkflowDelivery(
     // uses for the same state (`coordination.invalid-transition`).
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
-        "coordination.invalid-transition",
+        "coordination.completion-frozen",
         `refusing to record delivery evidence: coordination.invalid-transition: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
         { workflow_id: workflowId },
       );

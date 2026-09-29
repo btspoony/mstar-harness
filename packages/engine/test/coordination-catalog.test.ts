@@ -300,7 +300,7 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     // refused (the frozen input is immutable), so the move cannot be applied
     // retroactively.
     const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
-    expect(refused).toBe("coordination.invalid-transition");
+    expect(refused).toBe("coordination.prepare-already-prepared");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
