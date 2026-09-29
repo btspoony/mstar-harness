@@ -96,7 +96,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     "",
     "## Direction",
     "",
-    roadmap.content?.direction?.trim() ? roadmap.content.direction : "No stored Direction.",
+    roadmap.content?.direction?.trim() ? roadmap.content.direction.trim() : "No stored Direction.",
     "",
   ];
   for (const milestone of roadmap.milestones.milestones) {
@@ -106,7 +106,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     for (const issue of issues) lines.push(`- **${escapeMarkdown(issue.id)} — ${escapeMarkdown(issue.title)}** (${issue.disposition}): ${escapeMarkdown(issue.acceptance) || "No acceptance prose."}`);
     lines.push("");
   }
-  lines.push(`Unassigned issues: ${roadmap.milestones.unassignedIssues}`);
+  lines.push("## Unassigned", "", `Unassigned issues: ${roadmap.milestones.unassignedIssues}`);
   return lines.join("\n");
 }
 async function execute(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {

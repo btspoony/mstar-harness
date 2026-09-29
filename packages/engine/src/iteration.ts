@@ -1056,10 +1056,12 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
             // decode \\ and \" (placeholder pass so \" survives the \\ decode).
             value
               .slice(1, -1)
-              .replace(/\\\\/g, "\u0000")
-              .replace(/\\"/g, '"')
-              .replace(/\u0000/g, "\\")
-              .replace(/\\n/g, "\n")
+              // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
+              // \\" → quote, \\\\ → backslash; a lone backslash before any
+              // other character is preserved (JSON.stringify parity).
+              .replace(/\\(.)/g, (_, ch: string) =>
+                ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
+              )
           : /^\[.*\]$/.test(value)
             ? parseFlowArray(value, filePath)
             : value.replace(/^["']|["']$/g, "");
