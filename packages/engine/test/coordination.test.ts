@@ -1555,6 +1555,114 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
+  test("a deleted plan document refuses as a sealed-input staleness, never a filesystem error", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Assignment drifts (so this bind is an adoption) and the plan half of
+    // the sealed pair is gone: the refusal must be the structured one.
+    editAssignment(fixture, "comment-only drift, plan removed.");
+    rmSync(fixture.planPath, { force: true });
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "plan-gone-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("plan document");
+    expect(refused?.message).toContain("changed or is gone");
+    expect(refused?.message).not.toMatch(/ENOENT|EISDIR/);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a sealed input that is gone refuses structurally, and an unreadable one is a read error", async () => {
+    // Framing, stated precisely: this case exercises the GONE path (and the
+    // read-error normalization for a non-ENOENT failure). It does NOT reproduce
+    // the delete-between-check-and-read race — that race is closed structurally
+    // by removing the pre-check, so there is no check left to lose, and the
+    // assertions here cannot (and are not meant to) prove the race absent.
+    const planHalf = makeFixture();
+    await ensureCoordinator(planHalf);
+    await preparePlan(planHalf, PLAN_ID);
+    const planRowBefore = planRowOf(planHalf, PLAN_ID);
+    const planSnapshotBefore = readFileSync(planHalf.snapshotPath, "utf8");
+    editAssignment(planHalf, "comment-only drift, plan half made unreadable.");
+    rmSync(planHalf.planPath, { force: true });
+    mkdirSync(planHalf.planPath, { recursive: true });
+
+    const planRefusal = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: planHalf.assignmentPath },
+          cwd: planHalf.root,
+          sessionId: "unreadable-plan-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      }
+    })();
+
+    // A directory in place of the file is NOT "gone": the read fails for another
+    // reason and is reported as itself (the driver's EISDIR), never dressed up
+    // as a stale sealed input.
+    expect(planRefusal?.code).toBe("EISDIR");
+    expect(planRefusal?.code).not.toBe("coordination.assignment-stale");
+    // Nothing written either way: the bind refused before any commit.
+    expect(readFileSync(planHalf.snapshotPath, "utf8")).toBe(planSnapshotBefore);
+    expect(planRowOf(planHalf, PLAN_ID)).toEqual(planRowBefore);
+    expect(selfAmendmentAudit(planHalf)).toHaveLength(0);
+
+    // The GONE case for the Assignment half: the row is bound to a plan session
+    // first (so the mutation is a plan-session operation and reaches the
+    // freshness check), and its revision is read BEFORE the file is removed.
+    const assignmentHalf = makeFixture();
+    await ensureCoordinator(assignmentHalf);
+    await preparePlan(assignmentHalf, PLAN_ID);
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: assignmentHalf.harness },
+      cwd: assignmentHalf.root,
+      sessionId: "unreadable-assignment-holder",
+    });
+    const assignmentSnapshotBefore = readFileSync(assignmentHalf.snapshotPath, "utf8");
+    const revision = (await readPlanCoordination(bound.session_file, PLAN_ID, assignmentHalf.root)).revision;
+    rmSync(assignmentHalf.assignmentPath, { force: true });
+
+    const assignmentRefusal = await (async () => {
+      try {
+        await mutatePlanCoordination({
+          sessionPath: bound.session_file,
+          planId: PLAN_ID,
+          expectedRevision: revision,
+          operation: { kind: "progress", progress: { status: "InProgress", summary: "x", evidence_paths: [] } },
+        });
+        throw new Error("expected the mutation to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(assignmentRefusal?.code).toBe("coordination.assignment-stale");
+    expect(assignmentRefusal?.message).toContain("Assignment");
+    expect(assignmentRefusal?.message).toContain("changed or is gone");
+    expect(assignmentRefusal?.message).not.toMatch(/ENOENT/);
+    expect(readFileSync(assignmentHalf.snapshotPath, "utf8")).toBe(assignmentSnapshotBefore);
+  });
+
   test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
     const fixture = makeFixture();
     const leaf = join(fixture.workflowDir, "sessions", "leaf.json");

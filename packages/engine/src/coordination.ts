@@ -275,6 +275,32 @@ export type PlanCoordinationView = {
   catalog_pin?: ExecutionCatalogPinState;
 };
 
+/**
+ * Read one sealed input (the Assignment or the plan document `prepare` pinned)
+ * or refuse structurally. There is deliberately NO pre-check: an `existsSync`
+ * followed by a read is a check-then-act window in which a deletion or move
+ * lets a raw filesystem error escape a decision this engine reports
+ * structurally — and the snapshot lock does not protect these files. The read
+ * is the check, and its failure is the refusal. `what` names the input, so both
+ * halves of the sealed pair report the same family with the same code and the
+ * same `path` detail.
+ */
+function readSealedInput(filePath: string, what: string): Buffer {
+  try {
+    return readFileSync(filePath);
+  } catch (error) {
+    // ONLY absence is reclassified as staleness. A path that exists but cannot
+    // be read (a directory in place of the file, a permission change, an I/O
+    // failure) is not "gone" and must not be silently dressed up as a stale
+    // input: the environment could not answer, and that failure is reported as
+    // itself.
+    if (errorCode(error) !== "ENOENT") throw error;
+    throw new CoordinationError("coordination.assignment-stale", `${what} ${filePath} changed or is gone`, {
+      path: filePath,
+    });
+  }
+}
+
 /** One issue a scoped plan operation touched, as the core verb reported it. */
 export type CoordinationIssueReceipt = {
   issue_id: string;
@@ -624,7 +650,14 @@ export function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
   if (!existsSync(abs)) {
     throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
   }
-  return parseAssignmentBytes(abs, readFileSync(abs));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(abs);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    throw new CoordinationError("coordination.assignment-stale", `Assignment ${abs} changed or is gone`, { path: abs });
+  }
+  return parseAssignmentBytes(abs, bytes);
 }
 
 /**
@@ -642,11 +675,20 @@ export function readAssignmentInput(assignmentPath: string): {
   headers: AssignmentHeaders;
 } {
   const abs = resolve(assignmentPath);
-  if (!existsSync(abs)) {
-    throw new CoordinationError("coordination.assignment-invalid", `Assignment not found: ${abs}`, { path: abs });
-  }
-  const bytes = readFileSync(abs);
-  return { path: abs, bytes, sha256: sha256Bytes(bytes), headers: parseAssignmentBytes(abs, bytes) };
+  return { path: abs, ...readAssignmentBytes(abs) };
+}
+
+/**
+ * One Assignment read that cannot escape as a filesystem error: the read IS the
+ * check (no `existsSync` window), and a failure maps to the sealed-input
+ * refusal family. A path that exists but cannot be read — a directory standing
+ * in for the file, a permission change — reports exactly like a missing one,
+ * because to this decision they are the same fact: the sealed input is not
+ * available.
+ */
+function readAssignmentBytes(abs: string): { bytes: Buffer; sha256: string; headers: AssignmentHeaders } {
+  const bytes = readSealedInput(abs, "Assignment");
+  return { bytes, sha256: sha256Bytes(bytes), headers: parseAssignmentBytes(abs, bytes) };
 }
 
 /** Parse one already-read Assignment body (the read's own bytes, never a second read). */
@@ -972,7 +1014,11 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
       { workflow_id: workflowId, plan_id: planId },
     );
   }
-  const assignment = parseAssignmentFile(prepared.assignment_path);
+  // The RECORDED path is a sealed input: read through the same read-or-refuse
+  // door, so a prepared Assignment that cannot be read (deleted, moved, or
+  // replaced by something unreadable) reports the sealed-input refusal instead
+  // of a filesystem error escaping a mutation.
+  const assignment = readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers;
   return scopeFromAssignment(assignment, cwd, { requirePrepared: true, chosenRoot: harnessRoot, preloaded: { snapshot } });
 }
 
@@ -1264,12 +1310,7 @@ function stalePrepared(
   assignmentPath: string,
   prepared: PreparedCoordination,
 ): { refusal: CoordinationError; old_sha256: string; new_sha256: string } | null {
-  if (!existsSync(assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
-      path: assignmentPath,
-    });
-  }
-  const actual = sha256Bytes(readFileSync(assignmentPath));
+  const actual = sha256Bytes(readSealedInput(assignmentPath, "Assignment"));
   if (actual === prepared.assignment_sha256) return null;
   return { old_sha256: prepared.assignment_sha256, new_sha256: actual, refusal: staleRefusal(assignmentPath, prepared, actual) };
 }
@@ -1375,10 +1416,12 @@ function bindStaleAdoption(
     );
   }
   // The plan half of the pair `prepare` sealed: the refreshed pin must not sit
-  // beside a plan document that moved after preparation. (`prepared_by` /
-  // `prepared_at` stay exempt: they are provenance, never gates, and the DB
-  // route records its own receipts.)
-  if (sha256Bytes(readFileSync(scope.planPath)) !== prepared.plan_sha256) {
+  // beside a plan document that moved after preparation, and a plan document
+  // that is GONE reports through the same sealed-input family as a missing
+  // Assignment — never as a raw filesystem error. (`prepared_by` / `prepared_at`
+  // stay exempt: they are provenance, never gates, and the DB route records its
+  // own receipts.)
+  if (sha256Bytes(readSealedInput(scope.planPath, "plan document")) !== prepared.plan_sha256) {
     throw new CoordinationError(
       "coordination.assignment-stale",
       `plan document ${scope.planPath} changed after preparation \u2014 an adopted pin never re-seals a moved plan; ` +
@@ -1416,10 +1459,7 @@ export function assertSealedInputsUnchanged(seal: {
   planId: string;
 }): void {
   const recheck = (filePath: string, expected: string, what: string): void => {
-    if (!existsSync(filePath)) {
-      throw new CoordinationError("coordination.assignment-stale", `${what} is gone: ${filePath}`, { path: filePath });
-    }
-    const actual = sha256Bytes(readFileSync(filePath));
+    const actual = sha256Bytes(readSealedInput(filePath, what));
     if (actual !== expected) {
       throw new CoordinationError(
         "coordination.assignment-stale",
@@ -1581,7 +1621,7 @@ export async function readPlanCoordination(
   const prepared = rowCoordinationOf(row)?.prepared;
   let scope: ResolvedPlanScope | null = null;
   if (prepared !== undefined) {
-    const assignment = parseAssignmentFile(prepared.assignment_path);
+    const assignment = readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers;
     scope = scopeFromAssignment(assignment, cwd, {
       requirePrepared: true,
       chosenRoot: harnessRoot,
@@ -2340,7 +2380,7 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
       plan_id: planId,
     });
   }
-  const assignment = parseAssignmentFile(prepared.assignment_path);
+  const assignment = readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers;
   const scope = scopeFromAssignment(assignment, harnessRoot, {
     requirePrepared: true,
     chosenRoot: harnessRoot,
