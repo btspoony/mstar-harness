@@ -9274,7 +9274,10 @@ export async function showPrepareWorkflow(
   assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
   const compass = readPrepareCompass(scope.harnessRoot, snapshot);
   const admission = prepareStageAdmission(scope.harnessRoot, scope.workflowId, snapshot, phaseDerived);
-  const derived = compass.canonicalCompassRef === undefined ? [] : ["compass_ref"];
+  // Issue 4: a BLOCKED admission must not advertise derivations the refused
+  // amendment cannot apply - the derivation projection is only meaningful
+  // when the caller could actually act on it.
+  const derived = admission.ok && compass.canonicalCompassRef !== undefined ? ["compass_ref"] : [];
   return {
     ok: true,
     operation: "show-prepare",

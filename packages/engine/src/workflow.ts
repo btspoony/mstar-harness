@@ -2445,14 +2445,19 @@ export function normalizeIterationCompassRef(
     return canon === rootCanon || canon.startsWith(prefix);
   };
   if (isAbsolute(ref)) {
-    const resolved = resolve(ref);
-    if (!contained(resolved)) {
+    // Canonical-vs-canonical containment and storage (#301 issue 3 / #304
+    // issue 2 remedy): the symlink spelling of either side must not leak into
+    // the stored pointer. An EXTERNAL symlink reaching an in-root document
+    // stores the canonical in-root relative form; a harness root reached
+    // through its own symlink spelling stores the same relative form.
+    const canon = canonicalizeNearestExisting(resolve(ref));
+    if (canon !== rootCanon && !canon.startsWith(prefix)) {
       throw refuse(
         `options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` +
           `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`,
       );
     }
-    return relative(harnessRoot, resolved).split(sep).join("/");
+    return relative(rootCanon, canon).split(sep).join("/");
   }
   if (!contained(resolve(harnessRoot, ref))) {
     throw refuse(
@@ -2667,9 +2672,28 @@ export async function registerIterationWorkflow(
       // EXISTING snapshot bytes; an identity mismatch refuses instead of
       // adopting a foreign registration.
       const existing = readWorkflowSnapshot(workflowDir);
+      // The stored spelling of a compass pointer may predate normalization
+      // (pre-normalization absolute form) or differ by symlink spelling;
+      // both name the same reviewed document. Project both sides to the
+      // canonical relative form before the identity comparison so a spelling
+      // delta recovers the orphan instead of refusing, while a genuinely
+      // different document still mismatches. A ref that cannot be normalized
+      // keeps its raw spelling on both sides and compares verbatim.
+      const identityProjection = (candidate: WorkflowSnapshot): WorkflowSnapshot => {
+        if (!isNonEmptyString(candidate.compass_ref)) return candidate;
+        try {
+          return {
+            ...candidate,
+            compass_ref: normalizeIterationCompassRef(candidate.compass_ref, harnessDir, (detail) => new Error(detail)),
+          };
+        } catch {
+          return candidate;
+        }
+      };
       if (
         existing.snapshot.id !== workflowId ||
-        iterationWorkflowRegistrationIdentity(existing.snapshot) !== iterationWorkflowRegistrationIdentity(snapshot)
+        iterationWorkflowRegistrationIdentity(identityProjection(existing.snapshot)) !==
+          iterationWorkflowRegistrationIdentity(identityProjection(snapshot))
       ) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
