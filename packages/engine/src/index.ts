@@ -1044,6 +1044,23 @@ export {
 // the only reachable surface for consumers.
 export type { BackupInspection } from "./store-activation.js";
 export type {
+  ProjectMilestoneStatus,
+  ProjectMilestoneDTO,
+  MilestoneAdd,
+  MilestonePatch,
+  MilestoneMutation,
+  MilestoneReceipt,
+  MilestoneIssueDTO,
+  MilestoneRead,
+} from "./milestone-store.js";
+export {
+  MilestoneError,
+  addMilestone,
+  updateMilestone,
+  readMilestonesOn,
+  queryMilestones,
+} from "./milestone-store.js";
+export type {
   ExecutionDiagnosticExport,
   ExecutionRecoveryAuthorityDifference,
   ExecutionRecoveryErrorCode,
