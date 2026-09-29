@@ -75,6 +75,8 @@ import {
   type RowCoordination,
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
+  type CoordinationSelfAmendment,
+  type SnapshotCoordination,
 } from "./coordination-write.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity } from "./session-identity.js";
 import {
@@ -288,7 +290,11 @@ export type CoordinationResult = {
   operation: string;
   session: CoordinationSession;
   session_file: string;
-  /** `claimed` / `resumed` / `prepared` / `progressed` / `residual-added` / `residual-closed`. */
+  /**
+   * `bound` / `claimed` / `claim-bootstrapped` / `resumed` / `prepared` /
+   * `progressed` / `residual-added` / `residual-closed`. `claim-bootstrapped`
+   * is a plan claim that wrote the session binding without a lease (§D0).
+   */
   outcome?: string;
   view?: PlanCoordinationView;
   /**
@@ -1124,6 +1130,13 @@ type RowContext = {
   rowIndex: number;
   coordination: RowCoordination | undefined;
   revision: number;
+  /**
+   * Spec §D2 the drift this `bind` adopted: set by the in-lock freshness check
+   * for an orphan prepared row, and consumed by the mutation that records the
+   * refreshed pin and its audit entry in the SAME commit. `null` for every
+   * other mutation and for a pin that still matches.
+   */
+  staleAdoption: { old_sha256: string; new_sha256: string } | null;
 };
 
 /**
@@ -1138,8 +1151,15 @@ async function withRowCommit(
   scope: ResolvedPlanScope,
   opts: {
     expectedRevision: number | null;
-    /** `prepare` rewrites the pin itself, so it may not re-check the old hash. */
+    /**
+     * `prepare` rewrites the pin itself and the D0 claim writes no pin at all,
+     * so neither may re-check one. `bind` passes `staleAdoption` instead and
+     * owns the whole decision: an orphan prepared row's drift is amended
+     * (spec §D2), and every other stale row still stops right here.
+     */
     freshness?: boolean;
+    /** Spec §D2 the one mutation allowed to adopt a stale pin: `bind`. */
+    staleAdoption?: { sessionId: string };
     precheck: (context: RowContext) => void | Promise<void>;
     mutate: (context: RowContext) => RowCommit | null | Promise<RowCommit | null>;
   },
@@ -1158,11 +1178,25 @@ async function withRowCommit(
       rowIndex: index,
       coordination,
       revision: coordination?.revision ?? 0,
+      staleAdoption: null,
     };
     // Every row mutation re-authenticates the row's pin: an Assignment edited
     // after `prepare` invalidates the row until the coordinator re-prepares.
+    // `bind` is the one mutation that may instead AMEND the drift (spec §D2),
+    // and it says so here — this check runs before the precheck, so a held or
+    // handed-off row's terminal `coordination.assignment-stale` still wins over
+    // the holder checks, exactly as it did before the amendment existed.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
-      assertPreparedFresh(scope.assignmentPath, coordination.prepared);
+      if (opts.staleAdoption !== undefined) {
+        context.staleAdoption = bindStaleAdoption(
+          scope.assignmentPath,
+          coordination.prepared,
+          coordination,
+          opts.staleAdoption.sessionId,
+        );
+      } else {
+        assertPreparedFresh(scope.assignmentPath, coordination.prepared);
+      }
     }
     await opts.precheck(context);
     if (opts.expectedRevision !== null && context.revision !== opts.expectedRevision) {
@@ -1191,24 +1225,77 @@ async function withRowCommit(
 }
 
 /**
- * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
- * rule is shared with the DB transport, which re-reads the Assignment its own
- * seal records — one staleness rule for both routes, not a second tolerance.
+ * The measured staleness of one prepared Assignment: `null` while the pinned
+ * bytes are still on disk. A missing file is NOT a measured drift — there are
+ * no bytes to re-pin — so its terminal refusal is raised right here, and the
+ * one amendment that ever adopts a drift can only ever see a changed digest.
+ * The changed case carries the refusal it means, so every terminal site spells
+ * `coordination.assignment-stale` the same way without a second message.
  */
-export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
+function stalePrepared(
+  assignmentPath: string,
+  prepared: PreparedCoordination,
+): { refusal: CoordinationError; old_sha256: string; new_sha256: string } | null {
   if (!existsSync(assignmentPath)) {
     throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
       path: assignmentPath,
     });
   }
   const actual = sha256Bytes(readFileSync(assignmentPath));
-  if (actual !== prepared.assignment_sha256) {
-    throw new CoordinationError(
+  if (actual === prepared.assignment_sha256) return null;
+  return {
+    old_sha256: prepared.assignment_sha256,
+    new_sha256: actual,
+    refusal: new CoordinationError(
       "coordination.assignment-stale",
       `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
       { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-    );
-  }
+    ),
+  };
+}
+
+/**
+ * The `bind` path's own pin re-authentication (spec §D2, fixes #308): the same
+ * measured drift as `assertPreparedFresh`, but the ONE row state that turns a
+ * changed pin from a terminal refusal into an audited self-amendment — a
+ * prepared row nobody ELSE holds — is adopted, and the drift is returned to the
+ * amendment that records it. That state is: no handoff, and either no bound
+ * plan session at all (a coordinator-prepared orphan) or the BINDER'S OWN
+ * binding (the D0 claim row, held by the very session asking to bind it).
+ * Every other row — held or handed off by somebody else — keeps the terminal
+ * refusal, and the decision never authenticates: the file route's
+ * `--session-id` is caller-asserted, so a foreign caller simply keeps its
+ * refusal while a caller presenting the row's own recorded id is that binding
+ * by the route's own rules. A pin whose Assignment is gone is never adopted
+ * (nothing to pin).
+ */
+function bindStaleAdoption(
+  assignmentPath: string,
+  prepared: PreparedCoordination,
+  coordination: RowCoordination | undefined,
+  adopter: string,
+): { old_sha256: string; new_sha256: string } | null {
+  const stale = stalePrepared(assignmentPath, prepared);
+  if (stale === null) return null;
+  const holder = coordination?.session;
+  const adoptable =
+    coordination?.prepared !== undefined &&
+    coordination.handoff === undefined &&
+    (holder === undefined || holder.session_id === adopter);
+  if (!adoptable) throw stale.refusal;
+  return stale;
+}
+
+/**
+ * Re-verify the prepared Assignment hash; a changed Assignment is stale. The
+ * rule is shared with the DB transport, which re-reads the Assignment its own
+ * seal records — one staleness rule for both routes, not a second tolerance.
+ * Read paths and every row mutation but `bind` stop here; `bind` measures the
+ * same drift through `bindStaleAdoption` and amends it in-lock for an orphan.
+ */
+export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
+  const stale = stalePrepared(assignmentPath, prepared);
+  if (stale !== null) throw stale.refusal;
 }
 
 /**
@@ -1630,33 +1717,95 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
 }
 
 /**
+ * Resolve the scope a bind addresses. The locator-addressed form
+ * (`--assignment`) is the only one that may address a row `prepare` has not
+ * sealed yet (spec §D0): the addressed Assignment IS the locator a claim
+ * carries, so that form resolves an unprepared row. The `{workflowId, planId}`
+ * form reads its locator out of the row's prepared block, so it stays
+ * prepared-only — an unprepared row fails closed there before any session,
+ * envelope or lease exists, exactly as it did before the claim form existed.
+ */
+async function resolveBindScope(input: PlanScopeInput, cwd: string): Promise<ResolvedPlanScope> {
+  if (!isAssignmentScopeInput(input)) return resolvePlanScope(input, cwd);
+  assertExactKeys(input, ["assignmentPath", "workflowId", "planId", "harnessDir"], "scope input");
+  if ("workflowId" in input || "planId" in input || "harnessDir" in input) {
+    throw invalidInput("pass either an assignmentPath or a workflowId/planId pair, never both");
+  }
+  if (!isNonEmptyString(input.assignmentPath) || !isAbsolute(input.assignmentPath)) {
+    throw invalidInput("assignmentPath must be an absolute path");
+  }
+  // The addressed Assignment is required for this form (there is no other
+  // locator); `parseAssignmentFile` refuses a missing one in the vocabulary the
+  // other assignment-addressed verbs already use.
+  const assignment = parseAssignmentFile(input.assignmentPath);
+  return scopeFromAssignment(assignment, cwd, { requirePrepared: false });
+}
+
+/**
  * Fresh plan bind (spec §C2): the scope is already pinned and validated. The
  * engine generates the session UUID — or adopts the caller-supplied one —
  * creates the envelope inside the validated critical section, claims the L1
  * lease and writes the row session, status and revision in one snapshot
  * commit.
+ *
+ * Two admission self-service shapes hang off the same entry (fixes #308): an
+ * unclaimed, unprepared row reached through the Assignment locator is
+ * bootstrapped by `claimPlanSession` (spec §D0), and a prepared row nobody
+ * holds whose Assignment drifted is amended in-lock (spec §D2).
  */
-async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: string): Promise<CoordinationResult> {
+async function bindPlanSessionForPlan(
+  scope: ResolvedPlanScope,
+  sessionId?: string,
+  claimLocator?: string,
+): Promise<CoordinationResult> {
   const { harnessRoot, workflowId, planId } = scope;
   const snapshotPath = snapshotPathOf(harnessRoot, workflowId);
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
   const snapshot = readSnapshot(dirname(snapshotPath));
   const { row } = findPlanRow(snapshot, planId);
-  const prepared = rowCoordinationOf(row)?.prepared;
+  const coordination = rowCoordinationOf(row);
+  const prepared = coordination?.prepared;
+  // The identity this bind acts under, decided once: the §D2 adoption needs it
+  // (a row bound to THIS session is the claimant's own row, not somebody
+  // else's), and the same id names the envelope the bind creates or completes.
+  const adopter = sessionId ?? randomUUID();
   if (prepared === undefined) {
-    throw new CoordinationError(
-      "coordination.not-prepared",
-      `plan ${planId} has no prepared Assignment \u2014 the coordinator must run \`prepare\` first`,
-      { workflow_id: workflowId, plan_id: planId },
-    );
+    // Spec §D0: the claim bootstrap exists only for the locator-addressed form.
+    // `--workflow/--plan` has no locator to present, so its `not-prepared`
+    // refusal stays byte-identical and still fires before any I/O.
+    if (claimLocator === undefined) {
+      throw new CoordinationError(
+        "coordination.not-prepared",
+        `plan ${planId} has no prepared Assignment \u2014 the coordinator must run \`prepare\` first`,
+        { workflow_id: workflowId, plan_id: planId },
+      );
+    }
+    return claimPlanSession(scope, adopter);
   }
   const assignment = parseAssignmentFile(prepared.assignment_path);
-  const pinned = scopeFromAssignment(assignment, harnessRoot, {
+  // Validation, not a value. This re-pins the prepared Assignment's headers to
+  // this harness root and to this workflow's row before the locked section — the
+  // same checks the locator-addressed scope ran, on the path the prepared block
+  // records — so a header set that no longer describes the prepared scope
+  // refuses here instead of inside the lock. The bind then mutates through the
+  // caller's own `scope`; the returned copy is deliberately discarded, because
+  // the locked re-read is what decides.
+  void scopeFromAssignment(assignment, harnessRoot, {
     requirePrepared: true,
     chosenRoot: harnessRoot,
     preloaded: { snapshot },
   });
-  assertPreparedFresh(pinned.assignmentPath, prepared);
+  // Spec §D2: there is deliberately NO staleness verdict here. An unlocked read
+  // may not decide a refusal that a concurrent write can invalidate (the
+  // interleave test drives exactly that: a row orphaned between this read and
+  // the lock), and a caller that meant to refuse must not be able to swallow
+  // another operation's verdict by catching one. The freshness check inside
+  // `withRowCommit` measures the same drift on the row the lock actually holds
+  // and is the ONE authority — it adopts (nobody else holds the row) or throws
+  // the terminal `coordination.assignment-stale`. The checks below stay here
+  // because each of them is a fact this call's own scope pins, not a row state
+  // another writer owns.
+  bindPreInterleaveForTest?.();
   if (!existsSync(scope.worktreePath) || !statSync(scope.worktreePath).isDirectory()) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
@@ -1665,18 +1814,20 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     );
   }
 
-
   const session: CoordinationSession = {
     schema_version: 1,
     role: "plan-pm",
-    session_id: sessionId ?? randomUUID(),
+    session_id: adopter,
     workflow_id: workflowId,
     plan_id: planId,
     harness_root: harnessRoot,
   };
   let created = "";
+  let freshEnvelope = false;
   const result = await withRowCommit(scope, {
     expectedRevision: null,
+    // Spec §D2: this mutation owns the whole pin decision, for this adopter.
+    staleAdoption: { sessionId: adopter },
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared`, { plan_id: planId });
@@ -1688,12 +1839,30 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace (contract §3 step 3).
       await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
-      if (context.coordination.session !== undefined) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `plan ${planId} is already bound to session ${context.coordination.session.session_id} \u2014 resume it instead of binding a second one`,
-          { holder: context.coordination.session.session_id, session_file: context.coordination.session.session_file },
-        );
+      const bound = context.coordination.session;
+      if (bound !== undefined) {
+        // Spec §D0/D4: a prepared row bound to THIS session that holds no lease
+        // is the state the claim bootstrap left behind (a full bind always
+        // claims its lease in the same commit), so this bind COMPLETES that
+        // claim — same identity, same envelope, lease now. Every other bound
+        // row keeps the unchanged refusal: a live holder resumes, it never
+        // re-binds, and a foreign holder is never taken over.
+        const continuing = bound.session_id === session.session_id && context.row.execution_lease === undefined;
+        if (!continuing) {
+          throw new CoordinationError(
+            "coordination.duplicate-holder",
+            `plan ${planId} is already bound to session ${bound.session_id} \u2014 resume it instead of binding a second one`,
+            { holder: bound.session_id, session_file: bound.session_file },
+          );
+        }
+        const expectedEnvelope = sessionFilePath(harnessRoot, workflowId, "plan-pm", session.session_id);
+        if (canonicalTarget(bound.session_file) !== canonicalTarget(expectedEnvelope)) {
+          throw new CoordinationError(
+            "coordination.session-mismatch",
+            `plan ${planId} records session file ${bound.session_file}, which is not this session's own envelope`,
+            { expected: canonicalTarget(expectedEnvelope), actual: canonicalTarget(bound.session_file) },
+          );
+        }
       }
       if (context.coordination.handoff !== undefined) {
         throw new CoordinationError(
@@ -1704,20 +1873,188 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
       }
     },
     mutate: (context) => {
-      created = createSessionEnvelope(session);
+      const bound = context.coordination?.session;
+      const continuing = bound !== undefined && bound.session_id === session.session_id;
+      // A continuing bind owns the envelope the claim already emitted; only a
+      // fresh bind creates one, and only an envelope this call created is ever
+      // dropped on failure.
+      created = continuing ? canonicalTarget(bound.session_file) : createSessionEnvelope(session);
+      freshEnvelope = !continuing;
       const transition = claimLease(context.row, session.session_id, {
         worktree_path: scope.worktreePath,
         working_branch: scope.workingBranch,
         session_label: "plan-pm",
       });
       if (!transition.ok) throw leaseFailure(transition.violations);
+      const adoption = context.staleAdoption;
+      const previous = context.coordination?.prepared;
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
+        // Spec §D2 the adopted pin: the prepared block keeps its author and
+        // time, and only the digest it pinned moves to the bytes this bind
+        // accepted. The audit entry records the move.
+        ...(adoption !== null && previous !== undefined ? { prepared: { ...previous, assignment_sha256: adoption.new_sha256 } } : {}),
+        session: {
+          session_id: session.session_id,
+          session_file: canonicalTarget(created),
+          // §D2 `bound_at` is when the row acquired THIS binding: a fresh bind
+          // (and an orphan adoption, which is a fresh bind of an unheld row)
+          // stamps now, while a continuing bind preserves the claim's stamp —
+          // the binding has not changed hands, and the amendment is recorded in
+          // the audit entry, never by rewriting when the claim happened.
+          bound_at: bound?.bound_at ?? nowIso(),
+        },
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
+      const commit: RowCommit = { row: { ...transition.row, coordination: nextCoordination }, coordination: nextCoordination };
+      if (adoption !== null && previous !== undefined) {
+        commit.topLevel = {
+          coordination: withSelfAmendment(context.snapshot.coordination, {
+            at: nowIso(),
+            session_id: session.session_id,
+            old_sha256: adoption.old_sha256,
+            new_sha256: adoption.new_sha256,
+            // The file route's bind carries no caller-supplied operation id, so
+            // the record derives its own: sha256 over the adoption's canonical
+            // facts, identical for an identical adoption.
+            operation_id: createHash("sha256")
+              .update(
+                stableJson({
+                  workflow_id: workflowId,
+                  plan_id: planId,
+                  session_id: session.session_id,
+                  old_sha256: adoption.old_sha256,
+                  new_sha256: adoption.new_sha256,
+                }),
+                "utf8",
+              )
+              .digest("hex"),
+            prepared_by_matches: previous.prepared_by === session.session_id,
+          }),
+        };
+      }
+      return commit;
+    },
+  }).catch((error: unknown) => {
+    if (freshEnvelope && created !== "") dropSessionEnvelope(created);
+    throw error;
+  });
+
+  return {
+    ok: true,
+    operation: "bind",
+    session,
+    session_file: created,
+    outcome: "claimed",
+    view: buildView(harnessRoot, workflowId, scope.projectId, scope, result.snapshot, result.row, session, created),
+  };
+}
+
+let bindPreInterleaveForTest: (() => void) | undefined;
+
+/**
+ * Test-only hook for the §D2 adoption race: it runs AFTER the bind's unlocked
+ * fail-fast measurement and BEFORE the locked re-decision, so a test can orphan
+ * a row in exactly that window and prove the lock — not the speculative read —
+ * decides. Mirrors `setCompleteStandaloneMutateGapForTest`.
+ */
+export function setBindPreInterleaveForTest(callback: (() => void) | undefined): void {
+  bindPreInterleaveForTest = callback;
+}
+
+/**
+ * Snapshot-level audit append (spec §D2): the self-amendment history rides
+ * beside `identity_recoveries` on the workflow's coordination block. A snapshot
+ * without that block has no host for the record — and the claim bootstrap (D0)
+ * can prepare a row on a workflow whose coordinator seat was never bound — so
+ * the amendment refuses in the staleness vocabulary it belongs to, rather than
+ * refreshing a pin with nothing written down. Creating the block here would
+ * mean inventing a coordinator binding, which is the one thing this route never
+ * does with a plan-pm identity.
+ */
+function withSelfAmendment(
+  coordination: SnapshotCoordination | undefined,
+  entry: CoordinationSelfAmendment,
+): SnapshotCoordination {
+  if (coordination === undefined) {
+    throw new CoordinationError(
+      "coordination.assignment-stale",
+      `workflow records no coordination block, so the stale-pin adoption by session ${entry.session_id} ` +
+        "has nowhere to be recorded \u2014 bind the coordinator seat of this workflow first, then re-run the bind",
+      { session_id: entry.session_id, expected: entry.old_sha256, actual: entry.new_sha256 },
+    );
+  }
+  return { ...coordination, self_amendments: [...(coordination.self_amendments ?? []), entry] };
+}
+
+/**
+ * Spec §D0 the claim bootstrap (fixes #308): the locator-addressed bind on a
+ * row that is still the claim's to take — unclaimed, unprepared, `Todo`/
+ * `Blocked`, no lease. The claim writes the row's plan-pm session binding and
+ * emits the session envelope, and — unlike a full bind — claims NO lease and
+ * leaves the row's status untouched, so the claimant can `prepare` it (§D1) and
+ * then bind the same session to claim the lease.
+ *
+ * Nothing pinned is checked here, and that is a branch, not an omission. The
+ * pin gate has two halves and only one of them is vacuous on this row:
+ * `recordedPinOf(row)` is `null` (a claim-eligible row is unprepared, and
+ * `prepare` is the pin's only writer), while the catalog-BINDING half would
+ * still refuse a workflow whose active registration names another plan or
+ * document. The claim writes no frozen input and consumes none, so the binding
+ * half is asserted where consumption actually starts — the bind, through
+ * `assertExecutionCatalogPin`, after `prepare` has re-selected the pin.
+ * The plan's worktree is not checked either: the claim claims no lease, so the
+ * checkout belongs to the bind that does. The root registration gate IS kept —
+ * a claim is still an admission into this workspace.
+ */
+async function claimPlanSession(scope: ResolvedPlanScope, sessionId: string): Promise<CoordinationResult> {
+  const { harnessRoot, workflowId, planId } = scope;
+  const session: CoordinationSession = {
+    schema_version: 1,
+    role: "plan-pm",
+    session_id: sessionId,
+    workflow_id: workflowId,
+    plan_id: planId,
+    harness_root: harnessRoot,
+  };
+  let created = "";
+  const result = await withRowCommit(scope, {
+    expectedRevision: null,
+    // The claim writes no pin, so there is none for it to re-authenticate.
+    freshness: false,
+    precheck: async (context) => {
+      const bound = context.coordination?.session;
+      if (bound !== undefined) {
+        throw new CoordinationError(
+          "coordination.duplicate-holder",
+          `plan ${planId} is already claimed by session ${bound.session_id} \u2014 prepare and bind it instead of claiming a second time`,
+          { holder: bound.session_id, session_file: bound.session_file },
+        );
+      }
+      // Everything else a claim requires of the row is exactly the shared
+      // first-owner admission `prepare` uses: unprepared, un-handed-off,
+      // unleased and in a claimable status.
+      assertPrepareAdmission({
+        planId,
+        row: context.row,
+        coordination: context.coordination,
+        sessionBound: false,
+        leaseHeld: context.row.execution_lease !== undefined,
+      });
+      // A root-visible workflow with a pending catalog registration is never a
+      // valid workspace to claim in (contract §3 step 3).
+      await assertWorkflowRegistrationCommitted(harnessRoot, workflowId);
+    },
+    mutate: (context) => {
+      created = createSessionEnvelope(session);
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
         revision: context.revision + 1,
         session: { session_id: session.session_id, session_file: canonicalTarget(created), bound_at: nowIso() },
       };
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
-      return { row: { ...transition.row, coordination: nextCoordination }, coordination: nextCoordination };
+      return { row: { ...context.row, coordination: nextCoordination }, coordination: nextCoordination };
     },
   }).catch((error: unknown) => {
     if (created !== "") dropSessionEnvelope(created);
@@ -1729,8 +2066,10 @@ async function bindPlanSessionForPlan(scope: ResolvedPlanScope, sessionId?: stri
     operation: "bind",
     session,
     session_file: created,
-    outcome: "claimed",
-    view: buildView(harnessRoot, workflowId, scope.projectId, scope, result.snapshot, result.row, session, created),
+    outcome: "claim-bootstrapped",
+    // The row carries no prepared block yet, so the view reports the raw row
+    // with no scope — the same shape `plan show` gives an unprepared row.
+    view: buildView(harnessRoot, workflowId, scope.projectId, null, result.snapshot, result.row, session, created),
   };
 }
 
@@ -1782,7 +2121,11 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
   if (!isPlainObject(input.scope)) throw invalidInput("a plan bind requires a scope");
   requireCwd(input.cwd);
   const sessionId = safeSessionId(input.sessionId);
-  return bindPlanSessionForPlan(await resolvePlanScope(input.scope, input.cwd), sessionId);
+  // Spec §D0: only the Assignment-locator address carries what a claim needs,
+  // so that form — and only that form — may bind a row `prepare` has not
+  // sealed yet.
+  const claimLocator = isAssignmentScopeInput(input.scope) ? input.scope.assignmentPath : undefined;
+  return bindPlanSessionForPlan(await resolveBindScope(input.scope, input.cwd), sessionId, claimLocator);
 }
 
 /** Every bind form is a cooperative local call: it needs a real cwd. */
@@ -2329,18 +2672,52 @@ async function mutatePrepare(
     // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
     freshness: false,
     precheck: async (context) => {
-      if (session.role !== "coordinator") {
-        throw new CoordinationError("coordination.session-role", "only a coordinator session may prepare a plan", {
-          role: session.role,
-        });
+      const bound = context.coordination?.session;
+      // Fixes #308, §D1: `prepare` admits a coordinator session for any row of
+      // its workflow, and — the one plan-pm seat it accepts — the session the
+      // ADDRESSED ROW is already bound to, which is the D0 claim's own
+      // claimant. The row binding (id AND envelope file), not the workflow
+      // coordinator binding, is that seat's proof; a plan session that is not
+      // this row's holder keeps the coordinator-only refusal it always had.
+      const claimant =
+        session.role !== "coordinator" && bound !== undefined && bound.session_id === session.session_id;
+      if (session.role === "coordinator") {
+        assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      } else if (!claimant) {
+        throw new CoordinationError(
+          "coordination.session-role",
+          `prepare requires a coordinator session, or the plan session the row ${scope.planId} is bound to`,
+          { role: session.role, plan_id: scope.planId },
+        );
       }
-      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      if (claimant) {
+        // Identity is the row's recorded binding and the canonical envelope,
+        // never a copy of it. `readOnly: true` skips `assertRowBinding`'s
+        // lease-ownership half ON PURPOSE: the D0 claim bootstrap writes the
+        // session binding and no lease, so requiring a lease here would refuse
+        // exactly the seat this branch exists to admit; ownership is still
+        // enforced where it matters — the row must be unleased by
+        // `assertPrepareAdmission` below, and the continuing bind that follows
+        // claims the lease before any lease-gated operation becomes admissible.
+        assertRowBinding(session, sessionPath, context.row, scope.planId, { readOnly: true });
+        // A plan session addresses only its own workflow's rows: the Assignment
+        // reached this call with the session's harness root, and the row must
+        // belong to the workflow that session was bound in.
+        if (session.workflow_id !== context.snapshot.id) {
+          throw new CoordinationError(
+            "coordination.session-mismatch",
+            `plan session ${session.session_id} belongs to workflow ${session.workflow_id}, not ${context.snapshot.id}`,
+            { expected: session.workflow_id, actual: context.snapshot.id },
+          );
+        }
+      }
       assertPrepareAdmission({
         planId: scope.planId,
         row: context.row,
         coordination: context.coordination,
-        sessionBound: context.coordination?.session !== undefined,
+        sessionBound: bound !== undefined,
         leaseHeld: context.row.execution_lease !== undefined,
+        rowClaimant: claimant,
       });
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace to prepare against (contract §3 step 3).
@@ -2693,7 +3070,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     });
   }
   const seat: CoordinationSeat = { role: session.role, sessionId: session.session_id, planId: session.plan_id ?? null };
-  assertOperationRole(seat, kind);
+  // Fixes #308: `prepare` keeps its coordinator seat, and gains exactly one
+  // more — the plan session the ADDRESSED ROW is already bound to (the D0
+  // claim's own claimant, §D1). Which row that is, and whether this seat is
+  // its holder, can only be decided against the row, so the decision lives in
+  // `mutatePrepare`'s locked precheck; every other operation keeps the shared
+  // seat table here, before any request payload is read.
+  if (kind !== "prepare") assertOperationRole(seat, kind);
   assertPlanAddress(seat, request.planId);
   const sessionAbs = canonicalTarget(request.sessionPath);
 

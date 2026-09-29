@@ -165,10 +165,21 @@ export function allowedOperations(
       default:
         break;
     }
-  } else if (coordination?.session?.session_id === sessionId && coordination.prepared !== undefined) {
-    // A plan session keeps only `handoff`: returning a handoff restores the
-    // same session, so both directions stay available to it without rebinding.
-    if (handoff === undefined || handoff.state === "returned") {
+  } else if (coordination?.session?.session_id === sessionId) {
+    // Identity is not ownership (§D): the four plan-session operations below are
+    // lease-gated (`assertExecutionHolder`), so a row this session is bound to
+    // but does not HOLD advertises none of them. That state is real — the D0
+    // claim bootstrap creates it (session binding, no lease) and the continuing
+    // bind later claims the lease — and advertising an operation the mutation
+    // guards refuse would make this public view disagree with the engine.
+    const ownsLease = isPlainObject(row.execution_lease) && row.execution_lease.holder === sessionId;
+    if (coordination.prepared === undefined) {
+      // Fixes #308: the row's own bound claimant holds an unprepared row and no
+      // lease, and preparing it is exactly what that seat may do.
+      if (handoff === undefined && isClaimableStatus(status)) out.push("prepare");
+    } else if (ownsLease && (handoff === undefined || handoff.state === "returned")) {
+      // A plan session keeps only `handoff`: returning a handoff restores the
+      // same session, so both directions stay available to it without rebinding.
       out.push("progress", "residual-add", "residual-close", "handoff");
     }
   }
@@ -329,6 +340,14 @@ export function assertPrepareAdmission(input: {
   sessionBound: boolean;
   /** Whether the transport records an execution lease for this row. */
   leaseHeld: boolean;
+  /**
+   * `prepare`'s ONE self-service seat (fixes #308): the caller IS the session
+   * the row is bound to, so a claimed-but-unprepared row is its own claimant's
+   * to seal. The transport proves that identity against the row before it
+   * passes this (`mutatePrepare`'s locked precheck); the default keeps the
+   * ordered rule every other seat obeys — preparation precedes the bind.
+   */
+  rowClaimant?: boolean;
 }): void {
   const { planId, row, coordination } = input;
   if (coordination?.prepared !== undefined) {
@@ -338,7 +357,7 @@ export function assertPrepareAdmission(input: {
       { plan_id: planId },
     );
   }
-  if (input.sessionBound) {
+  if (input.sessionBound && input.rowClaimant !== true) {
     throw new CoordinationError(
       "coordination.invalid-transition",
       `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,

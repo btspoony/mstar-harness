@@ -41,6 +41,7 @@ import {
   EXECUTION_PIN_CONFLICT_CODE,
   amendPrepareWorkflow,
   bindPlanSession,
+  setBindPreInterleaveForTest,
   executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
@@ -62,7 +63,13 @@ import {
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
-import { CoordinationError, artifactVersion, readArtifactBytes, withProtectedWrite } from "../src/coordination-write.js";
+import {
+  CoordinationError,
+  artifactVersion,
+  readArtifactBytes,
+  validateSnapshotCoordination,
+  withProtectedWrite,
+} from "../src/coordination-write.js";
 import { claimLease, withStatusWriteLock } from "../src/lease.js";
 import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
@@ -877,9 +884,12 @@ describe("binding", () => {
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
     expect([...view.allowed_operations].sort()).toEqual(["handoff", "progress", "residual-add", "residual-close"]);
     // Every coordinator verb exists now; none is reachable — or advertised —
-    // from a plan session, `prepare` included (spec §D assigns it to the
-    // coordinator, not to the plan).
-    for (const kind of ["prepare", "accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
+    // from a plan session. `prepare` is the one verb with a plan-session seat
+    // (the session the addressed ROW is bound to, fixes #308), and that seat is
+    // decided against the row inside the lock: on this already-prepared row no
+    // plan-pm envelope may re-prepare it, and a session that is not the row's
+    // holder keeps the seat refusal.
+    for (const kind of ["accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
       expect(view.allowed_operations).not.toContain(kind);
       expect(
         await errorCodeOf(() =>
@@ -892,6 +902,40 @@ describe("binding", () => {
         ),
       ).toBe("coordination.session-role");
     }
+    expect(view.allowed_operations).not.toContain("prepare");
+    // The row's own holder reaches the row admission, which refuses the seal
+    // it already has — never a second prepare, and never a seat refusal now
+    // that the seat is lawful (spec §D3).
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: fixture.planSession,
+          planId: PLAN_ID,
+          expectedRevision: view.revision,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.invalid-transition");
+    // A plan-pm envelope that is NOT this row's holder keeps `session-role`.
+    const outsider = join(fixture.workflowDir, "sessions", "plan-pm-outsider.json");
+    writeJson(outsider, {
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: "outsider",
+      workflow_id: WORKFLOW_ID,
+      plan_id: PLAN_ID,
+      harness_root: fixture.harness,
+    });
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: outsider,
+          planId: PLAN_ID,
+          expectedRevision: view.revision,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.session-role");
     // `handoff` is implemented: it refuses its own missing evidence, not the slice boundary.
     expect(
       await errorCodeOf(() =>
@@ -929,6 +973,504 @@ describe("binding", () => {
     const coordinatorView = await readPlanCoordination(fixture.coordinatorSession, PEER_PLAN_ID, fixture.root);
     expect(coordinatorView.allowed_operations).toEqual(["prepare"]);
     expect(coordinatorView.scope).toBeNull();
+  });
+});
+
+/**
+ * Spec §D0/D1/D2 (fixes #308) — admission cost proportional to contention: the
+ * Assignment-addressed bind bootstraps an unclaimed, unprepared row (claim),
+ * the row's own claimant may prepare it, and a bind on a prepared row NOBODY
+ * holds whose Assignment drifted amends the pin with one appended audit entry
+ * instead of stopping. A row somebody else holds keeps every existing refusal.
+ */
+describe("admission self-claim and orphan adoption", () => {
+  /** The plan row's own `coordination` block, or `{}` when it carries none. */
+  function planCoordinationOf(fixture: Fixture, planId: string): Record<string, unknown> {
+    const row = planRowOf(fixture, planId);
+    return (row.coordination ?? {}) as Record<string, unknown>;
+  }
+
+  /** The snapshot-level self-amendment audit the coordinator reads post hoc. */
+  function selfAmendmentAudit(fixture: Fixture): Array<Record<string, unknown>> {
+    const coordination = snapshotOf(fixture).coordination as { self_amendments?: Array<Record<string, unknown>> } | undefined;
+    return coordination?.self_amendments ?? [];
+  }
+
+  /** Append a marker to the plan's Assignment, changing its bytes and its hash. */
+  function editAssignment(fixture: Fixture, marker: string): void {
+    writeText(fixture.assignmentPath, `${readFileSync(fixture.assignmentPath, "utf8")}\n${marker}\n`);
+  }
+
+  test("an orphan prepared row with a drifted Assignment is adopted at bind, with one audited amendment", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    const pinned = String((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).assignment_sha256);
+    editAssignment(fixture, "Slice A, revised by the operator.");
+    const current = sha256OfFile(fixture.assignmentPath);
+
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "orphan-adopter",
+    });
+
+    expect(bound.outcome).toBe("claimed");
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InProgress");
+    expect((row.execution_lease as Record<string, unknown>).holder).toBe("orphan-adopter");
+    // The pin moved to the bytes the bind actually accepted.
+    expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).assignment_sha256).toBe(current);
+
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      session_id: "orphan-adopter",
+      old_sha256: pinned,
+      new_sha256: current,
+      prepared_by_matches: false,
+    });
+    expect(typeof audit[0].at).toBe("string");
+    expect(audit[0].operation_id).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("a self re-bind takes the same stale-adopt exit, annotated with the matching preparer", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    editAssignment(fixture, "Slice A, self-edited.");
+    const current = sha256OfFile(fixture.assignmentPath);
+
+    // The host identity that prepared is the one that binds: one session id may
+    // back both role-scoped envelopes of a workflow.
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: FIXTURE_COORDINATOR_ID,
+    });
+
+    expect(bound.outcome).toBe("claimed");
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      session_id: FIXTURE_COORDINATOR_ID,
+      new_sha256: current,
+      prepared_by_matches: true,
+    });
+  });
+
+  test("a prepared row somebody holds keeps the terminal refusal when its Assignment drifts", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const before = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    editAssignment(fixture, "held-edit.");
+
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "second-adopter",
+        }),
+      ),
+    ).toBe("coordination.assignment-stale");
+
+    // Terminal means terminal: the pin, the row and the audit are untouched.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(before);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a fresh orphan binds without any amendment (regression)", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+    });
+
+    expect(bound.outcome).toBe("claimed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("the locator-addressed bind claims an unprepared row with no lease and no coordinator seat", async () => {
+    const fixture = makeFixture();
+
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    expect(bound.outcome).toBe("claim-bootstrapped");
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("Todo");
+    expect(row.execution_lease).toBeUndefined();
+    expect(planCoordinationOf(fixture, PLAN_ID).session).toMatchObject({ session_id: "claimant" });
+    expect(existsSync(bound.session_file)).toBe(true);
+    expect(readJson(bound.session_file).session_id).toBe("claimant");
+    // The view is the unprepared-row shape `show` returns: revision, no scope.
+    expect(bound.view?.scope).toBeNull();
+    expect(bound.view?.revision).toBe(1);
+  });
+
+  test("an addressed Assignment that does not exist refuses before any write", async () => {
+    const fixture = makeFixture();
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { assignmentPath: join(fixture.root, "no-such-assignment.md") },
+          cwd: fixture.root,
+          sessionId: "claimant",
+        }),
+      ),
+    ).toBe("coordination.assignment-invalid");
+
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Todo");
+  });
+
+  test("a second claim on the claimed row is a duplicate holder", async () => {
+    const fixture = makeFixture();
+    await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "second-claimant",
+        }),
+      ),
+    ).toBe("coordination.duplicate-holder");
+  });
+
+  test("the row's bound claimant prepares it, then the same session binds to claim the lease", async () => {
+    const fixture = makeFixture();
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    // The claimant's own read: the row is its to prepare, and nothing else yet.
+    const claimView = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    expect(claimView.scope).toBeNull();
+    expect(claimView.allowed_operations).toEqual(["prepare"]);
+
+    const prepared = await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    expect(prepared.outcome).toBe("prepared");
+    expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).prepared_by).toBe("claimant");
+
+    // §D3: the same claimant cannot seal the row a second time.
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: claim.session_file,
+          planId: PLAN_ID,
+          expectedRevision: prepared.view?.revision ?? claimView.revision,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.invalid-transition");
+
+    // §D/§D4 the prepared-but-unleased window advertises NO lease-gated
+    // operation: identity is not ownership, and the mutation guards require the
+    // execution lease the claim deliberately does not hold yet.
+    const unleased = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    expect(unleased.scope).not.toBeNull();
+    expect(unleased.allowed_operations).toEqual([]);
+
+    // §D0/D4 the claim's own continuation: same session, same envelope, lease.
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    expect(bound.outcome).toBe("claimed");
+    expect(bound.session_file).toBe(claim.session_file);
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InProgress");
+    expect((row.execution_lease as Record<string, unknown>).holder).toBe("claimant");
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a foreign plan session cannot prepare the claimed row", async () => {
+    const fixture = makeFixture();
+    const coordinator = await ensureCoordinator(fixture);
+    await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    // A plan-pm envelope that addresses the same plan under a different session
+    // id: not the row's holder, so the coordinator-only refusal stands.
+    const foreign = join(fixture.workflowDir, "sessions", "plan-pm-foreign-session.json");
+    writeJson(foreign, {
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: "foreign-session",
+      workflow_id: WORKFLOW_ID,
+      plan_id: PLAN_ID,
+      harness_root: fixture.harness,
+    });
+    const revision = (await readPlanCoordination(coordinator, PLAN_ID, fixture.root)).revision;
+
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: foreign,
+          planId: PLAN_ID,
+          expectedRevision: revision,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.session-role");
+    expect(planCoordinationOf(fixture, PLAN_ID).prepared).toBeUndefined();
+  });
+
+  test("the amendment validator refuses a record that describes no move", () => {
+    const entry = {
+      at: "2026-09-29T00:00:00Z",
+      session_id: "adopter",
+      old_sha256: "a".repeat(64),
+      new_sha256: "b".repeat(64),
+      operation_id: "c".repeat(64),
+    };
+    const coordination = { coordinator: { session_id: "s", session_file: "/tmp/s.json", bound_at: "2026-09-29T00:00:00Z" } };
+    expect(validateSnapshotCoordination({ ...coordination, self_amendments: [entry] })).toEqual([]);
+    const sameDigests = validateSnapshotCoordination({
+      ...coordination,
+      self_amendments: [{ ...entry, new_sha256: entry.old_sha256 }],
+    });
+    expect(sameDigests.map((violation) => violation.code)).toContain("coordination.amendment.hash");
+  });
+
+  test("a bind addressing a divergent Assignment copy is refused by the prepared-path resolver", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    // A second copy of the same contract with different bytes, addressed
+    // directly. The refusal is the PREPARED-PATH RESOLVER's (`scopeFromAssignment`
+    // refuses a prepared row addressed by another path, for both bind forms) —
+    // it is pinned here because it is the user-visible boundary that keeps one
+    // path and one hash; the adopt helper itself is path-blind by design.
+    const copy = join(fixture.root, "assignment-copy.md");
+    writeText(copy, `${readFileSync(fixture.assignmentPath, "utf8")}\ndivergent copy.\n`);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    expect(
+      await errorCodeOf(() => bindPlanSession({ scope: { assignmentPath: copy }, cwd: fixture.root, sessionId: "copy-adopter" })),
+    ).toBe("coordination.scope-mismatch");
+
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a leaf or unknown seat keeps the existing session-role refusal", async () => {
+    const fixture = makeFixture();
+    const leaf = join(fixture.workflowDir, "sessions", "leaf.json");
+    writeJson(leaf, {
+      schema_version: 1,
+      role: "leaf",
+      session_id: "leaf",
+      workflow_id: WORKFLOW_ID,
+      harness_root: fixture.harness,
+    });
+
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: leaf,
+          expectedRevision: 0,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.session-role");
+  });
+
+  test("a claimed row whose Assignment drifts before its bind is adopted by its own claimant", async () => {
+    const fixture = makeFixture();
+    // The workflow has its coordinator seat (the snapshot block the amendment
+    // audit rides on); the ROW is claimed and prepared by its own session.
+    await ensureCoordinator(fixture);
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    const claimView = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    const pinned = String((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).assignment_sha256);
+    editAssignment(fixture, "the claimant's own late edit.");
+    const current = sha256OfFile(fixture.assignmentPath);
+
+    // The row is bound to THIS session (the claim), so its own drift is the
+    // claimant's to amend — the same audited exit an orphan takes.
+    const bound = await bindPlanSession({
+      scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+
+    expect(bound.outcome).toBe("claimed");
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InProgress");
+    expect((row.execution_lease as Record<string, unknown>).holder).toBe("claimant");
+    expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).assignment_sha256).toBe(current);
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      session_id: "claimant",
+      old_sha256: pinned,
+      new_sha256: current,
+      prepared_by_matches: true,
+    });
+  });
+
+  test("the same claimed row keeps the terminal refusal for a different identity", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    const claimView = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    const before = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    editAssignment(fixture, "held by its claimant.");
+
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+          cwd: fixture.root,
+          sessionId: "intruder",
+        }),
+      ),
+    ).toBe("coordination.assignment-stale");
+
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(before);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("an orphaning interleave after the fail-fast read is settled by the locked re-decision", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    // The addressed row is prepared (by the coordinator) and HELD by another
+    // session: the unlocked fail-fast measurement sees a holder, and only the
+    // locked re-decision may adopt it.
+    await preparePlan(fixture, PEER_PLAN_ID);
+    await bindPlan(fixture, PEER_PLAN_ID);
+    // The drift the locked re-decision must adopt is in the ADDRESSED (peer)
+    // Assignment, not in the plan-A one.
+    writeText(fixture.peerAssignmentPath, `${readFileSync(fixture.peerAssignmentPath, "utf8")}\npeer edit.\n`);
+
+    // Interleave: between the fail-fast read and the locked decision the row
+    // loses its holder, so an unlocked refusal here would be a false one.
+    setBindPreInterleaveForTest(() => {
+      setBindPreInterleaveForTest(undefined);
+      updatePlanRow(fixture, PEER_PLAN_ID, (row) => {
+        const { execution_lease: _released, ...rest } = row;
+        const coordination = { ...((rest.coordination ?? {}) as Record<string, unknown>) };
+        delete coordination.session;
+        return { ...rest, status: "Todo", coordination };
+      });
+    });
+
+    try {
+      const bound = await bindPlanSession({
+        scope: { assignmentPath: fixture.peerAssignmentPath },
+        cwd: fixture.root,
+        sessionId: "late-adopter",
+      });
+      expect(bound.outcome).toBe("claimed");
+      expect(planRowOf(fixture, PEER_PLAN_ID).status).toBe("InProgress");
+      expect(selfAmendmentAudit(fixture)).toHaveLength(1);
+    } finally {
+      setBindPreInterleaveForTest(undefined);
+    }
+  });
+
+  test("with no coordination block to record it, a drifted claimed row refuses instead of adopting", async () => {
+    const fixture = makeFixture();
+    const claim = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "claimant",
+    });
+    const claimView = await readPlanCoordination(claim.session_file, PLAN_ID, fixture.root);
+    await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    const before = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    editAssignment(fixture, "no audit host for this adoption.");
+
+    // The claim bootstrap needs no coordinator seat, so this row can exist on a
+    // workflow whose snapshot carries no coordination block — and an amendment
+    // that cannot be recorded is not made. Fail closed, bytes untouched.
+    expect(
+      await errorCodeOf(() =>
+        bindPlanSession({
+          scope: { workflowId: WORKFLOW_ID, planId: PLAN_ID, harnessDir: fixture.harness },
+          cwd: fixture.root,
+          sessionId: "claimant",
+        }),
+      ),
+    ).toBe("coordination.assignment-stale");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(before);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a hash-fresh prepared row refuses a second prepare (the coordinator keeps it)", async () => {
+    const fixture = makeFixture();
+    const coordinator = await ensureCoordinator(fixture);
+    const view = await preparePlan(fixture, PLAN_ID);
+    const fresh = await readPlanCoordination(coordinator, PLAN_ID, fixture.root);
+
+    expect(
+      await errorCodeOf(() =>
+        mutatePlanCoordination({
+          sessionPath: coordinator,
+          planId: PLAN_ID,
+          expectedRevision: fresh.revision,
+          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+        }),
+      ),
+    ).toBe("coordination.invalid-transition");
+    expect(view.outcome).toBe("prepared");
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 });
 
@@ -5445,6 +5987,15 @@ async function storeBacked(fixture: Fixture, plans: string[] = [PLAN_ID]): Promi
       { operationId: `reg-${planId}-${index}`, actor: "project-manager" },
     );
   }
+  // Seal IMMEDIATELY, while the writes above are still the most recent store
+  // activity: the read-only open that follows can otherwise land in the
+  // documented window (see `sealStoreForReaders` — this runtime checkpoints and
+  // removes a closed handle's empty sidecars when it collects the handle, and a
+  // first read-only open of that quiesced WAL shape fails `store.corrupt` /
+  // SQLITE_CANTOPEN). Taking the read here keeps the fixture deterministic for
+  // every test that reads the store later, instead of leaving it to allocation
+  // timing.
+  await sealStoreForReaders(fixture);
   return context;
 }
 
