@@ -132,6 +132,36 @@ describe("validation command family", () => {
     expect(violations.length > 0).toBe(true);
     expect(result.code).toBe(violations[0]!.code);
   });
+  test("document validation derives a document type for the selected artifact", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "SKILL.md");
+    writeFileSync(file, "---\nname: valid-skill\ndescription: A fixture skill for validating documents.\n---\nA valid skill.\n");
+    const result = await definition("lint").execute({ target: file }, context(cwd));
+    expect(result.status).toBe("ok");
+  });
+
+  test("unknown optional validator type is classified as usage", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "SKILL.md");
+    writeFileSync(file, "---\nname: valid-skill\n---\nA valid skill.\n");
+    const result = await definition("lint").execute({ target: file, type: "unknown" }, context(cwd));
+    expect(result).toMatchObject({ status: "usage", exitCode: 2, code: "usage" });
+  });
+
+  test("aggregate diagnostics retain each selected document path", async () => {
+    const cwd = tempRoot();
+    const first = path.join(cwd, "one", "SKILL.md");
+    const second = path.join(cwd, "two", "SKILL.md");
+    mkdirSync(path.dirname(first), { recursive: true });
+    mkdirSync(path.dirname(second), { recursive: true });
+    writeFileSync(first, "---\nname: Bad Name\n---\nBody\n");
+    writeFileSync(second, "---\nname: Also Bad\n---\nBody\n");
+    const result = await definition("lint").execute({ target: cwd }, context(cwd));
+    expect(result).toMatchObject({ status: "refused", details: { results: expect.arrayContaining([
+      expect.objectContaining({ file: first, violations: expect.any(Array) }),
+      expect.objectContaining({ file: second, violations: expect.any(Array) }),
+    ]) } });
+  });
 
   test("artifact validators run against small local fixtures", async () => {
     const cwd = tempRoot();
