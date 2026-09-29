@@ -583,6 +583,14 @@ describe("migration 2", () => {
       if (existingTables.has(table)) handle.db.exec(`drop table ${table}`);
     }
     handle.db.prepare("delete from schema_version where version > 1").run();
+    // Migration 7 also ALTERs issues and creates named indexes/triggers; the
+    // create-table sweep above misses those artifacts, and a residual
+    // issues.milestone_id makes the replay fail with "duplicate column name".
+    const residue = handle.db
+      .prepare("select type, name from sqlite_master where name like 'issues_milestone%'")
+      .all() as { type: string; name: string }[];
+    for (const artifact of residue) handle.db.exec(`drop ${artifact.type} if exists ${artifact.name}`);
+    handle.db.exec("alter table issues drop column milestone_id");
     handle.close();
     expect((await openStore(context, "read")).schemaVersion).toBe(1);
 

@@ -13023,7 +13023,7 @@ function guard(db) {
     fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
   const active = db.prepare("select authority_state from store_meta where id=1").get();
   if (active?.authority_state !== "active")
-    fail("milestone.store-not-active", "Milestone access requires an active store.");
+    fail("store.not-active", "Milestone access requires an active store.");
 }
 function project(db, projectId) {
   if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
