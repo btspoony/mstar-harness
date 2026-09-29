@@ -91,7 +91,7 @@ All plan and workflow refusals are mutation-free: the authoritative bytes are un
 | `coordination.identity-recovery.*` | the JSON Prepare coordinator recovery refused: `not-prepare`, `invalid-request`, `execution-started` (a row already owns execution), `foreign-owner`, `stale`, `unauthorized`, `operation-conflict` |
 | `execution.direct-write-refused` | an **active execution authority**: the JSON recovery and the file route never run against it — the existing DB recovery verb owns that repair |
 | `coordination.duplicate-holder` | a second fresh claim of an already-held row, or of an already-bound coordinator |
-| `coordination.handoff-mismatch` | the handoff flag names something other than the row's live handoff |
+| `coordination.handoff-pin` | the handoff flag names something other than the row's live handoff |
 | `coordination.invalid-transition` | the proposed document fails validation for the requested transition |
 | `coordination.git-unavailable` | a Git-derived fact the verb needs cannot be established |
 | `coordination.expected-version-required` / `coordination.version-conflict` | a coordinate write without a token, or with one that no longer matches the bytes |

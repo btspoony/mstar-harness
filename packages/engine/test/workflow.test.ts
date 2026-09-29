@@ -1009,13 +1009,14 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
 
     // Re-pointing the recorded evidence is a different completion of the same
     // policy, never an evidence update: refused, with the DB route's own code.
-    let refusal = "";
+    let refusal: CoordinationError | undefined;
     try {
       await recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "sdd/plan-a/forged.md" } } });
     } catch (error) {
-      refusal = (error as Error).message;
+      if (!(error instanceof CoordinationError)) throw error;
+      refusal = error;
     }
-    expect(refusal).toContain("coordination.invalid-transition");
+    expect(refusal?.code).toBe("coordination.completion-frozen");
     expect(readFileSync(path, "utf8")).toBe(afterDone);
 
     // An identical re-record is the retried recording: a no-op, never a refusal.
@@ -1031,14 +1032,15 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
   test("a first-time fulfilment recorded after Done is refused too (the ordering is before Done, F-2)", async () => {
     const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "Done" })] });
     const before = readFileSync(path, "utf8");
-    let refusal = "";
+    let refusal: CoordinationError | undefined;
     try {
       await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
     } catch (error) {
-      refusal = (error as Error).message;
+      if (!(error instanceof CoordinationError)) throw error;
+      refusal = error;
     }
-    expect(refusal).toContain("coordination.invalid-transition");
-    expect(refusal).toContain("before the row is marked Done");
+    expect(refusal?.code).toBe("coordination.completion-frozen");
+    expect(refusal?.message).toContain("before the row is marked Done");
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 

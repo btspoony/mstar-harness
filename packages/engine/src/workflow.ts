@@ -1367,7 +1367,7 @@ export type RecordWorkflowDeliveryResult = {
  *   is not `Done` (`PHASE6_PLAN_ROW_NOT_DONE` - contract §3: the delivery
  *   tail runs after every row is Done; write-time only, see below);
  * - a `completion` fulfilment that would CHANGE once an owned plan row is
- *   `Done` (`coordination.invalid-transition` - contract §1 the mirror rule:
+ *   `Done` (`coordination.completion-frozen` - contract §1 the mirror rule:
  *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
  *   and the same stable code refuses the same state on the DB route's
  *   `applyDeliveryEvidence`).
@@ -1501,11 +1501,11 @@ export async function recordWorkflowDelivery(
     // afterwards would leave the `Done` fact standing on evidence it was never
     // accepted with. An identical re-record never reaches this point (the
     // idempotent return above), so a retried recording stays a no-op; the
-    // refusal carries the dedicated completion-frozen code shared with the DB route.
+    // refusal carries the dedicated completion-frozen code used by the DB route.
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
         "coordination.completion-frozen",
-        `refusing to record delivery evidence: coordination.invalid-transition: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
+        `refusing to record delivery evidence: coordination.completion-frozen: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
         { workflow_id: workflowId },
       );
     }
