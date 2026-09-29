@@ -671,6 +671,7 @@ export {
   linkIssue,
   listIssues,
   triageIssue,
+  assignIssueMilestone,
   ISSUE_PAYLOAD_SCHEMAS,
 } from "./issue.js";
 // Catalog authority: catalog metadata is

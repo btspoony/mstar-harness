@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCatalogCommandDefinitions, getRoadmapCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
@@ -95,5 +96,19 @@ describe("catalog and roadmap command families", () => {
     if (listed.status === "ok") expect(JSON.stringify(listed.data)).toContain("proj");
     if (shown.status === "ok") expect(JSON.stringify(shown.data)).toContain("Project");
     if (exported.status === "ok") expect(JSON.stringify(exported.data)).toContain("proj");
+  });
+
+  test("milestone grouped roadmap export retains absent prose and escapes stored text", async () => {
+    const { cwd, harness } = await activeFixture("milestone-roadmap-export");
+    const add = getMilestoneCommandDefinitions().find(item => item.id === "milestone.add")!;
+    const added = await add.execute({ project: "proj", name: "Build | launch", ordinal: 0, expectStore: 1, operation: "milestone-add", harness }, invocation(cwd));
+    expect(added.status).toBe("ok");
+    const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(exported.status).toBe("ok");
+    if (exported.status === "ok") {
+      expect(exported.data).toContain("Build \\| launch");
+      expect(exported.data).toContain("No stored Direction.");
+      expect(exported.data).toContain("No linked issues.");
+    }
   });
 });

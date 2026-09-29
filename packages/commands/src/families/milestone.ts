@@ -1,0 +1,39 @@
+import { addMilestone, assignIssueMilestone, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
+import { z } from "zod";
+import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+const commandEnvelopeSchema = z.discriminatedUnion("status", [
+ z.object({version:z.literal(1),command:z.string().min(1),status:z.literal("ok"),code:z.string().min(1),exitCode:z.literal(0),data:z.unknown()}),
+ z.object({version:z.literal(1),command:z.string().min(1),status:z.enum(["refused","error"]),code:z.string().min(1),exitCode:z.number().int().refine(code=>code!==0),message:z.string(),details:z.record(z.string(),z.unknown()).optional()}),
+ z.object({version:z.literal(1),command:z.string().min(1),status:z.literal("usage"),code:z.string().min(1),exitCode:z.literal(2),message:z.string(),details:z.record(z.string(),z.unknown()).optional()}),
+]);
+
+const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), session: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
+type Input = z.infer<typeof schema>;
+const verbs = ["add", "update", "assign", "list", "status"] as const;
+const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",session:"--session <path>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
+const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","session","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
+const required: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","expectStore","operation"], update:["project","id","expectStore","operation"], assign:["project","issue","reason","expectIssue","expectStore","operation","session","actor"], list:["project"], status:["project","id"] };
+class UsageError extends Error {}
+function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
+function context(input: Input, invocation: InvocationContext): StoreContext { const root = resolveProcessHarnessDir(invocation.cwd, input.harness); return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd }; }
+function envelope(id: string, status: "ok"|"refused"|"usage", code: string, exitCode: number, data?: unknown, message?: string): CommandEnvelope { return { version:1, command:id, status, code, exitCode, ...(data === undefined ? {} : {data}), ...(message === undefined ? {} : {message}) } as CommandEnvelope; }
+async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+ try {
+  const verb = id.slice("milestone.".length) as typeof verbs[number]; const projectId = requireValue(input.project,"--project"); const store = context(input,invocation);
+  if (verb === "list" || verb === "status") return envelope(id,"ok",`${id}.ok`,0,await withStoreRead(store,queryMilestones(projectId,verb === "status" ? requireValue(input.id,"--id") : undefined)));
+  if (input.expectStore === undefined) throw new UsageError("--expect-store is required");
+  const operationId = requireValue(input.operation,"--operation");
+  if (verb === "add") { if (input.name === undefined || input.ordinal === undefined) throw new UsageError("--name and --ordinal are required"); return envelope(id,"ok",`${id}.ok`,0,await addMilestone(store,{projectId,name:input.name,ordinal:input.ordinal,target:input.target ?? null},{operationId,expectedStoreRevision:input.expectStore})); }
+  if (verb === "update") {
+   if (input.target !== undefined && input.clearTarget) throw new UsageError("--target and --clear-target are exclusive");
+   const patch: MilestonePatch = { ...(input.name === undefined ? {} : {name:input.name}), ...(input.ordinal === undefined ? {} : {ordinal:input.ordinal}), ...(input.status === undefined ? {} : {status:input.status}), ...(input.target === undefined && !input.clearTarget ? {} : {target:input.clearTarget ? null : input.target!}) };
+   if (!Object.keys(patch).length) throw new UsageError("update requires at least one patch field");
+   return envelope(id,"ok",`${id}.ok`,0,await updateMilestone(store,projectId,requireValue(input.id,"--id"),patch,{operationId,expectedStoreRevision:input.expectStore}));
+  }
+  if ((input.id !== undefined) === (input.clear === true)) throw new UsageError("exactly one of --id or --clear is required");
+  if (input.expectIssue === undefined) throw new UsageError("--expect-issue is required");
+  const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),sessionFile:requireValue(input.session,"--session"),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};
+  return envelope(id,"ok",`${id}.ok`,0,await assignIssueMilestone(store,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
+ } catch(error) { const message=error instanceof Error?error.message:String(error); if(error instanceof UsageError) return envelope(id,"usage","usage",2,undefined,message); const code=error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`; return envelope(id,"refused",code,1,undefined,message); }
+}
+export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] { return verbs.map(verb => { const id=`milestone.${verb}`; const opts=options[verb]; return { id,cli:{path:["milestone",verb],aliases:[],arguments:[],options:opts.map(key=>({key,flags:flags[key],required:required[verb].includes(key)}))},input:schema.pick(Object.fromEntries(opts.map(key=>[key,true])) as never),output:commandEnvelopeSchema,effects:verb === "list"||verb === "status" ? ["read"] : ["write"],description:verb === "status"?"Show one milestone and linked issue rollup.":`Milestone ${verb} operation.`,execute:(input:Input,invocation:InvocationContext)=>run(id,input,invocation) }; }); }

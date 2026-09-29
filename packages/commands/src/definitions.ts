@@ -11,6 +11,7 @@ import { getExecutionCommandDefinitions } from "./families/execution.js";
 import { getIssueCommandDefinitions } from "./families/issue.js";
 import { getCatalogCommandDefinitions } from "./families/catalog.js";
 import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
+import { getMilestoneCommandDefinitions } from "./families/milestone.js";
 import { getSddCommandDefinitions } from "./families/sdd.js";
 import { getValidationCommandDefinitions } from "./families/validation.js";
 import { getAuditCommandDefinitions } from "./families/audit.js";
@@ -139,6 +140,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getSessionCommandDefinitions(),
   ...getWorkflowCommandDefinitions(),
   ...getIssueCommandDefinitions(),
+  ...getMilestoneCommandDefinitions(),
   ...getCatalogCommandDefinitions(),
   ...getRoadmapCommandDefinitions(),
   ...getStoreCommandDefinitions(),
