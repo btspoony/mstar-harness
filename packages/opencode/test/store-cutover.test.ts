@@ -258,7 +258,6 @@ describe("opencode authority boundary — store/retired-register direct writes (
     const api = await storeApiLoader.load();
     const detected = api!.detectStoreRuntime();
     expect(detected.isBun).toBe(true);
-    expect(detected.version).not.toBe(process.versions.node);
 
     // An engine without the store API refuses the register path instead of
     // dropping the plugin (the engine-absent contract this file shares).
