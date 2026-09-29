@@ -88,7 +88,7 @@ export function milestoneTargetText(target: string | null): string {
 /**
  * The counts one milestone shows. Resolved and other-retired stay separate
  * (§4): waived, duplicate and superseded issues are retired obligations, never
- * delivered work, and `doneIssues` is deliberately not rendered at all.
+ * delivered work.
  */
 export function milestoneCountRows(milestone: ProjectMilestoneDTO): Array<{ label: string; value: string }> {
   return [

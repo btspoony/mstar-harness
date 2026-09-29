@@ -120,6 +120,33 @@ describe("catalog and roadmap command families", () => {
     }
   });
 
+  test("direction export is byte-stable across export, replace and re-export (no escaping accumulation)", async () => {
+    const { cwd, harness } = await activeFixture("direction-roundtrip");
+    const directionWithSyntax = "Retained **bold** prose with [a link](https://example.test) and `code` spans — verbatim.";
+    const source = `---\nproject_id: proj\ntitle: Project\nstatus: active\ncreated_at: 2026-09-29\n---\n\n## Direction\n\n${directionWithSyntax}\n`;
+    const sourceFile = join(cwd, "direction-source.md");
+    writeFileSync(sourceFile, source);
+    const seed = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: sourceFile, expectProject: 1, expectRoadmap: "absent", operation: "direction-seed", harness }, invocation(cwd));
+    expect(seed.status).toBe("ok");
+
+    const first = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(first.status).toBe("ok");
+    const firstMarkdown = String(first.data);
+    expect(firstMarkdown).toContain(directionWithSyntax);
+
+    const roundTripFile = join(cwd, "roadmap-roundtrip.md");
+    writeFileSync(roundTripFile, firstMarkdown);
+    const replace = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: roundTripFile, expectProject: 1, expectRoadmap: 1, operation: "direction-roundtrip-replace", harness }, invocation(cwd));
+    expect(replace.status).toBe("ok");
+
+    const second = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(second.status).toBe("ok");
+    const firstDirection = String(first.data).split("## Direction")[1];
+    const secondDirection = String(second.data).split("## Direction")[1];
+    expect(secondDirection).toBe(firstDirection);
+    expect(secondDirection).not.toContain("\\*\\*");
+  });
+
   test("roadmap JSON export returns the v2 envelope", async () => {
     const { cwd, harness } = await activeFixture("roadmap-json-export");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));

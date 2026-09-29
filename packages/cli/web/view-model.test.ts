@@ -583,7 +583,6 @@ function milestone(overrides: Partial<ProjectMilestoneDTO> = {}): ProjectMilesto
     updatedAt: RECORDED_AT,
     totalIssues: 0,
     openIssues: 0,
-    doneIssues: 0,
     resolvedIssues: 0,
     otherRetiredIssues: 0,
     ...overrides,
@@ -896,7 +895,6 @@ describe("milestone grouping", () => {
         openIssues: 1,
         resolvedIssues: 2,
         otherRetiredIssues: 1,
-        doneIssues: 3,
       }),
       issues: [],
     };
@@ -906,8 +904,7 @@ describe("milestone grouping", () => {
     expect(text).toContain("Retired without resolution (waived, duplicate, superseded)\n1");
     expect(text).toContain("Open issues\n1");
     expect(text).toContain("Linked issues total\n4");
-    // The rollup's `doneIssues` is deliberately not rendered at all: retired
-    // obligations are not delivered work, so no line may claim 3 done.
+    // Retired obligations are not delivered work, so no line may claim completion.
     expect(text).not.toContain("done");
     expect(text).not.toContain("delivered");
   });

@@ -30,7 +30,7 @@ const descriptions: Record<(typeof verbs)[number], string> = {
   import: "Preview a roadmap import read-only or apply a saved reviewed source using engine drift checks.",
   replace: "Replace the complete roadmap using observed project and roadmap revisions.",
   show: "Show the project/catalog revisions, roadmap record and parsed content.",
-  export: "Export composed milestone roadmap as JSON v2 or grouped Markdown; reporting only, not backup/restore. import/replace/show modify Markdown content only.",
+  export: "Export composed milestone roadmap as JSON v2 or grouped Markdown; reporting only, not backup/restore. The grouped Markdown frontmatter is regenerated reporting metadata (status is always the reporting value 'active'; title mirrors the catalog title) — edits to it do not write back; use roadmap show for authority. import/replace/show modify Markdown content only.",
 };
 const cliFlags: Record<keyof Input, string> = {
   project: "--project <id>", file: "--file <absolute-md>", review: "--review <absolute-json>", apply: "--apply", operation: "--operation <id>",
@@ -85,9 +85,9 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
   const lines = [
     "---",
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
-    `title: ${JSON.stringify(roadmap.catalog.title)}`,
-    "status: active",
-    `created_at: ${roadmap.catalog.registeredAt.slice(0, 10)}`,
+    `title: ${JSON.stringify(roadmap.content?.frontmatter?.title ?? roadmap.catalog.title)}`,
+    `status: ${JSON.stringify(roadmap.content?.frontmatter?.status ?? "active")}`,
+    `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? roadmap.catalog.registeredAt.slice(0, 10))}`,
     "---",
     "",
     "# Roadmap",
@@ -96,7 +96,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     "",
     "## Direction",
     "",
-    roadmap.content?.direction?.trim() ? escapeMarkdown(roadmap.content.direction) : "No stored Direction.",
+    roadmap.content?.direction?.trim() ? roadmap.content.direction : "No stored Direction.",
     "",
   ];
   for (const milestone of roadmap.milestones.milestones) {
