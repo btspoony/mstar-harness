@@ -57,6 +57,7 @@ describe("issue milestone association", () => {
     const receipt = await assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId, reason: "roadmap" }, mutation("milestone-assign", 1));
     expect(receipt).toMatchObject({ issueId: "milestone-assignment-issue", revision: 2, storeRevision: before + 1, created: false });
     expect((await getIssue(context, receipt.issueId)).milestoneId).toBe(milestoneId);
+    expect((await listIssues(context, { projectId })).items.find((issue) => issue.id === receipt.issueId)?.milestoneId).toBe(milestoneId);
   });
   test("wrong actor or session refuses without mutation", async () => {
     const before = revision();
@@ -80,6 +81,13 @@ describe("issue milestone association", () => {
     const other = await addMilestone(context, { projectId: "other-project", name: "Other project milestone", target: null, ordinal: 0 }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: other.milestoneId, reason: "wrong project" }, mutation("milestone-cross-project", 3))).rejects.toMatchObject({ code: "milestone.project-mismatch" });
   });
+  test("invalid input and absent milestones use distinct refusal codes", async () => {
+    const req = { projectId, milestoneId: null as string | null, reason: "valid" };
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, projectId: " " }, mutation("milestone-invalid-project", 3))).rejects.toMatchObject({ code: "milestone.invalid-input" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, reason: " " }, mutation("milestone-invalid-reason", 3))).rejects.toMatchObject({ code: "milestone.invalid-input" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, milestoneId: " " }, mutation("milestone-invalid-id", 3))).rejects.toMatchObject({ code: "milestone.invalid-input" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, milestoneId: "missing-milestone" }, mutation("milestone-not-found", 3))).rejects.toMatchObject({ code: "milestone.not-found" });
+  });
   test("supports explicit move and clear", async () => {
     const another = await addMilestone(context, { projectId, name: `Move target ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     otherMilestoneId = another.milestoneId;
@@ -101,6 +109,11 @@ describe("issue milestone association", () => {
     const dropped = await addMilestone(context, { projectId, name: "Terminal dropped", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, dropped.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: dropped.milestoneId, reason: "dropped" }, mutation("milestone-terminal-dropped", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
+    const source = await addMilestone(context, { projectId, name: "Terminal source", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    makeIssue("milestone-terminal-source-issue");
+    const sourceAssigned = await assignIssueMilestone(context, "milestone-terminal-source-issue", { projectId, milestoneId: source.milestoneId, reason: "source guard" }, mutation("milestone-terminal-source-assign", 1));
+    await updateMilestone(context, projectId, source.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    await expect(assignIssueMilestone(context, sourceAssigned.issueId, { projectId, milestoneId: null, reason: "clear terminal source" }, mutation("milestone-terminal-source-clear", sourceAssigned.revision))).rejects.toMatchObject({ code: "milestone.terminal" });
   });
   test("failed assignment rolls back issue and store revisions", async () => {
     const before = revision();

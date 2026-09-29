@@ -345,7 +345,7 @@ export type IssueErrorCode =
   | "milestone.schema-outdated"
   | "milestone.project-mismatch"
   | "milestone.invalid-input"
-  | "milestone.revision-conflict"
+  | "milestone.not-found"
   | "milestone.terminal"
   | "store.not-active"
   | "store.operation-conflict";
@@ -1782,18 +1782,21 @@ export async function assignIssueMilestone(
   input: { projectId: string; milestoneId: string | null; reason: string },
   mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt> {
-  requireNonblank("projectId", input.projectId);
-  requireNonblank("reason", input.reason);
-  if (input.milestoneId !== null && (typeof input.milestoneId !== "string" || !input.milestoneId.trim())) {
-    throw new IssueError("issue.scope-refused", "milestoneId must be a nonblank identifier or null");
+  if (typeof input.projectId !== "string" || !input.projectId.trim() || typeof input.reason !== "string" || !input.reason.trim()) {
+    throw new IssueError("milestone.invalid-input", "projectId and reason must be nonblank");
   }
+  if (input.milestoneId !== null && (typeof input.milestoneId !== "string" || !input.milestoneId.trim())) {
+    throw new IssueError("milestone.invalid-input", "milestoneId must be a nonblank identifier or null");
+  }
+  const projectId = input.projectId.trim();
+  const reason = input.reason.trim();
   authorizeMutation(context, mutation);
   if (!mutation.operationId?.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "operationId and expectedStoreRevision are required");
   }
   const hash = requestHash("assignIssueMilestone", {
     issueId,
-    input: { projectId: input.projectId, milestoneId: input.milestoneId, reason: input.reason.trim() },
+    input: { projectId, milestoneId: input.milestoneId, reason },
     mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision, expectedStoreRevision: mutation.expectedStoreRevision },
   });
   return withWrite(context, (handle) => {
@@ -1807,14 +1810,15 @@ export async function assignIssueMilestone(
     const issue = db.prepare("select project_id, revision, milestone_id from issues where id=?").get(issueId) as
       | { project_id: string; revision: number; milestone_id: string | null } | undefined;
     if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
-    if (issue.project_id !== input.projectId) throw new IssueError("milestone.project-mismatch", "Issue does not belong to the requested project");
+    if (issue.project_id !== projectId) throw new IssueError("milestone.project-mismatch", "Issue does not belong to the requested project");
     if (readMeta(db).revision !== mutation.expectedStoreRevision) {
       throw new IssueError("milestone.revision-conflict", "expectedStoreRevision does not match the current store revision");
     }
     requireExpectedRevision(mutation, issue.revision);
     if (input.milestoneId !== null) {
-      const milestone = db.prepare("select status from project_milestones where milestone_id=? and project_id=?").get(input.milestoneId, input.projectId) as { status: string } | undefined;
-      if (!milestone) throw new IssueError("milestone.project-mismatch", "Milestone does not exist in the requested project");
+      const milestone = db.prepare("select project_id, status from project_milestones where milestone_id=?").get(input.milestoneId) as { project_id: string; status: string } | undefined;
+      if (!milestone) throw new IssueError("milestone.not-found", "Milestone does not exist");
+      if (milestone.project_id !== projectId) throw new IssueError("milestone.project-mismatch", "Milestone belongs to another project");
       if (milestone.status === "delivered" || milestone.status === "dropped") throw new IssueError("milestone.terminal", "Reopen the target milestone before assigning an issue to it");
     }
     if (issue.milestone_id !== null) {
