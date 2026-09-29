@@ -4218,6 +4218,69 @@ describe("closeWorkflow — the file-authority failed/stopped producer (R11/A21/
     expect(storedRow(storedSnapshot(foreignFixture.snapshotPath)).execution_lease).toMatchObject({ holder: priorCoordinator });
   }, 30000);
 
+  test("foreign claim: an unrecognized holder without a stop attestation refuses the close (R11/A21)", async () => {
+    // §R11 the file authority's stop-fact rule: a holder that resolves to none
+    // of this workflow's recorded identities is NOT thereby proven stopped (the
+    // activation import refuses exactly such a holder as an orphan). It settles a
+    // claim only on a recorded stop attestation, and refuses every other claim
+    // with the stop/transfer it needs — never a silent release.
+    const root = harnessRoot("file-terminal-unattested-row-");
+    const orphan = "host-unrecorded-00000111";
+    const fixture = terminalHarness(root, { rowHolder: orphan });
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+
+    const refused = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(root), { endedAt, outcome: "failed", sessionPath: fixture.coordinatorSession }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain(orphan);
+    expect(refused.message).toContain("no recorded stop or transfer");
+    expect(refused.message).toContain("stop or transfer");
+    expect(refused.details).toMatchObject({ workflow_id: id, status: "failed" });
+    // Zero writes: the unattested claim stays held, the lifecycle stays running
+    // and registered.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(storedRow(storedSnapshot(fixture.snapshotPath)).execution_lease).toMatchObject({ holder: orphan });
+    expect(registeredIds(root)).toEqual([id]);
+
+    // The workflow-wide claim is decided by the same rule.
+    const mergeRoot = harnessRoot("file-terminal-unattested-merge-");
+    const mergeOrphan = "host-unrecorded-00000111-merge";
+    const mergeFixture = terminalHarness(mergeRoot, { mergeHolder: mergeOrphan });
+    const mergeBefore = readFileSync(mergeFixture.snapshotPath, "utf8");
+    const mergeRefused = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(mergeRoot), { endedAt, outcome: "stopped", sessionPath: mergeFixture.coordinatorSession }),
+    );
+    expect(mergeRefused.code).toBe("coordination.invalid-transition");
+    expect(mergeRefused.message).toContain(mergeOrphan);
+    expect(mergeRefused.message).toContain("no recorded stop or transfer");
+    expect(readFileSync(mergeFixture.snapshotPath, "utf8")).toBe(mergeBefore);
+    expect(storedSnapshot(mergeFixture.snapshotPath).integration_merge_lease).toMatchObject({ holder: mergeOrphan });
+
+    // The recorded binding precedes the attestation: a session id this workflow
+    // still records as a live binding is never released, even when that same id
+    // also appears among the recovery's stopped sessions. The file authority has
+    // no heartbeat to prove the binding's stop, so the conservative refusal
+    // stands (a false refusal, never a release).
+    const collisionRoot = harnessRoot("file-terminal-collision-");
+    const collision = terminalHarness(collisionRoot, { rowHolder: planSessionId, recovered: true });
+    const collisionStored = storedSnapshot(collision.snapshotPath);
+    const coordination = collisionStored.coordination as Record<string, unknown>;
+    const recoveries = coordination.identity_recoveries as Array<Record<string, unknown>>;
+    recoveries[0]!.stopped_session_ids = [priorCoordinator, planSessionId];
+    withSnapshot(collision.snapshotPath, { coordination });
+    const collisionBefore = readFileSync(collision.snapshotPath, "utf8");
+
+    const collisionRefused = await refusalOf(() =>
+      closeWorkflow(id, workflowDirOf(collisionRoot), { endedAt, outcome: "stopped", sessionPath: collision.coordinatorSession }),
+    );
+    expect(collisionRefused.code).toBe("coordination.invalid-transition");
+    expect(collisionRefused.message).toContain(planSessionId);
+    expect(collisionRefused.message).toContain("still a live recorded session");
+    expect(readFileSync(collision.snapshotPath, "utf8")).toBe(collisionBefore);
+    expect(storedRow(storedSnapshot(collision.snapshotPath)).execution_lease).toMatchObject({ holder: planSessionId });
+  }, 30000);
+
   test("repeated terminal: the duplicate stop returns the recorded outcome and settles nothing twice (A28)", async () => {
     const root = harnessRoot("file-terminal-duplicate-");
     const { snapshotPath, coordinatorSession } = terminalHarness(root, {

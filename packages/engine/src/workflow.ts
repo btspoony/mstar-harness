@@ -31,7 +31,7 @@ import { readJson, type GateResult, type Severity, type ValidationResult } from 
 import {
   CoordinationError,
   canonicalTarget,
-  fileClaimHolderIsLive,
+  fileClaimHolderState,
   isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
@@ -1355,9 +1355,11 @@ export type CloseWorkflowOptions = {
    * `Done` state and the declared delivery kind's evidence are NOT consulted
    * (a failure close is never treated as a delivery), and the workflow's own
    * held claims are settled in the same locked snapshot write — a claim whose
-   * holder is no longer one of this workflow's recorded session identities is
-   * released (the file route's release is the lease key's absence), while a
-   * claim a live holder still holds refuses the outcome with that holder named.
+   * holder is no longer one of this workflow's recorded session identities AND
+   * whose stop a recorded identity-recovery attestation establishes is released
+   * (the file route's release is the lease key's absence), while a claim a live
+   * holder still holds, or one whose holder no recorded stop or transfer
+   * accounts for, refuses the outcome with that holder named.
    * A recorded terminal outcome is never rewritten: a `failed`/`stopped` request
    * against a lifecycle that already records a DIFFERENT terminal status is
    * refused.
@@ -1393,20 +1395,28 @@ export function isCloseTimestamp(value: string): boolean {
 /**
  * §R11/A21 the failed/stopped half of one file-route close: settle the
  * workflow's OWN held claims whose holder is no longer one of this workflow's
- * recorded session identities, and refuse the outcome when a live holder still
- * holds one.
+ * recorded session identities AND whose stop this workflow records, and refuse
+ * the outcome on every claim it leaves.
  *
- * Two rules are the whole rule, and they are the SAME two the DB route's
- * `releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim` apply:
+ * Three rules are the whole rule, and the first two are the SAME two the DB
+ * route's `releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim` apply:
  *
  * - OWNED means the claims this workflow's own snapshot carries — every
  *   `plans[].execution_lease` and the top-level `integration_merge_lease`; a
  *   claim of another lifecycle is not reachable here at all.
  * - a claim whose holder is a LIVE session of this workflow is never released.
- *   Liveness is the identity `fileClaimHolderIsLive` resolves (the workflow's
+ *   Liveness is the identity `fileClaimHolderState` resolves (the workflow's
  *   coordinator binding, or the addressed plan's own plan session) — §4.2: a
  *   stale heartbeat, an old `claimed_at` and a caller's assertion authorize
  *   nothing, so no close infers another session's stop.
+ * - an unrecognized holder is settled only on a recorded STOP FACT — the
+ *   workflow's own identity-recovery attestation
+ *   (`coordination.identity_recoveries[].stopped_session_ids`) naming it. The
+ *   absence of a binding is not proof of a stop (the activation import refuses
+ *   exactly such a holder as an orphan claim), so anything else is `unresolved`:
+ *   the claim stays held and this close refuses it with the stop/transfer it
+ *   needs, never releasing it silently. A conservative false refusal is the
+ *   accepted worst case here; a release without a stop fact is not.
  *
  * The release IS the key's absence (the file route's lease release — writers
  * delete the key, never write `null`/a tombstone), and it happens in the SAME
@@ -1426,7 +1436,8 @@ function settleStoppedFileClaims(input: {
 }): WorkflowSnapshot {
   const { snapshot, workflowId, outcome } = input;
   const coordination = snapshot.coordination;
-  const dangling: string[] = [];
+  const live: string[] = [];
+  const unresolved: string[] = [];
   const plans = snapshot.plans.map((row): PlanRow => {
     const lease = row.execution_lease;
     if (lease === undefined) return row;
@@ -1439,8 +1450,13 @@ function settleStoppedFileClaims(input: {
       );
     }
     const holder = lease.holder;
-    if (fileClaimHolderIsLive({ holder, coordination, planCoordinations: [row.coordination] })) {
-      dangling.push(`the execution lease of plan ${String(row.id)} (holder ${holder})`);
+    const state = fileClaimHolderState({ holder, coordination, planCoordinations: [row.coordination] });
+    if (state === "live") {
+      live.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, still a live recorded session of this workflow)`);
+      return row;
+    }
+    if (state === "unresolved") {
+      unresolved.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, no recorded stop or transfer)`);
       return row;
     }
     const { execution_lease: _released, ...restOfRow } = row;
@@ -1454,25 +1470,27 @@ function settleStoppedFileClaims(input: {
     // identity the record itself has — the workflow's coordinator binding and
     // every plan session this workflow records — exactly as the DB route's
     // integration half decides against any active session of the workflow.
-    if (
-      fileClaimHolderIsLive({
-        holder: claim.holder,
-        coordination,
-        planCoordinations: snapshot.plans.map((row) => row.coordination),
-      })
-    ) {
-      dangling.push(`the integration merge lease (holder ${claim.holder})`);
+    const state = fileClaimHolderState({
+      holder: claim.holder,
+      coordination,
+      planCoordinations: snapshot.plans.map((row) => row.coordination),
+    });
+    if (state === "live") {
+      live.push(`the integration merge lease (holder ${claim.holder}, still a live recorded session of this workflow)`);
+    } else if (state === "unresolved") {
+      unresolved.push(`the integration merge lease (holder ${claim.holder}, no recorded stop or transfer)`);
     } else {
       const { integration_merge_lease: _released, ...restOfSnapshot } = settled;
       settled = restOfSnapshot;
     }
   }
-  if (dangling.length > 0) {
+  if (live.length > 0 || unresolved.length > 0) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `workflow ${workflowId} cannot become ${outcome} while it still owns ${dangling.join(", ")} \u2014 this close settles only the ` +
-        `claims it owns whose holder is no longer one of this workflow's own recorded sessions, and a LIVE holder's claim needs ` +
-        `that holder's own stop or transfer (reconcile records the prior holder and the decision) before this lifecycle can end`,
+      `workflow ${workflowId} cannot become ${outcome} while it still owns ${[...live, ...unresolved].join("; ")} \u2014 this close ` +
+        `settles only the claims it owns whose holder a recorded stop or transfer has already taken out of this workflow's live ` +
+        `sessions, and every claim it leaves needs that holder's own stop or transfer (a recorded identity recovery attesting the ` +
+        `holder stopped, or the holder's own release) before this lifecycle can end`,
       { workflow_id: workflowId, status: outcome },
     );
   }
@@ -1496,10 +1514,12 @@ function settleStoppedFileClaims(input: {
  *   WITHOUT any successful-delivery precondition — no row-`Done` requirement, no
  *   delivery-evidence consultation (a failure close is never treated as a
  *   delivery; the Phase-6 gate passes such a snapshot by the same rule). Instead
- *   the close settles the workflow's OWN held claims whose holder is no longer
- *   one of its recorded session identities, in the SAME locked whole-snapshot
- *   write (`settleStoppedFileClaims`); a claim a LIVE holder still holds refuses
- *   the outcome with that holder named — the file authority never infers another
+ *   the close settles the workflow's OWN held claims whose holder a recorded
+ *   stop fact (the identity-recovery attestation) has already taken out of its
+ *   live recorded sessions, in the SAME locked whole-snapshot write
+ *   (`settleStoppedFileClaims`); a claim a LIVE holder still holds, and a claim
+ *   whose holder no recorded stop or transfer accounts for, EACH refuse the
+ *   outcome with that holder named — the file authority never infers another
  *   session's stop (§4.2, R11's "a genuinely running foreign lease needs that
  *   holder's stop/transfer fact"). The refusal is raised BEFORE the write, so a
  *   refused close spends no byte.
