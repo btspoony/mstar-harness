@@ -85,18 +85,77 @@ import {
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  afterEachCleanup();
 });
 
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID, FIXTURE_COORDINATOR_ID,
   type Fixture, type GitFixture, type HandoffEvidence,
   git, writeText, writeJson, readJson, planRow, assignmentText, makeFixture, sleep, errorCodeOf,
-  ensureCoordinator, preparePlan, bindPlan, resumePlan, finding, closeOp, linkedOpenIssues, headOf,
+  ensureCoordinator, preparePlan, bindPlan, resumePlan, headOf,
   gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, handoffFields, leaseHolder,
   handoffEvidenceOf, recordField, digestOf, sha256OfFile, handoffCall, coordinatorCall, acceptedFixture,
   standaloneGitFixture, acceptedStandaloneFixture, wrongSourceLegacyGitFixture, wrongSourceAcceptedFixture,
-  storeBacked, sealStoreForReaders,
+  storeBacked, sealStoreForReaders, afterEachCleanup,
 } from "./support/coordination-fixtures.js";
+
+/**
+ * An issue capture entry as the scoped `residual-add` operation now takes it
+ * (G2a): the core `CaptureInput` minus `projectId` — the plan scope supplies
+ * the project. No disposition is recorded at capture time (contract §6).
+ */
+function finding(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: `Finding ${id}`,
+    kind: "review-obligation",
+    severity: "medium",
+    impact: "blocks plan approval",
+    acceptance: "fixed or explicitly dispositioned",
+    owner: "@fullstack-dev",
+    sourceIdentity: `qc:report:${id}`,
+    rootCauseKey: `root-cause:${id}`,
+    acceptanceKey: "fix-verified",
+    occurrenceKey: `occ-${id}`,
+    sourceKind: "qc-report",
+    location: "packages/engine",
+    observedBehavior: `finding ${id} observed`,
+    evidence: ["review/qc1.md"],
+    discoveredAt: "2026-09-18T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** Close one captured issue through the scoped operation (core closure evidence). */
+function closeOp(issueId: string, expectedIssueRevision: number, disposition = "resolved"): Record<string, unknown> {
+  return {
+    kind: "residual-close",
+    issueId,
+    disposition,
+    evidence:
+      disposition === "resolved"
+        ? { reason: "fixed in session", references: ["review/qc1.md"], alignmentRef: "qa acceptance record" }
+        : disposition === "waived"
+          ? { reason: "accepted risk", scope: "engine", references: [], alignmentRef: "user alignment" }
+          : { reason: `folded into ${issueId}`, references: [], canonicalIssueId: "I-000001" },
+    expectedIssueRevision,
+  };
+}
+
+/** The open issues the issue store links to a plan (the authority the gate reads). */
+async function linkedOpenIssues(fixture: Fixture, planId: string): Promise<Array<{ id: string; severity: string; disposition: string }>> {
+  const handle = await openStore({ harnessDir: fixture.harness }, "read");
+  try {
+    return handle.db
+      .prepare(
+        "select issues.id as id, issues.severity as severity, issues.disposition as disposition from issues " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "where issues.disposition = 'open' order by issues.id asc",
+      )
+      .all(planId) as Array<{ id: string; severity: string; disposition: string }>;
+  } finally {
+    handle.close();
+  }
+}
 describe("binding", () => {
   test("coordinator bind claims the lifecycle with a 0600 envelope and refuses a second holder", async () => {
     const fixture = makeFixture();
@@ -5979,13 +6038,6 @@ describe("prepare coordinator recovery", () => {
 /* ------------------------------------------------------------------------ *
  * Catalog execution pin (state-projection contract §1)
  * ------------------------------------------------------------------------ */
-
-/**
- * Put a real catalog store behind the fixture's harness. The store context is
- * the harness dir the scoped calls themselves resolve (`fixture.harness`), so
- * the pin writer and the pin readers address the same database.
- */
-
 
 /**
  * The refusal of a call expected to hit the frozen-input pin. The pin conflict
