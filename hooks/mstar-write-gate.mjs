@@ -10858,8 +10858,8 @@ function parseCompassFrontmatterText(content3, filePath) {
       throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
     }
     const value = kv[2].trim();
-    doc[kv[1]] = value === "" ? null : value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1).replace(/\\\\/g, "\x00").replace(/\\"/g, '"').replace(/\u0000/g, "\\").replace(/\\n/g, `
-`) : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
+    doc[kv[1]] = value === "" ? null : value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1).replace(/\\(.)/g, (_, ch) => ch === "n" ? `
+` : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`) : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
     listKey = value === "" ? kv[1] : null;
   }
   return doc;
