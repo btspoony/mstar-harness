@@ -382,8 +382,8 @@ describe("migration 7 — project_milestones", () => {
     const dir = mkdtempSync(join(ROOT, "milestone-fresh-"));
     const handle = await initializeStore({ harnessDir: dir });
     expect(handle.schemaVersion).toBe(7);
-    const columns = handle.db.prepare("pragma table_info(issues)").all();
-    expect(columns.some((column) => "name" in column && column.name === "milestone_id")).toBe(true);
+    const columns = handle.db.prepare("pragma table_info(issues)").all() as Array<{ name?: string }>;
+    expect(columns.some((column) => column.name === "milestone_id")).toBe(true);
     handle.close();
     expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: 7 });
   });

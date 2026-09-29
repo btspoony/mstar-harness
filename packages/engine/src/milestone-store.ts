@@ -52,11 +52,13 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
   let changed = true;
   if (adding) {
     milestoneId = randomUUID();
-    db.prepare("insert into project_milestones(milestone_id,project_id,name,target,status,ordinal,revision,created_at,updated_at) values(?,?,?,?,'planned',?,1,?,?)").run(milestoneId, projectId, patch.name.trim(), patch.target, patch.ordinal, now, now);
+    const add = patch as MilestoneAdd;
+    db.prepare("insert into project_milestones(milestone_id,project_id,name,target,status,ordinal,revision,created_at,updated_at) values(?,?,?,?,'planned',?,1,?,?)").run(milestoneId, projectId, add.name.trim(), add.target, add.ordinal, now, now);
   } else {
     const row = db.prepare("select name,target,status,ordinal,revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { name:string; target:string|null; status:ProjectMilestoneStatus; ordinal:number; revision:number } | undefined;
-    if (!row) fail("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
-    const nextStatus = patch.status ?? row.status;
+    if (!row) throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
+    const update = patch as MilestonePatch;
+    const nextStatus = update.status ?? row.status;
     const statuses: ProjectMilestoneStatus[] = ["planned","active","delivered","dropped"];
     if (!statuses.includes(nextStatus)) fail("milestone.invalid-input", "Milestone status is invalid.");
     const transitions: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
@@ -66,9 +68,9 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
       if (!counts.total) fail("milestone.empty", "An empty milestone cannot be delivered.");
       if (counts.open) fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
     }
-    const name = patch.name === undefined ? row.name : patch.name.trim();
-    const target = patch.target === undefined ? row.target : patch.target;
-    const ordinal = patch.ordinal === undefined ? row.ordinal : patch.ordinal;
+    const name = update.name === undefined ? row.name : update.name.trim();
+    const target = update.target === undefined ? row.target : update.target;
+    const ordinal = update.ordinal === undefined ? row.ordinal : update.ordinal;
     changed = name !== row.name || target !== row.target || ordinal !== row.ordinal || nextStatus !== row.status;
     revision = row.revision + (changed ? 1 : 0);
     if (changed) db.prepare("update project_milestones set name=?,target=?,ordinal=?,status=?,revision=?,updated_at=? where milestone_id=? and project_id=?").run(name,target,ordinal,nextStatus,revision,now,milestoneId,projectId);

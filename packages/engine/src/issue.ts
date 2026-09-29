@@ -346,6 +346,7 @@ export type IssueErrorCode =
   | "milestone.project-mismatch"
   | "milestone.invalid-input"
   | "milestone.not-found"
+  | "milestone.revision-conflict"
   | "milestone.terminal"
   | "store.not-active"
   | "store.operation-conflict";
