@@ -1589,11 +1589,12 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
-  test("a sealed input that cannot be read is the same structured refusal, not a filesystem error", async () => {
-    // The portable read-failure trigger: the path exists but is a DIRECTORY, so
-    // the read itself fails (EISDIR) with no pre-check to race. The decision must
-    // map it to the sealed-input refusal family — the check-then-act window the
-    // reviewers found cannot reopen through a path that exists and is unreadable.
+  test("a sealed input that is gone refuses structurally, and an unreadable one is a read error", async () => {
+    // Framing, stated precisely: this case exercises the GONE path (and the
+    // read-error normalization for a non-ENOENT failure). It does NOT reproduce
+    // the delete-between-check-and-read race — that race is closed structurally
+    // by removing the pre-check, so there is no check left to lose, and the
+    // assertions here cannot (and are not meant to) prove the race absent.
     const planHalf = makeFixture();
     await ensureCoordinator(planHalf);
     await preparePlan(planHalf, PLAN_ID);
@@ -1612,21 +1613,23 @@ describe("admission self-claim and orphan adoption", () => {
         });
         throw new Error("expected the bind to refuse");
       } catch (error) {
-        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+        return error as { code?: string; message?: string };
       }
     })();
 
-    expect(planRefusal?.code).toBe("coordination.assignment-stale");
-    expect(planRefusal?.message).toContain("plan document");
-    expect(planRefusal?.message).not.toMatch(/EISDIR|ENOENT/);
+    // A directory in place of the file is NOT "gone": the read fails for another
+    // reason and is reported as itself (the driver's EISDIR), never dressed up
+    // as a stale sealed input.
+    expect(planRefusal?.code).toBe("EISDIR");
+    expect(planRefusal?.code).not.toBe("coordination.assignment-stale");
+    // Nothing written either way: the bind refused before any commit.
     expect(readFileSync(planHalf.snapshotPath, "utf8")).toBe(planSnapshotBefore);
     expect(planRowOf(planHalf, PLAN_ID)).toEqual(planRowBefore);
     expect(selfAmendmentAudit(planHalf)).toHaveLength(0);
 
-    // The Assignment half reports the same family with its own name. The row is
-    // bound to a plan session first (so the mutation is a plan-session operation
-    // and reaches the freshness check), and its revision is read BEFORE the file
-    // is broken — the read path refuses the same way once it is.
+    // The GONE case for the Assignment half: the row is bound to a plan session
+    // first (so the mutation is a plan-session operation and reaches the
+    // freshness check), and its revision is read BEFORE the file is removed.
     const assignmentHalf = makeFixture();
     await ensureCoordinator(assignmentHalf);
     await preparePlan(assignmentHalf, PLAN_ID);
@@ -1638,7 +1641,6 @@ describe("admission self-claim and orphan adoption", () => {
     const assignmentSnapshotBefore = readFileSync(assignmentHalf.snapshotPath, "utf8");
     const revision = (await readPlanCoordination(bound.session_file, PLAN_ID, assignmentHalf.root)).revision;
     rmSync(assignmentHalf.assignmentPath, { force: true });
-    mkdirSync(assignmentHalf.assignmentPath, { recursive: true });
 
     const assignmentRefusal = await (async () => {
       try {
@@ -1656,7 +1658,8 @@ describe("admission self-claim and orphan adoption", () => {
 
     expect(assignmentRefusal?.code).toBe("coordination.assignment-stale");
     expect(assignmentRefusal?.message).toContain("Assignment");
-    expect(assignmentRefusal?.message).not.toMatch(/EISDIR|ENOENT/);
+    expect(assignmentRefusal?.message).toContain("changed or is gone");
+    expect(assignmentRefusal?.message).not.toMatch(/ENOENT/);
     expect(readFileSync(assignmentHalf.snapshotPath, "utf8")).toBe(assignmentSnapshotBefore);
   });
 

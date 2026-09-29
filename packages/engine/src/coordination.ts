@@ -288,7 +288,13 @@ export type PlanCoordinationView = {
 function readSealedInput(filePath: string, what: string): Buffer {
   try {
     return readFileSync(filePath);
-  } catch {
+  } catch (error) {
+    // ONLY absence is reclassified as staleness. A path that exists but cannot
+    // be read (a directory in place of the file, a permission change, an I/O
+    // failure) is not "gone" and must not be silently dressed up as a stale
+    // input: the environment could not answer, and that failure is reported as
+    // itself.
+    if (errorCode(error) !== "ENOENT") throw error;
     throw new CoordinationError("coordination.assignment-stale", `${what} ${filePath} changed or is gone`, {
       path: filePath,
     });
@@ -647,7 +653,8 @@ export function parseAssignmentFile(assignmentPath: string): AssignmentHeaders {
   let bytes: Buffer;
   try {
     bytes = readFileSync(abs);
-  } catch {
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
     throw new CoordinationError("coordination.assignment-stale", `Assignment ${abs} changed or is gone`, { path: abs });
   }
   return parseAssignmentBytes(abs, bytes);
@@ -680,12 +687,7 @@ export function readAssignmentInput(assignmentPath: string): {
  * available.
  */
 function readAssignmentBytes(abs: string): { bytes: Buffer; sha256: string; headers: AssignmentHeaders } {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(abs);
-  } catch {
-    throw new CoordinationError("coordination.assignment-stale", `Assignment ${abs} changed or is gone`, { path: abs });
-  }
+  const bytes = readSealedInput(abs, "Assignment");
   return { bytes, sha256: sha256Bytes(bytes), headers: parseAssignmentBytes(abs, bytes) };
 }
 
