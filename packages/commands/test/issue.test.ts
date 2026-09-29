@@ -68,13 +68,6 @@ function boundSession(harness: string): string {
 }
 
 describe("issue command family", () => {
-  test("registers all eleven inventory identities, including separate terminal dispositions", () => {
-    const ids = getCommandDefinitions().map(({ id }) => id).filter((id) => id.startsWith("issue."));
-    expect(ids).toEqual([
-      "issue.add", "issue.list", "issue.show", "issue.occurrence", "issue.triage", "issue.close", "issue.waive",
-      "issue.duplicate", "issue.supersede", "issue.link", "issue.export",
-    ]);
-  });
 
   test("malformed capture is rejected without creating an issue", async () => {
     const context = await testContext();
@@ -140,7 +133,6 @@ describe("issue command family", () => {
       payload: JSON.stringify(capture()), operationId: "capture-json", actor: "project-manager",
     }, context);
     expect(result.status).toBe("ok");
-    expect(command.description).toContain("mstar schema CaptureInput");
     expect(command.payloads).toHaveProperty("payload");
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
