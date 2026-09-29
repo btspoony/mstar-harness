@@ -165,6 +165,7 @@ export {
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
   recordWorkflowDelivery,
+  normalizeIterationCompassRef,
   registerIterationWorkflow,
   registerPlanWorkflow,
   WORKFLOW_COMPOUND_OUTCOMES,

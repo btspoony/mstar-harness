@@ -221,12 +221,12 @@ const fullSource: MstarEngineStatusPayload = {
     specIntegrationBranch: 'iteration/iter-00000809-dsh-workflow-viz',
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
-    integrationWorktreePath: '/Users/bibi/workspace/ai/mstar-workflow',
+    integrationWorktreePath: '/tmp/mstar-fixture/workflow',
     leases: [
       {
         planId: '00000809-dsh-workflow-viz-panel',
         holder: 'dsh-web-mstar-workflow',
-        worktreePath: '/Users/bibi/workspace/ai/mstar-workflow/.worktrees/mstar-workflow-workflow-viz',
+        worktreePath: '/tmp/mstar-fixture/workflow/.worktrees/mstar-workflow-workflow-viz',
       },
     ],
     knowledge: {

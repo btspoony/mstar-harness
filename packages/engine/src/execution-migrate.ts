@@ -2653,6 +2653,12 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
   // that actually happened.
   const recoveries = snapshot.coordination?.identity_recoveries;
   if (recoveries !== undefined) header.identity_recoveries = recoveries;
+  // The same rule for the file route's admission self-amendments (spec §D2): a
+  // bind that adopted a drifted pin recorded who did it and both digests, and
+  // the DB transport has no pin recheck to re-derive that. Projected verbatim
+  // for the coordinator's post-hoc read; nothing enforces on it.
+  const selfAmendments = snapshot.coordination?.self_amendments;
+  if (selfAmendments !== undefined) header.self_amendments = selfAmendments;
   const headerGate = validateWorkflowSnapshot({ ...header, plans: [] });
   if (!headerGate.ok) {
     throw conflict(

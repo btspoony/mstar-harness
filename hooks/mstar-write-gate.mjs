@@ -5,7 +5,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative4, resolve as resolve3 } from "node:path";
+import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative5, resolve as resolve3 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -25,25 +25,25 @@ import {
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative3, resolve as resolve12, sep as sep7 } from "node:path";
+import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative2, resolve as resolve8 } from "node:path";
+import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 import { dirname as dirname2, join as join2, resolve as resolvePath, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
+import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { isAbsolute as isAbsolute6, join as join8, resolve as resolve6 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
-import { basename as basename10, dirname as dirname13, join as join21, relative as relative5, resolve as resolve15 } from "node:path";
+import { basename as basename10, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash16 } from "node:crypto";
 import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
@@ -1073,11 +1073,38 @@ function validateCoordinationIdentityRecovery(value, what = "coordination.identi
   }
   return violations;
 }
+function validateCoordinationSelfAmendment(value, what = "coordination.self_amendments[]") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.amendment.shape", `${what} must be an object`)];
+  const allowed = ["at", "session_id", "old_sha256", "new_sha256", "operation_id", "prepared_by_matches"];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.amendment.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of ["at", "session_id", "operation_id"]) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.amendment.field", `${what}.${key} must be a non-empty string`));
+    }
+  }
+  for (const key of ["old_sha256", "new_sha256"]) {
+    if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
+      violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
+    }
+  }
+  if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
+    violations.push(invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ — an amendment records a move`));
+  }
+  if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
+    violations.push(invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`));
+  }
+  return violations;
+}
 function validateSnapshotCoordination(value, what = "coordination") {
   if (!isPlainObject(value))
     return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations = [];
-  const allowed = ["coordinator", "identity_recoveries"];
+  const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
@@ -1086,6 +1113,15 @@ function validateSnapshotCoordination(value, what = "coordination") {
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  if (value.self_amendments !== undefined) {
+    if (!Array.isArray(value.self_amendments)) {
+      violations.push(invalid("coordination.snapshot.field", `${what}.self_amendments must be an array`));
+    } else {
+      value.self_amendments.forEach((entry, index) => {
+        violations.push(...validateCoordinationSelfAmendment(entry, `${what}.self_amendments[${String(index)}]`));
+      });
+    }
   }
   if (value.identity_recoveries !== undefined) {
     if (!Array.isArray(value.identity_recoveries)) {
@@ -10649,7 +10685,7 @@ function validateStatusV2(docOrPath, opts = {}) {
         violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep4}`)) {
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep5}`)) {
         violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
@@ -11138,7 +11174,7 @@ function defaultWorkspaceRoot(startDir) {
   return startDir;
 }
 function isAtOrBelow2(dir, root) {
-  const rel = relative2(root, dir);
+  const rel = relative3(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
@@ -12193,7 +12229,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
-    const rel = relative5(harnessDir2, resolved);
+    const rel = relative6(harnessDir2, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE)
       return { harnessDir: harnessDir2, kind: "status" };
     let workflowDir;
@@ -12205,10 +12241,10 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = join21(harnessDir2, "workflows");
       projectDir = join21(harnessDir2, "projects");
     }
-    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative5(workflowDir, resolved))) {
+    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
     }
-    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative5(projectDir, resolved))) {
+    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative6(projectDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "register" };
     }
     return null;
@@ -13746,7 +13782,7 @@ function landedPathOf(resolved) {
       let dir = dirname4(resolved);
       for (;; ) {
         try {
-          return join4(realpathSync(dir), relative4(dir, resolved));
+          return join4(realpathSync(dir), relative5(dir, resolved));
         } catch {
           const parent = dirname4(dir);
           if (parent === dir)
@@ -13775,7 +13811,7 @@ function caseFoldedRegisterRoot(candidate) {
       } catch {
         projectDir = join4(dir, PROJECT_DIR_NAME);
       }
-      if (REGISTER_SHAPE.test(relative4(projectDir, target)))
+      if (REGISTER_SHAPE.test(relative5(projectDir, target)))
         return dir;
     }
     const parent = dirname4(dir);
@@ -13835,7 +13871,7 @@ function displaySafe(text6) {
   return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
-  const rel = relative4(harnessDir, targetPath);
+  const rel = relative5(harnessDir, targetPath);
   return displaySafe(rel && !rel.startsWith("..") && !isAbsolute4(rel) ? rel : targetPath);
 }
 function readStdinJson() {

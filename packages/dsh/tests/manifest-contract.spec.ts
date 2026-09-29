@@ -4,7 +4,7 @@
  *
  * Root cause: upstream dsh moved client-module discovery from the top-level
  * `dshClient` package.json field to the nested `dsh.client`
- * (`/Users/bibi/.dsh/source/current/packages/client/modules/src/index.ts`
+ * (`/tmp/dsh-source/packages/client/modules/src/index.ts`
  * `parseDshClient` / `resolveMeta` — read `pkg.dsh.client` only, NO legacy
  * fallback). The old field parsed to `undefined` → the plugin was no longer a
  * web client module → `window.__DSH_BOOT__.entries` lost the

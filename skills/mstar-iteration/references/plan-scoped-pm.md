@@ -32,6 +32,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 - Fail **before any bind** on: duplicate flags, unknown flags, positional arguments, missing/blank values, mixed forms, partial `--workflow`/`--plan` pairs, and any path that is not absolute.
 - Rejection is terminal for the turn: report the malformed form and the accepted forms. There is no fallback plan, no "first unfinished row", and no whole-iteration fallback.
 - Both fresh forms resolve the **same** registered Assignment: `--workflow/--plan` reads `row.coordination.prepared.assignment_path`; it never selects the first unfinished row.
+- Only `--assignment` carries a **locator** (the addressed Assignment file), so it is the one fresh form that can address a row the coordinator has not prepared yet — see §2. `--workflow/--plan` has no locator and stays prepared-only: on a row without `coordination.prepared` it fails closed, unchanged.
 
 ## 2. Scoped boot
 
@@ -53,7 +54,15 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
    mstar plan bind --coordinator --workflow <id> [--harness <absolute-path>] [--json]   # coordinator seat only
    ```
 
-   `bind` is the only operation without an external `--expect`: it reads, checks and claims atomically against current ownership. Fresh coordinator bind initializes the workflow's coordinator only when absent; a second fresh coordinator fails exactly like a duplicate plan holder. Plan fresh bind requires a row that was **prepared** by the coordinator. A **resume is read-only** — it never reacquires ownership, never re-identifies the caller and is **never** the recovery path for a stopped owner.
+   `bind` is the only operation without an external `--expect`: it reads, checks and claims atomically against current ownership. Fresh coordinator bind initializes the workflow's coordinator only when absent; a second fresh coordinator fails exactly like a duplicate plan holder. A **resume is read-only** — it never reacquires ownership, never re-identifies the caller and is **never** the recovery path for a stopped owner.
+
+   A fresh **plan** bind has three states, all decided against the row it holds under the snapshot lock:
+
+   - **Prepared row** (any fresh form): claims the row's `execution_lease`, records the session binding and moves the row to `InProgress`. A row already bound to a session fails with `coordination.duplicate-holder` naming the holder — a live holder resumes, it is never re-bound or taken over.
+   - **Claim bootstrap** (`--assignment` on an unclaimed, unprepared `Todo`/`Blocked` row, no session, no handoff, no lease): writes the row's plan-pm **session binding** and emits the session envelope, claims **no** lease and leaves the status untouched. This is the admission step for an agent that finds a row nobody has prepared; the same session then prepares the row (§4.1) and binds again to claim the lease. Its `show` reports `scope: null` and advertises exactly `prepare` until then. A second claim on the claimed row is `coordination.duplicate-holder`; `--workflow/--plan` cannot reach this shape (no locator) and keeps its `coordination.not-prepared` refusal.
+   - **Orphan adoption** (prepared row **nobody else holds** — no session at all, or the binder's own claim binding — with no handoff, whose addressed Assignment bytes changed after `prepare`): the bind refreshes the pin to the bytes it actually bound and appends one `coordination.self_amendments` entry naming the adopting session and both hashes, then continues as a normal bind. The coordinator verifies that record post hoc (§6). A row held or handed off by **another** session keeps the terminal `coordination.assignment-stale`, an Assignment that is gone is never adopted, and an amendment the snapshot cannot record is never made — a workflow with no `coordination` block refuses the same way and needs its coordinator seat bound first.
+
+   A **continuing** bind — the same session id the claim recorded, on that row, before any lease exists — completes the claim instead of failing as a duplicate holder: same identity, same envelope, lease now.
 3. **Re-read with `show` and constrain the session to the returned scope**:
 
    ```bash
@@ -65,7 +74,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 
    `show` returns the selected row, resolved scoped paths, `allowed_operations`, the snapshot byte version, and `revision`. It never returns an editable sibling snapshot. A plan session passes no `--plan`; a coordinator session requires it. On the active route the reference carries the workflow it authorizes — `--session-ref` accepts no `--workflow` — and the token to spend comes from the scope read, not from a remembered value.
 4. **Constrain everything that follows to that scope**: loaded skills, dispatched child inputs, session backlog, goal text, session todos, STOP conditions, and every writable path.
-5. **Stale input stops.** If a later `show` reports the Assignment hash changed, the session/scope/holder no longer matches, or the token is behind, stop and report — do not re-bind silently and do not fall back to generic iteration drive.
+5. **Stale input stops.** If a later `show` reports the Assignment hash changed, the session/scope/holder no longer matches, or the token is behind, stop and report — do not re-bind silently and do not fall back to generic iteration drive. The one exception is the bind itself, and it is engine-decided, never caller-decided: on a prepared row **nobody else holds** (no session, or the binder's own claim binding; no handoff) a changed Assignment is adopted at bind and recorded (§2, §6). A row another session holds or has handed off keeps the terminal `coordination.assignment-stale` — report it, do not retry it under a different session id.
 
 ## 3. Scope boundary (writable surface)
 
@@ -83,7 +92,7 @@ Field semantics, ownership and lock rules → **`mstar-artifacts/references/stat
 
 Drive the bound plan with the **existing** SDD / gate machinery; scope is inherited by every child input.
 
-1. **Prepare gate**: the coordinator prepared this row (`mstar plan prepare`, §6). A plan session never prepares itself.
+1. **Prepare gate**: the coordinator prepares this row (`mstar plan prepare`, §6). A **leaf or foreign session never prepares anything**, and a plan session prepares no row but the one it is itself bound to — the claim bootstrap's own claimant (§2), which is the only self-service preparation this route admits. Any other plan-pm envelope addressing this row keeps the existing `coordination.session-role` refusal.
 2. **Implement**: `mstar sdd workspace` → `mstar sdd task-brief` → dispatch implementers → fresh L2 task reviewer（`mstar-sdd` § Per-task loop）. `Execution mode: sdd` stays the default for multi-task plans.
 3. **Plan QC tri**: after all tasks, branch `review-package` → **N=3** tri-review（`mstar-review-qc`, `mstar-dispatch-gates`）; then the `QA gate` from the Assignment (`mandatory` → `qa-engineer`; `pm-acceptance` → PM acceptance artifact).
 4. **Progress**（row status + summary + evidence paths）:
@@ -180,6 +189,8 @@ A stopped or unreachable coordinator is replaced **only** by `mstar session reco
    | `completed`; proof still valid | read-only no-op `already-completed` |
 
 8. The coordinator — not the plan session — retains dependency release, compass / index / root projections, the iteration PR, and Phase 3–6.
+9. **Post-hoc verification of self-claimed and adopted rows.** The coordinator is the verifier for every admission the coordinator seat did not perform. Read it from the snapshot before `accept`: the row's `coordination.session` (who claimed it) and `coordination.prepared.prepared_by` (who sealed it) for a claim bootstrap, and one append-only `coordination.self_amendments` entry per adopted pin — `{at, session_id, old_sha256, new_sha256, operation_id, prepared_by_matches?}` — where `old_sha256`/`new_sha256` are the pin before and after the bind's refresh. A bind that cannot record the amendment (a workflow with no `coordination` block, which a claim bootstrap can produce because it needs no coordinator seat) refuses instead of refreshing the pin unrecorded: bind the workflow's coordinator seat and re-run. `prepared_by_matches` is an **annotation only** (the file route's `--session-id` is caller-asserted and authenticates nobody) and so is the rest of the record: it is provenance the coordinator reads, never a gate, a token or a permission. An entry the coordinator cannot reconcile with the review trail goes back to the plan as a finding; the missing review, not the record, is what blocks.
+10. **An abandoned claim recovers through the recorded identity — there is no takeover verb.** A claimant that stops between its claim bootstrap and its `prepare` leaves a claimed-but-unprepared row, and the only door is the id the row already records: `mstar plan bind --assignment <the addressed Assignment> --session-id <the claimed session id>` **is the recovery** — the claim branch is idempotent for the recorded holder, so it re-emits (or, if the file went missing, recreates) that session's envelope and returns the claim unchanged; the claimant's `plan session` then prepares and binds as in §2, and the recovery is also what a continuing bind relies on (it restores a lost envelope rather than binding a file that is gone). `--workflow/--plan` is **not** the recovery form: it carries no locator, so on this unprepared row it refuses `coordination.not-prepared`. Neither coordinator verb reaches the state — `prepare` refuses it (`coordination.invalid-transition`, a bound session precedes preparation) and `return` / `reconcile` both require a handoff — and any *other* identity asking to claim it keeps `coordination.duplicate-holder`. So: re-present the recorded id; if it is genuinely lost, the coordinator records the wedge as a finding and re-creates the plan row under a new identity through the normal route. Never hand-edit the session binding to steal the row.
 
 ## 7. Revision / token protocol（`--expect`）
 

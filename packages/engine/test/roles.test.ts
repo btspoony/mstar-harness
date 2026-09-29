@@ -81,8 +81,6 @@ function resolveCorpusRoot(): string | null {
     if (parent === dir) break;
     dir = parent;
   }
-  const control = "/Users/bibi/workspace/ai/mstar-harness/skills";
-  if (existsSync(join(control, "mstar-roles", "SKILL.md"))) return control;
   return null;
 }
 

@@ -2574,13 +2574,23 @@ const RECOVERY_RECORD = {
   request_hash: "c".repeat(64),
   workflow_id: PRODUCER_WORKFLOW,
   prior_session_id: "host-prior-0001",
-  session_id: COORDINATOR_SESSION,
+  session_id: "host-recovered-0001",
   authorization_ref: "D29 Prepare recovery",
   reason: "prior coordinator stopped",
   stopped_session_ids: ["host-prior-0001"],
   snapshot_version_before: `sha256:${"d".repeat(64)}`,
   compass_version: `sha256:${"e".repeat(64)}`,
   recovered_at: "2026-09-04T00:00:00.000Z",
+};
+
+/** Spec §D2's append-only self-amendment audit: the same provenance rule. */
+const SELF_AMENDMENT_RECORD = {
+  at: "2026-09-04T00:00:00.000Z",
+  session_id: "host-adopter-0001",
+  old_sha256: "a".repeat(64),
+  new_sha256: "b".repeat(64),
+  operation_id: "f".repeat(64),
+  prepared_by_matches: true,
 };
 
 type PopulatedWorkspace = Fixture & {
@@ -2633,6 +2643,7 @@ async function populatedWorkspace(name: string): Promise<PopulatedWorkspace> {
     coordination: {
       coordinator: { session_id: COORDINATOR_SESSION, session_file: envelopePath, bound_at: TS },
       identity_recoveries: [RECOVERY_RECORD],
+      self_amendments: [SELF_AMENDMENT_RECORD],
     },
     plans: [{ id: PLAN_A, title: "Populated plan", file: "plans/plan-a.md", status: "InReview", metadata: {} }],
   });
@@ -2807,6 +2818,7 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
       )!.state_json,
     ) as Record<string, unknown>;
     expect(storedHeader.identity_recoveries).toEqual([RECOVERY_RECORD]);
+    expect(storedHeader.self_amendments).toEqual([SELF_AMENDMENT_RECORD]);
     expect(rawGet<{ n: number }>(fixture.dbPath, "select count(*) as n from issues")).toEqual(issueFootprint);
 
     // ── §3.3 retirement: core sources PLUS the retire-disposition envelope row

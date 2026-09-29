@@ -28,7 +28,7 @@ Scoped drive starts from the requested plan intent. Follow the current public ve
 | 调用形态 | 走向 |
 |---|---|
 | **无参数** | 下方 Boot → Phase 2 → 3 → 4 → 5 → 6（**语义不变**） |
-| `--assignment <绝对 md 路径>` / `--workflow <id> --plan <id>` / `--resume <绝对 session json 路径>` | **scoped route** → **`mstar-iteration/references/plan-scoped-pm.md`**（scoped boot 先于全局 boot；不加载 compound / Phase 3–6 detail）。`--resume` 是 **pre-activation** 文件形态：执行 authority 为 active 的 harness 上它以 `execution.consumer-not-ready` 拒绝，本会话的只读续接改走 `mstar plan bind --execution --resume-ref <wire>` |
+| `--assignment <绝对 md 路径>` / `--workflow <id> --plan <id>` / `--resume <绝对 session json 路径>` | **scoped route** → **`mstar-iteration/references/plan-scoped-pm.md`**（scoped boot 先于全局 boot；不加载 compound / Phase 3–6 detail）。`--assignment` 是唯一携带 locator 的形态：行尚未 `coordination.prepared` **且为可认领状态**（`Todo`/`Blocked`、无 `coordination.session`、无 `coordination.handoff`、无 `execution_lease`）时由它走 **claim bootstrap**（写入 plan-pm session 绑定、不取 lease、行状态保持为其原可认领状态（`Todo`/`Blocked`）），接着由该 session `prepare` 并再次 bind 取 lease（§2）；不可认领的行仍按 `prepare` 的同一套行准入拒绝。`--workflow/--plan` 无 locator，未 prepared 时 fail closed（`coordination.not-prepared`）。`--resume` 是 **pre-activation** 文件形态：执行 authority 为 active 的 harness 上它以 `execution.consumer-not-ready` 拒绝，本会话的只读续接改走 `mstar plan bind --execution --resume-ref <wire>` |
 | 其他任何非空参数形态（重复 flag、未知 flag、位置参数、缺值/空值、混用形态、半对 `--workflow`/`--plan`） | **fail closed**：在 bind 与 boot 之前停止并报告接受的形态；**禁止**回落为整迭代路线 |
 
 **Leaf 边界**：leaf executor 收到本命令 → 角色边界拒绝（`mstar-dispatch-gates`），**不得**晋升为 PM 或递归分派。

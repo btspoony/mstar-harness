@@ -203,4 +203,4 @@ export function readHarnessVersion(): string {
  * A drift test asserts they match. CLI src must not import JSON (no
  * resolveJsonModule; published dist cannot see the repo).
  */
-export const DSH_LLM_FALLBACKS_VERSION = "0.5.2";
+export const DSH_LLM_FALLBACKS_VERSION = "0.6.4";
