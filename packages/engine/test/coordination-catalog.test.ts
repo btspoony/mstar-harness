@@ -27,6 +27,7 @@ import {
   readJson,
   storeBacked,
   writeJson,
+  type Fixture,
 } from "./support/coordination-fixtures.js";
 
 afterEach(() => afterEachCleanup());

@@ -52,13 +52,10 @@ import {
 } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID, FIXTURE_COORDINATOR_ID,
-  type Fixture, type GitFixture, type HandoffEvidence,
-  git, writeText, writeJson, readJson, planRow, assignmentText, makeFixture, sleep, errorCodeOf,
-  ensureCoordinator, preparePlan, bindPlan, resumePlan, headOf,
-  gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, handoffFields, leaseHolder,
-  handoffEvidenceOf, recordField, digestOf, sha256OfFile, handoffCall, coordinatorCall, acceptedFixture,
-  standaloneGitFixture, acceptedStandaloneFixture, wrongSourceLegacyGitFixture, wrongSourceAcceptedFixture,
-  storeBacked, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
+  git, writeText, writeJson, readJson, makeFixture, errorCodeOf,
+  ensureCoordinator, preparePlan, bindPlan, resumePlan,
+  gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, leaseHolder,
+  handoffEvidenceOf, sha256OfFile, handoffCall, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
 
 afterEach(() => {
