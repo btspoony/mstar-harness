@@ -1247,11 +1247,8 @@ function residualLinkOperationId(sessionId: string, planId: string, occurrenceKe
   return `residual-add-link:${sessionId}:${planId}:${occurrenceKey}`;
 }
 
-function residualCloseOperationId(sessionId: string, planId: string, issueId: string): string {
-  return `residual-close:${sessionId}:${planId}:${issueId}`;
-}
 /** Derive plan-owned fields and report every independently invalid entry before writing. */
-function deriveResidualEntries(entries: readonly unknown[], projectId: string): CaptureInput[] {
+export function deriveResidualEntries(entries: readonly unknown[], projectId: string): CaptureInput[] {
   const derived: CaptureInput[] = [];
   const problems: Array<{ path: string; code: string; message: string }> = [];
   entries.forEach((entry, index) => {

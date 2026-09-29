@@ -33,6 +33,7 @@ import {
   type ClosureEvidence,
   type IssueError,
 } from "./issue.js";
+import { deriveResidualEntries } from "./execution-coordination.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-atomicity-"));
@@ -167,6 +168,25 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(next.issueId).toBe("I-000001");
     expect(next.created).toBe(true);
   });
+  test("indexed validation reports every invalid issue entry before capture", () => {
+    const derived = deriveResidualEntries([baseInput({ projectId: "caller-project", occurrenceKey: "event-17" })], "plan-project");
+    expect(derived[0]).toMatchObject({ projectId: "plan-project", occurrenceKey: "event-17" });
+
+    let failure: unknown;
+    try {
+      deriveResidualEntries(
+        [{ title: "first", occurrenceKey: "event-18" }, { title: "second", occurrenceKey: "event-19" }],
+        "plan-project",
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+    });
+  });
+
   test("occurrence replay retains the same event identity across capture and plan-link retries", async () => {
     const context = await activeStore("occurrence-replay");
     const input = baseInput({ occurrenceKey: "event-17" });
