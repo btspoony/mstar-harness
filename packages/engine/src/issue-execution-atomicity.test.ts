@@ -186,6 +186,33 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
       details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
     });
   });
+  test("indexed residual validation rejects sparse holes", () => {
+    let mixedFailure: unknown;
+    try {
+      deriveResidualEntries(
+        [baseInput({ occurrenceKey: "event-18" }), , baseInput({ occurrenceKey: "event-20" })],
+        "plan-project",
+      );
+    } catch (error) {
+      mixedFailure = error;
+    }
+    expect(mixedFailure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[1]" }] },
+    });
+
+    let allHolesFailure: unknown;
+    try {
+      deriveResidualEntries([, ,], "plan-project");
+    } catch (error) {
+      allHolesFailure = error;
+    }
+    expect(allHolesFailure).toMatchObject({
+      code: "coordination.invalid-input",
+      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+    });
+  });
+
 
   test("occurrence replay retains the same event identity across capture and plan-link retries", async () => {
     const context = await activeStore("occurrence-replay");

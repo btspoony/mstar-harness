@@ -1251,10 +1251,11 @@ function residualLinkOperationId(sessionId: string, planId: string, occurrenceKe
 export function deriveResidualEntries(entries: readonly unknown[], projectId: string): CaptureInput[] {
   const derived: CaptureInput[] = [];
   const problems: Array<{ path: string; code: string; message: string }> = [];
-  entries.forEach((entry, index) => {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
     if (!isPlainObject(entry)) {
       problems.push({ path: `entries[${index}]`, code: "coordination.invalid-input", message: "expected an issue observation object" });
-      return;
+      continue;
     }
     const input = { ...entry, projectId } as CaptureInput;
     try {
@@ -1264,7 +1265,7 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
       if (!(error instanceof IssueError)) throw error;
       problems.push({ path: `entries[${index}]`, code: error.code, message: error.message });
     }
-  });
+  }
   if (problems.length > 0) {
     throw new CoordinationError(
       "coordination.invalid-input",
