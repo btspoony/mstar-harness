@@ -1,5 +1,5 @@
 /**
- * execution-workflow — the DB transport of the WORKFLOW-LEVEL transitions and
+ * execution-workflow - the DB transport of the WORKFLOW-LEVEL transitions and
  * the explicit coordinator recovery bootstrap (primary spec §2.3/§3/§4.1/§4.2).
  *
  * Run with
@@ -18,7 +18,7 @@
  * - one accepted transition advances the addressed workflow once and the store
  *   once; a terminal close additionally advances the ROOT once, removes
  *   registry routing and commits the terminal state in ONE transaction while
- *   the history rows stay — and a refused close changes none of them;
+ *   the history rows stay - and a refused close changes none of them;
  * - `recoverExecutionCoordinator` refuses without a named, attested-stopped
  *   prior holder and never replaces a live owner; on success it invalidates the
  *   old reference, binds the caller, and adopts exactly the lease ownership its
@@ -326,7 +326,7 @@ function setRowStatus(context: StoreContext, planId: string, status: string): vo
 /**
  * Plant one execution lease. No W-phase verb produces a lease held by a session
  * that is not its own, so the crash states the recovery bootstrap repairs are
- * planted here — exactly as the W4 fixtures plant a foreign merge lease.
+ * planted here - exactly as the W4 fixtures plant a foreign merge lease.
  */
 function plantLease(
   context: StoreContext,
@@ -416,7 +416,7 @@ const DELIVERY_TAIL = {
  * ------------------------------------------------------------------------ */
 
 describe("execution-workflow: \u00A73 the published APIs and their verbatim signatures", () => {
-  test("exports both APIs verbatim with their §3 signatures", () => {
+  test("exports both APIs verbatim with their section-3 signatures", () => {
     // The compile-time pins: each binding fails to typecheck if the declared
     // signature drifts from primary spec §3. § One resolver path (S2/E02) the
     // workflow intent accepts the same envelope with its derivable half
@@ -664,7 +664,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     // A request for the path the header ALREADY records is a satisfied effect:
     // it writes nothing, so no probe of it can go stale (A12). The call below is
     // a CHANGE of the recorded path, which is what takes the probe this case is
-    // about — and the checkout it probes is switched in the probe→commit window.
+    // about - and the checkout it probes is switched in the probe→commit window.
     withRaw(fixture.context, (db) => {
       db.prepare(
         "update execution_workflows set state_json = json_set(state_json, '$.integration_worktree_path', ?) where workflow_id = ?",
@@ -690,7 +690,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence:
     // it is captured when it is observed, whatever the row's own `Done`
     // projection is, because the close composes that projection itself from the
-    // same evidence — the ordering is bookkeeping, never a caller ceremony.
+    // same evidence - the ordering is bookkeeping, never a caller ceremony.
     const captured = await workflowMutation(fixture, "op-delivery-early", {
       kind: "delivery",
       delivery: { compound: { outcome: "created" } },
@@ -875,7 +875,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     // §3.1 the receipt witnesses the COMMITTED root this close produced: the
     // registry loss advanced the root revision and its timestamp in the SAME
     // transaction, so the token the caller stores back as CAS is the POST-close
-    // root token — never the pre-close one the frame read at BEGIN.
+    // root token - never the pre-close one the frame read at BEGIN.
     const after = await readExecutionState(fixture.context);
     expect(revisions(fixture.context).root).toBe(before.root + 1);
     expect(receipt.token).toBe(after.token);
@@ -962,7 +962,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
 
     // A token of a SUPERSEDED AUTHORITY GENERATION is a generation fence: it
     // authorizes nothing, is reported with the typed re-resolution cause, and
-    // nothing is replayed (A26). A superseded REVISION alone is not a fence — the
+    // nothing is replayed (A26). A superseded REVISION alone is not a fence - the
     // intent is recomputed against the current state instead (the
     // `unrelated revision` case below).
     const [storeRow] = rows(fixture.context, "select store_id, authority_epoch from store_meta where id = 1");
@@ -1056,7 +1056,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
 
     // The retry re-read the state first, so it presents a token read AFTER the
     // commit: the transport freshness moved, the intent did not. That is the
-    // replay — the recorded receipt, and not one revision or receipt row more.
+    // replay - the recorded receipt, and not one revision or receipt row more.
     const retryToken = await liveWorkflowToken(fixture);
     expect(retryToken).not.toBe(firstToken);
     const again = await workflowMutation(fixture, "op-replay-policy", { kind: "execution-policy", policy });
@@ -1076,8 +1076,8 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     const settled = await workflowFootprint(fixture.context);
 
     // A DIFFERENT operation id and the token read BEFORE the commit: the effect
-    // is already held, so this is the current success — no receipt row, no
-    // revision, no timestamp — and the drift is reported as provenance (A10),
+    // is already held, so this is the current success - no receipt row, no
+    // revision, no timestamp - and the drift is reported as provenance (A10),
     // never as a refusal.
     const held = await workflowMutation(fixture, "op-already-held", { kind: "execution-policy", policy }, { expected });
     expect(held.replayed).toBe(true);
@@ -1093,8 +1093,8 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     const expected = await liveWorkflowToken(fixture);
     const before = revisions(fixture.context);
     // A committed operation on a CHILD of the workflow: the row moves and the
-    // workflow's revision with it, while the header — the read set of a policy
-    // change — is byte-identical to what the caller read.
+    // workflow's revision with it, while the header - the read set of a policy
+    // change - is byte-identical to what the caller read.
     setRowStatus(fixture.context, PLAN_ID, "InProgress");
     commitSiblingPlanChange(fixture.context);
     const drifted = revisions(fixture.context);
@@ -1264,7 +1264,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     // Git is genuinely required to prove an integration checkout belongs to this
     // repository. With no readable Git worktree the transition is reported as an
     // unavailable prerequisite with its known commit boundary (none) and the work
-    // that remains possible — never as a missing user field and never as a
+    // that remains possible - never as a missing user field and never as a
     // fabricated substitute fact.
     rmSync(join(fixture.repoRoot, ".git"), { recursive: true, force: true });
     const refused = await refusalOf(() =>
@@ -1456,7 +1456,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(receipt.replayed).toBe(false);
 
     // The lifecycle reads again, and the orphaned ownership is now the recovery
-    // session's — with the epoch it was claimed in, unchanged.
+    // session's - with the epoch it was claimed in, unchanged.
     const state = await readExecutionState(fixture.context);
     expect(state.data.workflows).toHaveLength(1);
     const [lease] = leaseRows(fixture.context);
@@ -1501,7 +1501,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
 
     // The unrelated holder's ownership is NOT adopted: byte-identical row and no
-    // transfer provenance. It stays outstanding — §2.3 keeps outstanding leases
+    // transfer provenance. It stays outstanding - §2.3 keeps outstanding leases
     // at their own owner_epoch pending an explicit reconcile (or a recovery that
     // names THEIR holder), so the workflow stays fail-closed instead of handing
     // the new coordinator an ownership nothing attested.
@@ -1537,13 +1537,13 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
 });
 
 /* ------------------------------------------------------------------------ *
- * E08 — the Prepare amendment's components on the ACTIVE DB route
+ * E08 - the Prepare amendment's components on the ACTIVE DB route
  * ------------------------------------------------------------------------ */
 
 /**
  * The compound Prepare amendment is the FILE route's patch surface
  * (`amendPrepareWorkflow`). Two of its components also exist as ACTIVE-route
- * operations — `execution-policy` and `integration-worktree` — and the contract
+ * operations - `execution-policy` and `integration-worktree` - and the contract
  * the two authority routes share is what these cases pin: the ONE closed
  * `plan_parallelism` set (exported by `coordination.ts`, not mirrored here), the
  * ONE `recovery.applied` component vocabulary, one connected effect per accepted
@@ -1557,7 +1557,7 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     return prepareAmendmentComponent(kind, value);
   }
 
-  test("connected amendment — the active route applies ONE shared execution-policy rule and reports ONE component identity (A23)", async () => {
+  test("connected amendment - the active route applies ONE shared execution-policy rule and reports ONE component identity (A23)", async () => {
     const fixture = await workflowFixture("amendment-shared-rule");
     // The closed vocabulary is one rule for both routes: the active route accepts
     // exactly the values the file route's amendment accepts, and its receipt
@@ -1598,11 +1598,11 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     );
   });
 
-  test("partial replay — the amendment's components commit once each on the active route and a retry duplicates nothing (A09/A28)", async () => {
+  test("partial replay - the amendment's components commit once each on the active route and a retry duplicates nothing (A09/A28)", async () => {
     const fixture = await workflowFixture("amendment-components");
     const policy = { plan_parallelism: "parallel", worktree_mode: "required" };
 
-    // Component 1: the policy — one accepted operation, one connected effect.
+    // Component 1: the policy - one accepted operation, one connected effect.
     const policyReceipt = await workflowMutation(fixture, "op-amendment-policy", { kind: "execution-policy", policy });
     expect(policyReceipt.replayed).toBe(false);
     expect(policyReceipt.recovery?.outcome).toBe("applied");
@@ -1627,8 +1627,8 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     expect(Number(afterBoth.store_revision)).toBe(Number(afterPolicy.store_revision) + 1);
     expect(Number(afterBoth.operations)).toBe(Number(afterPolicy.operations) + 1);
 
-    // A lost-response retry of the FIRST component — same operation id, the
-    // tokens re-read — is the recorded receipt: no second mutation, no revision,
+    // A lost-response retry of the FIRST component - same operation id, the
+    // tokens re-read - is the recorded receipt: no second mutation, no revision,
     // and NO applied component reported twice (the later component's commit does
     // not disturb the earlier one's receipt).
     const retry = await workflowMutation(fixture, "op-amendment-policy", { kind: "execution-policy", policy });
@@ -1659,7 +1659,7 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     expect(settled.integration_worktree_path).toBe(realpathSync(fresh));
   });
 
-  test("connected amendment — an aliased checkout spelling reports the SAME component identity the FILE route emits (A23)", async () => {
+  test("connected amendment - an aliased checkout spelling reports the SAME component identity the FILE route emits (A23)", async () => {
     const fixture = await workflowFixture("amendment-alias-identity");
     const fresh = join(fixture.repoRoot, "wt-amendment-alias");
     runGit(["worktree", "add", "-q", "-b", `${INTEGRATION_BRANCH}-alias`, fresh], fixture.repoRoot);
@@ -1668,7 +1668,7 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     // ONE checkout, spelled with a lexical ALIAS (`<path>/.`). The route
     // canonicalizes the requested path, so the receipt names the one
     // `integration-worktree` component the FILE route's amendment emits for the
-    // recorded value — `prepareAmendmentComponent` over the canonical path, the
+    // recorded value - `prepareAmendmentComponent` over the canonical path, the
     // same rule `coordination.test.ts` pins on the file route. A transport
     // therefore consumes ONE component vocabulary across both authorities, and a
     // spelling never becomes a second component identity.
@@ -1698,10 +1698,10 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
 });
 
 /* ------------------------------------------------------------------------ *
- * E10 — the terminal close's residue repair and its convergence (§R5/§R10, A20/A28)
+ * E10 - the terminal close's residue repair and its convergence (§R5/§R10, A20/A28)
  * ------------------------------------------------------------------------ */
 
-describe("execution-close-composition: §R10/A20 the terminal close's residue repair", () => {
+describe("execution-close-composition: R10/A20 the terminal close's residue repair", () => {
   test("terminal cleanup: a terminal snapshot whose registry row remains is repaired, preserving its outcome (A20)", async () => {
     const fixture = await workflowFixture("close-residue");
     setRowStatus(fixture.context, PLAN_ID, "Done");
@@ -1768,7 +1768,7 @@ describe("execution-close-composition: §R10/A20 the terminal close's residue re
     });
     const before = await workflowFootprint(fixture.context);
 
-    // A closed lifecycle is never amended and its outcome is never rewritten —
+    // A closed lifecycle is never amended and its outcome is never rewritten -
     // only the restatement of the RECORDED status is its own membership repair.
     const refused = await refusalOf(() =>
       workflowMutation(fixture, "op-close-residue-rewrite", {
@@ -1803,8 +1803,8 @@ describe("execution-close-composition: §R10/A20 the terminal close's residue re
 
 /**
  * Plant one plan-pm session row in the state a crash leaves it. No W-phase verb
- * hands a lease to a session that then stops — and a plan-pm bind requires a
- * prepared Assignment, a state this fixture deliberately does not build — so the
+ * hands a lease to a session that then stops - and a plan-pm bind requires a
+ * prepared Assignment, a state this fixture deliberately does not build - so the
  * crash states are planted raw, exactly as the W4 fixtures plant a foreign merge
  * lease. `epoch` is the fixture's own, so the row is one ownership fact with the
  * lease that names it.
@@ -1874,7 +1874,7 @@ function closedRow(context: StoreContext): Record<string, unknown> {
   return row!;
 }
 
-describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its own stopped claims", () => {
+describe("execution-workflow: R11/A21/A28 the failed/stopped lifecycle and its own stopped claims", () => {
   test("failed lifecycle: an explicit failed close settles its own stopped claims with no delivery evidence (R11/A21)", async () => {
     const fixture = await workflowFixture("failed-lifecycle");
     plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
@@ -1882,8 +1882,8 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
     plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
     const before = revisions(fixture.context);
     // The workflow this close addresses is UNREADABLE through the whole-view
-    // reader — a held lease whose holder session stopped is exactly the state
-    // `assertLeaseOwnership` refuses — so the caller's CAS is the stored row's
+    // reader - a held lease whose holder session stopped is exactly the state
+    // `assertLeaseOwnership` refuses - so the caller's CAS is the stored row's
     // token, the last read it could take before the owner died.
     const expected = workflowTokenOfRow(fixture.context);
 
@@ -2039,8 +2039,8 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
     plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended", sessionId: COORDINATOR_ID });
     plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "plan-pm" });
     // The pair is unreadable through the whole-view reader (a held lease whose
-    // plan-pm holder row stopped) — the state this close's own cleanup exists to
-    // settle — so the CAS is the stored row's token.
+    // plan-pm holder row stopped) - the state this close's own cleanup exists to
+    // settle - so the CAS is the stored row's token.
     expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
     const expected = workflowTokenOfRow(fixture.context);
 
@@ -2051,8 +2051,8 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
       { expected },
     );
 
-    // Liveness is the lease's OWN ownership identity — role, session id, and the
-    // plan a plan-pm holds — not its session id: the ACTIVE coordinator row that
+    // Liveness is the lease's OWN ownership identity - role, session id, and the
+    // plan a plan-pm holds - not its session id: the ACTIVE coordinator row that
     // happens to carry that id is a different owner, so the stopped plan-pm's
     // claim is settled as stopped-owned instead of being left held, which would
     // make the close's whole-view read refuse and wedge the terminal outcome.
@@ -2095,7 +2095,7 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
     plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
     plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
     // The whole-view read refuses this state (a held lease whose holder stopped),
-    // so the CAS is the stored row's token — and BOTH calls below present the same
+    // so the CAS is the stored row's token - and BOTH calls below present the same
     // request, which is what makes the second one a replay rather than a new intent.
     const expected = workflowTokenOfRow(fixture.context);
     const close: WorkflowExecutionOperation = { kind: "lifecycle", status: "failed", reason: "operator abandoned the wave" };
@@ -2189,7 +2189,7 @@ describe("execution-workflow: §R11/A21/A28 the failed/stopped lifecycle and its
  * ------------------------------------------------------------------------ */
 
 /**
- * A DB fixture with ONE prepared plan and its bound plan-pm seat — the state a
+ * A DB fixture with ONE prepared plan and its bound plan-pm seat - the state a
  * plan-owned write needs. The reviewed Assignment is a real document the DB
  * `prepare` transition seals, and the plan's own session binds through the real
  * verb (so the lease the row admission requires is one the store recorded
@@ -2268,11 +2268,11 @@ const SPARSE_PROGRESS: { kind: "progress"; progress: PlanProgress } = {
   progress: { status: "InProgress", summary: "sparse intent", evidence_paths: [] },
 };
 
-describe("execution-intent-sparse: § One resolver path (S2/E02)", () => {
+describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
   test("a sparse workflow intent omitting the session, the token and the workflow id reaches the same result (A02)", async () => {
     // Only the intent's own operation is stated. The engine resolves the
     // CURRENT authority route, the trusted coordinator's OWN live binding and
-    // the workflow token of the record that read returned — and the receipt's
+    // the workflow token of the record that read returned - and the receipt's
     // semantic fingerprint is built from the intent alone, so the same sparse
     // call replays its own receipt instead of writing twice.
     const specified = await workflowFixture("sparse-workflow-specified");
@@ -2357,14 +2357,14 @@ describe("execution-intent-sparse: § One resolver path (S2/E02)", () => {
     expect(sparseWitness.session).toEqual(strictWitness.session);
     expect(sparseWitness.session.sessionId).toBe(PLAN_PM_ID);
     // Both calls are read-only transitions: resolving the sparse intent wrote
-    // nothing — the row, its revisions and the session rows are untouched.
+    // nothing - the row, its revisions and the session rows are untouched.
     expect(await workflowFootprint(fixture.context)).toEqual(before);
     expect((await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID)).token).toBe(strict.token);
   });
 
   test("a sparse workflow intent on a root whose authority is not the ACTIVE store refuses without falling back", async () => {
     // § One resolver path: the CURRENT route decides, and a control root whose
-    // authority is not the ACTIVE execution store answers on the files route —
+    // authority is not the ACTIVE execution store answers on the files route -
     // so a sparse DB intent refuses `execution.not-active` rather than falling
     // back to the file route or inventing a binding to derive from.
     const workspace = realpathSync(mkdtempSync(join(ROOT, "sparse-no-authority-")));

@@ -1,8 +1,8 @@
 # V4 recovery-first product contract
 
-Status: product specification for the recovery-first wave (iteration `iter-20260928-v4-recovery-first`), written by the product seat during Phase 1 (2026-09-28). Implementation has not started; nothing here claims a fix landed or a bug closed. This file is the long-lived product authority for the wave; the live per-issue tracking state lives in the iteration package (`../iterations/iter-20260928-v4-recovery-first/specs/issue-ownership-matrix.md`).
+Status: product specification for the recovery-first wave (iteration `<iteration-id>`), written by the product seat during Phase 1 (2026-09-28). Implementation has not started; nothing here claims a fix landed or a bug closed. This file is the long-lived product authority for the wave; the live per-issue tracking state lives in the iteration package (`../iterations/<iteration-id>/specs/issue-ownership-matrix.md`).
 
-Authority chain (highest first): the user's locked decisions recorded in `plans/20260927-v4-release-readiness.md`; the accepted recovery design `plans/20260927-v4-progress-without-false-blockers.md` (recovery classes R1–R12, scenario groups A01–A30, slices S1–S6, §4.1 component rules, §9 gate-disposition ledger); the accepted closure matrix `plans/20260927-v4-known-bug-clearance.md`; then this contract. This contract references those documents and adds product rules plus the source-current technical handoff below; it does not replace the accepted recovery design. Where they conflict with a later user decision, the user decision wins.
+Authority chain (highest first): the user's locked decisions recorded in `the release-readiness plan`; the accepted recovery design `the recovery design plan` (recovery classes R1–R12, scenario groups A01–A30, slices S1–S6, §4.1 component rules, §9 gate-disposition ledger); the accepted closure matrix `the clearance matrix plan`; then this contract. This contract references those documents and adds product rules plus the source-current technical handoff below; it does not replace the accepted recovery design. Where they conflict with a later user decision, the user decision wins.
 
 ## Product outcomes
 
@@ -25,10 +25,10 @@ Slices S1–S6 and all nine open issues (2026-09-28: #248 #270 #278 #282 #283 #2
 
 | Plan | Slices | Primary issue ownership |
 |---|---|---|
-| 20260928-recovery-engine | S1–S3 | #278, #293, #270 engine half |
-| 20260928-recovery-transports | S4–S5 | #288 (expanded), #299 runtime half, #270 transport half |
-| 20260928-recovery-policy | S6 | #282 Slice A, #283, #295, #299 doc half |
-| 20260928-recovery-clearance | — | #282 all package slices, #248, #270 acceptance, closure evidence for all nine |
+| plan-engine | S1–S3 | #278, #293, #270 engine half |
+| plan-transports | S4–S5 | #288 (expanded), #299 runtime half, #270 transport half |
+| plan-policy | S6 | #282 Slice A, #283, #295, #299 doc half |
+| plan-clearance | — | #282 all package slices, #248, #270 acceptance, closure evidence for all nine |
 
 Split halves of one issue (#270, #299, #282) close only together with their issue; cross-plan dependencies and the final integration obligation preserve the complete engine/CLI/MCP cutover — no plan is independently "done" against a partially migrated surface. The `packages/omp` model-handoff extension (#299 runtime half) is an explicitly assigned host seam inside recovery-transports, not part of the shared command registry; the architect's decomposition records its exact files and its write handoff against the `omp` test corpus.
 
