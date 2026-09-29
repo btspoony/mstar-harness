@@ -645,6 +645,130 @@ describe("mstar plan — session identity", () => {
   });
 });
 
+/**
+ * Spec §D0/D1/D2 (fixes #308): the Assignment-locator address claims an
+ * unclaimed, unprepared row, the claimant prepares it, and the same session
+ * binds to reach `InProgress`; the locator-less form stays fail-closed, and a
+ * coordinator-prepared orphan adopts an operator edit at bind with one audited
+ * self-amendment.
+ */
+describe("mstar plan — admission self-claim and orphan adoption", () => {
+  /** The snapshot row of one plan, read from disk rather than from a claim. */
+  function rowOf(fixture: Fixture, planId: string): Record<string, unknown> {
+    const plans = readJson(fixture.snapshotPath).plans as Array<Record<string, unknown>>;
+    const row = plans.find((entry) => entry.id === planId);
+    if (row === undefined) throw new Error(`plan ${planId} is not a row of ${WORKFLOW_ID}`);
+    return row;
+  }
+
+  test("the Assignment address claims an unprepared row and the claim→prepare→bind chain reaches InProgress", () => {
+    const fixture = makeFixture();
+    const claimed = runCli(
+      ["plan", "bind", "--assignment", fixture.assignmentPath, "--session-id", "claimant", "--json"],
+      fixture.root,
+    );
+    expect(claimed.exitCode).toBe(0);
+    const claim = jsonOf(claimed);
+    expect(claim.outcome).toBe("claim-bootstrapped");
+    const claimedRow = rowOf(fixture, PLAN_ID);
+    expect(claimedRow.status).toBe("Todo");
+    expect(claimedRow.execution_lease).toBeUndefined();
+    expect((claimedRow.coordination as Record<string, unknown>).session).toMatchObject({ session_id: "claimant" });
+    const claimant = String(claim.session_file);
+    expect(existsSync(claimant)).toBe(true);
+
+    // The claimant's own read advertises exactly the one operation it may run.
+    const show = runCli(["plan", "show", "--session", claimant, "--json"], fixture.root);
+    expect(show.exitCode).toBe(0);
+    const showPayload = jsonOf(show);
+    expect(showPayload.scope).toBeNull();
+    expect(showPayload.allowed_operations).toEqual(["prepare"]);
+
+    const prepared = runCli(
+      [
+        "plan",
+        "prepare",
+        "--session",
+        claimant,
+        "--plan",
+        PLAN_ID,
+        "--assignment",
+        fixture.assignmentPath,
+        "--expect",
+        String(showPayload.revision),
+        "--json",
+      ],
+      fixture.root,
+    );
+    expect(prepared.exitCode).toBe(0);
+    expect(jsonOf(prepared).outcome).toBe("prepared");
+
+    const bound = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", "claimant", "--json"],
+      fixture.root,
+    );
+    expect(bound.exitCode).toBe(0);
+    const boundPayload = jsonOf(bound);
+    expect(boundPayload.outcome).toBe("claimed");
+    expect(String(boundPayload.session_file)).toBe(claimant);
+    const live = rowOf(fixture, PLAN_ID);
+    expect(live.status).toBe("InProgress");
+    expect((live.execution_lease as Record<string, unknown>).holder).toBe("claimant");
+  });
+
+  test("a second claim on the claimed row is a duplicate holder and the locator-less form stays fail-closed", () => {
+    const fixture = makeFixture();
+    const claimed = runCli(
+      ["plan", "bind", "--assignment", fixture.assignmentPath, "--session-id", "claimant", "--json"],
+      fixture.root,
+    );
+    expect(claimed.exitCode).toBe(0);
+
+    const again = runCli(
+      ["plan", "bind", "--assignment", fixture.assignmentPath, "--session-id", "second-claimant", "--json"],
+      fixture.root,
+    );
+    expect(again.exitCode).toBe(1);
+    expect(jsonOf(again).code).toBe("coordination.duplicate-holder");
+
+    // `--workflow/--plan` carries no locator, so the unprepared row keeps the
+    // refusal it always had — the claim form never widens that address.
+    const noLocator = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", "locatorless", "--json"],
+      fixture.root,
+    );
+    expect(noLocator.exitCode).toBe(1);
+    expect(jsonOf(noLocator).code).toBe("coordination.not-prepared");
+  });
+
+  test("a coordinator-prepared orphan adopts the operator's edit at bind, with one audited self-amendment", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const pinned = String(
+      ((rowOf(fixture, PLAN_ID).coordination as Record<string, unknown>).prepared as Record<string, unknown>).assignment_sha256,
+    );
+    writeText(fixture.assignmentPath, `${readText(fixture.assignmentPath)}\npost-prepare operator edit.\n`);
+
+    const bound = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", "late-adopter", "--json"],
+      fixture.root,
+    );
+    expect(bound.exitCode).toBe(0);
+    expect(jsonOf(bound).outcome).toBe("claimed");
+
+    const row = rowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("InProgress");
+    const recorded = ((row.coordination as Record<string, unknown>).prepared as Record<string, unknown>).assignment_sha256;
+    expect(recorded).not.toBe(pinned);
+    const audit = (readJson(fixture.snapshotPath).coordination as Record<string, unknown>).self_amendments as Array<
+      Record<string, unknown>
+    >;
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ session_id: "late-adopter", old_sha256: pinned, new_sha256: recorded, prepared_by_matches: false });
+  });
+});
+
 describe("mstar plan — strict-input", () => {
   test("invalid inputs are usage errors while a missing runtime session remains a refusal", () => {
     const fixture = makeFixture();

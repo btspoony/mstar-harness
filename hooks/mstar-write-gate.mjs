@@ -1073,11 +1073,38 @@ function validateCoordinationIdentityRecovery(value, what = "coordination.identi
   }
   return violations;
 }
+function validateCoordinationSelfAmendment(value, what = "coordination.self_amendments[]") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.amendment.shape", `${what} must be an object`)];
+  const allowed = ["at", "session_id", "old_sha256", "new_sha256", "operation_id", "prepared_by_matches"];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.amendment.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of ["at", "session_id", "operation_id"]) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.amendment.field", `${what}.${key} must be a non-empty string`));
+    }
+  }
+  for (const key of ["old_sha256", "new_sha256"]) {
+    if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
+      violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
+    }
+  }
+  if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
+    violations.push(invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ — an amendment records a move`));
+  }
+  if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
+    violations.push(invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`));
+  }
+  return violations;
+}
 function validateSnapshotCoordination(value, what = "coordination") {
   if (!isPlainObject(value))
     return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations = [];
-  const allowed = ["coordinator", "identity_recoveries"];
+  const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
@@ -1086,6 +1113,15 @@ function validateSnapshotCoordination(value, what = "coordination") {
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  if (value.self_amendments !== undefined) {
+    if (!Array.isArray(value.self_amendments)) {
+      violations.push(invalid("coordination.snapshot.field", `${what}.self_amendments must be an array`));
+    } else {
+      value.self_amendments.forEach((entry, index) => {
+        violations.push(...validateCoordinationSelfAmendment(entry, `${what}.self_amendments[${String(index)}]`));
+      });
+    }
   }
   if (value.identity_recoveries !== undefined) {
     if (!Array.isArray(value.identity_recoveries)) {

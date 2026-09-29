@@ -362,13 +362,44 @@ export type CoordinationIdentityRecovery = {
 };
 
 /**
+ * One recorded self-amendment of a prepared pin (spec §D2, fixes #308): a
+ * `bind` that found the row's prepared Assignment bytes stale, while the row
+ * was one nobody held (no `coordination.session`, no `coordination.handoff`),
+ * refreshed the pin to the bytes it actually bound and recorded who adopted it.
+ *
+ * Append-only PROVENANCE, never authority: nothing in the engine reads it to
+ * decide anything. `at`/`session_id` name the adoption; `old_sha256` is the
+ * pinned digest that moved and `new_sha256` the digest recorded in its place;
+ * `operation_id` is the record's own identifier on a transport that carries no
+ * caller-supplied operation id; `prepared_by_matches` is a NON-GATING
+ * annotation — the file route's `--session-id` is caller-asserted and
+ * authenticates nobody, so the annotation is evidence for the coordinator's
+ * post-hoc read, not a gate.
+ */
+export type CoordinationSelfAmendment = {
+  at: string;
+  session_id: string;
+  /** The pin the prepared block carried before the amendment (bare sha256 hex). */
+  old_sha256: string;
+  /** The digest of the bytes the adopting bind pinned (bare sha256 hex). */
+  new_sha256: string;
+  /** The record's own id; sha256 hex over the amendment's canonical facts. */
+  operation_id: string;
+  /** Whether the adopting session is the one the prepared block recorded. */
+  prepared_by_matches?: boolean;
+};
+
+/**
  * Snapshot-level coordination block (the workflow's coordinator). The
  * coordinator binding is the single live owner; `identity_recoveries` is the
- * append-only audit history of how that owner changed (`recoverPrepareCoordinator`).
+ * append-only audit history of how that owner changed (`recoverPrepareCoordinator`),
+ * and `self_amendments` is the append-only audit of prepared pins adopted by a
+ * bind (`coordination.assignment-stale` drift on a row nobody held).
  */
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
   identity_recoveries?: CoordinationIdentityRecovery[];
+  self_amendments?: CoordinationSelfAmendment[];
 };
 
 /** Row-level coordination block (one plan). */
@@ -774,15 +805,61 @@ export function validateCoordinationIdentityRecovery(
 }
 
 /**
+ * Validate one stored self-amendment record (spec §D2). Strict in the same way
+ * the rest of this module is: the key set is exact (the optional
+ * `prepared_by_matches` annotation aside), both digests are bare sha256 hex and
+ * the record's own id must be present — an audit entry that cannot be read
+ * exactly is a malformed document, never a record with optional halves.
+ */
+export function validateCoordinationSelfAmendment(
+  value: unknown,
+  what = "coordination.self_amendments[]",
+): ValidationResult[] {
+  if (!isPlainObject(value)) return [invalid("coordination.amendment.shape", `${what} must be an object`)];
+  const allowed = ["at", "session_id", "old_sha256", "new_sha256", "operation_id", "prepared_by_matches"];
+  const violations: ValidationResult[] = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.amendment.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of ["at", "session_id", "operation_id"]) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.amendment.field", `${what}.${key} must be a non-empty string`));
+    }
+  }
+  for (const key of ["old_sha256", "new_sha256"]) {
+    if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
+      violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
+    }
+  }
+  // An amendment that records the same digest twice describes no move at all:
+  // the writer only ever appends a measured drift, so a record claiming
+  // otherwise is malformed, never a harmless no-op entry.
+  if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
+    violations.push(
+      invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ \u2014 an amendment records a move`),
+    );
+  }
+  if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
+    violations.push(
+      invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`),
+    );
+  }
+  return violations;
+}
+
+/**
  * Validate a snapshot's top `coordination` block (spec §C2) plus the
- * append-only recovery audit the JSON Prepare recovery appends (§3.3). The
- * validator is the schema OWNER (`workflow.ts` consumes it), so a malformed
- * audit entry can never be persisted or read as a valid snapshot.
+ * append-only audits it carries: the recovery history the JSON Prepare
+ * recovery appends (§3.3) and the self-amendment history a bind appends to a
+ * prepared pin it adopted (§D2). The validator is the schema OWNER
+ * (`workflow.ts` consumes it), so a malformed audit entry can never be
+ * persisted or read as a valid snapshot.
  */
 export function validateSnapshotCoordination(value: unknown, what = "coordination"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations: ValidationResult[] = [];
-  const allowed = ["coordinator", "identity_recoveries"];
+  const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
@@ -791,6 +868,15 @@ export function validateSnapshotCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  if (value.self_amendments !== undefined) {
+    if (!Array.isArray(value.self_amendments)) {
+      violations.push(invalid("coordination.snapshot.field", `${what}.self_amendments must be an array`));
+    } else {
+      value.self_amendments.forEach((entry, index) => {
+        violations.push(...validateCoordinationSelfAmendment(entry, `${what}.self_amendments[${String(index)}]`));
+      });
+    }
   }
   if (value.identity_recoveries !== undefined) {
     if (!Array.isArray(value.identity_recoveries)) {
