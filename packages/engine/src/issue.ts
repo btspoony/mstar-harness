@@ -1018,6 +1018,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     // is inspectable through the migration surface (manifest/receipt), never
     // as queryable issues.
     assertIssueStoreActive(db);
+    const hasMilestones = handle.schemaVersion >= 7;
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const order = `order by case issues.severity
@@ -1028,7 +1029,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const rows = db
       .prepare(
         `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-                issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
+                issues.registered_at as registeredAt, issues.revision${hasMilestones ? ", issues.milestone_id as milestoneId" : ""},
                 (${LAST_ACTIVITY_SQL}) as lastActivity
          from issues ${where} ${order} limit ? offset ?`,
       )
@@ -1041,7 +1042,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       disposition: Disposition;
       registeredAt: string | null;
       revision: number;
-      milestoneId: string | null;
+      milestoneId?: string | null;
       lastActivity: string | null;
     }>;
     return {
@@ -1055,7 +1056,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
         registeredAt: row.registeredAt,
         lastActivity: row.lastActivity,
         revision: row.revision,
-        milestoneId: row.milestoneId,
+        milestoneId: row.milestoneId ?? null,
       })),
       total: totalRow.n,
       storeRevision,
@@ -1072,9 +1073,10 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
     assertIssueStoreActive(db);
+    const milestoneSelect = handle.schemaVersion >= 7 ? ", milestone_id" : "";
     const issue = db
       .prepare(
-        "select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?",
+        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision${milestoneSelect}, provider, external_id, url, identity_key from issues where id = ?`,
       )
       .get(id) as
       | {
@@ -1093,7 +1095,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
           created_at: string;
           updated_at: string;
           revision: number;
-          milestone_id: string | null;
+          milestone_id?: string | null;
           provider: string;
           external_id: string | null;
           url: string | null;
@@ -1216,7 +1218,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       revision: issue.revision,
-      milestoneId: issue.milestone_id,
+      milestoneId: issue.milestone_id ?? null,
       provider: issue.provider,
       externalId: issue.external_id,
       url: issue.url,

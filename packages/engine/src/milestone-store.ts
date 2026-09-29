@@ -3,7 +3,7 @@ import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import type { StoreReadQuery } from "./store-read.js";
 
 export type ProjectMilestoneStatus = "planned" | "active" | "delivered" | "dropped";
-export type ProjectMilestoneDTO = { milestoneId: string; projectId: string; name: string; target: string | null; status: ProjectMilestoneStatus; ordinal: number; revision: number; createdAt: string; updatedAt: string; totalIssues: number; openIssues: number; doneIssues: number; resolvedIssues: number; otherRetiredIssues: number };
+export type ProjectMilestoneDTO = { milestoneId: string; projectId: string; name: string; target: string | null; status: ProjectMilestoneStatus; ordinal: number; revision: number; createdAt: string; updatedAt: string; totalIssues: number; openIssues: number; resolvedIssues: number; otherRetiredIssues: number };
 export type MilestoneAdd = { projectId: string; name: string; target: string | null; ordinal: number };
 export type MilestonePatch = { name?: string; target?: string | null; ordinal?: number; status?: ProjectMilestoneStatus };
 export type MilestoneMutation = { operationId: string; expectedStoreRevision: number };
@@ -12,7 +12,7 @@ export type MilestoneAssignment = { projectId: string; milestoneId: string | nul
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: "open" | "resolved" | "waived" | "duplicate" | "superseded"; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
@@ -89,10 +89,15 @@ export function updateMilestone(context: StoreContext, projectId: string, milest
 }
 export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: string): MilestoneRead {
   guard(db); project(db,projectId);
+  if (milestoneId !== undefined) {
+    const owner = db.prepare("select project_id from project_milestones where milestone_id=?").get(milestoneId) as { project_id: string } | undefined;
+    if (!owner) return fail("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
+    if (owner.project_id !== projectId) fail("milestone.project-mismatch", `Milestone ${milestoneId} does not belong to project ${projectId}.`);
+  }
   const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
   const params = milestoneId === undefined ? [projectId] : [projectId,milestoneId];
   const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params) as Array<Record<string,unknown>>;
-  const milestones: ProjectMilestoneDTO[] = rows.map(r => { const resolvedIssues=Number(r.resolved_issues)||0, otherRetiredIssues=Number(r.other_retired_issues)||0, openIssues=Number(r.open_issues)||0; return { milestoneId:String(r.milestone_id),projectId:String(r.project_id),name:String(r.name),target:r.target as string|null,status:r.status as ProjectMilestoneStatus,ordinal:Number(r.ordinal),revision:Number(r.revision),createdAt:String(r.created_at),updatedAt:String(r.updated_at),totalIssues:Number(r.total_issues),openIssues,doneIssues:resolvedIssues+otherRetiredIssues,resolvedIssues,otherRetiredIssues }; });
+  const milestones: ProjectMilestoneDTO[] = rows.map(r => { const resolvedIssues=Number(r.resolved_issues)||0, otherRetiredIssues=Number(r.other_retired_issues)||0, openIssues=Number(r.open_issues)||0; return { milestoneId:String(r.milestone_id),projectId:String(r.project_id),name:String(r.name),target:r.target as string|null,status:r.status as ProjectMilestoneStatus,ordinal:Number(r.ordinal),revision:Number(r.revision),createdAt:String(r.created_at),updatedAt:String(r.updated_at),totalIssues:Number(r.total_issues),openIssues,resolvedIssues,otherRetiredIssues }; });
   const issues = (db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params) as Array<Record<string,unknown>>).map(r => ({ id:String(r.id),title:String(r.title),acceptance:String(r.acceptance),disposition:r.disposition as MilestoneIssueDTO["disposition"],revision:Number(r.revision),milestoneId:String(r.milestone_id) }));
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };

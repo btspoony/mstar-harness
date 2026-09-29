@@ -8,6 +8,7 @@ import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from 
 const root = mkdtempSync(join(tmpdir(), "milestone-store-"));
 const context: StoreContext = { harnessDir: root };
 let db: StoreDb;
+const otherProjectId = "milestone-other-project";
 const projectId = "milestone-test-project";
 function issue(id: string, disposition: string, milestoneId: string | null): void {
   db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?,?)").run(id,projectId,id,milestoneId,disposition);
@@ -15,6 +16,7 @@ function issue(id: string, disposition: string, milestoneId: string | null): voi
 beforeAll(async () => {
   const handle = await initializeStore(context); db = handle.db;
   db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(projectId,"Test project",`${projectId}/roadmap.md`);
+  db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(otherProjectId,"Other project",`${otherProjectId}/roadmap.md`);
 });
 afterAll(() => { db.close(); rmSync(root,{recursive:true,force:true}); });
 
@@ -67,12 +69,16 @@ describe("milestone store", () => {
     const empty=await addMilestone(context,{projectId,name:"Empty",target:null,ordinal:1},{operationId:crypto.randomUUID(),expectedStoreRevision:full.storeRevision});
     issue("I-MILESTONE-2","resolved",full.milestoneId); issue("I-MILESTONE-3","waived",full.milestoneId); issue("I-MILESTONE-4","duplicate",full.milestoneId); issue("I-MILESTONE-5","superseded",full.milestoneId); issue("I-MILESTONE-6","open",null);
     const result=readMilestonesOn(db,projectId);
-    for (const milestone of result.milestones) {
-      expect(milestone.totalIssues).toBe(milestone.openIssues + milestone.doneIssues);
-      expect(milestone.doneIssues).toBe(milestone.resolvedIssues + milestone.otherRetiredIssues);
-    }
-    expect(result.milestones.map(milestone => [milestone.milestoneId,milestone.totalIssues,milestone.openIssues,milestone.resolvedIssues,milestone.otherRetiredIssues,milestone.doneIssues])).toEqual([[full.milestoneId,4,0,1,3,4],[empty.milestoneId,0,0,0,0,0],[(db.prepare("select milestone_id from project_milestones where project_id=? and name='Release'").get(projectId) as {milestone_id:string}).milestone_id,1,0,1,0,1]]);
+    expect(result.milestones.map(milestone => [milestone.milestoneId,milestone.totalIssues,milestone.openIssues,milestone.resolvedIssues,milestone.otherRetiredIssues])).toEqual([[full.milestoneId,4,0,1,3],[empty.milestoneId,0,0,0,0],[(db.prepare("select milestone_id from project_milestones where project_id=? and name='Release'").get(projectId) as {milestone_id:string}).milestone_id,1,0,1,0]]);
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones).toHaveLength(1);
     await expect(updateMilestone(context,projectId,full.milestoneId,{name:"x"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toBeInstanceOf(MilestoneError);
+  });
+  test("milestone status rejects missing and cross-project IDs", async () => {
+    const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
+    const own=await addMilestone(context,{projectId,name:"Own",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
+    const foreign=await addMilestone(context,{projectId:otherProjectId,name:"Foreign",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:own.storeRevision});
+    expect(readMilestonesOn(db,projectId,own.milestoneId).milestones).toHaveLength(1);
+    expect(() => readMilestonesOn(db,projectId,"missing-milestone")).toThrow(expect.objectContaining({code:"milestone.not-found"}));
+    expect(() => readMilestonesOn(db,projectId,foreign.milestoneId)).toThrow(expect.objectContaining({code:"milestone.project-mismatch"}));
   });
 });

@@ -379,7 +379,6 @@ function milestoneRows(read: MilestoneRead): unknown[] {
     milestone.openIssues,
     milestone.resolvedIssues,
     milestone.otherRetiredIssues,
-    milestone.doneIssues,
   ]);
 }
 
@@ -491,7 +490,7 @@ describe("milestone views", () => {
     });
     const assigned = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
     expect(assigned.projection.generation).toBe(generation);
-    expect(assigned.data?.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 1, doneIssues: 0 });
+    expect(assigned.data?.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 1 });
     expect(assigned.data?.milestones.unassignedIssues).toBe(0);
     expect(assigned.storeRevision).toBe(before.storeRevision + 1);
 
@@ -503,7 +502,7 @@ describe("milestone views", () => {
     expect(resolved.projection.generation).toBe(generation);
     const resolvedData = resolved.data;
     if (resolvedData === null) throw new Error("fixture: the roadmap view must answer for proj-a");
-    expect(resolvedData.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 0, resolvedIssues: 1, doneIssues: 1 });
+    expect(resolvedData.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 0, resolvedIssues: 1 });
 
     // The same membership answers through the standalone view at the same
     // revision: a milestone-only read answers from committed rows, and the
@@ -650,7 +649,7 @@ describe("milestone views", () => {
     const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-solo" }));
     expect(envelope.data?.authority).toEqual({ state: "absent" });
     expect(envelope.data?.content).toBeNull();
-    expect(envelope.data?.milestones.milestones[0]).toMatchObject({ name: "Solo milestone", totalIssues: 1, otherRetiredIssues: 1, doneIssues: 1 });
+    expect(envelope.data?.milestones.milestones[0]).toMatchObject({ name: "Solo milestone", totalIssues: 1, otherRetiredIssues: 1 });
     expect(envelope.data?.milestones.issues[0]).toMatchObject({ id: "I-S1", disposition: "duplicate", acceptance: "dup" });
     expect(envelope.data?.milestones.unassignedIssues).toBe(1);
     expect(envelope.data?.milestones.projectId).toBe("proj-solo");

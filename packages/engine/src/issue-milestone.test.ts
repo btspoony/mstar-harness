@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { bindPlanSession } from "./coordination.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { initializeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-milestone-"));
 const harness = join(root, ".mstar");
@@ -132,4 +133,23 @@ describe("issue milestone association", () => {
     expect(closed.revision).toBe(assigned.revision + 1);
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);
   });
+});
+
+test("schema-4 stores list and read issue details without milestone columns", async () => {
+  const oldHarness = join(mkdtempSync(join(tmpdir(), "issue-schema-4-")), ".mstar");
+  mkdirSync(oldHarness, { recursive: true });
+  const raw = new DatabaseSync(storeDbPath({ harnessDir: oldHarness }));
+  raw.exec(SCHEMA_VERSION_TABLE_SQL);
+  for (const migration of MIGRATIONS.filter(({ version }) => version <= 4)) {
+    raw.exec(migration.sql);
+    raw.prepare("insert into schema_version(version,name,checksum,applied_at) values(?,?,?,?)")
+      .run(migration.version, migration.name, migrationChecksum(migration), "2026-09-29T00:00:00Z");
+  }
+  raw.prepare("update store_meta set authority_state='active' where id=1").run();
+  raw.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('old-issue','old-project','Old issue','bug','high','impact','acceptance','now','now','old-issue')").run();
+  raw.close();
+  const oldContext: StoreContext = { harnessDir: oldHarness };
+  expect((await listIssues(oldContext, { projectId: "old-project" })).items[0]?.milestoneId).toBeNull();
+  expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
+  rmSync(oldHarness, { recursive: true, force: true });
 });
