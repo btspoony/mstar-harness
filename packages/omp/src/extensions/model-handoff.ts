@@ -771,10 +771,18 @@ type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; detai
  * `bindingModeFor` is exposed because its verdict is the whole observable of the
  * §5 ordering that keeps the retired root register out of the pre-authority
  * path *on the FILE route* (the ACTIVE route never consults it).
+ *
+ * `decisionPreferenceRead` is the fire path's first (decision) preference read.
+ * It is a seam for the same reason `inspectReadiness` is: that read is where the
+ * consistency window opens, so a probe holds it open to plant a concurrent
+ * ledger transition and prove the window is closed on *both* arms — an unbound
+ * snapshot must not answer with a success-shaped no-op for a binding that
+ * appeared during the read.
  */
 export const handoffSeams = {
   inspectReadiness: inspectPhase1Readiness,
   bindingModeFor,
+  decisionPreferenceRead: readHandoffSettings,
 };
 
 function outcome(ok: boolean, isError: boolean, text: string, details: Record<string, unknown> = {}): ToolOutcome {
@@ -1390,7 +1398,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
     if (decision.kind === "none" || decision.kind === "pending") {
-      const settings = await readHandoffSettings(ctx.cwd);
+      const settings = await handoffSeams.decisionPreferenceRead(ctx.cwd);
       const afterSettings = suspensionReason(ctx, sessionId, generation);
       if (afterSettings !== null) return suspend(afterSettings, decision.kind);
       if (decision.kind === "pending") {
@@ -1405,7 +1413,17 @@ export default function modelHandoff(pi: ExtensionAPI): void {
           ...(decision.kind === "pending" ? { state: "pending" } : {}),
         });
       }
-      if (!settings.value.modelHandoff) return preferenceOff(decision.kind === "pending");
+      if (!settings.value.modelHandoff) {
+        // The preference-off no-op is only honest for the state it was decided
+        // on. The unbound snapshot therefore needs the same consistency re-read
+        // the bound arm does: a binding armed while settings were read is
+        // reported as `not-pending`, never as a neutral success.
+        if (decision.kind === "pending") return preferenceOff(true);
+        if (reconstruct(ctx).kind !== "none") {
+          return outcome(false, true, "the model handoff changed while settings were read.", { code: "not-pending" });
+        }
+        return preferenceOff(false);
+      }
     }
     if (decision.kind !== "pending") {
       const described = decision.kind === "none" ? "no binding" : `${decision.kind} (${decision.record.binding.workflowId})`;

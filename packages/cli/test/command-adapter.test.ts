@@ -8,8 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { registerMcpCommand } from "../src/mcp/command";
+import { mcpToolInputSchema } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
-import type { InvocationContext } from "@mstar-harness/commands";
+import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 const census = [
   "harness.scaffold", "doctor", "plugin.validate", "path.resolve", "status.validate", "status.workflow-close",
@@ -93,6 +94,68 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
+    const definitions = getCommandDefinitions();
+    const definition = (id: string): CommandDefinition => {
+      const found = definitions.find((entry) => entry.id === id);
+      if (found === undefined) throw new Error(`missing command definition: ${id}`);
+      return found;
+    };
+
+    // An issue verb's placeholder `payload: z.unknown().optional()` becomes the
+    // per-verb domain schema, so `tools/list` carries the constructible shape.
+    const schema = mcpToolInputSchema(definition("issue.add")).toJSONSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+      required?: readonly string[];
+    };
+    expect(schema.properties.payload).toMatchObject({ type: "object" });
+    // The published payload carries the real domain contract, not `{}`.
+    expect(schema.properties.payload.required).toContain("rootCauseKey");
+    expect(Object.keys((schema.properties.payload.properties ?? {}) as object)).toContain("title");
+    // …and stays transport-optional: the domain handler owns the requirement.
+    expect(schema.required ?? []).not.toContain("payload");
+
+    // A field the family itself shapes stays its own contract: the workflow
+    // `--file` descriptor must not turn an absolute pathname into a document.
+    const policy = mcpToolInputSchema(definition("workflow.execution-policy")).toJSONSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(policy.properties.file).toMatchObject({ type: "string" });
+  });
+
+  test("a workflow --file pathname reaches the domain reader instead of being JSON-decoded", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mstar-workflow-file-"));
+    try {
+      const file = path.join(dir, "delivery.json");
+      writeFileSync(file, JSON.stringify({ compound: { outcome: "created" } }));
+      const result = await run(["workflow", "evidence", "--workflow", "cli-payload-probe", "--file", file]);
+      const body = JSON.parse(result.stdout) as { code?: string; status?: string; message?: string };
+      // The path must not be parsed as a JSON document: a payload-decode
+      // failure is exactly the regression this guards.
+      expect(body.message ?? "").not.toContain("Invalid command payload");
+      expect(body.code).not.toBe("command.invalid-input");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an issue --payload is decoded and validated by its own descriptor with pathful diagnostics", async () => {
+    const invalid = await run(["issue", "add", "--payload", "{}", "--operation-id", "probe", "--actor", "project-manager"]);
+    const body = JSON.parse(invalid.stdout) as {
+      code?: string;
+      message?: string;
+      details?: { diagnostics?: Array<{ path: string }> };
+    };
+    // The shared decoder must be the one that rejects it: the descriptor is
+    // bound to the `payload` input field, so the refusal carries indexed
+    // `payload.<field>` paths rather than falling through to the family parser.
+    expect(body.code).toBe("command.invalid-input");
+    expect(body.message).toContain("Invalid command payload");
+    const paths = (body.details?.diagnostics ?? []).map((entry) => entry.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
+  });
+
   test("report census accounts for every canonical identity and excludes installer init", () => {
     const ids = getCommandDefinitions().map(({ id }) => id);
     expect(new Set(ids)).toEqual(new Set(census));

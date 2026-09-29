@@ -101,6 +101,27 @@ describe("store and execution command surface", () => {
     expect(typeof dataOf(backup).storeId).toBe("string");
   });
 
+  test("a control-root-only manifest without --coverage is a usage refusal naming the flag", async () => {
+    const root = fixture("execution-control-root-only");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    // No inventoryPath: the reviewed scope is control-root-only, so coverage
+    // cannot be derived and must be supplied explicitly. The adapter decides
+    // this before the engine is entered, so the operator sees the flag it needs
+    // rather than an engine-internal "inventory is not closed" verdict.
+    const manifestPath = join(root, "control-root-manifest.json");
+    writeJson(manifestPath, { version: 2, id: "control-root-manifest", root: harness, surfaces: [] });
+    const apply = await invoke(definition("store.execution.apply"), {
+      harness,
+      operation: "control-root-only",
+      operator: "ops-engineer",
+      manifest: manifestPath,
+      backup: join(root, "unused-recovery-receipt.json"),
+    }, root);
+    expect(apply.status).toBe("usage");
+    if (apply.status === "usage") expect(apply.message).toContain("--coverage");
+  });
+
   test("maintenance input derives inventory from the reviewed manifest and aggregates irreducible requirements", async () => {
     const root = fixture("execution-sparse-maintenance");
     const harness = join(root, ".mstar");

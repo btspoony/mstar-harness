@@ -81,12 +81,15 @@ const SCRATCH: string[] = [];
 const HARNESS_ENV = process.env.MSTAR_HARNESS_DIR;
 /** The readiness step is only ever held open; the real checkpoint still runs. */
 const REAL_INSPECT_READINESS = handoffSeams.inspectReadiness;
+/** The fire path's decision preference read; a probe may hold this step open. */
+const REAL_DECISION_PREFERENCE_READ = handoffSeams.decisionPreferenceRead;
 
 beforeAll(() => {
   delete process.env.MSTAR_HARNESS_DIR;
 });
 afterAll(() => {
   handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+  handoffSeams.decisionPreferenceRead = REAL_DECISION_PREFERENCE_READ;
   setArtifactStore(undefined);
   if (HARNESS_ENV !== undefined) process.env.MSTAR_HARNESS_DIR = HARNESS_ENV;
   for (const dir of SCRATCH) rmSync(dir, { recursive: true, force: true });
@@ -1145,6 +1148,63 @@ describe("preference off is a neutral no-op", () => {
       "Model handoff preference off: modelHandoff is off in native settings; no model action was taken.",
       "Model handoff preference off: modelHandoff is off in native settings; no model action was taken.",
     ]);
+  }, 60_000);
+
+  test("an unbound snapshot does not answer preference-off for a binding that appeared while settings were read", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: false, handoffTarget: "@smol" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+
+    // Hold the fire path's decision preference read open, then arm a binding
+    // inside that window: the snapshot the fire path decided on ("none") is
+    // stale by the time it would answer, so the no-op would be a lie. Entry is
+    // signalled by the seam itself — no timer stands in for the await.
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let held = false;
+    handoffSeams.decisionPreferenceRead = async (cwd) => {
+      if (!held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return REAL_DECISION_PREFERENCE_READ(cwd);
+    };
+    try {
+      const firing = harness.runTool({ operation: "phase1-complete", workflowId: "raced-iteration" });
+      await entered.promise;
+      const baselineModelChangeId = session.appendModelChange("probe/slow-model", "default");
+      session.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+        version: 1,
+        binding: {
+          sessionId: session.getSessionId(),
+          workflowId: "raced-iteration",
+          controlRoot: repo.main,
+          harnessRoot: repo.harness,
+          snapshotPath: join(repo.harness, "workflows", "raced-iteration", "snapshot.json"),
+          compassPath: join(repo.harness, "iterations", "raced-iteration", "delivery-compass.md"),
+        },
+        state: "pending",
+        operationId: "arm-race-fixture",
+        action: "arm",
+        baselineModelChangeId,
+        observedModel: "probe/slow-model",
+        reason: null,
+      } satisfies HandoffRecord);
+      release.resolve();
+
+      const result = await firing;
+      expect(codeOf(result)).toBe("not-pending");
+      expect(result.isError).toBe(true);
+    } finally {
+      release.resolve();
+      handoffSeams.decisionPreferenceRead = REAL_DECISION_PREFERENCE_READ;
+    }
+    // The concurrent binding is untouched: a stale no-op would have claimed it.
+    expect(statesOf(harness)).toEqual(["pending"]);
+    expect(harness.attempts).toEqual([]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
   }, 60_000);
 });
 

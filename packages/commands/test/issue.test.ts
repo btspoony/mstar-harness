@@ -141,14 +141,14 @@ describe("issue command family", () => {
     }, context);
     expect(result.status).toBe("ok");
     expect(command.description).toContain("mstar schema CaptureInput");
-    expect(command.payloads).toHaveProperty("CaptureInput");
+    expect(command.payloads).toHaveProperty("payload");
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
   });
   test("payload schema exposes registry constraints and refusals identify invalid and missing paths", async () => {
     const context = await testContext();
     const command = definition("issue.add");
-    const schema = command.payloads?.CaptureInput.schema;
+    const schema = command.payloads?.payload?.schema;
     expect(schema?.safeParse({}).success).toBe(false);
     expect(schema?.safeParse(capture()).success).toBe(true);
 

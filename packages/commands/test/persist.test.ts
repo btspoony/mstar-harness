@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createFsStore, initializeExecutionAuthority, initializeStore, setArtifactStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, InvocationContext } from "../src/types.js";
@@ -138,6 +138,36 @@ describe("persist command family", () => {
     const missing = await definition("persist.get").execute({ kind: "json", key: join(root, "missing.json") }, context);
     expect(missing).toMatchObject({ status: "refused", code: "persist.not-found" });
   });
+  test("keys stay inside their kind namespace", async () => {
+    const { root, store, context } = setup();
+    const write = definition("persist.write");
+
+    // Non-json kinds are logical names: a traversal segment, an absolute path,
+    // or a nested path is refused before the store is reached — the same
+    // verdict the store's own `assertSafePathComponent` gives, one layer earlier
+    // and before any payload is read.
+    for (const key of ["../escape", "nested/key", "/etc/passwd", "..", "."]) {
+      const rejected = await write.execute({ kind: "review", key, input: JSON.stringify({ verdict: "x" }) }, context);
+      expect(rejected).toMatchObject({ status: "refused", code: "persist.key-refused", exitCode: 1 });
+    }
+    // The read and delete faces apply the same contract.
+    expect(await definition("persist.get").execute({ kind: "snapshot", key: "../escape" }, context))
+      .toMatchObject({ status: "refused", code: "persist.key-refused" });
+    expect(await definition("persist.delete").execute({ kind: "review", key: "a/b" }, context))
+      .toMatchObject({ status: "refused", code: "persist.key-refused" });
+
+    // json's key IS an absolute path (the store's escape hatch) — but a `..`
+    // segment is refused before the store ever sees it, as it does there too.
+    const escapeName = "mstar-persist-escape-probe.json";
+    const traversal = await write.execute({ kind: "json", key: `${root}/../${escapeName}`, input: "{}" }, context);
+    expect(traversal).toMatchObject({ status: "refused", code: "persist.key-refused" });
+    expect(existsSync(join(dirname(root), escapeName))).toBe(false);
+    // …and a non-absolute json key keeps its original refusal shape.
+    const relative = await write.execute({ kind: "json", key: "relative/path.json", input: "{}" }, context);
+    expect(relative).toMatchObject({ status: "refused", exitCode: 1 });
+    expect(relative.message).toContain("absolute path");
+  });
+
   test("aggregate validation declares governed schemas and arbitrary JSON as parse-only", async () => {
     const { root, context } = setup();
     const write = definition("persist.write");

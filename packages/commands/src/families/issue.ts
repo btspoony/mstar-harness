@@ -169,11 +169,17 @@ function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
     if (field.itemsNonblank) array = array.refine((items) => items.every((item) => item.trim() !== ""));
     schema = array;
   } else if (field.type === "string") {
-    let string: z.ZodType = field.values === undefined
-      ? z.string()
-      : z.enum(field.values as [string, ...string[]]);
-    if (field.nonblankWhenPresent) string = string.refine((value) => typeof value === "string" && value.trim() !== "");
-    schema = string;
+    if (field.values !== undefined) {
+      // An enum is its own constraint: every member is a non-empty string by
+      // construction, so `nonblankWhenPresent` has nothing left to assert on it
+      // (applying a refine here would be provably-true dead code). It applies
+      // only to a free-form string.
+      schema = z.enum(field.values as [string, ...string[]]);
+    } else {
+      let text = z.string();
+      if (field.nonblankWhenPresent) text = text.refine((value) => value.trim() !== "", `${field.description ?? "field"} must be nonblank when present`);
+      schema = text;
+    }
   } else {
     schema = z.unknown();
   }
@@ -220,7 +226,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,
     ...(payloadType[verb] !== undefined
-      ? { payloads: { [payloadType[verb]]: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

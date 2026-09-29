@@ -55,19 +55,17 @@ describe("session and workflow command families", () => {
     expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
-  test("execution.policy payload accepts engine-valid policy and rejects unsupported values", () => {
-    const payload = definition("workflow.execution-policy").payloads?.file?.schema;
-    expect(payload?.safeParse({ plan_parallelism: "parallel", worktree_mode: "required" }).success).toBe(true);
-    expect(payload?.safeParse({ plan_parallelism: "sometimes" }).success).toBe(false);
-    expect(payload?.safeParse({ plan_parallelism: "parallel", extra: true }).success).toBe(false);
-  });
-
-  test("delivery evidence payload validates complete member shapes", () => {
-    const payload = definition("workflow.evidence").payloads?.file?.schema;
-    expect(payload?.safeParse({ compound: { outcome: "created" } }).success).toBe(true);
-    expect(payload?.safeParse({ pr: { repo: "owner/repo", head: "feature/x", target: "main" } }).success).toBe(true);
-    expect(payload?.safeParse({ pr: { repo: "owner/repo", head: "feature/x" } }).success).toBe(false);
-    expect(payload?.safeParse({}).success).toBe(false);
+  test("pathname fields carry no payload descriptor, so a file path is never parsed as JSON", () => {
+    // `--file` is an absolute pathname on every workflow verb. A descriptor
+    // bound to it would make the shared CLI decoder `JSON.parse` the path and
+    // reject ordinary paths as invalid JSON, so the field must not appear —
+    // while the genuine document-valued fields keep theirs.
+    for (const id of ["workflow.evidence", "workflow.execution-policy"]) {
+      const command = definition(id);
+      expect(command.payloads).toBeDefined();
+      expect(command.payloads).not.toHaveProperty("file");
+      expect(command.cli.options.some((option) => option.key === "file")).toBe(true);
+    }
   });
 
   test("evidence before Done is accepted through the workflow command", async () => {

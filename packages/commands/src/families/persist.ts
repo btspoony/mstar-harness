@@ -52,6 +52,35 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The one key contract for every persist verb (write / get / delete). A key is
+ * a **logical name inside a kind**, never a path: `json` is the single kind
+ * whose key is an absolute path (the store contract's escape hatch), and even
+ * there the store refuses `..` segments. Everything else must be a single safe
+ * component, so a key can neither climb out of its `kind/` namespace nor be
+ * silently reinterpreted as one. Returns the refusal message, or `null` when
+ * the key is admissible. The empty key is handled by the caller as a usage
+ * error (its pre-existing classification).
+ *
+ * The refusals are phrased as the store's own, because this is the same rule
+ * applied one layer earlier: the adapter rejects a key the store would have
+ * rejected anyway, before any payload is read.
+ */
+function invalidKey(kind: PersistKind, key: string): string | null {
+  if (key === "") return null;
+  const segments = key.split(/[\\/]+/);
+  if (kind === "json") {
+    if (!path.isAbsolute(key)) return `json key must be an absolute path \u2014 got ${JSON.stringify(key)}`;
+    if (segments.includes("..")) return `json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`;
+    return null;
+  }
+  if (segments.includes("..")) return `${kind} key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`;
+  if (path.isAbsolute(key) || segments.length > 1 || key === "." || !/^[A-Za-z0-9._-]+$/.test(key)) {
+    return `${kind} key must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") \u2014 got ${JSON.stringify(key)}`;
+  }
+  return null;
+}
+
 function errorCode(error: unknown, fallback: string): string {
   return error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
@@ -134,6 +163,8 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
         if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         const raw = readPayload(input.input, input.file, context.cwd, id);
         if (typeof raw !== "string") return raw;
         let payload: unknown;
@@ -177,6 +208,9 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.get";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
+        if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (input.versioned === true) {
@@ -224,6 +258,9 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.delete";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
+        if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (typeof store.delete !== "function") return usage(id, "store does not support delete");
