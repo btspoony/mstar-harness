@@ -2433,7 +2433,7 @@ export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot
  * the same canonical read `readPrepareCompass` performs later — rather than
  * being stored and failing at amendment time.
  */
-function normalizeIterationCompassRef(
+export function normalizeIterationCompassRef(
   ref: string,
   harnessRoot: string,
   refuse: (detail: string) => Error,
