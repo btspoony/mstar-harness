@@ -1293,4 +1293,3 @@ describe("gitRead subprocess failure classification", () => {
     expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
   }, 90_000);
 });
-
