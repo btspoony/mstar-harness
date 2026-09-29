@@ -33,6 +33,8 @@ Every leaf executor returns this template (only `**Agent**` and content fields c
 
 `{role_id}` = the role's own id (e.g. `fullstack-dev`, `frontend-dev`, `ops-engineer`, `qa-engineer`, `architect`, `code-reviewer`, `product-manager`, `prompt-engineer`, `writing-specialist`, `qc-specialist*`).
 
+For repo/process edits, provide the PM the actual edit time, editor seat, observable model or `unknown`, iteration/workflow and scope for the **local ignored attribution record** (`mstar-artifacts/references/plan-files-and-reports.md`). Do not invent a child's model, backdate a correction, or copy real provenance into tracked plans/examples. This is review-side evidence, not a new engine check.
+
 ## Git NEVER (repo writes)
 
 Apply when the assignment writes tracked repo files:

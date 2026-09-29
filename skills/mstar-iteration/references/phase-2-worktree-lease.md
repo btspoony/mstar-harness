@@ -11,6 +11,8 @@ full protocol here.
 
 **Scoped primary route**（`/iteration-drive --assignment|--workflow/--plan|--resume`）: this file is the **whole-iteration** execution checklist. On the scoped route every handwritten snapshot / register mutation below is replaced by a frozen `mstar plan …` state verb (which owns the same-host lock) — active：session reference + the scope's full execution token + an operation id under an independently acquired identity；pre-activation：session envelope + row revision → **`plan-scoped-pm.md`**. The §2.0 gates, per-plan loop, worktree layout and read-only validators still apply; the plan session's finish is a **handoff**, not `Done`.
 
+Normal scoped transition: PM/coordinator runs the intended public plan verb under its own identity and reads the applied/partial/replay receipt. Do not force a separate state-repair, rebind or token-copy step when the authority derives its projection and composes entailed bookkeeping. An unresolved foreign holder, ambiguous target or authorization gap is action-local: name the missing fact and continue independent ready work. The leaf receives only paths/scope, never session credentials.
+
 ## When it applies
 
 **Phase 2**（SKILL.md execute/resume route + `iteration-drive` / `iteration-loop`

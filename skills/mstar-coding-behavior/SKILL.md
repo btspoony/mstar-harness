@@ -86,7 +86,11 @@ When something does not work, investigate; do not guess.
 - **Reproduce before fixing.** If you cannot reproduce, you cannot verify. "I think this should fix it" is gambling.
 - **Change one thing at a time.** Changing three things and seeing the bug disappear tells you nothing about which change fixed it — or what new bugs the other two introduced.
 - **Fix the root cause, not the symptom.** If a value is unexpectedly null, do not just add a null check — figure out why it is null (see Surgical Changes · bug=root-cause).
-- **For executable bugs, write the minimal reproduction unit test before fixing.** Observe the relevant failure, apply the fix, then observe that case pass. For document/policy fixes, use the scoped evidence route below.
+
+**Test admission — product behavior first.** Before writing or retaining a test, name the plausible consumer-visible behavior, meaningful invariant, boundary, or fails-first regression it protects. Keep assertions that catch a real behavior regression. Delete tests that only pin source shape, wording, forwarding/copy echoes, duplicated producer checks, or environment-derived constants; do not rename or weaken them into a new category. PR #280 examples include a manifest parity guard duplicating and disagreeing with its producer, platform-dependent build-byte pins, SQLite fixtures built from raw platform bytes, and a test-only header regression. Replace a deleted assertion only with a product-behavior assertion when one exists; otherwise leave no test. For docs/policy, use scoped static or before/after evidence below rather than a test of the prose.
+
+- **For executable bugs, write the minimal consumer-behavior reproduction test before fixing.** Observe the relevant failure, apply the fix, then observe that case pass. For document/policy changes, use the scoped evidence route below; do not manufacture tests for wording.
+
 - **Run only affected unit tests.** Name the relevant file/case or selector; distinguish pre-existing failures from regressions. Reuse unaffected evidence and do not rerun a suite because HEAD changed. If an entry cannot select the required scope, report the gap instead of broadening it.
 - **If stuck, say so.** "I tried X and Y; neither worked. I'm seeing Z. I think it might be W but am not sure" is infinitely more useful than silently trying random things for 20 iterations.
 

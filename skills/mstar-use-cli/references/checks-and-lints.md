@@ -4,6 +4,8 @@ This file indexes the check commands — the ones skill engine-check callouts ci
 
 Behavior that the check's own contract does not cover is owned elsewhere: field schemas by `mstar-artifacts`, phase semantics by `mstar-iteration`, checkout rules by `mstar-branch-worktree`, dispatch fields by `mstar-dispatch-gates`.
 
+Payload discovery is read-only: `mstar-harness schema <type>` prints the runtime field contract for `CaptureInput`, `OccurrenceInput`, `IssueTriage`, `ClosureEvidence`, `IssueLink`, `PlanProgress`, or `HandoffEvidence`; command help owns the associated flags. This is a schema lookup, not a validator of an operator's evidence or authority. Historical `submit` maps to `judgment review-advice` (bounded non-authoritative advice), not a new command or acceptance gate.
+
 ## Reading a result
 
 | Code | Meaning |

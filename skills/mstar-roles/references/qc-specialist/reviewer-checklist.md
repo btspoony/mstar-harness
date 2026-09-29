@@ -33,6 +33,12 @@ Apply only affected items by **reading the assigned changed diff and directly re
 - [ ] Breaking changes include migration guidance.
 - [ ] Reuse preferred over duplicate logic.
 
+## Evidence and planning attribution (affected changes only)
+
+- [ ] Independently assess whether changed executable behavior has meaningful consumer-visible test coverage or invariant/boundary/regression evidence; accept applicable existing L1/L2 evidence, without running tests or requiring a new test for each edit.
+- [ ] Flag only concrete gaps: source-shape/wording pins, forwarding echoes, duplicated producer checks, and environment-dependent bytes are not meaningful coverage. Docs/policy changes use scoped static or before/after evidence, not prose tests (`mstar-coding-behavior` § Test admission).
+- [ ] For touched delivery compass, plan, spec, or knowledge documents, verify local edit attribution includes seat, model, ISO-8601 timestamp, and iteration; `unknown` is valid for an unavailable model ID, not a reason to infer it from this reviewer session.
+
 ## High-risk ops (when Assignment marks high-risk)
 
 Applies to migrations, prod config, destructive data ops, cert rotation, shared-env scripts, etc.
