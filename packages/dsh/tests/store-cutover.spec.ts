@@ -20,6 +20,7 @@
  *    uninitialized/staged store (pre-activation) does not.
  * 5. The current phase/leases still come from the JSON execution authority.
  */
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -60,6 +61,15 @@ afterEach(async () => {
 async function appWithRoot(name: string, enforcement?: 'hard' | 'soft'): Promise<{ app: BootResult; harnessDir: string }> {
   const root = await mkdtemp(join(tmpdir(), `dsh-${name}-`))
   roots.push(root)
+  // The root is a real git worktree, like every other engine/dsh fixture that
+  // goes through `storeDbPath`. That path resolves its context through
+  // `resolveProcessHarnessDir` → `resolveHarnessDir`, whose candidate probe
+  // counts a bare `plans/` CHILD as a harness root: once a test seeds
+  // `{HARNESS_DIR}/plans/` (the plan-document source of a registration review),
+  // a non-git root would re-resolve the store to `{HARNESS_DIR}/plans/store.db`.
+  // In a git root the `.mstarc` declaration in `bootApp` wins and the harness
+  // marker itself is returned stably, so the seeded plan dir cannot move it.
+  execFileSync('git', ['init', '-q'], { cwd: root })
   const app = booted = await bootApp({ root, ...(enforcement !== undefined ? { enforcement } : {}) })
   return { app, harnessDir: app.harnessDir }
 }
