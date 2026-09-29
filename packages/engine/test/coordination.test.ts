@@ -1259,6 +1259,35 @@ describe("admission self-claim and orphan adoption", () => {
     expect(sameDigests.map((violation) => violation.code)).toContain("coordination.amendment.hash");
   });
 
+  test("the amendment validator accepts the optional plan-half pair only as a pair that records a move", () => {
+    const entry = {
+      at: "2026-09-29T00:00:00Z",
+      session_id: "adopter",
+      old_sha256: "a".repeat(64),
+      new_sha256: "b".repeat(64),
+      operation_id: "c".repeat(64),
+    };
+    const coordination = { coordinator: { session_id: "s", session_file: "/tmp/s.json", bound_at: "2026-09-29T00:00:00Z" } };
+    const withPlan = (entry: Record<string, unknown>, plan: Record<string, unknown>) =>
+      validateSnapshotCoordination({ ...coordination, self_amendments: [{ ...entry, ...plan }] });
+
+    // A complete pair of differing digests: the two-half adoption.
+    expect(withPlan(entry, { plan_old_sha256: "d".repeat(64), plan_new_sha256: "e".repeat(64) })).toEqual([]);
+    // Half a pair, a non-hex half and a pair that records no move are each malformed.
+    for (const plan of [
+      { plan_old_sha256: "d".repeat(64) },
+      { plan_new_sha256: "e".repeat(64) },
+      { plan_old_sha256: "D".repeat(64), plan_new_sha256: "e".repeat(64) },
+      { plan_old_sha256: "d".repeat(63), plan_new_sha256: "e".repeat(64) },
+      { plan_old_sha256: "d".repeat(64), plan_new_sha256: "d".repeat(64) },
+    ]) {
+      expect({ plan, codes: withPlan(entry, plan).map((violation) => violation.code) }).toEqual({
+        plan,
+        codes: ["coordination.amendment.hash"],
+      });
+    }
+  });
+
   test("a bind addressing a divergent Assignment copy is refused by the prepared-path resolver", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
@@ -1521,11 +1550,12 @@ describe("admission self-claim and orphan adoption", () => {
     }
   });
 
-  test("a plan document edited inside the interleave window is refused too", async () => {
+  test("a plan document moved inside the interleave window is adopted with the Assignment drift", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
     await preparePlan(fixture, PLAN_ID);
-    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    const pinned = planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>;
+    const planPinned = String(pinned.plan_sha256);
 
     setBindPreInterleaveForTest(() => {
       setBindPreInterleaveForTest(undefined);
@@ -1536,23 +1566,57 @@ describe("admission self-claim and orphan adoption", () => {
     });
 
     try {
-      expect(
-        await errorCodeOf(() =>
-          bindPlanSession({
-            scope: { assignmentPath: fixture.assignmentPath },
-            cwd: fixture.root,
-            sessionId: "plan-edit-adopter",
-          }),
-        ),
-      ).toBe("coordination.assignment-stale");
+      const bound = await bindPlanSession({
+        scope: { assignmentPath: fixture.assignmentPath },
+        cwd: fixture.root,
+        sessionId: "plan-edit-adopter",
+      });
+      expect(bound.outcome).toBe("claimed");
     } finally {
       setBindPreInterleaveForTest(undefined);
     }
-    // The pair `prepare` sealed is only re-sealed as a pair: a moved plan
-    // document blocks the adoption even though the Assignment drift alone would
-    // have been adopted.
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
-    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+
+    // Both halves of the sealed pair are re-pinned to the bytes this bind acted
+    // under (spec §D2), and one audit entry records the two moves.
+    const prepared = planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>;
+    expect(prepared.assignment_sha256).toBe(sha256OfFile(fixture.assignmentPath));
+    expect(prepared.plan_sha256).toBe(sha256OfFile(fixture.planPath));
+    expect(prepared.plan_sha256).not.toBe(planPinned);
+
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      session_id: "plan-edit-adopter",
+      old_sha256: pinned.assignment_sha256,
+      new_sha256: prepared.assignment_sha256,
+      plan_old_sha256: planPinned,
+      plan_new_sha256: prepared.plan_sha256,
+      prepared_by_matches: false,
+    });
+  });
+
+  test("an adoption whose plan half did not move records no plan-half pair", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const planPinned = String((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).plan_sha256);
+    editAssignment(fixture, "Assignment only, plan untouched.");
+
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "assignment-only-adopter",
+    });
+    expect(bound.outcome).toBe("claimed");
+
+    // A matching plan half is an absent pair, never a pair of equal digests —
+    // the row keeps its plan pin and the entry records one move.
+    const prepared = planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>;
+    expect(prepared.plan_sha256).toBe(planPinned);
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].plan_old_sha256).toBeUndefined();
+    expect(audit[0].plan_new_sha256).toBeUndefined();
   });
 
   test("a deleted plan document refuses as a sealed-input staleness, never a filesystem error", async () => {
@@ -1584,6 +1648,106 @@ describe("admission self-claim and orphan adoption", () => {
     expect(refused?.message).toContain("plan document");
     expect(refused?.message).toContain("changed or is gone");
     expect(refused?.message).not.toMatch(/ENOENT|EISDIR/);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a moved plan that redirects its Working branch declaration refuses instead of being adopted", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Assignment drifts (adoption attempt) and the moved plan declares a
+    // different Working branch than the one this bind would claim: the seal
+    // must not describe a plan pointing the work somewhere else.
+    editAssignment(fixture, "comment-only drift, plan branch redirected.");
+    writeText(fixture.planPath, "# plan a\n\n**Working branch:** feature/somewhere-else\n\nBody.\n");
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "branch-redirect-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("declares Working branch feature/somewhere-else");
+    expect(refused?.message).toContain("feature/plan-a");
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+  });
+
+  test("a moved plan whose Working branch declaration still names the bind's branch is adopted", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    editAssignment(fixture, "comment-only drift, plan body edited.");
+
+    // The declared branches match the scope this bind acts under and the real
+    // main checkout (`git init -b main` above), so the move is a plain §D2
+    // re-pin: the declarations are not a second refusal surface.
+    writeText(
+      fixture.planPath,
+      "# plan a\n\n**Main worktree branch:** main\n**Working branch:** feature/plan-a\n\nplan edited after prepare.\n",
+    );
+
+    const bound = await bindPlanSession({
+      scope: { assignmentPath: fixture.assignmentPath },
+      cwd: fixture.root,
+      sessionId: "matching-declaration-adopter",
+    });
+    expect(bound.outcome).toBe("claimed");
+
+    const prepared = planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>;
+    expect(prepared.plan_sha256).toBe(sha256OfFile(fixture.planPath));
+    const audit = selfAmendmentAudit(fixture);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].plan_new_sha256).toBe(prepared.plan_sha256);
+  });
+
+  test("a moved plan whose Main worktree branch declaration contradicts the main checkout refuses", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const rowBefore = planRowOf(fixture, PLAN_ID);
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+
+    // The Working branch declaration still matches the bind's scope, but the
+    // moved plan points the main-residency expectation at a branch the main
+    // checkout is not on: the SDD path reads this header live, so the adoption
+    // re-proves the equality prepare proved instead of sealing the lie.
+    editAssignment(fixture, "comment-only drift, plan main header moved.");
+    writeText(
+      fixture.planPath,
+      "# plan a\n\n**Main worktree branch:** trunk\n**Working branch:** feature/plan-a\n\nplan edited after prepare.\n",
+    );
+
+    const refused = await (async () => {
+      try {
+        await bindPlanSession({
+          scope: { assignmentPath: fixture.assignmentPath },
+          cwd: fixture.root,
+          sessionId: "main-redirect-adopter",
+        });
+        throw new Error("expected the bind to refuse");
+      } catch (error) {
+        return error instanceof CoordinationError ? { code: error.code, message: error.message } : null;
+      }
+    })();
+
+    expect(refused?.code).toBe("coordination.assignment-stale");
+    expect(refused?.message).toContain("declares Main worktree branch trunk");
+    expect(refused?.message).toContain("is on main");
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID)).toEqual(rowBefore);
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
