@@ -1108,7 +1108,16 @@ function validateCoordinationIdentityRecovery(value, what = "coordination.identi
 function validateCoordinationSelfAmendment(value, what = "coordination.self_amendments[]") {
   if (!isPlainObject(value))
     return [invalid("coordination.amendment.shape", `${what} must be an object`)];
-  const allowed = ["at", "session_id", "old_sha256", "new_sha256", "operation_id", "prepared_by_matches"];
+  const allowed = [
+    "at",
+    "session_id",
+    "old_sha256",
+    "new_sha256",
+    "plan_old_sha256",
+    "plan_new_sha256",
+    "operation_id",
+    "prepared_by_matches"
+  ];
   const violations = [];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
@@ -1126,6 +1135,20 @@ function validateCoordinationSelfAmendment(value, what = "coordination.self_amen
   }
   if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
     violations.push(invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ — an amendment records a move`));
+  }
+  const planHalves = ["plan_old_sha256", "plan_new_sha256"].filter((key) => value[key] !== undefined);
+  if (planHalves.length === 1) {
+    violations.push(invalid("coordination.amendment.hash", `${what}.plan_old_sha256 and .plan_new_sha256 are recorded together or not at all`));
+  }
+  if (planHalves.length > 0) {
+    for (const key of planHalves) {
+      if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
+        violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
+      }
+    }
+    if (value.plan_old_sha256 === value.plan_new_sha256 && typeof value.plan_old_sha256 === "string") {
+      violations.push(invalid("coordination.amendment.hash", `${what}.plan_old_sha256 and .plan_new_sha256 must differ — an amendment records a move`));
+    }
   }
   if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
     violations.push(invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`));

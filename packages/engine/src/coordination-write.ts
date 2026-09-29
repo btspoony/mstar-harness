@@ -422,14 +422,25 @@ export type CoordinationIdentityRecovery = {
  * annotation — the file route's `--session-id` is caller-asserted and
  * authenticates nobody, so the annotation is evidence for the coordinator's
  * post-hoc read, not a gate.
+ *
+ * Both halves of the sealed pair are amendable by one adoption (spec §D2): a
+ * plan document revised while the iteration runs moves with the Assignment, so
+ * the record carries a SECOND optional pair — `plan_old_sha256` /
+ * `plan_new_sha256`, the plan document's digests before and after the refresh —
+ * present exactly when that half moved. An entry that records only the
+ * Assignment half is a complete record of a plan half that still matched.
  */
 export type CoordinationSelfAmendment = {
   at: string;
   session_id: string;
-  /** The pin the prepared block carried before the amendment (bare sha256 hex). */
+  /** The Assignment pin the prepared block carried before the amendment (bare sha256 hex). */
   old_sha256: string;
-  /** The digest of the bytes the adopting bind pinned (bare sha256 hex). */
+  /** The digest of the Assignment bytes the adopting bind pinned (bare sha256 hex). */
   new_sha256: string;
+  /** The plan document's pinned digest before the amendment, when that half moved too. */
+  plan_old_sha256?: string;
+  /** The digest of the plan bytes the adopting bind re-pinned, when that half moved too. */
+  plan_new_sha256?: string;
   /** The record's own id; sha256 hex over the amendment's canonical facts. */
   operation_id: string;
   /** Whether the adopting session is the one the prepared block recorded. */
@@ -877,16 +888,31 @@ export function validateCoordinationIdentityRecovery(
 /**
  * Validate one stored self-amendment record (spec §D2). Strict in the same way
  * the rest of this module is: the key set is exact (the optional
- * `prepared_by_matches` annotation aside), both digests are bare sha256 hex and
- * the record's own id must be present — an audit entry that cannot be read
- * exactly is a malformed document, never a record with optional halves.
+ * `prepared_by_matches` annotation and the optional plan-half pair aside),
+ * both digests are bare sha256 hex and the record's own id must be present — an
+ * audit entry that cannot be read exactly is a malformed document, never a
+ * record with optional halves.
+ *
+ * The plan-half pair is optional as a PAIR: present together when the adopted
+ * move carried both halves of the sealed pair, absent together when only the
+ * Assignment moved. A half-written pair describes a move the writer can never
+ * produce, so it is a malformed document like any other.
  */
 export function validateCoordinationSelfAmendment(
   value: unknown,
   what = "coordination.self_amendments[]",
 ): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.amendment.shape", `${what} must be an object`)];
-  const allowed = ["at", "session_id", "old_sha256", "new_sha256", "operation_id", "prepared_by_matches"];
+  const allowed = [
+    "at",
+    "session_id",
+    "old_sha256",
+    "new_sha256",
+    "plan_old_sha256",
+    "plan_new_sha256",
+    "operation_id",
+    "prepared_by_matches",
+  ];
   const violations: ValidationResult[] = [];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
@@ -909,6 +935,32 @@ export function validateCoordinationSelfAmendment(
     violations.push(
       invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ \u2014 an amendment records a move`),
     );
+  }
+  // The plan-half pair: both keys or neither, each a bare sha256 hex, and — like
+  // the Assignment half — a pair that records no move is malformed.
+  const planHalves = ["plan_old_sha256", "plan_new_sha256"].filter((key) => value[key] !== undefined);
+  if (planHalves.length === 1) {
+    violations.push(
+      invalid(
+        "coordination.amendment.hash",
+        `${what}.plan_old_sha256 and .plan_new_sha256 are recorded together or not at all`,
+      ),
+    );
+  }
+  if (planHalves.length > 0) {
+    for (const key of planHalves) {
+      if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
+        violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
+      }
+    }
+    if (value.plan_old_sha256 === value.plan_new_sha256 && typeof value.plan_old_sha256 === "string") {
+      violations.push(
+        invalid(
+          "coordination.amendment.hash",
+          `${what}.plan_old_sha256 and .plan_new_sha256 must differ \u2014 an amendment records a move`,
+        ),
+      );
+    }
   }
   if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
     violations.push(
