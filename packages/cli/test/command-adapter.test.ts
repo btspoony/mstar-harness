@@ -121,6 +121,23 @@ describe("generated CLI adapter", () => {
       properties: Record<string, Record<string, unknown>>;
     };
     expect(policy.properties.file).toMatchObject({ type: "string" });
+
+    // A descriptor keyed by a VALUE of the command's own argument
+    // (`persist.write` declares one contract per `kind`) names no input field,
+    // so it is never injected: a published tool field the handler does not read
+    // is a capability `tools/list` must not advertise. The handler reads the
+    // document from `input`/`file` only.
+    const persist = mcpToolInputSchema(definition("persist.write")).toJSONSchema() as {
+      properties: Record<string, unknown>;
+      required?: readonly string[];
+    };
+    for (const field of ["status", "snapshot", "review", "json"]) {
+      expect(Object.keys(persist.properties)).not.toContain(field);
+      expect(persist.required ?? []).not.toContain(field);
+    }
+    // …and the transport the handler does read stays published.
+    expect(Object.keys(persist.properties)).toContain("input");
+    expect(Object.keys(persist.properties)).toContain("file");
   });
 
   test("a workflow --file pathname reaches the domain reader instead of being JSON-decoded", async () => {

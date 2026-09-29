@@ -230,12 +230,11 @@ async function withWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Prom
 
 /**
  * The one roadmap write (contract §6). `expected` carries the caller's
- * comparison claims; an omitted claim is DERIVED from the authority read under
- * this same `begin immediate`, so it states the state the write actually
- * observed rather than a value the caller had to reconstruct. A supplied claim
- * is a constraint: a disagreement is `roadmap.revision-conflict` and nothing is
- * written. Derivation is not a second authority — the same row the readers
- * resolve is the one compared and rewritten here.
+ * comparison claims; both are REQUIRED, because a claim derived from the same
+ * read the write is built on can never disagree with it — the guard would be
+ * vacuous and a stale caller would silently overwrite whatever moved since it
+ * read (A11). A disagreement with the current authority inside this
+ * transaction is `roadmap.revision-conflict` and nothing is written.
  *
  * The request hash covers the DECLARED intent, not the resolved comparison: a
  * replay (same operation id, same body, same declared claims) is the same
@@ -248,9 +247,9 @@ function writeAuthority(
   db: StoreDb,
   input: { projectId: string; contentMarkdown: string },
   operation: RoadmapOperation,
-  provenance?: { sourcePath: string; sourceHash: string },
-  requestHashOverride?: string,
-  expected?: { projectRevision?: number; roadmapRevision?: RoadmapExpected },
+  provenance: { sourcePath: string; sourceHash: string } | undefined,
+  requestHashOverride: string | undefined,
+  expected: { projectRevision: number; roadmapRevision: RoadmapExpected },
 ): RoadmapWriteReceipt {
   requireRoadmapSchema(db);
   requireActive(db);
@@ -258,8 +257,8 @@ function writeAuthority(
   const requestHash = requestHashOverride ?? sha256(JSON.stringify({
     domain: "roadmap-content-authority",
     projectId: input.projectId,
-    declaredProjectRevision: expected?.projectRevision ?? null,
-    declaredRoadmapRevision: expected?.roadmapRevision ?? null,
+    declaredProjectRevision: expected.projectRevision,
+    declaredRoadmapRevision: expected.roadmapRevision,
     contentHash: hash,
     provenance: provenance ?? null,
   }));
@@ -273,15 +272,11 @@ function writeAuthority(
   const project = projectRow(db, input.projectId);
   const current = db.prepare("select revision from project_roadmaps where project_id=?").get(input.projectId) as { revision?: unknown } | undefined;
   const currentExpected: RoadmapExpected = current ? Number(current.revision) : "absent";
-  const observed = {
-    projectRevision: expected?.projectRevision ?? project.revision,
-    roadmapRevision: expected?.roadmapRevision ?? currentExpected,
-  };
-  if (project.revision !== observed.projectRevision || currentExpected !== observed.roadmapRevision) {
+  if (project.revision !== expected.projectRevision || currentExpected !== expected.roadmapRevision) {
     throw new RoadmapError(
       "roadmap.revision-conflict",
       `Catalog project ${input.projectId} is at project revision ${project.revision} / roadmap revision ${String(currentExpected)}, ` +
-        `not the expected ${observed.projectRevision} / ${String(observed.roadmapRevision)}; nothing was written.`,
+        `not the expected ${expected.projectRevision} / ${String(expected.roadmapRevision)}; nothing was written.`,
     );
   }
   validateContent(input.projectId, input.contentMarkdown);
@@ -303,24 +298,23 @@ function writeAuthority(
 }
 
 /**
- * Replace the whole roadmap body (contract §6 "raw replacement still requires
- * an observed comparison basis"). `expectedProjectRevision` /
- * `expectedRoadmapRevision` are a CONSTRAINT on the semantic read set when
- * supplied: each is compared against the current authority inside the write
- * transaction and a disagreement is `roadmap.revision-conflict`. An omitted
- * one is DERIVED from the current authority read under that same lock — the
- * observed comparison basis is the state this replacement actually applied to,
- * so a caller that just read the authority supplies nothing and still cannot
- * silently overwrite a concurrent change (A02/A11). What an omitted revision
- * never becomes is a second authority: the stored `project_roadmaps` row this
- * call writes is the same one every reader resolves.
+ * Replace the whole roadmap body (contract §6, whose signature declares both
+ * `expectedProjectRevision: number` and `expectedRoadmapRevision: RoadmapExpected`
+ * as required). The caller states the comparison basis it actually read: each
+ * claim is compared against the current authority inside the write transaction
+ * and a disagreement is `roadmap.revision-conflict`. Deriving an omitted claim
+ * from that same transaction would compare the authority against itself, so the
+ * guard would be vacuous and a caller holding a stale read would silently
+ * overwrite the newer content. What a claimed revision never becomes is a
+ * second authority: the stored `project_roadmaps` row this call writes is the
+ * same one every reader resolves.
  */
 export async function replaceRoadmapAuthority(
   context: StoreContext,
   input: {
     projectId: string;
-    expectedProjectRevision?: number;
-    expectedRoadmapRevision?: RoadmapExpected;
+    expectedProjectRevision: number;
+    expectedRoadmapRevision: RoadmapExpected;
     contentMarkdown: string;
   },
   operation: RoadmapOperation,

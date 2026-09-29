@@ -26,7 +26,7 @@ function failure(code: string, error: unknown, status: "refused" | "error" = "re
   };
 }
 
-function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): Promise<RunningDashboard> {
+function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { server: Promise<RunningDashboard>; reused: boolean } {
   let services = dashboards.get(context.effects);
   if (services === undefined) {
     services = new Map();
@@ -34,7 +34,7 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
   }
   const key = JSON.stringify([harnessDir, port, projectId ?? null]);
   const existing = services.get(key);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) return { server: existing, reused: true };
 
   const starting = context.effects.startDashboard({
     harnessDir,
@@ -45,7 +45,11 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
     throw error;
   });
   services.set(key, starting);
-  return starting;
+  return { server: starting, reused: false };
+}
+/** Drop one started handle from the connection cache by its own key. */
+function forget(context: InvocationContext, harnessDir: string, port: number, projectId?: string): void {
+  dashboards.get(context.effects)?.delete(JSON.stringify([harnessDir, port, projectId ?? null]));
 }
 async function execute(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   if (context.signal.aborted) {
@@ -69,8 +73,11 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
   }
 
   let server: RunningDashboard;
+  let reused: boolean;
   try {
-    server = await serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
+    const started = serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
+    reused = started.reused;
+    server = await started.server;
   } catch (error) {
     const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
       ? error.code
@@ -78,6 +85,15 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
     return failure(code, error);
   }
   if (context.signal.aborted) {
+    // Cancellation arrived while this call was starting a listener: stop the
+    // handle THIS call created and drop it from the cache, so the aborted
+    // request leaves no connection-scoped service behind. A handle another
+    // call already owns is reused, never stopped, because the connection still
+    // holds it.
+    if (!reused) {
+      forget(context, harnessDir, parsed.data.port, parsed.data.project);
+      await server.close();
+    }
     return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
   }
 
@@ -85,8 +101,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
     try {
       await context.effects.openBrowser(server.url);
     } catch (error) {
-      const services = dashboards.get(context.effects);
-      services?.delete(JSON.stringify([harnessDir, parsed.data.port, parsed.data.project ?? null]));
+      forget(context, harnessDir, parsed.data.port, parsed.data.project);
       await server.close();
       return failure("capability.browser.unavailable", error, "error");
     }
