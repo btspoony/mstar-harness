@@ -128,7 +128,7 @@ function decodePayloadInputs(
     for (const issue of parsed.error.issues) {
       const suffix = issue.path.reduce((path: string, part: string | number | symbol) =>
         typeof part === "number" ? `${path}[${String(part)}]` : `${path}.${String(part)}`,
-      String(issue.path[0] ?? ""));
+      "");
       const path = `${field}${suffix}`;
       const index = issue.path.find((part) => typeof part === "number");
       diagnostics.push({
