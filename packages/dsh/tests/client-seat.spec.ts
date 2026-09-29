@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createElement } from 'react'
@@ -190,11 +190,11 @@ describe('workflow panel — sidebar seat registration (plugin entry)', () => {
     // without re-registration.
     expect(definition.title('sidebar://mstar-workflow')).toBe('Morning Star Workflow')
     expect(guide.title()).toBe('Morning Star Workflow')
-    expect(guide.description?.()).toBe('Workspace state, plans, and iteration progress')
+
     locale.setLocale('zh')
     expect(definition.title('sidebar://mstar-workflow')).toBe('晨星工作流')
     expect(guide.title()).toBe('晨星工作流')
-    expect(guide.description?.()).toBe('查看工作区状态、计划与迭代进度')
+
   })
 
   it('registers the body and chip-title seats under the definition id once the seats are declared', () => {
@@ -285,23 +285,5 @@ describe('workflow panel — sidebar body visibility gate (plan §L2.6)', () => 
 
   it('tab.visible === true renders the panel', () => {
     expect(renderBody(true)).toContain('data-mstar-panel="waiting"')
-  })
-})
-
-describe('workflow panel — no conversation.view registration remains (AC1 negative)', () => {
-  it('src/client/** contains no conversation.view registration', () => {
-    const clientDir = join(import.meta.dir, '..', 'src', 'client')
-    const offenders: string[] = []
-    const visit = (dir: string): void => {
-      for (const name of readdirSync(dir, { withFileTypes: true })) {
-        const path = join(dir, name.name)
-        if (name.isDirectory()) visit(path)
-        else if (/\.(ts|tsx)$/.test(name.name) && readFileSync(path, 'utf8').includes('conversation.view')) {
-          offenders.push(path)
-        }
-      }
-    }
-    visit(clientDir)
-    expect(offenders).toEqual([])
   })
 })

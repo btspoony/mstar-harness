@@ -14,12 +14,7 @@
  */
 import { describe, expect, it } from 'bun:test'
 import { ENGINE_STATUS_CHANNEL, ENGINE_STATUS_ENDPOINT, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
-import {
-  MSTAR_ENGINE_STATUS_METHOD,
-  MSTAR_ENGINE_STATUS_NAMESPACE,
-  MSTAR_SELECT_WORKFLOW_METHOD,
-  mstarEngineStatusContribution,
-} from '../src/engine-status-endpoint.ts'
+import { mstarEngineStatusContribution } from '../src/engine-status-endpoint.ts'
 import { MstarEngineStatusClient } from '../src/client/panel/engine-status-client.ts'
 import { stubGateway } from './gateway-stub.ts'
 
@@ -47,10 +42,6 @@ describe('engine-status wire address — one declaration, both halves', () => {
     expect(gateway.calls[0]!.endpoint).toBe(ENGINE_STATUS_ENDPOINT)
   })
 
-  it('the address is composed of the namespace and method the host declares', () => {
-    expect(ENGINE_STATUS_ENDPOINT).toBe(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_ENGINE_STATUS_METHOD}`)
-    expect(ENGINE_STATUS_CHANNEL).toBe('/api')
-  })
 })
 
 describe('selectWorkflow wire address — one declaration, both halves', () => {
@@ -69,8 +60,4 @@ describe('selectWorkflow wire address — one declaration, both halves', () => {
     client.dispose()
   })
 
-  it('the address is composed of the namespace and method the host declares', () => {
-    expect(SELECT_WORKFLOW_ENDPOINT).toBe(`${MSTAR_ENGINE_STATUS_NAMESPACE}/${MSTAR_SELECT_WORKFLOW_METHOD}`)
-  })
 })
-

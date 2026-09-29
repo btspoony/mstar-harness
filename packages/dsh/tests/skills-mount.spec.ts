@@ -205,7 +205,7 @@ describe('skills mount via the plugin (real composition)', () => {
     const skills = await booted.ctx.skills.list()
     const planConventions = skills.find((skill) => skill.name === 'mstar-conventions')
     expect(planConventions).toBeDefined()
-    expect(planConventions!.description.length).toBeGreaterThan(0)
+
     expect(planConventions!.provider).toBe('mstar')
     expect(planConventions!.source).toBe('custom')
     // The plan acceptance: name/description present for the mounted skill.

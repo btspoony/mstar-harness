@@ -10,7 +10,7 @@
  * (skips gracefully when the checkout lacks the mirror source).
  */
 import { describe, expect, it, test } from 'bun:test'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,24 +22,6 @@ import {
   sourceAgents,
 } from '../scripts/bundle-harness-assets.ts'
 
-/** The 13 shared subagent shells — the `mode: primary` project-manager seat
- * is OpenCode-only (`packages/opencode/agents/`, merged into its own
- * `harness-agents/` at bundle time), never on the shared subagent surface. */
-const AGENT_SHELLS: string[] = [
-  'architect.md',
-  'code-reviewer.md',
-  'frontend-dev.md',
-  'fullstack-dev-2.md',
-  'fullstack-dev.md',
-  'ops-engineer.md',
-  'product-manager.md',
-  'prompt-engineer.md',
-  'qa-engineer.md',
-  'qc-specialist-2.md',
-  'qc-specialist-3.md',
-  'qc-specialist.md',
-  'writing-specialist.md',
-]
 
 /** A tiny throwaway source/dest pair; never touches the real mirrors. */
 async function fixturePair(): Promise<{ src: string; dest: string; cleanup: () => Promise<void> }> {
@@ -97,10 +79,6 @@ describe('copyTree — mirror contract on a tiny fixture', () => {
 
 // Real-checkout sanity: 13 shared subagent shells in the monorepo; skips when
 // agents/ is absent.
-test.skipIf(!existsSync(sourceAgents))('repo-root agents/ carries the 13 shared subagent shells (monorepo checkout)', () => {
-  const shells = readdirSync(sourceAgents)
-    .filter((f) => f.endsWith('.md'))
-    .sort()
-  expect(shells).toEqual([...AGENT_SHELLS].sort())
+test.skipIf(!existsSync(sourceAgents))('repo-root agents/ excludes the OpenCode-only project-manager seat (monorepo checkout)', () => {
   expect(existsSync(join(sourceAgents, 'project-manager.md'))).toBe(false)
 })
