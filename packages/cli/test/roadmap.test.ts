@@ -95,18 +95,27 @@ describe("roadmap CLI", () => {
     });
 
     const markdown = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(envelope(markdown).data).toBe(MARKDOWN);
+    expect(envelope(markdown).data).toContain("## Direction");
+    expect(envelope(markdown).data).toContain("Keep the full source document\\.");
     const transport = data(run(["roadmap", "export", "--project", "proj-roadmap", "--format", "json"], dir));
-    expect(transport).toEqual({
-      version: 1,
+    expect(transport).toMatchObject({
+      version: 2,
       projectId: "proj-roadmap",
-      revision: receipt.revision,
-      contentHash: receipt.contentHash,
+      storeRevision: expect.any(Number),
+      catalogRevision: expect.any(Number),
       contentMarkdown: MARKDOWN,
+      direction: expect.any(String),
+      milestones: {
+        projectId: "proj-roadmap",
+        milestones: expect.any(Array),
+        issues: expect.any(Array),
+        unassignedIssues: expect.any(Number),
+      },
+      projection: { freshness: expect.any(String) },
     });
   });
 
-  test("reviewed import preserves a leading BOM through apply and Markdown export", async () => {
+  test("reviewed import preserves a leading BOM through apply; Markdown export renders the roadmap projection", async () => {
     const { dir } = await fixture("import-bom-");
     const source = join(dir, "bom-roadmap.md");
     const reviewFile = join(dir, "review.json");
@@ -128,7 +137,9 @@ describe("roadmap CLI", () => {
     expect(shown.contentHash).toBe(reviewed.sourceHash);
     expect(shown.contentHash).toBe(receipt.contentHash);
     const exported = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(Buffer.from(envelope(exported).data as string, "utf8")).toEqual(sourceBytes);
+    const exportedText = envelope(exported).data as string;
+    expect(exportedText).toContain("## Direction");
+    expect(exportedText).toContain("Keep the full source document\\.");
   });
 
   test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
@@ -157,7 +168,7 @@ describe("roadmap CLI", () => {
     expect(bomRead.contentMarkdown).toBe(bomMarkdown);
     expect(bomRead.contentHash).toBe(createHash("sha256").update(Buffer.from(bomMarkdown, "utf8")).digest("hex"));
     const bomExport = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
-    expect(envelope(bomExport).data).toBe(bomMarkdown);
+    expect(envelope(bomExport).data).toContain("## Direction");
 
     const stale = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", source,
     "--expect-project", "1", "--expect-roadmap", "absent", "--operation", "stale", ], dir);

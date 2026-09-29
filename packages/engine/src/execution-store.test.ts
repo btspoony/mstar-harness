@@ -304,7 +304,8 @@ describe("execution-schema: append-only coverage migration", () => {
       expect(MIGRATIONS[4].name).toBe("execution-coverage-column");
       expect(MIGRATIONS[5].version).toBe(6);
       expect(MIGRATIONS[5].name).toBe("roadmap-content-authority");
-      expect(MIGRATIONS.length).toBe(6);
+      expect(MIGRATIONS[6].version).toBe(7);
+      expect(MIGRATIONS.length).toBe(7);
     });
   });
 
@@ -363,7 +364,7 @@ describe("execution-schema: append-only coverage migration", () => {
           operation_id: "op-1",
           request_hash: "req-hash-1",
         });
-        // Applied rows 1–3 keep their checksums; migrations 4–6 append.
+        // Applied rows 1–3 keep their checksums; migrations 4–7 append.
         expect(all(db, "select version, name, checksum from schema_version order by version")).toEqual([
           { version: 1, name: "issue-core", checksum: FROZEN_V3_CHECKSUMS[1] },
           { version: 2, name: "catalog-authority", checksum: FROZEN_V3_CHECKSUMS[2] },
@@ -371,6 +372,7 @@ describe("execution-schema: append-only coverage migration", () => {
           { version: 4, name: "execution-authority", checksum: migrationChecksum(MIGRATIONS[3]) },
           { version: 5, name: "execution-coverage-column", checksum: migrationChecksum(MIGRATIONS[4]) },
           { version: 6, name: "roadmap-content-authority", checksum: migrationChecksum(MIGRATIONS[5]) },
+          { version: 7, name: "project-milestones", checksum: migrationChecksum(MIGRATIONS[6]) },
         ]);
         expect(all(db, "pragma table_info(execution_migrations)").some((row: { name?: unknown }) => row.name === "coverage_json")).toBe(true);
         expect(all(db, "pragma foreign_key_check")).toEqual([]);

@@ -11944,13 +11944,64 @@ create table project_roadmaps(
 );
 drop table projection_roadmaps;
 `;
+var MIGRATION_7_SQL = `
+create table project_milestones(
+  milestone_id text primary key not null,
+  project_id text not null,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  name text not null check (length(trim(name)) > 0),
+  target text check (
+    target is null or
+    (length(target) = 10 and target glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+  ),
+  status text not null default 'planned'
+    check (status in ('planned','active','delivered','dropped')),
+  ordinal integer not null check (typeof(ordinal) = 'integer' and ordinal >= 0),
+  revision integer not null default 1 check (revision > 0),
+  created_at text not null,
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);
+create index project_milestones_order
+  on project_milestones(project_id, ordinal, milestone_id);
+alter table issues add column milestone_id text
+  references project_milestones(milestone_id);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger project_milestones_identity_immutable
+before update of milestone_id, project_id on project_milestones
+when new.milestone_id != old.milestone_id or new.project_id != old.project_id
+begin
+  select raise(abort, 'milestone.identity-immutable');
+end;
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
   { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
-  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL }
+  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
+  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL }
 ];
 var EXECUTION_TABLE_NAMES = [
   "execution_meta",
@@ -12955,6 +13006,43 @@ async function refreshProjections(context) {
   return attempt.report;
 }
 
+class MilestoneError extends Error {
+  code;
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
+    this.name = "MilestoneError";
+    this.code = code2;
+  }
+}
+var fail = (code2, message) => {
+  throw new MilestoneError(code2, message);
+};
+function guard(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
+    fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
+  const active = db.prepare("select authority_state from store_meta where id=1").get();
+  if (active?.authority_state !== "active")
+    fail("milestone.store-not-active", "Milestone access requires an active store.");
+}
+function project(db, projectId) {
+  if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
+    fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
+}
+function readMilestonesOn(db, projectId, milestoneId) {
+  guard(db);
+  project(db, projectId);
+  const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
+  const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
+  const milestones = rows.map((r) => {
+    const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
+    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, doneIssues: resolvedIssues + otherRetiredIssues, resolvedIssues, otherRetiredIssues };
+  });
+  const issues = db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params).map((r) => ({ id: String(r.id), title: String(r.title), acceptance: String(r.acceptance), disposition: r.disposition, revision: Number(r.revision), milestoneId: String(r.milestone_id) }));
+  const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
+  return { projectId, milestones, issues, unassignedIssues: unassigned.count };
+}
 class StoreReadError extends Error {
   code;
   constructor(code2, message) {
@@ -13195,7 +13283,7 @@ function readIssuePage(db, filter) {
   const storeRevision = readMeta2(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params);
   const rows = db.prepare(`select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision,
+              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`).all(...params, limit, offset);
   return {
@@ -13208,7 +13296,8 @@ function readIssuePage(db, filter) {
       disposition: row.disposition,
       registeredAt: row.registeredAt,
       lastActivity: row.lastActivity,
-      revision: row.revision
+      revision: row.revision,
+      milestoneId: row.milestoneId
     })),
     total: totalRow.n,
     storeRevision
@@ -13223,7 +13312,7 @@ function parseEvidenceText(json) {
   }
 }
 function readIssueDetail(db, id) {
-  const issue = db.prepare("select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key from issues where id = ?").get(id);
+  const issue = db.prepare("select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id from issues where id = ?").get(id);
   if (!issue)
     throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
   const occurrences = db.prepare("select id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at, imported from occurrences where issue_id = ? order by id asc").all(id).map((row) => ({
@@ -13284,6 +13373,7 @@ function readIssueDetail(db, id) {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    milestoneId: issue.milestone_id,
     occurrences,
     transitions,
     relations,
@@ -13663,14 +13753,16 @@ function readRoadmap(db, filters) {
       return null;
     throw error;
   }
+  const milestones = readMilestonesOn(db, projectId);
   if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null };
+    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
   }
   return {
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown)
+    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    milestones
   };
 }
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
