@@ -228,6 +228,21 @@ describe("generated CLI adapter", () => {
     expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
   });
 });
+test("payload decoding reports malformed JSON as usage without executing the command", async () => {
+  const result = await run(["report", "--arguments", "[not-json"]);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    command: "report",
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+  });
+});
+
+test("sparse input reaches the command resolver without transport defaulting", async () => {
+  const result = await run(["report"]);
+  expect(JSON.parse(result.stdout)).toMatchObject({ command: "report", status: "ok" });
+});
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));
   const source = path.join(root, "roadmap.md");

@@ -21,7 +21,7 @@ export type CommandSchemaDescriptor = {
   id: string;
   cli: CommandDefinition["cli"];
   input: unknown;
-  payloadSchemas: typeof ISSUE_PAYLOAD_SCHEMAS;
+  payloadSchemas: Readonly<Record<string, unknown>>;
 };
 
 export function getCommandSchemas(definitions: readonly CommandDefinition[]): readonly CommandSchemaDescriptor[] {
@@ -29,7 +29,9 @@ export function getCommandSchemas(definitions: readonly CommandDefinition[]): re
     id: definition.id,
     cli: definition.cli,
     input: definition.input.toJSONSchema(),
-    payloadSchemas: ISSUE_PAYLOAD_SCHEMAS,
+    payloadSchemas: Object.fromEntries(
+      Object.entries(definition.payloads ?? {}).map(([name, descriptor]) => [name, descriptor.schema.toJSONSchema()]),
+    ),
   }));
 }
 
