@@ -854,7 +854,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       subject: "Model handoff preference off",
       detail: "modelHandoff is off in native settings; no model action was taken.",
     }));
-    return outcome(true, false, "modelHandoff is off in native settings; no model action was taken and the session model and handoff record are unchanged.", {
+    return outcome(true, false, "modelHandoff is off in native settings; this session is not armed and its model is unchanged. Enabling it later does not retro-arm an in-flight iteration.", {
       code: "preference-off",
       ...(pending ? { state: "pending" } : {}),
     });
