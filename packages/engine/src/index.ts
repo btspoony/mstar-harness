@@ -162,6 +162,7 @@ export {
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   recordWorkflowDelivery,
+  normalizeIterationCompassRef,
   registerIterationWorkflow,
   registerPlanWorkflow,
   WORKFLOW_COMPOUND_OUTCOMES,
