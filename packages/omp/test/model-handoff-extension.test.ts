@@ -1221,7 +1221,7 @@ describe("fire reads current preference", () => {
     const skipped = await off.runTool({ operation: "phase1-complete", workflowId: "no-binding" });
     expect(codeOf(skipped)).toBe("preference-off");
     expect(skipped.isError).toBe(false);
-    expect(skipped.content[0]?.text).toContain("this session is not armed and its model is unchanged");
+    expect(skipped.content[0]?.text).toContain("no model action was taken and the session model and handoff record are unchanged");
     expect(off.records()).toEqual([]);
     expect(off.switched).toEqual([]);
 
