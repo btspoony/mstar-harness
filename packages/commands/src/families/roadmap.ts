@@ -96,7 +96,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     "",
     "## Direction",
     "",
-    roadmap.content?.direction?.trim() ? roadmap.content.direction.trim() : "No stored Direction.",
+    roadmap.content?.direction?.replace(/^\n+|\n+$/g, "") || "No stored Direction.",
     "",
   ];
   for (const milestone of roadmap.milestones.milestones) {

@@ -123,7 +123,8 @@ describe("catalog and roadmap command families", () => {
   test("direction export is byte-stable across export, replace and re-export (no escaping accumulation)", async () => {
     const { cwd, harness } = await activeFixture("direction-roundtrip");
     const directionWithSyntax = "Retained **bold** prose with [a link](https://example.test) and `code` spans — verbatim.";
-    const source = `---\nproject_id: proj\ntitle: Project\nstatus: active\ncreated_at: 2026-09-29\n---\n\n## Direction\n\n${directionWithSyntax}\n`;
+    const indentedCode = "    const first = line();\n    return first;";
+    const source = `---\nproject_id: proj\ntitle: Project\nstatus: active\ncreated_at: 2026-09-29\n---\n\n## Direction\n\n${indentedCode}\n\n${directionWithSyntax}\n`;
     const sourceFile = join(cwd, "direction-source.md");
     writeFileSync(sourceFile, source);
     const seed = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: sourceFile, expectProject: 1, expectRoadmap: "absent", operation: "direction-seed", harness }, invocation(cwd));
@@ -145,6 +146,7 @@ describe("catalog and roadmap command families", () => {
     const secondDirection = String(second.data).split("## Direction")[1];
     expect(secondDirection).toBe(firstDirection);
     expect(secondDirection).not.toContain("\\*\\*");
+    expect(secondDirection).toContain("    const first = line();");
   });
 
   test("quoted and backslash roadmap titles export verbatim and can be replaced", async () => {
