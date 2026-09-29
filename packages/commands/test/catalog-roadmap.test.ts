@@ -147,6 +147,25 @@ describe("catalog and roadmap command families", () => {
     expect(secondDirection).not.toContain("\\*\\*");
   });
 
+  test("quoted and backslash roadmap titles export verbatim and can be replaced", async () => {
+    const { cwd, harness } = await activeFixture("quoted-title-roundtrip");
+    const title = 'He said "hi" \\ adjusted';
+    const sourceFile = join(cwd, "roadmap-source.md");
+    writeFileSync(sourceFile, markdown(title));
+    const seed = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: sourceFile, expectProject: 1, expectRoadmap: "absent", operation: "quoted-title-seed", harness }, invocation(cwd));
+    expect(seed.status).toBe("ok");
+
+    const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(exported.status).toBe("ok");
+    const exportedMarkdown = String(exported.data);
+    expect(exportedMarkdown.split("\n").find((line) => line.startsWith("title: "))).toBe(`title: ${title}`);
+
+    const roundTripFile = join(cwd, "roadmap-roundtrip.md");
+    writeFileSync(roundTripFile, exportedMarkdown);
+    const replace = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: roundTripFile, expectProject: 1, expectRoadmap: 1, operation: "quoted-title-roundtrip-replace", harness }, invocation(cwd));
+    expect(replace.status).toBe("ok");
+  });
+
   test("roadmap JSON export returns the v2 envelope", async () => {
     const { cwd, harness } = await activeFixture("roadmap-json-export");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));

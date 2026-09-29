@@ -96,7 +96,7 @@ describe("roadmap CLI", () => {
 
     const markdown = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     expect(envelope(markdown).data).toContain("## Direction");
-    expect(envelope(markdown).data).toContain("Keep the full source document\\.");
+    expect(envelope(markdown).data).toContain("Keep the full source document.");
     const transport = data(run(["roadmap", "export", "--project", "proj-roadmap", "--format", "json"], dir));
     expect(transport).toMatchObject({
       version: 2,
@@ -139,7 +139,7 @@ describe("roadmap CLI", () => {
     const exported = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     const exportedText = envelope(exported).data as string;
     expect(exportedText).toContain("## Direction");
-    expect(exportedText).toContain("Keep the full source document\\.");
+    expect(exportedText).toContain("Keep the full source document.");
   });
 
   test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
