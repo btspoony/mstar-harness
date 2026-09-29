@@ -165,7 +165,7 @@ describe("catalog and roadmap command families", () => {
     expect(stale.code).toBe("catalog.revision-conflict");
   });
 
-  test("reviewed import keeps its saved comparison basis and raw replacement derives an omitted one", async () => {
+  test("reviewed import keeps its saved comparison basis and raw replacement states its own", async () => {
     const { cwd, harness } = await activeFixture("reviewed-import");
     // Discovery is read-only; the reviewed mapping states the identity the
     // reviewer confirmed, and the engine re-reads the named source by hash.
@@ -199,23 +199,33 @@ describe("catalog and roadmap command families", () => {
     if (listed.status === "ok") expect((listed.data as { total: number }).total).toBe(2);
   });
 
-  test("roadmap conflict refuses a stale expectation while an omitted one derives the observed state", async () => {
+  test("roadmap replace requires the caller's revision claims and refuses a stale one", async () => {
     const { cwd, harness } = await activeFixture("roadmap-conflict");
     const create = join(cwd, "create.md");
     const replace = join(cwd, "replace.md");
     writeFileSync(create, markdown("Created"));
     writeFileSync(replace, markdown("Replaced"));
-    // Derived: no --expect-project/--expect-roadmap, so the engine compares
-    // against the authority it observed under its own write lock.
     const created = await roadmap["roadmap.replace"]!.execute({
-      project: "proj", file: create, operation: "roadmap-create", harness,
+      project: "proj", file: create, expectProject: 1, expectRoadmap: "absent", operation: "roadmap-create", harness,
     }, invocation(cwd));
     expect(created.status).toBe("ok");
+    // An omitted claim is NOT derived from the transaction's own read: the
+    // comparison basis is a caller fact, so a stale read cannot silently
+    // overwrite a newer update (A11). Both flags are named in one refusal.
+    const derived = await roadmap["roadmap.replace"]!.execute({
+      project: "proj", file: replace, operation: "roadmap-derived", harness,
+    }, invocation(cwd));
+    expect(derived.status).toBe("usage");
+    if (derived.status !== "usage") throw new Error("expected an aggregated roadmap refusal");
+    for (const flag of ["--expect-project", "--expect-roadmap"]) expect(derived.message).toContain(flag);
+    const untracked = await roadmap["roadmap.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+    if (untracked.status === "ok") expect(JSON.stringify(untracked.data)).not.toContain("Replaced");
+
     const replaced = await roadmap["roadmap.replace"]!.execute({
-      project: "proj", file: replace, operation: "roadmap-replace", harness,
+      project: "proj", file: replace, expectProject: 1, expectRoadmap: 1, operation: "roadmap-replace", harness,
     }, invocation(cwd));
     expect(replaced.status).toBe("ok");
-    if (replaced.status !== "ok") throw new Error("derived replacement did not apply");
+    if (replaced.status !== "ok") throw new Error("claimed replacement did not apply");
     expect(replaced.data).toMatchObject({ revision: 2 });
     // A supplied expectation claiming the absent state the project left behind
     // is a semantic conflict: nothing is overwritten (A11).
@@ -231,19 +241,24 @@ describe("catalog and roadmap command families", () => {
     const sparse = await roadmap["roadmap.replace"]!.execute({ harness }, invocation(cwd));
     expect(sparse.status).toBe("usage");
     if (sparse.status !== "usage") throw new Error("expected an aggregated roadmap refusal");
-    for (const flag of ["--project", "--file", "--operation"]) expect(sparse.message).toContain(flag);
+    for (const flag of ["--project", "--file", "--expect-project", "--expect-roadmap", "--operation"]) {
+      expect(sparse.message).toContain(flag);
+    }
   });
 
   test("roadmap replay returns the recorded receipt instead of a second write", async () => {
     const { cwd, harness } = await activeFixture("roadmap-replay");
     const file = join(cwd, "candidate.md");
     writeFileSync(file, markdown("Replayed"));
+    const claim = { expectProject: 1, expectRoadmap: "absent" } as const;
     const first = await roadmap["roadmap.replace"]!.execute({
-      project: "proj", file, operation: "roadmap-replay-op", harness,
+      project: "proj", file, operation: "roadmap-replay-op", harness, ...claim,
     }, invocation(cwd));
     expect(first.status).toBe("ok");
+    // The replay reuses the SAME declared claim: hashing the declared intent
+    // keeps an identical retry from turning into an operation conflict (A09).
     const second = await roadmap["roadmap.replace"]!.execute({
-      project: "proj", file, operation: "roadmap-replay-op", harness,
+      project: "proj", file, operation: "roadmap-replay-op", harness, ...claim,
     }, invocation(cwd));
     expect(second.status).toBe("ok");
     expect(second.data).toEqual(first.status === "ok" ? first.data : undefined);
@@ -251,7 +266,7 @@ describe("catalog and roadmap command families", () => {
     // than silently rewriting under the old identity.
     writeFileSync(file, markdown("Different"));
     const conflicting = await roadmap["roadmap.replace"]!.execute({
-      project: "proj", file, operation: "roadmap-replay-op", harness,
+      project: "proj", file, operation: "roadmap-replay-op", harness, ...claim,
     }, invocation(cwd));
     expect(conflicting.status).toBe("refused");
     expect(conflicting.code).toBe("roadmap.operation-conflict");

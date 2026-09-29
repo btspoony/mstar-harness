@@ -125,6 +125,56 @@ describe("dashboard connection lifetime", () => {
     }
   });
 
+  test("cancellation while the service starts stops that listener instead of leaking it", async () => {
+    const harnessDir = await workspace("dashboard-cancel-during-");
+    const handles: RunningDashboard[] = [];
+    const controller = new AbortController();
+    // Abort while the service effect is in flight: the listener is started and
+    // published, then the request observes the cancellation. That handle
+    // belongs to this aborted call, so it must be closed and evicted.
+    const effects = serviceEffects(handles);
+    const starting = { ...effects, async startDashboard(request: Parameters<CommandEffects["startDashboard"]>[0]) {
+      const handle = await effects.startDashboard(request);
+      controller.abort();
+      return handle;
+    } };
+    try {
+      const invocation = { ...context(harnessDir, starting), signal: controller.signal };
+      const result = await dashboardDefinition().execute({ port: 0 }, invocation);
+      expect(result).toMatchObject({ status: "error", code: "command.cancelled" });
+      expect(handles).toHaveLength(1);
+      await expect(fetch(handles[0]!.url)).rejects.toThrow();
+      // The evicted handle is not reused after a later, non-cancelled call.
+      const restarted = await dashboardDefinition().execute({ port: 0 }, context(harnessDir, effects));
+      expect(restarted).toMatchObject({ status: "ok" });
+      expect(handles).toHaveLength(2);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancellation after a reused service starts leaves the shared listener running", async () => {
+    const harnessDir = await workspace("dashboard-cancel-reused-");
+    const handles: RunningDashboard[] = [];
+    const first = await dashboardDefinition().execute({ port: 0 }, context(harnessDir, serviceEffects(handles)));
+    expect(first).toMatchObject({ status: "ok" });
+    const controller = new AbortController();
+    controller.abort();
+    try {
+      // Same root/port: the call reuses the live handle. A cancelled reuse must
+      // NOT stop a service the connection still owns.
+      const result = await dashboardDefinition().execute({ port: 0 }, { ...context(harnessDir, serviceEffects(handles)), signal: controller.signal });
+      expect(result).toMatchObject({ status: "error", code: "command.cancelled" });
+      expect(handles).toHaveLength(1);
+      const response = await fetch(handles[0]!.url);
+      expect(response.status).toBe(200);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+
   test("optional browser failure is typed and closes its unrequested service", async () => {
     const harnessDir = await workspace("dashboard-opener-");
     const handles: RunningDashboard[] = [];

@@ -25,10 +25,15 @@ export function mcpToolName(commandId: string): string {
  * handler decodes and validates through the same descriptor, so the published
  * schema and the enforced contract are one schema.
  *
- * A field the input schema already declares as a shape is left to that schema
- * (it is the family's own transport contract — the workflow `--file` path,
- * which must stay a pathname); a permissive `z.unknown()` placeholder gains the
- * domain-owned shape instead.
+ * A descriptor is composed only when its key is a declared field the family
+ * left as a permissive `z.unknown()` placeholder: that placeholder gains the
+ * domain-owned shape. A field the input schema already shapes stays that
+ * schema (it is the family's own transport contract — the workflow `--file`
+ * path, which must stay a pathname), and a key that names no input field at
+ * all is never injected, because a tool field the handler does not read is a
+ * capability `tools/list` must not advertise. Descriptor keys are not required
+ * to be payload field names — `persist.write` keys its per-kind contracts by
+ * `kind` value — so they are published by the `schema` family alone.
  */
 export function mcpToolInputSchema(definition: CommandDefinition) {
   const input = definition.input;
@@ -37,12 +42,9 @@ export function mcpToolInputSchema(definition: CommandDefinition) {
   const composed = Object.fromEntries(
     Object.entries(definition.payloads ?? {}).flatMap(([field, descriptor]) => {
       const declared = input.shape[field];
-      // Replace only a permissive placeholder (`z.unknown`): a shaped field is
-      // the family's own transport contract (the workflow `--file` path), which
-      // the payload descriptor must not overwrite with a document object.
       const placeholder = declared instanceof z.ZodUnknown
         || (declared instanceof z.ZodOptional && declared.unwrap() instanceof z.ZodUnknown);
-      if (declared !== undefined && !placeholder) return [];
+      if (!placeholder) return [];
       return [[field, descriptor.schema.optional()] as const];
     }),
   );

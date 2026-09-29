@@ -168,7 +168,12 @@ function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
     if (field.minItems !== undefined) array = array.min(field.minItems);
     if (field.itemsNonblank) array = array.refine((items) => items.every((item) => item.trim() !== ""));
     schema = array;
-  } else if (field.type === "string") {
+  } else if (field.type === "string" || field.type === "string | null") {
+    // `"string | null"` is the declared union spelling (the null arm also
+    // arrives as the separate `nullable` flag, applied below). Treating it as a
+    // free-form string keeps the type the contract states: falling through to
+    // `z.unknown()` would accept any JSON value where the domain declares a
+    // string-or-null.
     if (field.values !== undefined) {
       // An enum is its own constraint: every member is a non-empty string by
       // construction, so `nonblankWhenPresent` has nothing left to assert on it

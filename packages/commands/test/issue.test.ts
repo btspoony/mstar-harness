@@ -156,5 +156,29 @@ describe("issue command family", () => {
     expect(missingMutation.status).toBe("refused");
     if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["operationId", "actor"]);
   });
+
+  test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {
+    const context = await testContext();
+    // `IssueTriage.owner` is the registry's `"string | null"` field: the
+    // published schema must reject a value the domain does not declare, not
+    // fall back to an unbounded `z.unknown()`.
+    const triage = definition("issue.triage").payloads?.payload?.schema;
+    expect(triage?.safeParse({ reason: "reclassify", owner: "reviewer" }).success).toBe(true);
+    expect(triage?.safeParse({ reason: "reclassify", owner: null }).success).toBe(true);
+    expect(triage?.safeParse({ reason: "reclassify", owner: 7 }).success).toBe(false);
+    expect(triage?.safeParse({ reason: "reclassify", owner: { role: "pm" } }).success).toBe(false);
+
+    const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-owner", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const receipt = added.data as { issueId: string; revision: number };
+    const typed = await definition("issue.triage").execute({
+      id: receipt.issueId, payload: { reason: "reclassify", owner: "reviewer" },
+      operationId: "triage-owner", actor: "project-manager", session: boundSession(context.controlRoot!), expect: receipt.revision,
+    }, context);
+    expect(typed.status).toBe("ok");
+    const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
+  });
 });
 

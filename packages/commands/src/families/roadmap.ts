@@ -48,6 +48,8 @@ class UsageError extends Error {
 const REPLACE_REQUIREMENTS: Readonly<Record<string, { flag: string; need: string }>> = {
   project: { flag: "--project", need: "the catalog project the roadmap belongs to" },
   file: { flag: "--file", need: "the absolute Markdown candidate to publish" },
+  expectProject: { flag: "--expect-project", need: "the project revision this candidate was read against" },
+  expectRoadmap: { flag: "--expect-roadmap", need: "the roadmap revision this candidate was read against (or absent)" },
   operation: { flag: "--operation", need: "the operation id this write is journalled under" },
 };
 const REVIEW_REQUIREMENTS: Readonly<Record<string, { flag: string; need: string }>> = {
@@ -57,6 +59,10 @@ const REVIEW_REQUIREMENTS: Readonly<Record<string, { flag: string; need: string 
 function requireAll(input: Input, requirements: Readonly<Record<string, { flag: string; need: string }>>): void {
   const missing = Object.entries(requirements).filter(([key]) => {
     const value = input[key as keyof Input];
+    // A revision claim is present when it is a number (`--expect-roadmap
+    // absent` arrives as its literal string); every other aggregated field is
+    // a non-blank string.
+    if (typeof value === "number") return false;
     return typeof value !== "string" || value.trim() === "";
   });
   if (missing.length === 0) return;
@@ -136,11 +142,12 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       return success(id, await reviewRoadmapImport(context, input.project!, absolute(input.file!, "--file")));
     }
     if (verb === "replace") {
-      // The observed revisions are DERIVED inside the write transaction when
-      // omitted: a caller that just read the authority states nothing and the
-      // engine still compares against the state it actually observed. What
-      // stays irreducible is the target, the candidate bytes and the operation
-      // id — all three are aggregated in one refusal (A27).
+      // A whole-document replacement states the comparison basis it actually
+      // read: both revisions are irreducible caller claims, because deriving
+      // them inside the write transaction would make the guard vacuous and a
+      // stale read would silently overwrite whatever moved since (A11). The
+      // target, the candidate bytes, both claims and the operation id are
+      // aggregated in one refusal (A27).
       requireAll(input, REPLACE_REQUIREMENTS);
       const bytes = readFileSync(absolute(input.file!, "--file"));
       let contentMarkdown: string;
@@ -152,8 +159,8 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       }
       return success(id, await replaceRoadmapAuthority(context, {
         projectId: input.project!,
-        ...(input.expectProject === undefined ? {} : { expectedProjectRevision: input.expectProject }),
-        ...(input.expectRoadmap === undefined ? {} : { expectedRoadmapRevision: input.expectRoadmap as RoadmapExpected }),
+        expectedProjectRevision: input.expectProject!,
+        expectedRoadmapRevision: input.expectRoadmap as RoadmapExpected,
         contentMarkdown,
       }, { operationId: input.operation! }));
     }
@@ -179,10 +186,12 @@ const optionsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
   export: ["project", "format", "harness"],
 };
 /**
- * Only facts that can never be derived stay CLI-required: the target project
- * and the candidate/reviewed bytes. `--operation` is declared here too where
- * the engine journals the write, so the CLI help states the same irreducible
- * set the handler aggregates.
+ * Parser-level required options: the facts whose absence makes the verb's
+ * identity itself unknown (the target project and the candidate/reviewed
+ * bytes). `--expect-project`/`--expect-roadmap` are equally irreducible on
+ * `replace`, but they are aggregated by the handler instead so one refusal
+ * names every missing claim at once (A27); `--operation` is declared here too
+ * where the engine journals the write.
  */
 const requiredOptions: Record<(typeof verbs)[number], (keyof Input)[]> = {
   import: [], replace: ["project", "file", "operation"], show: ["project"], export: ["project"],
