@@ -1208,8 +1208,20 @@ type RowContext = {
    * for an orphan prepared row, and consumed by the mutation that records the
    * refreshed pin and its audit entry in the SAME commit. `null` for every
    * other mutation and for a pin that still matches.
+   *
+   * Both halves of the pair `prepare` sealed are measured: `old_sha256` /
+   * `new_sha256` are the Assignment pin before and after the refresh, and the
+   * plan-half pair carries the plan document's move when it moved with the
+   * Assignment — `null` on both when the plan half still matches, because an
+   * amendment records a move and the plan half never drifts alone. A plan
+   * document that is GONE is not a measured drift and refuses right there.
    */
-  staleAdoption: { old_sha256: string; new_sha256: string } | null;
+  staleAdoption: {
+    old_sha256: string;
+    new_sha256: string;
+    plan_old_sha256: string | null;
+    plan_new_sha256: string | null;
+  } | null;
 };
 
 /**
@@ -1227,8 +1239,9 @@ async function withRowCommit(
     /**
      * `prepare` rewrites the pin itself and the D0 claim writes no pin at all,
      * so neither may re-check one. `bind` passes `staleAdoption` instead and
-     * owns the whole decision: an orphan prepared row's drift is amended
-     * (spec §D2), and every other stale row still stops right here.
+     * owns the whole decision: an orphan prepared row's drift — either half of
+     * the pair `prepare` sealed — is amended (spec §D2), and every other stale
+     * row still stops right here.
      */
     freshness?: boolean;
     /** Spec §D2 the one mutation allowed to adopt a stale pin: `bind`. */
@@ -1344,6 +1357,13 @@ function staleRefusal(assignmentPath: string, prepared: PreparedCoordination, ac
  * refusal while a caller presenting the row's own recorded id is that binding
  * by the route's own rules. A pin whose Assignment is gone is never adopted
  * (nothing to pin).
+ *
+ * BOTH halves of the sealed pair are amended by the same adoption: the plan
+ * document of a running iteration is revised as a matter of course, so a moved
+ * plan half is re-pinned to the bytes this bind acts under and recorded in the
+ * same audit entry, exactly like the Assignment half. A plan document that is
+ * GONE is still never adopted — a missing input has no bytes to pin, and its
+ * sealed-input refusal is raised here (PR #312).
  */
 function bindStaleAdoption(
   scope: ResolvedPlanScope,
@@ -1351,7 +1371,12 @@ function bindStaleAdoption(
   coordination: RowCoordination | undefined,
   adopter: string,
   snapshot: WorkflowSnapshot,
-): { old_sha256: string; new_sha256: string } | null {
+): {
+  old_sha256: string;
+  new_sha256: string;
+  plan_old_sha256: string | null;
+  plan_new_sha256: string | null;
+} | null {
   // (PR #309 reviews 2 and 3) ONE read, inside the lock, drives EVERY part of
   // this decision: the drift the pin is refreshed to and the contract the
   // refreshed pin must still describe. An earlier version parsed the headers
@@ -1415,21 +1440,21 @@ function bindStaleAdoption(
       { path: scope.assignmentPath, expected: prepared.qa_gate, actual: read.headers.qaGate },
     );
   }
-  // The plan half of the pair `prepare` sealed: the refreshed pin must not sit
-  // beside a plan document that moved after preparation, and a plan document
-  // that is GONE reports through the same sealed-input family as a missing
-  // Assignment — never as a raw filesystem error. (`prepared_by` / `prepared_at`
-  // stay exempt: they are provenance, never gates, and the DB route records its
-  // own receipts.)
-  if (sha256Bytes(readSealedInput(scope.planPath, "plan document")) !== prepared.plan_sha256) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `plan document ${scope.planPath} changed after preparation \u2014 an adopted pin never re-seals a moved plan; ` +
-        "the coordinator re-runs `prepare`",
-      { path: scope.planPath, expected: prepared.plan_sha256 },
-    );
-  }
-  return { old_sha256: prepared.assignment_sha256, new_sha256: read.sha256 };
+  // The plan half of the pair `prepare` sealed, on the same §D2 rule as the
+  // Assignment half: a plan document revised while the iteration runs is a
+  // measured drift, re-pinned to the bytes this bind acts under and recorded in
+  // the same audit entry. A plan document that is GONE is not a drift — there
+  // are no bytes to re-pin — so `readSealedInput` raises its sealed-input
+  // refusal here instead. (`prepared_by` / `prepared_at` stay exempt: they are
+  // provenance, never gates, and the DB route records its own receipts.)
+  const planNow = sha256Bytes(readSealedInput(scope.planPath, "plan document"));
+  const planMoved = planNow !== prepared.plan_sha256;
+  return {
+    old_sha256: prepared.assignment_sha256,
+    new_sha256: read.sha256,
+    plan_old_sha256: planMoved ? prepared.plan_sha256 : null,
+    plan_new_sha256: planMoved ? planNow : null,
+  };
 }
 
 /**
@@ -2037,9 +2062,19 @@ async function bindPlanSessionForPlan(
         ...(context.coordination ?? { revision: 0 }),
         revision: context.revision + 1,
         // Spec §D2 the adopted pin: the prepared block keeps its author and
-        // time, and only the digest it pinned moves to the bytes this bind
-        // accepted. The audit entry records the move.
-        ...(adoption !== null && previous !== undefined ? { prepared: { ...previous, assignment_sha256: adoption.new_sha256 } } : {}),
+        // time, and only the digests it pinned move to the bytes this bind
+        // accepted — both halves of the sealed pair, so the row's pin and the
+        // audit entry describe the same move. The plan pin is rewritten only
+        // when that half moved (`plan_new_sha256` is non-null then).
+        ...(adoption !== null && previous !== undefined
+          ? {
+              prepared: {
+                ...previous,
+                assignment_sha256: adoption.new_sha256,
+                ...(adoption.plan_new_sha256 !== null ? { plan_sha256: adoption.plan_new_sha256 } : {}),
+              },
+            }
+          : {}),
         session: {
           session_id: session.session_id,
           session_file: canonicalTarget(created),
@@ -2054,15 +2089,25 @@ async function bindPlanSessionForPlan(
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
       const commit: RowCommit = { row: { ...transition.row, coordination: nextCoordination }, coordination: nextCoordination };
       if (adoption !== null && previous !== undefined) {
+        const planHalf =
+          adoption.plan_old_sha256 !== null && adoption.plan_new_sha256 !== null
+            ? { plan_old_sha256: adoption.plan_old_sha256, plan_new_sha256: adoption.plan_new_sha256 }
+            : {};
         commit.topLevel = {
           coordination: withSelfAmendment(context.snapshot.coordination, {
             at: nowIso(),
             session_id: session.session_id,
             old_sha256: adoption.old_sha256,
             new_sha256: adoption.new_sha256,
+            // The plan half rides in the same entry only when it moved with the
+            // Assignment: an amendment records a move, so a matching plan half
+            // is an absent pair, never a pair of equal digests.
+            ...planHalf,
             // The file route's bind carries no caller-supplied operation id, so
             // the record derives its own: sha256 over the adoption's canonical
-            // facts, identical for an identical adoption.
+            // facts — both halves' moves included, so two adoptions that differ
+            // only in the plan half are two records, identical for an identical
+            // adoption.
             operation_id: createHash("sha256")
               .update(
                 stableJson({
@@ -2071,6 +2116,8 @@ async function bindPlanSessionForPlan(
                   session_id: session.session_id,
                   old_sha256: adoption.old_sha256,
                   new_sha256: adoption.new_sha256,
+                  plan_old_sha256: adoption.plan_old_sha256,
+                  plan_new_sha256: adoption.plan_new_sha256,
                 }),
                 "utf8",
               )
