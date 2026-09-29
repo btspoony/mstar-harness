@@ -52,7 +52,7 @@ import {
 } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID, FIXTURE_COORDINATOR_ID,
-  git, writeText, writeJson, readJson, makeFixture, errorCodeOf,
+  type Fixture, git, writeText, writeJson, readJson, makeFixture, errorCodeOf,
   ensureCoordinator, preparePlan, bindPlan, resumePlan,
   gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, leaseHolder,
   handoffEvidenceOf, sha256OfFile, handoffCall, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
