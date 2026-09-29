@@ -1,6 +1,6 @@
 ---
 name: mstar-project-governance
-description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写、reviewed Markdown import / export、revision-guarded replace 与 legacy `roadmap.md` transport；issue capture、迁移历史 residual register、`_default` 项目归属。写/审 roadmap、迭代收口更新项目目标、登记或关闭 issue、判断项目归属时 Read。CLI flags 以 `mstar roadmap --help` 为准；路径符号 → `mstar-conventions`。
+description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写、reviewed Markdown import / export、revision-guarded replace 与 legacy `roadmap.md` transport；milestone 机制（`mstar milestone`）承载结构化路线目标与 issue 关联；issue capture、迁移历史 residual register、`_default` 项目归属。写/审 roadmap 或 milestone、迭代收口更新项目目标、登记或关闭 issue、判断项目归属时 Read。CLI flags 以 `mstar roadmap --help` / `mstar milestone --help` 为准；路径符号 → `mstar-conventions`。
 ---
 
 # mstar-project-governance（项目治理层：roadmap + register）
@@ -31,7 +31,14 @@ description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_D
 - **日常修改**：先读 store 的当前内容与版本；有记录时用 `mstar roadmap export` 导出**独立 Markdown 候选**，无记录时明确创建候选并预期 absent。编辑、复核候选后用 `mstar roadmap replace` 做整份正文的 revision-guarded replacement（同时校验 project 与 roadmap revision）。冲突重新读权威并复核候选，绝不覆盖 live `roadmap.md` 代替写入。export 也可输出 JSON transport，供跨环境 handoff；导出文件不随写入自动同步，也不反向成为权威。具体命令选项与 payload → built `mstar roadmap --help` 及各动词 `--help`，本 skill 不复写 flags。
 - **校验**：engine 统一校验 import/replace 的 Markdown 正文；frontmatter `project_id`（非空且与目标 catalog project 一致）、`title`（非空）、`status`（`active | paused | completed`）、`created_at`（`YYYY-MM-DD`）为 machine-checkable；`milestones` 可选非空字符串列表（空字段按缺省），`residuals_ref` 可选非空字符串（如迁移 register 文件名）。正文宜有 `## Direction` 与目标 task-list（`- [ ]` / `- [x]`）；缺少正文约定只报 warnings，不将 `ok` 翻成 false。目标与 residual 不自动关联；`residuals_ref` 只是迁移文件引用，不恢复 register 写权威。
 
-`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议。项目归属和路径解析 → `mstar-conventions`；执行态仍是 workflow snapshot；open findings → 下文 Issue capture。
+`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议，也不是 live milestone 机制（→ 下节）。项目归属和路径解析 → `mstar-conventions`；执行态仍是 workflow snapshot；open findings → 下文 Issue capture。
+
+## Milestone（结构化路线目标）
+
+- **唯一机制**：项目路线的结构化目标是 `{HARNESS_DIR}/store.db` 的 `project_milestones` 记录 + `issues.milestone_id` 关联。`mstar milestone add | update` 写元数据（name / target / ordinal / status，CAS 于 store revision）；`mstar milestone assign` 是 issue 关联的**唯一**写入面（同项目约束，explicit move / clear，走 issue 的特权 mutation 校验，不落 roadmap 的宽松 authoring 面）；`list | status` 只读并给出 open / resolved / other-retired rollup。动词与标志以 `mstar milestone --help` 为准，本 skill 不复写。
+- **roadmap 语句引用 milestone**：Direction 与后续路线写 milestone ID + 关联 issue 的 acceptance / owner / dependency / trigger 证据；不用 `roadmap.md` stub 的 checkbox / frontmatter 名称表达目标状态。Direction 正文（`project_roadmaps.content_markdown`）与 milestone 是同一 read envelope 的两个组成，互不取代；已知项目无 roadmap 记录仍是明确 absence，milestone 数据不依赖 Markdown 正文存在。
+- **交付判定**：`delivered` 的必要条件是至少一个关联 issue 且零 open（同事务校验）；交付只经显式状态变更，从不自动触发，也从不关闭 issue。retired（waived / duplicate / superseded）≠ resolved，rollup 分列展示，不把退役计成已完成工作。
+- **export / dashboard 是 reporting transport**：`mstar roadmap export`（JSON v2 / 分组 Markdown）与 dashboard 由同一 envelope 组合 Direction 与 milestones；`import | replace | show` 只改 Markdown 内容权威，**从不**修改 milestone 记录。
 
 ## Issue capture（`{HARNESS_DIR}/store.db`）
 
@@ -86,9 +93,10 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 1. 确定 catalog 项目归属（无项目 → `_default`）；从 roadmap 域读现有内容与版本，absence 不走文件 fallback。
 2. 首次文件导入走 preview → review → apply；后续编辑走独立候选 → revision-guarded replace；文件只作为 transport。校验 frontmatter 及 body warnings 按上文。
-3. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
-4. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
-5. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
+3. 路线目标：结构化目标建 milestone 并显式关联 issue（§ Milestone）；roadmap 语句引用 milestone ID + 关联 issue 证据，不用文件 stub 表达状态。
+4. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
+5. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
+6. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
 
 ## Decision Rules
 
@@ -99,7 +107,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 ## Evidence
 
-正确结果 = roadmap 域读取当前内容或明确 absence；reviewed import / replacement 返回新 revision 与 hash（冲突拒绝，无 live 文件覆盖）；register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
+正确结果 = roadmap 域读取当前内容或明确 absence；reviewed import / replacement 返回新 revision 与 hash（冲突拒绝，无 live 文件覆盖）；milestone 写入返回 receipt（同请求 replay 幂等、冲突/stale 拒绝且无变更），`mstar milestone list | status` 的 rollup 与 store 一致；register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
 
 ## References
 
