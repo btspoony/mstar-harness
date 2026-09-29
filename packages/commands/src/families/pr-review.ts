@@ -134,7 +134,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], context.cwd, payload(kept, dropped));
       let response = await send(plan.inlineComments, []);
       if (response.exitCode !== 0 && /HTTP\s+422|"status"\s*:\s*422/.test(`${response.stderr}\n${response.stdout}`) && plan.inlineComments.length) response = await send([], plan.inlineComments);
-      if (response.exitCode !== 0 || response.signal !== null) throw new Error(response.stderr || "gh api review post failed");
+      if (response.exitCode !== 0 || response.signal !== null) {
+        return {
+          version: 1, command: id, status: "error", code: `${id}.unknown-outcome`, exitCode: 1,
+          message: `GitHub review post outcome is unknown; inspect PR ${plan.pr} before retrying: ${response.stderr || "gh api review post failed"}`,
+          details: { outcome: "unknown", pr: plan.pr, commitId: plan.commitId },
+        };
+      }
       let reviewUrl = response.stdout.trim();
       try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* preserve successful response text */ }
       return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
@@ -193,7 +199,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (input.stage !== "1" && input.stage !== "2") throw new UsageError("--stage must be 1 or 2");
       if (input.tier !== undefined && !["quick", "default", "deep"].includes(input.tier)) throw new UsageError("--tier must be quick | default | deep");
       const skillRoot = abs(context.cwd, input.skillRoot ?? "skills/mstar-audit");
-      return ok(id, { prompt: prReviewSeatPrompt({ stage: input.stage === "1" ? 1 : 2, domain: need(input.domain, "--domain"), seat: need(input.seat, "--seat"), skillRoot, worktreePath: path.resolve(need(input.worktree, "--worktree")), reconFacts: input.recon ?? [], ...(input.security ? { securitySeat: true } : {}), ...(input.tier ? { tier: input.tier as "quick" | "default" | "deep" } : {}), ...(input.diffFile ? { diffFile: abs(context.cwd, input.diffFile) } : {}), ...(input.collectFolded ? { collectFolded: true } : {}) }) });
+      return ok(id, { prompt: prReviewSeatPrompt({ stage: input.stage === "1" ? 1 : 2, domain: need(input.domain, "--domain"), seat: need(input.seat, "--seat"), skillRoot, worktreePath: path.resolve(input.worktree ?? context.cwd), reconFacts: input.recon ?? [], ...(input.security ? { securitySeat: true } : {}), ...(input.tier ? { tier: input.tier as "quick" | "default" | "deep" } : {}), ...(input.diffFile ? { diffFile: abs(context.cwd, input.diffFile) } : {}), ...(input.collectFolded ? { collectFolded: true } : {}) }) });
     }
     return ok(id, { budgets: PR_REVIEW_TIER_BUDGETS });
   } catch (error) { return failure(id, error); }
