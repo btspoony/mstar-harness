@@ -1075,7 +1075,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
   const existing = readSnapshotIfPresent(plan.dir);
 
   if (existing !== undefined) {
-    if (existing.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, existing.snapshot) !== plan.identity) {
+    if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
       throw conflictError(
         `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
           "whose identity is NOT this reviewed request",
@@ -1109,7 +1109,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
       `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}`,
     );
   }
-  if (written.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, written.snapshot) !== plan.identity) {
+  if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
     throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
   }
   if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
@@ -1177,7 +1177,7 @@ async function publishUnderRootLock(
           "the catalog delta is not published for an execution registration that does not hold",
       );
     }
-    if (onDisk.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, onDisk.snapshot) !== plan.identity) {
+    if (onDisk.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, onDisk.snapshot, plan.identity)) {
       throw conflictError(
         `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
           "the catalog delta describes the reviewed request, not those bytes",
