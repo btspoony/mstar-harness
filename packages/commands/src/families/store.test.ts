@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { initializeStore, openStore, upgradeStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
+import { getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
 import { storeUpgradeFailure } from "./store.js";
 
@@ -192,7 +193,9 @@ async function runUpgradeHandler(harness: string, root: string, answer = "preser
       });
     }
     const backupDir = join(harness, "archived", "store-migration", "backups");
-    const backupName = readdirSync(backupDir).find((name) => name.endsWith("-pre-schema.db"));
+    const backups = readdirSync(backupDir).filter((name) => name.endsWith("-pre-schema.db"));
+    expect(backups).toHaveLength(1);
+    const backupName = backups[0];
     expect(backupName).toBeDefined();
     const backupHarness = join(root, "active-pre-schema-check");
     mkdirSync(backupHarness, { recursive: true });
@@ -484,8 +487,11 @@ describe("store.upgrade unified entry", () => {
     expect(conflictResult.status).toBe("refused");
     expect(coverageResult.status).toBe("refused");
     if (conflictResult.status !== "refused" || coverageResult.status !== "refused") throw new Error("expected refusal envelopes");
-    expect(conflictResult.message).toContain("legacy workflow");
-    expect(conflictResult.message).toContain("pending change");
+    expect(conflictResult.message).toContain("reviewed evidence may no longer match");
+    expect(conflictResult.message).toContain("Do not rerun this staged attempt");
+    expect(conflictResult.message).toContain("store execution abort");
+    expect(conflictResult.message).toContain("create and review a fresh migration");
+    expect(getCommandDefinitions().some(({ id }) => id === "store.execution.abort")).toBe(true);
     expect(conflictResult.message).not.toContain("--inventory");
     expect(coverageResult.message).toContain("stop-session evidence");
     expect(coverageResult.message).toContain("only if discovery inventory is the missing item");

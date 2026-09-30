@@ -126,8 +126,8 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
     "execution.migration-conflict": {
-      blocker: "A legacy workflow has conflicting or pending migration state.",
-      recovery: "Review that workflow's pending change, resolve it through the supported workflow action, then rerun `store upgrade`.",
+      blocker: "The staged migration conflicts with current workspace state; its reviewed evidence may no longer match.",
+      recovery: "Do not rerun this staged attempt. Abandon it with `store execution abort`, then create and review a fresh migration.",
     },
     "execution.coverage-incomplete": {
       blocker: "The legacy execution source is missing required completeness evidence.",
