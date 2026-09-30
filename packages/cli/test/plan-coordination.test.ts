@@ -2438,7 +2438,7 @@ describe("report-only completion", () => {
     expect(gitOut(["branch", "--format=%(refname:short)"], fixture.root).split("\n")).not.toContain(INTEGRATION_BRANCH);
   }, RECOVERY_TIMEOUT);
 
-  test("missing policy evidence refuses complete and close, and only the record unblocks it", () => {
+  test("missing policy evidence refuses complete; the close records the entailed fulfilment and completes (A17)", () => {
     const fixture = makeAcceptedReportOnlyFixture();
     const before = snapshotBytes(fixture);
 
@@ -2453,22 +2453,25 @@ describe("report-only completion", () => {
     expect(recordedHandoffState(fixture)).toBe("accepted");
     expect(snapshotBytes(fixture)).toBe(before);
 
-    // No fabricated Done state: the close refuses the row too — and it refuses
-    // for the reason that actually blocks it (the completion fulfilment was
-    // never recorded), not with a row-status restatement.
+    // §R5/A17 (#270) the CLOSE is the one call that records the completion
+    // fulfilment, and the ACCEPTED handoff above is its basis: it derives the
+    // policy/evidence pair from that handoff, writes it, completes the row and
+    // unregisters — "fulfilment before Done" is satisfied by that recording, so
+    // the close does NOT refuse here. (Only `complete` without recorded evidence
+    // is refused, asserted above.)
     const closed = closeReportOnly(fixture);
-    expect(closed.exitCode).toBe(1);
-    expect(String(jsonOf(closed).message)).toContain("only from a fulfilment that was RECORDED");
-    expect(readJson(fixture.snapshotPath).status).toBe("running");
-    expect(snapshotBytes(fixture)).toBe(before);
-
-    // The very same accepted handoff completes once its evidence is recorded.
-    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
-    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
-    expect(completed.exitCode).toBe(0);
+    expect(closed.exitCode).toBe(0);
+    const closedDoc = readJson(fixture.snapshotPath) as { status?: string; delivery?: { completion?: { policy?: string } } };
+    expect(closedDoc.status).toBe("completed");
     expect(rowOf(fixture).status).toBe("Done");
-    expect(closeReportOnly(fixture).exitCode).toBe(0);
+    expect(closedDoc.delivery?.completion?.policy).toBe(REPORT_ONLY_POLICY);
+
+    // The close has already recorded the entailed fulfilment, so the ordinary
+    // `complete` route has nothing left to do — the workflow is terminal and a
+    // post-close evidence record is refused rather than re-opened.
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(1);
     expect(readJson(fixture.snapshotPath).status).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
   }, RECOVERY_TIMEOUT);
 
   test("mismatched completion policy refuses complete and preserves the recorded evidence", () => {
