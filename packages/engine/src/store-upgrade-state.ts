@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { MIGRATIONS, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 
-export type StoreUpgradeReason = "store-missing" | "execution-authority-legacy" | "execution-authority-staged";
+export type StoreUpgradeReason = "store-missing" | "schema-upgrade-pending" | "execution-authority-legacy" | "execution-authority-staged";
 
 export type StoreUpgradeState = {
   storeExists: boolean;
@@ -35,11 +35,14 @@ export async function probeStoreUpgradeState(context: StoreContext): Promise<Sto
     const metadata = store.db.prepare("select authority_state from store_meta where id = 1").get() as
       | { authority_state?: unknown }
       | undefined;
-    const operations = store.db
-      .prepare("select operation_id from catalog_operations where phase not in ('committed', 'aborted') order by operation_id")
-      .all() as Array<{ operation_id?: unknown }>;
-    const execution = store.execution;
+    const operations = store.schemaVersion >= 2
+      ? store.db
+          .prepare("select operation_id from catalog_operations where phase != 'committed' order by operation_id")
+          .all() as Array<{ operation_id?: unknown }>
+      : [];
     const reasons: StoreUpgradeReason[] = [];
+    const execution = store.execution;
+    if (store.schemaVersion < MIGRATIONS.length) reasons.push("schema-upgrade-pending");
     if (execution?.authorityState === "legacy") reasons.push("execution-authority-legacy");
     if (execution?.authorityState === "staged") reasons.push("execution-authority-staged");
     return {
