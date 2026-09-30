@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectExecutionCoverage } from "../src/execution-migrate.js";
+import { applyExecutionMigration, collectExecutionCoverage, executionManifestHash } from "../src/execution-migrate.js";
 import { activateStoreUpgrade, stageStoreUpgrade } from "../src/store-upgrade.js";
 import { ACTIVATION_PROTOCOL_VERSION } from "../src/store-activation.js";
-import { initializeStore, storeDbPath, type StoreContext } from "../src/store-db.js";
+import { initializeStore, MIGRATIONS, storeDbPath, type StoreContext } from "../src/store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "../src/workflow.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -44,8 +44,8 @@ function fixture() {
 }
 
 function fixtureAttestation() {
-  // These facts are local to this isolated fixture: it installs the current coordinator
-  // consumer below and creates no sessions, so there are no session ids to stop.
+  // These fixture-only consumer facts are authored here and passed to the real
+  // API; the fixture installs no host consumer and creates no sessions.
   return {
     version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-09-30T00:00:00.000Z",
@@ -65,24 +65,57 @@ function fixtureAttestation() {
 }
 
 describe("single-call store upgrade", () => {
-  test("derives the declared empty scope and activates a legacy execution authority", async () => {
+  test("stages an older schema with pre-schema and reviewed-schema recovery points, then retires through phase two", async () => {
     const f = fixture();
     const store = await initializeStore(f.context);
+    store.db.exec("drop trigger issues_milestone_project_insert; drop trigger issues_milestone_project_update; drop trigger project_milestones_identity_immutable; drop index issues_milestone_disposition; drop table project_milestones; alter table issues drop column milestone_id; delete from schema_version where version=7");
     store.close();
-    const before = new DatabaseSync(f.dbPath);
-    expect(before.prepare("select authority_state from execution_meta where id=1").get()).toEqual({ authority_state: "legacy" });
-    before.close();
+
+    const old = new DatabaseSync(f.dbPath);
+    expect(old.prepare("select max(version) as version from schema_version").get()).toEqual({ version: 6 });
+    old.close();
 
     const staged = await stageStoreUpgrade(f);
+    expect(staged.schemaBackup.schemaVersion).toBe(6);
+    expect(staged.backup.schemaVersion).toBe(MIGRATIONS.length);
+    expect(staged.manifest.schemaVersion).toBe(MIGRATIONS.length);
     expect(staged.manifest.inventoryPath).toBeNull();
     expect(staged.coverageDigest).toMatch(/^[a-f0-9]{64}$/);
-    const active = await activateStoreUpgrade(staged, fixtureAttestation());
-    expect(active).toBeDefined();
+    const retired = await activateStoreUpgrade(staged, fixtureAttestation());
+    expect(retired).toMatchObject({ phase: "retired", manifestId: staged.manifest.id });
+
     const after = new DatabaseSync(f.dbPath);
     expect(after.prepare("select authority_state from execution_meta where id=1").get()).toEqual({ authority_state: "active" });
     after.close();
+    expect(existsSync(join(f.context.harnessDir, "status.json"))).toBe(false);
+    expect(existsSync(join(f.context.harnessDir, "archived", "execution", staged.manifest.id, "status.json"))).toBe(true);
+  });
 
-    const unexaminedInventoryPath = join(f.context.harnessDir, "inventory-not-examined.json");
-    await expect(collectExecutionCoverage({ ...f, inventoryPath: unexaminedInventoryPath, manifest: staged.manifest })).rejects.toThrow();
+  test("refuses control-only collection for a manifest reviewed with additional inventory scope", async () => {
+    const f = fixture();
+    const store = await initializeStore(f.context);
+    store.close();
+    const inventoryPath = join(f.context.harnessDir, "operator-inventory.json");
+    const snapshotPath = join(f.context.harnessDir, "workflows", f.workflowId, WORKFLOW_SNAPSHOT_FILE);
+    writeFileSync(inventoryPath, JSON.stringify({
+      version: 2,
+      roots: {
+        sdd: join(f.context.harnessDir, "workflows"),
+        host: join(f.context.harnessDir, "operator-host"),
+        package: join(f.context.harnessDir, "operator-package"),
+      },
+      hostSessions: [],
+      sddEvidence: [{ workflowId: f.workflowId, path: snapshotPath }],
+      consumers: [],
+      injectors: [],
+      injectorInventory: null,
+      backup: null,
+    }));
+    const staged = await stageStoreUpgrade({ ...f, inventoryPath });
+    await expect(collectExecutionCoverage({ ...f, manifest: staged.manifest }))
+      .rejects.toMatchObject({
+        code: "execution.migration-conflict",
+        message: expect.stringContaining("frozen manifest's surface discovery no longer holds"),
+      });
   });
 });

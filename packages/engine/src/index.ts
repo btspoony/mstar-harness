@@ -620,14 +620,10 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
-// ADDITIVE: single-call upgrade orchestration — derives what is derivable
-// (manifest, verified recovery point, byte-backed coverage), sequences the
-// existing migration verbs, and stops before the ONE irreversible authority
-// transition. The staged result is durable, so the flip stays a separate
-// authorized call. The state probe above it is read-only.
+// Staging derives reviewed inputs and recovery points; the second call performs
+// the authority flip and source retirement.
 export {
   activateStoreUpgrade,
-  retireStoreUpgrade,
   stageStoreUpgrade,
   type StagedStoreUpgrade,
   type StoreUpgradeInput,

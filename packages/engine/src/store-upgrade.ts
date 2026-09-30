@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { upgradeStore, type StoreContext } from "./store-db.js";
 import { backupStore, type ActivationAttestation, type BackupReceipt } from "./store-activation.js";
 import {
@@ -27,6 +28,9 @@ export type StagedStoreUpgrade = {
   inventoryPath?: string;
   manifest: ExecutionManifest;
   manifestHash: string;
+  /** Pre-schema recovery point; retained to recover a failed schema upgrade. */
+  schemaBackup: BackupReceipt;
+  /** Reviewed-schema recovery point required by apply's identity guard. */
   backup: BackupReceipt;
   coverageDigest: string;
 };
@@ -38,9 +42,13 @@ export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<Stage
     throw new Error(`store upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
   }
 
-  // A recovery point must precede schema upgrades as well as migration writes.
-  const backup = await backupStore(input.context);
+  // Keep a verified point before schema writes, then take a second point of
+  // the migrated schema for apply's exact reviewed-store identity guard.
+  const schemaBackup = await backupStore(input.context);
   if (state.schemaVersion !== null) await upgradeStore(input.context);
+  const migrationBackup = await backupStore(input.context, {
+    out: join(input.context.harnessDir, "archived", "store-migration", "backups", `${input.operationId}-reviewed.db`),
+  });
 
   const request = { ...input, operationId: `${input.operationId}-preview` };
   const manifest = await previewExecutionMigration(request);
@@ -51,18 +59,17 @@ export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<Stage
     operationId: `${input.operationId}-apply`,
     manifest,
     manifestHash,
-    backup,
+    backup: migrationBackup,
     coverage,
   });
-  return { ...input, manifest, manifestHash, backup, coverageDigest: coverage.digest };
+  return { ...input, manifest, manifestHash, schemaBackup, backup: migrationBackup, coverageDigest: coverage.digest };
 }
-
-/** Perform the one authority transition; source retirement remains a later call. */
+/** Flip authority and retire reviewed sources under their existing guards. */
 export async function activateStoreUpgrade(
   staged: StagedStoreUpgrade,
   attestation: ActivationAttestation,
 ): Promise<ExecutionMigrationReceipt> {
-  return activateExecutionMigration({
+  await activateExecutionMigration({
     context: staged.context,
     operator: staged.operator,
     inventoryPath: staged.inventoryPath,
@@ -71,10 +78,6 @@ export async function activateStoreUpgrade(
     attestation,
     operationId: `${staged.operationId}-activate`,
   });
-}
-
-/** Retire only after a separately completed activation call. */
-export async function retireStoreUpgrade(staged: StagedStoreUpgrade): Promise<ExecutionMigrationReceipt> {
   return retireExecutionSources({
     context: staged.context,
     operator: staged.operator,
