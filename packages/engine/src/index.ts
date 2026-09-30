@@ -629,6 +629,7 @@ export {
   type StoreUpgradeInput,
 } from "./store-upgrade.js";
 export { probeStoreUpgradeState, type StoreUpgradeReason, type StoreUpgradeState } from "./store-upgrade-state.js";
+export { upgradeStoreWithRecoveryPoint } from "./store-upgrade.js";
 // Execution authority: the canonical value form and `exec-v1` version tokens
 // (§3.1), the one-transaction ownership boundary, the create-only empty
 // execution initializer (§3/§4.1) and the create-only workflow/registry/sealed

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
+import { Database } from "bun:sqlite";
+import { initializeStore, openStore, upgradeStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
 import { getStoreCommandDefinitions } from "../index.js";
 import { storeUpgradeFailure } from "./store.js";
@@ -190,7 +191,18 @@ async function runUpgradeHandler(harness: string, root: string, answer = "preser
         executionMigration: "not-needed",
       });
     }
-    expect(existsSync(join(harness, "status.json"))).toBe(true);
+    const backupDir = join(harness, "archived", "store-migration", "backups");
+    const backupName = readdirSync(backupDir).find((name) => name.endsWith("-pre-schema.db"));
+    expect(backupName).toBeDefined();
+    const backupHarness = join(root, "active-pre-schema-check");
+    mkdirSync(backupHarness, { recursive: true });
+    copyFileSync(join(backupDir, backupName!), join(backupHarness, "store.db"));
+    const recoveryPoint = await openStore({ harnessDir: backupHarness }, "read");
+    try {
+      expect(recoveryPoint.schemaVersion).toBe(priorVersion);
+    } finally {
+      recoveryPoint.close();
+    }
     const upgraded = await openStore({ harnessDir: harness }, "read");
     try {
       expect(upgraded.schemaVersion).toBe(priorVersion + 1);
@@ -339,6 +351,30 @@ describe("store.upgrade unified entry", () => {
     }
   });
 
+  test("no legacy execution files initializes legacy authority once, then reports up-to-date", async () => {
+    const root = fixture();
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initial = await initializeStore({ harnessDir: harness });
+    initial.close();
+    await upgradeStore({ harnessDir: harness });
+    const storeDb = new Database(join(harness, "store.db"));
+    storeDb.prepare("update execution_meta set authority_state = 'legacy', manifest_id = null where id = 1").run();
+    storeDb.close();
+    const authorityDb = new Database(join(harness, "store.db"), { readonly: true });
+    expect(authorityDb.query("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "legacy" });
+    authorityDb.close();
+
+    const first = await runUpgrade(harness, root);
+    expect(first.result.status).toBe("ok");
+    if (first.result.status === "ok") {
+      expect(first.result.data).toMatchObject({ verdict: "upgraded", authorityState: "active" });
+    }
+    const second = await runUpgrade(harness, root);
+    expect(second.result.status).toBe("ok");
+    if (second.result.status === "ok") expect(second.result.data).toMatchObject({ verdict: "up-to-date" });
+  });
+
   test("schema-only upgrade advances schema without execution migration inputs", async () => {
     const root = fixture();
     const harness = join(root, ".mstar");
@@ -355,20 +391,35 @@ describe("store.upgrade unified entry", () => {
       alter table issues drop column milestone_id;
       delete from schema_version where version = 7;
     `);
+    expect(store.db.prepare("select max(version) as version from schema_version").get()).toEqual({ version: priorVersion });
     store.close();
 
     const definition = upgradeDefinition();
     const parsed = definition.input.parse({ harness });
     const { context } = invocation(root);
-    const result = await definition.execute(parsed, context);
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.data).toMatchObject({ verdict: "upgraded", schemaVersion: priorVersion + 1, executionMigration: "not-needed" });
+    const first = await definition.execute(parsed, context);
+    expect(first.status).toBe("ok");
+    if (first.status === "ok") {
+      expect(first.data).toMatchObject({
+        verdict: "upgraded",
+        schemaVersion: priorVersion + 1,
+        executionMigration: "not-needed",
+      });
+    }
+    const backupDir = join(harness, "archived", "store-migration", "backups");
+    const backups = readdirSync(backupDir).filter((name) => name.endsWith("-pre-schema.db"));
+    expect(backups).toHaveLength(1);
+    const backupName = backups[0];
+    expect(backupName).toBeDefined();
+    const recoveryPoint = new Database(join(backupDir, backupName!), { readonly: true });
+    try {
+      expect(recoveryPoint.query("select max(version) as version from schema_version").get()).toEqual({ version: priorVersion });
+    } finally {
+      recoveryPoint.close();
     }
     const upgraded = await openStore({ harnessDir: harness }, "read");
     try {
       expect(upgraded.schemaVersion).toBe(priorVersion + 1);
-      expect(upgraded.execution?.authorityState).toBe("legacy");
     } finally {
       upgraded.close();
     }

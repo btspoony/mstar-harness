@@ -10,6 +10,7 @@ import {
   appliedReceiptFor,
   applyStoreMigration,
   backupStore,
+  initializeExecutionAuthority,
   initializeStore,
   planStoreMigration,
   probeStoreUpgradeState,
@@ -17,6 +18,7 @@ import {
   retireStoreSources,
   stageStoreUpgrade,
   upgradeStore,
+  upgradeStoreWithRecoveryPoint,
   retireExecutionSources,
   type ActivationAttestation,
   type MigrationManifest,
@@ -195,17 +197,30 @@ async function unifiedStoreUpgrade(
         : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
     };
   }
+  const noLegacyExecutionFiles = !hasLegacyExecutionFiles(context.harnessDir);
   if (
     state.reasons.includes("schema-upgrade-pending")
     && (
-      !hasLegacyExecutionFiles(context.harnessDir)
+      noLegacyExecutionFiles
       || (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired")
     )
   ) {
-    const upgraded = await upgradeStore(context);
+    const upgraded = await upgradeStoreWithRecoveryPoint(context, randomUUID());
+    state = await probeStoreUpgradeState(context);
+    const authority = noLegacyExecutionFiles && state.executionAuthorityState === "legacy"
+      ? await initializeExecutionAuthority(context)
+      : undefined;
     state = await probeStoreUpgradeState(context);
     if (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired") {
       return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
+    }
+    if (noLegacyExecutionFiles) {
+      return ok(id, {
+        verdict: "upgraded",
+        schemaVersion: upgraded.schemaVersion,
+        executionMigration: "not-needed",
+        ...(authority === undefined ? {} : { authorityState: "active" }),
+      });
     }
   }
   if (state.verdict === "up-to-date") {
@@ -227,8 +242,17 @@ async function unifiedStoreUpgrade(
   }
 
   if (!hasLegacyExecutionFiles(context.harnessDir)) {
-    const upgraded = await upgradeStore(context);
-    return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
+    const upgraded = await upgradeStoreWithRecoveryPoint(context, randomUUID());
+    state = await probeStoreUpgradeState(context);
+    const authority = state.executionAuthorityState === "legacy"
+      ? await initializeExecutionAuthority(context)
+      : undefined;
+    return ok(id, {
+      verdict: "upgraded",
+      schemaVersion: upgraded.schemaVersion,
+      executionMigration: "not-needed",
+      ...(authority === undefined ? {} : { authorityState: "active" }),
+    });
   }
   requireInputs(input, ["operator", "attestation"]);
   const operator = required(input.operator, "--operator");

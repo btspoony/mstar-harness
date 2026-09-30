@@ -41,6 +41,24 @@ describe("probeStoreUpgradeState", () => {
       expect(result).toMatchObject({ storeExists: true, storeAuthorityState: "active", executionAuthorityState: "active", manifestId: "manifest-1", pendingCatalogOperations: { count: 0, ids: [] }, verdict: "up-to-date", reasons: [] });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  test("reports empty active authority current without a migration retirement record", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-upgrade-state-empty-"));
+    const store = await initializeStore({ harnessDir: dir });
+    store.db.exec("update execution_meta set authority_state = 'active', manifest_id = null where id = 1");
+    store.close();
+    try {
+      const result = await probeStoreUpgradeState({ harnessDir: dir });
+      expect(result).toMatchObject({
+        executionAuthorityState: "active",
+        executionMigrationPhase: null,
+        verdict: "up-to-date",
+        reasons: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   test("keeps ACTIVE authority upgrade-required until recorded retirement is complete", async () => {
     const { dir, db } = await fixture();
     try {

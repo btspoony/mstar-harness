@@ -1,5 +1,12 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { MIGRATIONS, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+
+function hasLegacyExecutionFiles(harnessDir: string): boolean {
+  const workflowsDir = join(harnessDir, "workflows");
+  return existsSync(join(harnessDir, "status.json")) ||
+    (existsSync(workflowsDir) && readdirSync(workflowsDir).length > 0);
+}
 
 export type StoreUpgradeReason = "store-missing" | "schema-upgrade-pending" | "execution-authority-legacy" | "execution-authority-staged";
 
@@ -49,6 +56,9 @@ export async function probeStoreUpgradeState(context: StoreContext): Promise<Sto
       : store.db.prepare("select phase, manifest_hash from execution_migrations where manifest_id = ?")
           .get(execution.manifestId) as { phase?: unknown; manifest_hash?: unknown } | undefined;
     const phase = typeof migration?.phase === "string" ? migration.phase : null;
+    const executionWorkflowCount = execution === null || execution === undefined
+      ? null
+      : store.db.prepare("select count(*) as count from execution_workflows").get() as { count?: unknown };
     const reasons: StoreUpgradeReason[] = [];
     if (store.schemaVersion < MIGRATIONS.length) reasons.push("schema-upgrade-pending");
     if (execution?.authorityState === "legacy") reasons.push("execution-authority-legacy");
@@ -65,7 +75,10 @@ export async function probeStoreUpgradeState(context: StoreContext): Promise<Sto
         count: operations.length,
         ids: operations.flatMap((row) => typeof row.operation_id === "string" ? [row.operation_id] : []),
       },
-      verdict: reasons.length === 0 && execution?.authorityState === "active" && phase === "retired"
+      verdict: reasons.length === 0 && execution?.authorityState === "active" && (
+        phase === "retired" ||
+        (phase === null && executionWorkflowCount?.count === 0 && !hasLegacyExecutionFiles(context.harnessDir))
+      )
         ? "up-to-date"
         : "upgrade-required",
       reasons,
