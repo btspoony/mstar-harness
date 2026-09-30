@@ -425,6 +425,28 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect((await listCatalog(context, {})).total).toBe(1);
   });
 
+  test("a post-registration plan progress does not invalidate the replay (the row status is not registration identity)", async () => {
+    const { harnessDir, context } = await fixture("progress-replay-");
+    const request = planRequest({ harnessDir, operationId: "op-progress", expectedCatalogRevision: 0 });
+    const receipt = await registerCatalogExecution(context, request);
+
+    // Normal plan progress legitimately moves the row past its registration
+    // status (Todo -> InReview) while the registration itself still holds.
+    // The replay's key face deliberately EXCLUDES the row status: a retry of
+    // the same committed registration after ordinary progress must replay its
+    // receipt, not answer a false registration-conflict over an evolved row.
+    const snapshotDoc = JSON.parse(readFileSync(join(harnessDir, "workflows", "wf-plan-1", "snapshot.json"), "utf8")) as {
+      plans: Array<{ status: string }>;
+    };
+    snapshotDoc.plans[0]!.status = "InReview";
+    writeFileSync(join(harnessDir, "workflows", "wf-plan-1", "snapshot.json"), `${JSON.stringify(snapshotDoc, null, 2)}\n`);
+
+    expect(
+      await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-progress-retry", expectedCatalogRevision: 1 })),
+    ).toEqual(receipt);
+    expect((await listCatalog(context, {})).total).toBe(1);
+  });
+
   test("interrupted registration \u2014 recovers a crash after the catalog publish: the pending marker is finished without republishing", async () => {
     const { harnessDir, context } = await fixture("post-publish-crash-");
     const request = planRequest({ harnessDir, operationId: "op-crash", expectedCatalogRevision: 0 });
