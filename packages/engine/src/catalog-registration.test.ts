@@ -430,11 +430,12 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     const request = planRequest({ harnessDir, operationId: "op-progress", expectedCatalogRevision: 0 });
     const receipt = await registerCatalogExecution(context, request);
 
-    // Normal plan progress legitimately moves the row past its registration
-    // status (Todo -> InReview) while the registration itself still holds.
-    // The replay's key face deliberately EXCLUDES the row status: a retry of
-    // the same committed registration after ordinary progress must replay its
-    // receipt, not answer a false registration-conflict over an evolved row.
+    // Simulates the PERSISTED EFFECT of a normal plan progress (Todo ->
+    // InReview) without exercising the progress mutation itself — the point
+    // under regression is the replay's key face, which deliberately EXCLUDES
+    // the row status: a retry of the same committed registration after the
+    // row evolved must replay its receipt, not answer a false
+    // registration-conflict over a state the progress route wrote.
     const snapshotDoc = JSON.parse(readFileSync(join(harnessDir, "workflows", "wf-plan-1", "snapshot.json"), "utf8")) as {
       plans: Array<{ status: string }>;
     };
