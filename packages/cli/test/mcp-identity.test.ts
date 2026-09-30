@@ -71,4 +71,3 @@ describe("MCP session identity", () => {
     expect(recover?.options.map((option) => option.long)).toContain("--session-id");
   });
 });
-
