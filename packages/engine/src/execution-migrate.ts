@@ -2202,16 +2202,14 @@ export async function collectExecutionCoverage(input: ExecutionMigrationCoverage
     throw conflict(`the manifest was reviewed for control root ${manifest.root}, not ${root}; nothing was collected.`);
   }
   // `resolveMigrationInput` hands the same request back, so the one inventory
-  // path it names is the discovery scope - and it must be named for coverage:
-  // a control-root-only manifest has no non-control evidence to collect.
+  // path it names is the discovery scope. An ABSENT inventory is NOT an
+  // unexamined scope: it is the explicitly control-root-only declaration the
+  // manifest was reviewed under, and coverage is collected over exactly that
+  // declared scope. The distinction survives in the shape handed to discovery
+  // (`null` = declared-empty, a path = that inventory) — it is never expressed
+  // by synthesising witnesses for the declared-empty case.
   const inventoryPath = resolved.inventoryPath;
-  if (inventoryPath === undefined) {
-    throw conflict(
-      "coverage collection requires the explicit inventory path: a manifest reviewed under a control-root-only scope has no non-control " +
-        "evidence to collect, and re-previewing with the inventory is the only way to cover those surfaces.",
-    );
-  }
-  const discovered = discoverExecutionSources(resolved.context, { inventoryPath });
+  const discovered = discoverExecutionSources(resolved.context, { inventoryPath: inventoryPath ?? null });
   return coverageFromDiscovery({ discovered, manifest, manifestHash: executionManifestHash(manifest) }).set;
 }
 

@@ -620,6 +620,19 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+// ADDITIVE: single-call upgrade orchestration — derives what is derivable
+// (manifest, verified recovery point, byte-backed coverage), sequences the
+// existing migration verbs, and stops before the ONE irreversible authority
+// transition. The staged result is durable, so the flip stays a separate
+// authorized call. The state probe above it is read-only.
+export {
+  activateStoreUpgrade,
+  retireStoreUpgrade,
+  stageStoreUpgrade,
+  type StagedStoreUpgrade,
+  type StoreUpgradeInput,
+} from "./store-upgrade.js";
+export { probeStoreUpgradeState, type StoreUpgradeReason, type StoreUpgradeState } from "./store-upgrade-state.js";
 // Execution authority: the canonical value form and `exec-v1` version tokens
 // (§3.1), the one-transaction ownership boundary, the create-only empty
 // execution initializer (§3/§4.1) and the create-only workflow/registry/sealed
