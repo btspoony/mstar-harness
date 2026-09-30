@@ -10,7 +10,6 @@ const resolveContext: ResolveContext = (_definition, _input, signal, _services, 
   versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
   signal,
   effects,
-  ...(process.env.MSTAR_HOST_SESSION_ID === undefined ? {} : { sessionId: process.env.MSTAR_HOST_SESSION_ID }),
 });
 
 export function serveMcpStdio(): StdioServerHandle {

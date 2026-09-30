@@ -78,7 +78,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         { key: "unowned", flags: "--unowned", required: false }, { key: "reason", flags: "--reason <text>", required: true },
         { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
-        { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" },
+        { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
       description: "Recover a stopped workflow coordinator through active DB authority. Recovery never resumes a session.",
