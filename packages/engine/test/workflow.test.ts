@@ -1556,12 +1556,10 @@ describe("registerPlanWorkflow — generic registration producer (seam S1)", () 
     // protected base anchor cleanup Rule 2 / L1 consume) stays unset.
     expect(snapshot.branch).toEqual({ source: "feature/20260916-plan-example", target: "main" });
     // One owned plan row, Todo — registration does not authorize implementation.
-    // The row keeps the caller's DECLARED pointer spelling: the §4 resolver
-    // proves that pointer (and reads the document it names) before anything is
-    // written, so the stored value is the reviewed declaration, never a
-    // re-rendered canonical absolute form.
+    // The pointer is the §4 canonical absolute plan file, the form the resolver
+    // returns (a supplied relative spelling is proven, never copied verbatim).
     expect(snapshot.plans).toEqual([
-      { id: "20260916-plan-example", title: "Example plan", file: "plans/20260916-plan-example.md", status: "Todo" },
+      { id: "20260916-plan-example", title: "Example plan", file: realpathSync(join(root, "plans", "20260916-plan-example.md")), status: "Todo" },
     ]);
 
     const rootDoc = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
@@ -1821,14 +1819,12 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     });
     expect(snapshot.branch).toEqual({ base: "main", integration: "feature/20260918-iteration-fixture", target: "main" });
     expect(snapshot.delivery_kind).toBeUndefined();
-    // Rows keep order, are forced Todo, carry §1.5-derived metadata, and keep
-    // the caller's DECLARED pointer spelling (the resolver proves each pointer
-    // against the document it names before the write).
+    // Rows keep order, are forced Todo, and carry §1.5-derived metadata.
     expect(snapshot.plans).toEqual([
       {
         id: "20260918-iteration-register-cli",
         title: "Engine producer",
-        file: `plans/${ROW_IDS[0]}.md`,
+        file: planFile(root, "20260918-iteration-register-cli"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -1839,7 +1835,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       {
         id: "20260918-iteration-register-cli-2",
         title: "CLI verb",
-        file: `plans/${ROW_IDS[1]}.md`,
+        file: planFile(root, "20260918-iteration-register-cli-2"),
         status: "Todo",
         metadata: {
           iteration_refs: ["iterations/20260918-fixture/delivery-compass.md"],
@@ -2135,16 +2131,16 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
   // §4 registered-plan path contract on the iteration producer: the snapshot
   // persists the canonical absolute pointer, and the old repository-relative
   // spelling (or a foreign/absent declaration) refuses BEFORE any write.
-  test("prerequisite path: a declared plan pointer is proven against its document and registers verbatim", async () => {
+  test("prerequisite path: a valid pointer registers as the canonical absolute plan file", async () => {
     const { root, snapshotPath } = harness();
     const result = await registerIterationWorkflow(id, options(root));
     expect(result.recovered).toBe(false);
 
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
-    // The pointer is RESOLVED (each declared plan file is read and proven) but
-    // the row stores the caller's declaration, not a re-rendered absolute form.
-    for (const rowId of ROW_IDS) planFile(root, rowId);
-    expect(snapshot.plans.map((row) => row.file)).toEqual(ROW_IDS.map((rowId) => `plans/${rowId}.md`));
+    expect(snapshot.plans.map((row) => row.file)).toEqual([planFile(root, ROW_IDS[0]), planFile(root, ROW_IDS[1])]);
+    // Canonical absolute, resolved through the configured root — never the
+    // caller's `plans/<id>.md` spelling.
+    expect(snapshot.plans.every((row) => row.file.startsWith(realpathSync(root)))).toBe(true);
   });
 
   test("prerequisite path: the repository-relative .mstar/plans spelling refuses with no root or snapshot write", async () => {
@@ -2174,10 +2170,8 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     );
     expect(result.recovered).toBe(false);
     const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
-    // The pointer keeps the caller's declared spelling, resolved against the
-    // `.mstarc`-declared plan root rather than re-rendered to an absolute form.
     expect(snapshot.plans).toEqual([
-      expect.objectContaining({ id: ROW_IDS[0], file: `planning/${ROW_IDS[0]}.md` }),
+      expect.objectContaining({ id: ROW_IDS[0], file: planPath }),
     ]);
     expect(realpathSync(dirname(planPath))).toBe(realpathSync(join(root, "planning")));
 
@@ -3064,11 +3058,8 @@ describe("registerPlanWorkflow — the selected plan document is the registratio
     const snapshot = JSON.parse(readFileSync(join(root, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE), "utf8")) as {
       plans: unknown;
     };
-    // The derivation names the RESOLVED document; the row the producer persists
-    // keeps the reviewed pointer's own spelling (the resolver proves it, it is
-    // not re-rendered), so compare the row against the pointer.
     expect(snapshot.plans).toEqual([
-      { id: planId, title: "Derived registration title", file: pointer, status: "Todo" },
+      { id: planId, title: "Derived registration title", file: derived.plan.file, status: "Todo" },
     ]);
     expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
     expect(validateStatus(join(root, "status.json")).ok).toBe(true);

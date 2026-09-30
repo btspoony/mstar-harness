@@ -2779,8 +2779,26 @@ describe("Prepare workflow amendment", () => {
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const patch = preparePatchOf(fixture);
     const appends = patch.appendPlans as Array<Record<string, unknown>>;
-    writeJson(fixture.patchPath, { ...patch, appendPlans: [{ ...appends[0]!, id: PREPARE_ROW }] });
-    const before = readText(fixture.snapshotPath);
+    // Re-declare the EXISTING row COHERENTLY: id, title, document and branch all
+    // name `plan-prepare`'s own facts. Keeping the append's `plan-append.md`
+    // pointer under the id `plan-prepare` (or its `feature/plan-append` branch)
+    // is an incoherent declaration the resolver refuses earlier as `invalid-plan`,
+    // which would mask the duplicate check this case is about.
+    writeJson(fixture.patchPath, {
+      ...patch,
+      appendPlans: [
+        {
+          ...appends[0]!,
+          id: PREPARE_ROW,
+          title: `Plan ${PREPARE_ROW}`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          metadata: {
+            ...(appends[0]!.metadata as Record<string, unknown>),
+            working_branch: `feature/${PREPARE_ROW}`,
+          },
+        },
+      ],
+    });
 
     const refused = runCli(
       amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
@@ -2792,8 +2810,12 @@ describe("Prepare workflow amendment", () => {
     expect(payload.ok).toBe(false);
     expect(payload.operation).toBe("amend-prepare");
     expect(payload.code).toBe("coordination.prepare-amendment.duplicate-plan");
-    expect(readText(fixture.snapshotPath)).toBe(before);
-    // The stale-read route still works: the review can be re-read and re-applied.
+    // Components are independent (§4.1/A23/A27): the DUPLICATE is withheld while
+    // this patch's unrelated components (the checkout and the policy) still land,
+    // so the snapshot legitimately moves. What must hold is that the row was not
+    // re-declared and the review stays readable and re-appliable.
+    const after = JSON.parse(readText(fixture.snapshotPath)) as { plans: Array<{ id: string }> };
+    expect(after.plans.filter((row) => row.id === PREPARE_ROW)).toHaveLength(1);
     expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
   });
 

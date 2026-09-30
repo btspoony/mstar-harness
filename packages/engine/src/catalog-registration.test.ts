@@ -620,10 +620,7 @@ describe("catalog execution registration \u2014 interrupted registration restart
       {
         id: planId,
         title: "State projection plan",
-        // The row keeps the caller's DECLARED spelling: the resolver validates
-        // it before any write (contract R1), so the stored pointer is the
-        // reviewed harness-relative value rather than a re-rendered absolute.
-        file: join("plans", `${planId}.md`),
+        file: realpathSync(join(harnessDir, "plans", `${planId}.md`)),
         status: "Todo",
       },
     ]);

@@ -1160,18 +1160,13 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     // second time — and the derivation names the document as the source of every
     // omitted field, which is the provenance the sparse route reports.
     const derived = derivePlanRegistration({ harnessDir: fixture.context.harnessDir, plan: selection });
-    // The derivation names the RESOLVED document, while the row it persists keeps
-    // the caller's DECLARED spelling (contract R1: the resolver validates the
-    // pointer before any write; it is not re-rendered). Compare the row against
-    // the declaration, not the resolution, or this asserts the wrong authority.
-    expect(derived.plan.file).toBe(realpathSync(join(fixture.context.harnessDir, selection.file)));
     const row = await one<{ state_json: string }>(
       fixture.context,
       "select state_json from execution_plans where workflow_id = ? and plan_id = ?",
       WORKFLOW_ID,
       PLAN_ID,
     );
-    expect(JSON.parse(String(row?.state_json))).toEqual({ ...derived.plan, file: selection.file, status: "Todo" });
+    expect(JSON.parse(String(row?.state_json))).toEqual({ ...derived.plan, status: "Todo" });
     expect(derived.resolvedFrom.map((source) => source.path)).toEqual(["plan.file", "plan.id", "plan.title"]);
     for (const source of derived.resolvedFrom) expect(source.source).toContain(derived.plan.file);
 

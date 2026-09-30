@@ -2500,11 +2500,14 @@ export function iterationWorkflowSnapshot(
     branch: { base: options.branch.base, integration: options.branch.integration, target: options.branch.target },
     // Each row stores the RESOLVED canonical pointer (E07 parity with the plan
     // producer): the reviewed spelling is input, and the resolver proves and
-    // reads the document it names before anything is written.
+    // reads the document it names before anything is written. Only the POINTER is
+    // resolved here — the iteration row's id and title are the reviewed
+    // declarations, which `derivePlanRegistration` would additionally constrain
+    // against the document body (the plan producer's R1 rule, not this route's).
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: derivePlanRegistration({ harnessDir: options.harnessDir, plan: r }).plan.file,
+      file: resolveRegisteredPlanFile({ harnessRoot: resolve(options.harnessDir), planId: r.id, file: r.file }).planPath,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],
