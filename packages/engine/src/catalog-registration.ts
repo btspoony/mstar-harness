@@ -1715,7 +1715,16 @@ export async function retireStaleCatalogExecutionsForMigration(
     }
     const catalogRevision = readJournalVersions(db).catalogRevision;
     for (const row of rows) {
-      if (hasPublishedDelta(db, row.operation_id) || parseJournalDelta(row).expectedCatalogRevision === catalogRevision) {
+      const journal = parseJournalDelta(row);
+      if (
+        !(
+          existsSync(journal.workflow.snapshotPath) ||
+          findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId) !== undefined
+        )
+      ) {
+        failReconcile(`operation ${JSON.stringify(row.operation_id)} has no current snapshot or root execution entry and cannot be retired`);
+      }
+      if (hasPublishedDelta(db, row.operation_id) || journal.expectedCatalogRevision === catalogRevision) {
         failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
       }
     }

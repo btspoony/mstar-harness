@@ -1200,6 +1200,35 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
+  test("migration retirement refuses stale execution-written rows with no execution bytes without changing the journal", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-no-bytes-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: PLAN_ID, title: "Already registered", rootKind: "plans", relativePath: "elsewhere.md" },
+      { operationId: "seed-migration-no-bytes", actor: "project-manager" },
+    );
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-stale-no-bytes", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    const before = handle.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-no-bytes");
+    handle.close();
+
+    rmSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE), { force: true });
+    rmSync(join(harnessDir, "status.json"), { force: true });
+    expect(existsSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+
+    await expect(
+      retireStaleCatalogExecutionsForMigration(context, ["op-stale-no-bytes"], "owner approved discard"),
+    ).rejects.toMatchObject({ code: "catalog.reconcile-conflict" });
+    const afterHandle = await openStore(context, "read");
+    const after = afterHandle.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-no-bytes");
+    afterHandle.close();
+    expect(after).toEqual(before);
+  });
+
   test("migration retirement refuses ordinary pending rows and empty dispositions without writing", async () => {
     const { harnessDir, context } = await fixture("migration-retire-refuse-");
     setArtifactStore(failingStore(harnessDir, "snapshot"));
