@@ -9091,7 +9091,6 @@ function readPlanFileCorrection(
   // previous spelling of THIS plan's own pointer (the pre-correction form a
   // replayed patch still carries) is the same intent, satisfied.
   const expectedIdentifiesPlan =
-    expectedFile === previous ||
     expectedFile === planPath ||
     (() => {
       try {
