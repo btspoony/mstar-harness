@@ -657,21 +657,25 @@ function migrationIdentityMatches(
   identity: string,
   policy: "strict" | "legacy-retirement" = "strict",
 ): boolean {
-  if (policy === "legacy-retirement") {
-    try {
-      JSON.parse(identity);
-    } catch {
-      return kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
-    }
+  let recorded: Record<string, unknown>;
+  try {
+    recorded = JSON.parse(identity) as Record<string, unknown>;
+  } catch {
+    return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
   }
-  return migrationOwnershipIdentity(kind, snapshot) === identity;
+  const coordinator = recorded.coordinator;
+  const recordedSnapshot = {
+    ...recorded,
+    coordination: coordinator === null || coordinator === undefined ? undefined : { coordinator },
+  } as unknown as WorkflowSnapshot;
+  return migrationOwnershipIdentity(kind, snapshot) === migrationOwnershipIdentity(kind, recordedSnapshot);
 }
 function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
   const registration = {
     ...snapshot,
     status: "running",
     plans: snapshot.plans.map((plan) => ({ ...plan, status: "Todo" })),
-    coordination: undefined,
+    coordination: snapshot.coordination === undefined ? undefined : { coordinator: snapshot.coordination.coordinator },
   } as WorkflowSnapshot;
   return onDiskIdentity(kind, registration);
 }
