@@ -20,3 +20,10 @@ export const WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
   updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
   plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." },
 } as const;
+
+/** Public field contract used by persist payload discovery; validation remains `validateStatusV2` (status.ts). */
+export const STATUS_V2_PAYLOAD_SCHEMA = {
+  version: { required: true, type: "number", description: "Root schema version; must be 2." },
+  updated_at: { required: true, type: "string", description: "Last status-register update date." },
+  workflows: { required: true, type: "array", description: "Active workflow entries." },
+} as const;

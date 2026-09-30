@@ -79,7 +79,7 @@ export const WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only
 // The literal lives in an acyclic leaf module: coordination.ts reads it at
 // module evaluation time for PERSIST_PAYLOAD_CONTRACTS, and this module's own
 // import graph reaches coordination.ts — a binding here would be a TDZ.
-export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow-payload-schema.js";
+export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./persist-payload-schemas.js";
 
 export type WorkflowDeliveryKind = (typeof WORKFLOW_DELIVERY_KINDS)[number];
 

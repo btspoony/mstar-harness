@@ -149,7 +149,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, planDeclaredHeadersFromContent, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, STATUS_V2_PAYLOAD_SCHEMA, type PlanRow, type StatusV2Doc } from "./status.js";
+import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
@@ -193,7 +193,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
-import { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow-payload-schema.js";
+import { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA } from "./persist-payload-schemas.js";
 
 /**
  * Persist payload contracts are owned by their validating domains. `json` is

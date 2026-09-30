@@ -993,17 +993,18 @@ function assertRegistrationEffectHeld(plan: CatalogExecutionPlan): void {
   const entry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
   // The key face covers every registration-identity field the E07 fold
   // freezes (branch anchors, project, delivery kind, completion policy and the
-  // row pointers), not just the id/status core: a replacement that moved any
-  // ONE of them is a different registration.
+  // row pointers). `status` is deliberately EXCLUDED: normal plan progress
+  // legitimately moves rows past their registration status (Todo → InReview →
+  // …) while the registration itself still holds, so comparing it would turn
+  // every post-registration retry into a false registration-conflict.
   const keyFace = (s: WorkflowSnapshot): unknown => ({
     id: s.id,
     type: s.type,
-    status: s.status,
     branch: s.branch ?? null,
     project: s.project ?? null,
     delivery_kind: s.delivery_kind ?? null,
     completion_policy: s.completion_policy ?? null,
-    plans: (s.plans ?? []).map((row) => ({ id: row.id, title: row.title, file: row.file, status: row.status })),
+    plans: (s.plans ?? []).map((row) => ({ id: row.id, title: row.title, file: row.file })),
   });
   const identityHeld =
     snapshot !== undefined &&

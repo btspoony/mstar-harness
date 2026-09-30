@@ -174,12 +174,10 @@ export function normalizeSeverity(value: unknown): unknown {
   return value;
 }
 
-/** Public field contract used by persist payload discovery; validation remains `validateStatusV2`. */
-export const STATUS_V2_PAYLOAD_SCHEMA = {
-  version: { required: true, type: "number", description: "Root schema version; must be 2." },
-  updated_at: { required: true, type: "string", description: "Last status-register update date." },
-  workflows: { required: true, type: "array", description: "Active workflow entries." },
-} as const;
+// The literal lives in the acyclic leaf `persist-payload-schemas.ts` (same
+ // reason as WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA: coordination.ts reads it at
+ // module evaluation time). Re-exported to keep every existing import working.
+export { STATUS_V2_PAYLOAD_SCHEMA } from "./persist-payload-schemas.js";
 
 /**
  * jq semantics: an entry is open when `.lifecycle // "open"` equals `"open"`

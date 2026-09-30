@@ -206,19 +206,43 @@ describe("mstar status workflow-close", () => {
     );
   });
 
-  test("unfinished plan row refuses before write (exit 1, bytes unchanged)", () => {
+  test("an authorized coordinator cannot close an unfinished plan row (exit 1, bytes unchanged)", () => {
     setupHarness(
       (harness, { snapshot, root }) => {
         const beforeSnapshot = readFileSync(snapshot, "utf8");
         const beforeRoot = readFileSync(root, "utf8");
 
-        const result = runCli(closeArgs(harness));
-        expect(result.exitCode).toBe(1);
-        // Stable code, not prose: an owed row on a composed workflow is closed
-        // only through its bound coordinator session.
-        expect(envelope(result).code).toBe("coordination.session-mismatch");
+        // The COORDINATED form of this refusal: the session gate must PASS
+        // (this fixture binds a well-formed coordinator) so the row gate
+        // itself is what refuses the unfinished row.
+        const sessionId = "11111111-2222-3333-4444-555555555555";
+        const sessionFile = join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json");
+        mkdirSync(join(harness, "workflows", WORKFLOW_ID, "sessions"), { recursive: true });
+        writeFileSync(
+          sessionFile,
+          JSON.stringify(
+            { schema_version: 1, role: "coordinator", session_id: sessionId, workflow_id: WORKFLOW_ID, harness_root: harness },
+            null,
+            2,
+          ),
+        );
+        const coordinated = snapshotDoc({
+          coordination: {
+            coordinator: { session_id: sessionId, session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" },
+          },
+          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
+        });
+        writeFileSync(snapshot, JSON.stringify(coordinated, null, 2), "utf8");
 
-        expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
+        const result = runCli(closeArgs(harness, ["--session", sessionFile]));
+        expect(result.exitCode).toBe(1);
+        // Stable code, not prose: with the session gate PASSED (the bound
+        // coordinator is calling), the ROW gate is what refuses the unfinished
+        // row — this is the authorized-coordinator close refusal, not the
+        // session-mismatch shortcut the uncoordinated form hits.
+        expect(envelope(result).code).toBe("coordination.not-prepared");
+
+        expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(coordinated, null, 2));
         expect(readFileSync(root, "utf8")).toBe(beforeRoot);
       },
       {
