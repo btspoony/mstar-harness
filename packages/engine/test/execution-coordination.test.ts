@@ -845,7 +845,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const again = await refusalOf(async () =>
       prepareCall(fixture, OWN_PLAN, "prepare-again", await planTokenOf(fixture, OWN_PLAN)),
     );
-    expect(again.code).toBe("coordination.invalid-transition");
+    expect(again.code).toBe("coordination.prepare-already-prepared");
     expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
 
     // A frozen Assignment that describes another plan is never sealed onto this
@@ -901,7 +901,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const doneRefusal = await refusalOf(async () =>
       prepareCall(fixture, SPARE_PLAN, "prepare-done", planTokens[SPARE_PLAN]!),
     );
-    expect(doneRefusal).toMatchObject({ code: "coordination.invalid-transition", details: { status: "Done" } });
+    expect(doneRefusal).toMatchObject({ code: "coordination.prepare-status", details: { status: "Done" } });
     expect(planFootprint(context, SPARE_PLAN)).toEqual(done);
 
     // §D a row that already records a lease is never sealed a second owner.
@@ -949,7 +949,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     });
     const pausedToken = await planTokenOf(fixture, PEER_PLAN);
     const paused = await refusalOf(async () => prepareCall(fixture, PEER_PLAN, "prepare-paused", pausedToken));
-    expect(paused).toMatchObject({ code: "coordination.invalid-transition" });
+    expect(paused).toMatchObject({ code: "coordination.workflow-not-running" });
     expect(planFootprint(context, PEER_PLAN)).toEqual(peerBefore);
     expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
   });
@@ -1141,7 +1141,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const unstatused = await refusalOf(async () =>
       progressCall("progress-done", await planTokenOf(fixture, OWN_PLAN), "InProgress"),
     );
-    expect(unstatused).toMatchObject({ code: "coordination.invalid-transition" });
+    expect(unstatused).toMatchObject({ code: "coordination.progress-phase" });
     expect(parsedJson(planFootprint(context, OWN_PLAN).plan_state).status).toBe("Done");
 
     // §3.1 a plan whose lease is not HELD holds no plan-owned write: the DB
@@ -1167,7 +1167,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const notHeld = await refusalOf(async () =>
       progressCall("progress-released", await planTokenOf(fixture, OWN_PLAN), "InReview"),
     );
-    expect(notHeld).toMatchObject({ code: "coordination.invalid-transition" });
+    expect(notHeld).toMatchObject({ code: "coordination.execution-lease-required" });
     expect(planFootprint(context, OWN_PLAN)).toEqual(releasedFootprint);
     expect(parsedJson(releasedFootprint.own_lease).status).toBe("released");
   });
@@ -1294,7 +1294,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const reprepare = await refusalOf(async () =>
       prepareCall(fixture, OWN_PLAN, "prepare-2", await planTokenOf(fixture, OWN_PLAN)),
     );
-    expect(reprepare.code).toBe("coordination.invalid-transition");
+    expect(reprepare.code).toBe("coordination.prepare-already-prepared");
     expect(planFootprint(context, OWN_PLAN)).toEqual(sealedAfter);
 
     // The ELIGIBLE authorized prepare is the selection point: the peer plan's
@@ -2516,7 +2516,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "holder-first-own-foreign", { kind: "complete", handoffId }),
     );
     expect(ownForeign).toMatchObject({
-      code: "coordination.invalid-transition",
+      code: "coordination.merge-lease-foreign",
       details: {
         plan_id: OWN_PLAN,
         holder_plan_id: PEER_PLAN,
@@ -2594,7 +2594,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     const after = await refusalOf(async () =>
       lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "progress-after-done", "InProgress", await planTokenOf(fixture, OWN_PLAN)),
     );
-    expect(after.code).toBe("coordination.invalid-transition");
+    expect(after.code).toBe("coordination.execution-lease-required");
   });
 
   test("standalone completion needs no integration record, and an iteration attempt is never completed by it", async () => {
@@ -2729,8 +2729,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     // documented ordering) is the basis of that `Done`: a different reference is
     // a re-pointed completion, refused with the file route's own stable code.
     const refusal = await refusalOf(() => record("delivery-rewrite-freeze", "/etc/passwd"));
-    expect(refusal.code).toBe("coordination.invalid-transition");
-    expect(String(refusal.message)).toContain("re-pointed");
+    expect(refusal.code).toBe("coordination.completion-frozen");
     // The frame rolled back onto exactly the state it was refused on.
     expect((await readExecutionState(fixture.context)).data.workflows[0]!.state).toEqual(headerBefore);
     expect(rows(fixture.context, revisionRowSql)[0]).toEqual(revisionsBefore);
@@ -2751,8 +2750,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(snapshot), WORKFLOW_ID);
     });
     const noEvidence = await refusalOf(() => record("delivery-first-freeze", "acceptance.md"));
-    expect(noEvidence.code).toBe("coordination.invalid-transition");
-    expect(String(noEvidence.message)).toContain("recorded BEFORE");
+    expect(noEvidence.code).toBe("coordination.completion-frozen");
   }, 30000);
 
   test("report-only completion refuses a delivery route changed after its preflight", async () => {
@@ -3530,8 +3528,7 @@ describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-own
         handoffId,
       }),
     );
-    expect(refused.code).toBe("coordination.invalid-transition");
-    expect(String(refused.message)).toContain("stopped");
+    expect(refused.code).toBe("coordination.merge-lease-stopped-owner");
     expect(mergeLeaseRowOf(context).lease).toEqual(stoppedClaim);
 
     // The explicit reconcile succeeds, and the takeover is recorded: prior

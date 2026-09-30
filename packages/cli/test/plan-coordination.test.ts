@@ -1109,7 +1109,7 @@ describe("mstar plan — linked-control-root", () => {
     // verdict, read THROUGH the pinned store — not by an unpinned store
     // mismatch, and not silently absorbed.
     expect(stale.exitCode).toBe(1);
-    expect(jsonOf(stale).code).toBe("coordination.invalid-transition");
+    expect(jsonOf(stale).code).toBe("coordination.handoff-pin");
   }, CLI_INTEGRATION_TIMEOUT);
 });
 
@@ -2528,7 +2528,7 @@ describe("report-only completion", () => {
     // A different reference is a re-pointed completion, not an evidence update.
     const refused = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY, "sdd/plan-a/forged.md");
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).code).toBe("coordination.invalid-transition");
+    expect(jsonOf(refused).code).toBe("coordination.completion-frozen");
     expect(String(jsonOf(refused).message)).toContain("frozen once");
     expect(deliveryOf(fixture)).toEqual({ completion: { policy: REPORT_ONLY_POLICY, evidence: REPORT_ONLY_EVIDENCE } });
     expect(snapshotBytes(fixture)).toBe(frozen);

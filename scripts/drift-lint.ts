@@ -962,6 +962,47 @@ export function checkProvenanceScan(files: Array<{ rel: string; text: string }>)
   return { filesScanned, citationsFound, failures };
 }
 
+/** Advisory inventory of oversized test suites; this never contributes failure rows. */
+export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
+  try {
+    const candidates: string[] = [];
+    const addTree = (dir: string, extensions: readonly string[]): void => {
+      const visit = (current: string): void => {
+        for (const entry of readdirSync(current, { withFileTypes: true })) {
+          if (entry.name === "node_modules" || entry.name === "dist") continue;
+          const path = join(current, entry.name);
+          if (entry.isDirectory()) visit(path);
+          else if (entry.isFile() && extensions.some((ext) => entry.name.endsWith(ext))) candidates.push(path);
+        }
+      };
+      try {
+        visit(dir);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    };
+    for (const pkg of readdirSync(join(repoRoot, "packages"), { withFileTypes: true })) {
+      if (!pkg.isDirectory()) continue;
+      for (const subdir of ["test", "src"]) addTree(join(repoRoot, "packages", pkg.name, subdir), [".test.ts"]);
+    }
+    addTree(join(repoRoot, "packages", "dsh", "tests"), [".spec.ts", ".spec.tsx"]);
+    return candidates.flatMap((file) => {
+      const text = readFileSync(file, "utf8");
+      const lines = text.split(/\r?\n/).length - (text.endsWith("\n") ? 1 : 0);
+      return lines > 2000 ? [{ file: relative(repoRoot, file), lines }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function reportOversizedTests(): void {
+  for (const { file, lines } of findOversizedTestFiles(root)) {
+    console.warn(`advisory: oversized test file ${file} (${lines} lines; threshold 2000)`);
+  }
+}
+
+
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
  /* Engine export inventory (packages/engine/src/index.ts) */
@@ -1296,6 +1337,7 @@ if (import.meta.main) {
 
   const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
 
+  reportOversizedTests();
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);

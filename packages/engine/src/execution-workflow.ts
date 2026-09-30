@@ -1757,7 +1757,8 @@ function applyDeliveryEvidence(input: {
       const incoming = isPlainObject(delivery.completion) ? delivery.completion : null;
       const recorded = isPlainObject(stored.completion) ? stored.completion : null;
       if (stableJson(recorded) !== stableJson(incoming)) {
-        throw invalidWorkflowTransition(
+        throw new CoordinationError(
+          "coordination.completion-frozen",
           `workflow ${workflowId} cannot record the completion fulfilment: ${done.join(", ")} ` +
             `${done.length === 1 ? "is" : "are"} Done, and the registered completion policy's fulfilment is recorded BEFORE ` +
             `the row is marked Done (contract \u00A71) \u2014 the recorded evidence is the basis that row was completed on, so a ` +

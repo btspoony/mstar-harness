@@ -1657,7 +1657,7 @@ export type RecordWorkflowDeliveryResult = {
  *   an identical re-record is idempotent, a different pair is refused);
  * - an empty patch or a malformed member: nothing is silently dropped;
  * - a `completion` fulfilment that would CHANGE once an owned plan row is
- *   `Done` (`coordination.invalid-transition` - contract §1 the mirror rule:
+ *   `Done` (`coordination.completion-frozen` - contract §1 the mirror rule:
  *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
  *   and the same stable code refuses the same state on the DB route's
  *   `applyDeliveryEvidence`).
@@ -1789,8 +1789,8 @@ export async function recordWorkflowDelivery(
     // (`coordination.invalid-transition`).
     if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
       throw new CoordinationError(
-        "coordination.invalid-transition",
-        `refusing to record delivery evidence: coordination.invalid-transition: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
+        "coordination.completion-frozen",
+        `refusing to record delivery evidence: coordination.completion-frozen: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
         { workflow_id: workflowId },
       );
     }
