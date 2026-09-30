@@ -274,7 +274,14 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
     const view = await showPrepareWorkflow({ sessionPath: envelopePath, cwd: fixture.root });
     expect(view.view.allowed).toBe(true);
     expect(view.view.blockers).toEqual([]);
-    expect(view.view.derived).toEqual(["phase", "compass_ref"]);
+    // Two-generation history: the #301 hotfix asserted ["phase", "compass_ref"]
+    // here (this surface derived the absent phase). E06a derives the phase on
+    // READ (R3/#293, `workflow.snapshot.derived-phase`), so by the time this
+    // view is computed the phase is already derived and only the compass
+    // projection is this surface's own repair. E07 owns the final
+    // derived-Prepare view reporting and may re-shape it — this re-baseline is
+    // not a freeze of that contract.
+    expect(view.view.derived).toEqual(["compass_ref"]);
     // The read never writes: the bytes still lack the phase and keep the
     // absolute pointer.
     const after = readSnapshot(fixture);
@@ -307,7 +314,13 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
       patch: { mainWorktreeBranch: "main", appendPlans: [], integrationWorktreePath: integrationPath, planParallelism: "serial" },
     });
     expect(amended.outcome).toBe("amended");
-    expect(amended.view.derived).toEqual(["phase", "compass_ref"]);
+    // Two-generation history: the #301 hotfix asserted ["phase", "compass_ref"]
+    // here (the amendment adopted the absent phase in its own locked write).
+    // E06a derives the phase on READ (R3/#293), so only the compass projection
+    // remains this surface's own repair — while the ADOPTION itself is
+    // unchanged and asserted on disk below, which is the hotfix's core
+    // behavior. E07 owns the final derived-Prepare reporting.
+    expect(amended.view.derived).toEqual(["compass_ref"]);
     const after = readSnapshot(fixture);
     expect(after.phase).toBe("phase-1-prepare");
     expect(after.compass_ref).toBe(`iterations/${fixture.workflowId}/delivery-compass.md`);
@@ -335,6 +348,10 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
     expect(shown.view.allowed).toBe(false);
     expect(shown.view.blockers.join(" ")).toMatch(/not-prepare/);
     expect(shown.view.derived).toBeUndefined();
+    // E07: the amendment is admitted per ADDRESSED COMPONENT (§4.1), so a
+    // recorded forward label no longer gates the verb — a local repair lands in
+    // an executing lifecycle (A06). What refuses here is the patch itself, which
+    // addresses nothing... and the label is still never rewritten.
     await expect(
       amendPrepareWorkflow({
         sessionPath: envelopePath,
@@ -343,7 +360,7 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
         expectedCompassVersion: shown.view.compassVersion,
         patch: { mainWorktreeBranch: "main", appendPlans: [] },
       }),
-    ).rejects.toThrow(/not phase-1-prepare/);
+    ).rejects.toThrow(/changes nothing/);
     expect((readSnapshot(fixture) as Record<string, unknown>).phase).toBe("phase-2-execute");
   });
 

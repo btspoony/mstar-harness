@@ -90,4 +90,11 @@ describe("judgment command family", () => {
 
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
   });
+
+  test("documents the active review-advice route instead of historical submit", () => {
+    const command = definition(async () => result);
+    expect(command.id).toBe("judgment.review-advice");
+    expect(command.cli.options.find(({ key }) => key === "file")?.flags).toBe("--file <path>");
+    expect(command.cli.options.find(({ key }) => key === "pilot")?.required).toBe(true);
+  });
 });

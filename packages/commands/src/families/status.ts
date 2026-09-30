@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
-  closeWorkflow,
+  closeFileWorkflow,
   createFsStore,
   decodeExecutionSessionRef,
   executionContextFor,
@@ -9,13 +9,13 @@ import {
   listIssues,
   mutateExecutionWorkflow,
   readExecutionAuthority,
-  readJson,
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
+  resolveIntentRoot,
+  resolveIntentTarget,
   resolveProcessHarnessDir,
   resolveWorkflowDir,
   setArtifactStore,
-  unregisterWorkflow,
   validateStatusV2,
   WORKFLOW_SNAPSHOT_FILE,
   type ExecutionToken,
@@ -57,6 +57,16 @@ function engineCode(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+
+/**
+ * The typed details a refusal carries (`error.details`: the field facts and the
+ * `recovery` sidecar) are forwarded verbatim, so a command refusal is the same
+ * contract as the engine's own — never reduced to its code and message.
+ */
+function isDetailsRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function todayString(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -114,6 +124,11 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         }
       },
     }),
+    /**
+     * Lifecycle close uses the engine's composed file close: it resolves row
+     * completion, terminal state and root unregister as one resumable domain
+     * operation. The DB route remains the workflow mutation API.
+     */
     command({
       id: "status.workflow-close",
       cli: { path: ["status", "workflow-close"], aliases: [], arguments: [], options: [
@@ -178,27 +193,35 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             });
             return ok("status.workflow-close", receipt);
           }
-          if (session !== undefined && !path.isAbsolute(session)) {
-            return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "--session must be an absolute path" };
-          }
-          setArtifactStore(createFsStore(harnessDir));
-          const snapshotDir = path.join(resolveWorkflowDir(harnessDir, { harnessDir }), workflow);
-          const statusFile = path.join(harnessDir, "status.json");
-          if (!existsSync(path.join(snapshotDir, WORKFLOW_SNAPSHOT_FILE))) {
-            return refused("status.workflow-close", "workflow.snapshot-not-found", `workflow snapshot not found: ${path.join(snapshotDir, WORKFLOW_SNAPSHOT_FILE)}`);
-          }
-          const closed = await closeWorkflow(workflow, snapshotDir, { endedAt: endedAt ?? todayString(), ...(session ? { sessionPath: session } : {}) });
-          let hadRootEntry = false;
-          try {
-            const rootDoc = readJson(statusFile);
-            hadRootEntry = Array.isArray(rootDoc.workflows) && (rootDoc.workflows as Array<Record<string, unknown>>).some((entry) => entry?.id === workflow);
-            await unregisterWorkflow(statusFile, workflow);
-          } catch (error) {
-            throw new Error(`partial close: snapshot ${workflow} is terminal (${closed.status}, ended_at ${closed.ended_at}) but its status.json entry remains — resolve the root and re-run the close (${messageOf(error)})`);
-          }
-          return ok("status.workflow-close", { snapshot: closed, unregistered: hadRootEntry, statusFile });
+          const rootResolution = resolveIntentRoot({
+            cwd: context.cwd,
+            ...(harnessDir === undefined ? {} : { controlRoot: harnessDir }),
+          });
+          if (!rootResolution.ok) throw Object.assign(new Error(rootResolution.problem.needed), {
+            code: rootResolution.problem.code,
+            details: { recovery: { unresolved: [rootResolution.problem] } },
+          });
+          const target = resolveIntentTarget({ root: rootResolution.root, selection: { workflowId: workflow } });
+          if (!target.ok) throw Object.assign(new Error(target.problem.needed), {
+            code: target.problem.code,
+            details: { recovery: { unresolved: [target.problem] } },
+          });
+          setArtifactStore(createFsStore(rootResolution.root));
+          const closed = await closeFileWorkflow({
+            harnessRoot: rootResolution.root,
+            workflowId: target.workflowId,
+            endedAt: endedAt ?? todayString(),
+            ...(session === undefined ? {} : { sessionPath: session }),
+          });
+          return ok("status.workflow-close", { ...closed, statusFile: path.join(rootResolution.root, "status.json") });
         } catch (error) {
-          return refused("status.workflow-close", engineCode(error, "workflow.close-refused"), messageOf(error));
+          // A refused close reports the engine's own typed cause: the field
+          // facts and the `recovery` sidecar travel with the code and message.
+          const details =
+            error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
+              ? error.details
+              : undefined;
+          return refused("status.workflow-close", engineCode(error, "workflow.close-refused"), messageOf(error), details);
         }
       },
     }),

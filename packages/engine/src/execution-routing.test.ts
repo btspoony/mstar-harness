@@ -104,9 +104,16 @@ function scalar(context: StoreContext, sql: string): unknown {
 }
 
 function planOptions(fx: Fixture, workflowId: string): RegisterPlanWorkflowOptions {
+  // Registration proves the SELECTED plan document (§4/R1): the pointer must be
+  // the registered plan file, whose own `plan_id` header is the identity
+  // authority and whose heading is the title authority (the declared "A routing
+  // plan" below states exactly that heading).
+  const planFile = join(fx.harnessDir, "plans", `${workflowId}-plan.md`);
+  mkdirSync(dirname(planFile), { recursive: true });
+  writeFileSync(planFile, `# A routing plan\n\n**plan_id:** ${workflowId}-plan\n`);
   return {
     harnessDir: fx.harnessDir,
-    plan: { id: `${workflowId}-plan`, title: "A routing plan", file: "plans/routing.md" },
+    plan: { id: `${workflowId}-plan`, title: "A routing plan", file: `plans/${workflowId}-plan.md` },
     deliveryKind: "development",
     branchSource: "feature/routing",
     branchTarget: "main",

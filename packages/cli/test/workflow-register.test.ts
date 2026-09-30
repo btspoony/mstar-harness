@@ -23,7 +23,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { initializeStore, listPendingCatalogRegistrations, resolveCatalogRegistrationState, type StoreContext } from "@mstar-harness/engine";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -107,6 +107,12 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-workflow-register-"));
+  // The registration derives id/title from the SELECTED DOCUMENT (the plan
+  // document is the registered title source), so the declared plan file must
+  // exist and declare the registered title.
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), "# CLI example plan\n\n**plan_id:** 20260916-plan-cli-example\n");
+  writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), "# Verification plan\n\n**plan_id:** 20260916-plan-verify\n");
   // Contract §3: registration goes through the catalog journal, which requires
   // an initialized ACTIVE store — the fixture provisions one.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
@@ -149,7 +155,7 @@ describe("mstar workflow register", () => {
       // stays unset.
       expect(doc.branch).toEqual({ source: "feature/20260916-plan-cli-example", target: "main" });
       expect(doc.plans).toEqual([
-        { id: "20260916-plan-cli-example", title: "CLI example plan", file: "plans/20260916-plan-cli-example.md", status: "Todo" },
+        { id: "20260916-plan-cli-example", title: "CLI example plan", file: realpathSync(join(harness, "plans/20260916-plan-cli-example.md")), status: "Todo" },
       ]);
 
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
@@ -180,10 +186,10 @@ describe("mstar workflow register", () => {
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
 
+      // R1/R6/A09: the repeat of a registration that already fully holds is a
+      // successful no-op — the recorded receipt, no byte churn.
       const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(1);
-      expect(commandOutput(duplicate).status).toBe("refused");
-      expect(commandMessage(duplicate)).toContain("already registered");
+      expect(duplicate.exitCode).toBe(0);
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
@@ -309,13 +315,11 @@ describe("mstar workflow register", () => {
       expect(commandOutput(retry).status).toBe("refused");
       expect(commandMessage(retry)).toContain("reconcile");
       expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
-      // The adoption re-registered the lost root entry from the preserved
-      // snapshot bytes, but the binding belongs to the committed operation —
-      // success is never advertised and reconcile is the way forward.
+      // The diverged-journal refusal writes nothing: the root register keeps
+      // the caller's ghost bytes verbatim, and `catalog reconcile` owns the
+      // repair (a replayed success must never invent the lost root entry).
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([
-        { id: WORKFLOW_ID, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${WORKFLOW_ID}` },
-      ]);
+      expect(rootDoc.workflows).toEqual([]);
     });
   });
 });

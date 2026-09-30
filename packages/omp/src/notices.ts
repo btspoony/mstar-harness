@@ -25,6 +25,11 @@ export function fallbackNotice(input: { subject: string; detail: string }): Noti
   };
 }
 
+/** A configured no-op is informational, not a refusal or failure. */
+export function neutralNotice(input: { subject: string; detail: string }): NoticeTitle {
+  return { title: input.subject, detail: input.detail };
+}
+
 /**
  * `${title}: ${detail}` — the single rendering point. A detail that opens with
  * the title's own sentence (the status-bearing case whose observed condition is

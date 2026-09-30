@@ -13,30 +13,43 @@ type Input = z.infer<typeof inputSchema>;
 
 // The effects object is connection-scoped by the host. Keep one live handle per
 // root/port on that connection so repeated calls reuse the same listener.
-const dashboards = new WeakMap<CommandEffects, Map<string, Promise<RunningDashboard>>>();
+// Each slot tracks whether ANY call has already delivered its URL (a success
+// return hands the listener to the connection, so no later cancellation may
+// tear it down) and how many calls are still awaiting the shared startup —
+// the starter that gets cancelled must not close the listener out from under
+// a concurrent caller that is awaiting the same startup.
+type DashboardSlot = {
+  server: Promise<RunningDashboard>;
+  delivered: boolean;
+  waiters: number;
+};
+const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
-function failure(code: string, error: unknown): CommandEnvelope<never> {
+function failure(code: string, error: unknown, status: "refused" | "error" = "refused"): CommandEnvelope<never> {
   return {
     version: 1,
     command: id,
-    status: "refused",
+    status,
     code,
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
   };
 }
 
-function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): Promise<RunningDashboard> {
+function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {
   let services = dashboards.get(context.effects);
   if (services === undefined) {
     services = new Map();
     dashboards.set(context.effects, services);
   }
-  const key = JSON.stringify([harnessDir, port]);
+  const key = JSON.stringify([harnessDir, port, projectId ?? null]);
   const existing = services.get(key);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) return { slot: existing, reused: true };
 
-  const starting = context.effects.startDashboard({
+  const slot = {} as DashboardSlot;
+  slot.delivered = false;
+  slot.waiters = 0;
+  slot.server = context.effects.startDashboard({
     harnessDir,
     port,
     ...(projectId === undefined ? {} : { projectId }),
@@ -44,11 +57,18 @@ function serviceFor(context: InvocationContext, harnessDir: string, port: number
     services!.delete(key);
     throw error;
   });
-  services.set(key, starting);
-  return starting;
+  services.set(key, slot);
+  return { slot, reused: false };
 }
-
+/** Drop one started handle from the connection cache by its own key. */
+function forget(context: InvocationContext, harnessDir: string, port: number, projectId?: string): void {
+  dashboards.get(context.effects)?.delete(JSON.stringify([harnessDir, port, projectId ?? null]));
+}
 async function execute(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
+  if (context.signal.aborted) {
+    return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+  }
+
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -66,23 +86,41 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
   }
 
   let server: RunningDashboard;
+  let reused: boolean;
+  const started = serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
+  reused = started.reused;
+  started.slot.waiters++;
   try {
-    server = await serviceFor(context, harnessDir, parsed.data.port, parsed.data.project);
+    server = await started.slot.server;
   } catch (error) {
     const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
       ? error.code
       : "dashboard.start-failed";
     return failure(code, error);
+  } finally {
+    started.slot.waiters--;
   }
+  if (context.signal.aborted) {
+    // Cancellation arrived while this call was starting a listener. Tear the
+    // handle down ONLY when this call is the sole owner of an undelivered
+    // startup: no concurrent caller is awaiting the same slot and no call has
+    // already handed the URL to the connection (lifetime "connection" outlives
+    // any single call). A shared or delivered listener is left running.
+    if (!reused && !started.slot.delivered && started.slot.waiters === 0) {
+      forget(context, harnessDir, parsed.data.port, parsed.data.project);
+      await server.close();
+    }
+    return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+  }
+  started.slot.delivered = true;
 
   if (parsed.data.open === true) {
     try {
       await context.effects.openBrowser(server.url);
     } catch (error) {
-      const services = dashboards.get(context.effects);
-      services?.delete(JSON.stringify([harnessDir, parsed.data.port]));
+      forget(context, harnessDir, parsed.data.port, parsed.data.project);
       await server.close();
-      return failure("capability.browser.unavailable", error);
+      return failure("capability.browser.unavailable", error, "error");
     }
   }
 
@@ -111,7 +149,7 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
     },
     input: inputSchema,
     output: commandEnvelopeSchema,
-    effects: ["service", "browser"],
+    effects: ["service"],
     description: "Start the read-only Morning Star dashboard on 127.0.0.1",
     execute,
   }];

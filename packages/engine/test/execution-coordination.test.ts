@@ -52,6 +52,7 @@ import {
   type ExecutionPlanWitness,
   type ExecutionReceipt,
   type ExecutionSessionRef,
+  type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
 import type { CoordinationOperation } from "../src/index.js";
@@ -1028,7 +1029,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
       working_branch: `feature/${OWN_PLAN}`,
       track_branches: [`feature/${OWN_PLAN}`],
     });
-    const accepted = planFootprint(context, OWN_PLAN);
+    let accepted = planFootprint(context, OWN_PLAN);
     const acceptedProgress = {
       status: "InProgress",
       summary: "InProgress on the DB route",
@@ -1066,19 +1067,26 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(replay.data).toEqual(receipt.data);
     expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
 
-    // The frozen Assignment is a witness of every progress: an edited one
-    // invalidates the row with no revision change, exactly as the file route's
-    // locked re-authentication does.
-    writeFileSync(documents[OWN_PLAN]!.assignmentPath, `${readFileSync(documents[OWN_PLAN]!.assignmentPath, "utf8")}\nedited\n`);
-    const tampered = await refusalOf(async () =>
-      progressCall("progress-tampered", await planTokenOf(fixture, OWN_PLAN), "InReview"),
+    // §4.2 (A29) the frozen Assignment is re-authenticated by MEANING, exactly
+    // as the file route's locked re-authentication behaves: a reformatted
+    // document (prose appended, headers reflowed) leaves the row fresh, so this
+    // report is admitted and records itself ...
+    const assignmentPath = documents[OWN_PLAN]!.assignmentPath;
+    const assignmentBytes = readFileSync(assignmentPath, "utf8");
+    writeFileSync(assignmentPath, `${assignmentBytes}\nedited\n`);
+    const reformatted = await progressCall("progress-reformatted", await planTokenOf(fixture, OWN_PLAN), "InReview");
+    expect(reformatted.replayed).toBe(false);
+    expect(reformatted.data.plan.status).toBe("InReview");
+    // ... while a change of MEANING still invalidates the row with no revision
+    // change, because the row stays sealed against the intent `prepare` recorded.
+    writeFileSync(assignmentPath, assignmentBytes.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+    accepted = planFootprint(context, OWN_PLAN);
+    const reworded = await refusalOf(async () =>
+      progressCall("progress-reworded", await planTokenOf(fixture, OWN_PLAN), "InProgress"),
     );
-    expect(tampered).toMatchObject({ code: "coordination.assignment-stale" });
+    expect(reworded).toMatchObject({ code: "coordination.assignment-stale" });
     expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
-    writeFileSync(
-      documents[OWN_PLAN]!.assignmentPath,
-      readFileSync(documents[OWN_PLAN]!.assignmentPath, "utf8").replace(/\nedited\n$/, ""),
-    );
+    writeFileSync(assignmentPath, `${assignmentBytes}\nedited\n`);
 
     // §D the plan's own progress admission. Each refusal leaves the accepted
     // progress footprint byte-identical.
@@ -1162,6 +1170,87 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(notHeld).toMatchObject({ code: "coordination.execution-lease-required" });
     expect(planFootprint(context, OWN_PLAN)).toEqual(releasedFootprint);
     expect(parsedJson(releasedFootprint.own_lease).status).toBe("released");
+  });
+
+  test("a superseded plan effect is disclosed instead of replayed, and the token fence runs before a replay", async () => {
+    const fixture = await liveWorkflow("progress-superseded");
+    const { context, epoch, planTokens, storeId } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-1", planTokens[OWN_PLAN]!);
+    const seat = await planSeat(fixture, OWN_PLAN, PLAN_PM_ID, "superseded");
+    const boundToken = await planTokenOf(fixture, OWN_PLAN);
+
+    const progressCall = (operationId: string, expected: ExecutionToken, status: string) =>
+      progressExecutionPlan(domainContext(context, seat.caller), {
+        operationId,
+        session: seat.session,
+        expected,
+        planId: OWN_PLAN,
+        operation: {
+          kind: "progress",
+          progress: { status: status as "InProgress", summary: `${status} on the DB route`, evidence_paths: [] },
+        },
+      });
+
+    const first = await progressCall("progress-1", boundToken, "InProgress");
+    expect(first.replayed).toBe(false);
+    const accepted = planFootprint(context, OWN_PLAN);
+
+    // §4.2 (R6/A12) the commit advanced the row, so an exact retry always
+    // presents the token it superseded: the revision is transport freshness, and
+    // the recorded receipt is the current success with nothing written.
+    const replayed = await progressCall("progress-1", boundToken, "InProgress");
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.data).toEqual(first.data);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
+
+    // §4.2 (R6/R7/A26) the token's ADDRESS and generation are fenced BEFORE the
+    // recorded receipt is served: a matching receipt answers nothing to a token
+    // of another row, of another store or of a superseded epoch.
+    const foreignRow = await refusalOf(async () =>
+      progressCall("progress-1", executionToken("plan", storeId, epoch, [WORKFLOW_ID, PEER_PLAN], 1), "InProgress"),
+    );
+    expect(foreignRow).toMatchObject({ code: "execution.scope-mismatch" });
+    const foreignStore = await refusalOf(async () =>
+      progressCall(
+        "progress-1",
+        executionToken("plan", "11111111-1111-4111-8111-111111111111", epoch, [WORKFLOW_ID, OWN_PLAN], 1),
+        "InProgress",
+      ),
+    );
+    expect(foreignStore).toMatchObject({ code: "execution.scope-mismatch" });
+    const staleEpoch = await refusalOf(async () =>
+      progressCall("progress-1", executionToken("plan", storeId, epoch + 1, [WORKFLOW_ID, OWN_PLAN], 1), "InProgress"),
+    );
+    expect(staleEpoch).toMatchObject({ code: "store.stale-epoch" });
+    expect(staleEpoch.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(accepted);
+
+    // §4.2 (A10) a later accepted operation on the SAME row that owns none of
+    // this effect (a residual capture writes the row back unchanged) leaves the
+    // recorded progress effect genuinely held: still current success, still no
+    // second commit.
+    await residualAddCall(
+      fixture,
+      seat,
+      "residual-unrelated",
+      [residualEntry({ occurrenceKey: "unrelated-1" })],
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    const stillHeld = await progressCall("progress-1", boundToken, "InProgress");
+    expect(stillHeld.replayed).toBe(true);
+    expect(stillHeld.data).toEqual(first.data);
+
+    // §4.2 (A13) a later accepted operation that REPLACES the recorded effect
+    // supersedes it: the retry is disclosed, never restored, and the row stays
+    // exactly as the superseding operation left it.
+    const second = await progressCall("progress-2", await planTokenOf(fixture, OWN_PLAN), "InReview");
+    expect(second.replayed).toBe(false);
+    const supersededFootprint = planFootprint(context, OWN_PLAN);
+    const superseded = await refusalOf(async () => progressCall("progress-1", boundToken, "InProgress"));
+    expect(superseded).toMatchObject({ code: "execution.effect-superseded" });
+    expect(superseded.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(supersededFootprint);
+    expect(parsedJson(supersededFootprint.plan_coordination).progress).toMatchObject({ status: "InReview" });
   });
 
   test("a concurrent catalog edit never rebinds the frozen input, and only an eligible prepare selects one", async () => {
@@ -2969,6 +3058,347 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
   }, 30000);
 });
 
+/* ------------------------------------------------------------------------ *
+ * W5 — the entailed bookkeeping of the lifecycle transitions (§R5/§R8)
+ * ------------------------------------------------------------------------ */
+
+/** The addressed row's stored state and coordination, as a test reads them. */
+function storedPlanRow(
+  context: StoreContext,
+  planId: string,
+): { state: Record<string, unknown>; coordination: Record<string, unknown> } {
+  const footprint = planFootprint(context, planId);
+  return {
+    state: parsedJson(footprint.plan_state),
+    coordination: parsedJson(footprint.plan_coordination),
+  };
+}
+
+/**
+ * The commits on the integration branch's FIRST-PARENT path that carry two
+ * parents — the merges of this attempt, selected exactly the way
+ * `integrationProof` selects its candidates. A second merge would add another
+ * candidate; a re-run of the same merge would move HEAD.
+ */
+function firstParentMerges(path: string, baseSha: string, head: string): string[] {
+  const range = execFileSync("git", ["-C", path, "rev-list", "--first-parent", "--parents", `${baseSha}..${head}`], {
+    encoding: "utf8",
+  });
+  return range
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.split(" ").map((id) => id.trim()).filter((id) => id.length > 0))
+    .filter((ids) => ids.length === 3)
+    .map((ids) => ids[0]!);
+}
+
+/** The recorded integration attempt of one handoff, as the row stores it. */
+function recordedAttempt(context: StoreContext, planId: string): Record<string, unknown> {
+  const handoff = parsedJson(planFootprint(context, planId).plan_coordination).handoff as
+    | { integration?: Record<string, unknown> }
+    | undefined;
+  if (handoff?.integration === undefined) throw new Error(`plan ${planId} records no integration attempt`);
+  return handoff.integration;
+}
+
+describe("execution-transition-bookkeeping: §R5/§R8 the recordings a transition entails", () => {
+  test("entailed bookkeeping: a handoff records the InReview it entails, once, beside the seal", async () => {
+    const fixture = await lifecycleFixture("entailed-bookkeeping", "integration");
+    const { context } = fixture;
+
+    // (A29) the transitions re-authenticate the sealed Assignment SEMANTICALLY:
+    // an irrelevant formatting change of the sealed document leaves the row
+    // fresh, so the report below (and the handoff further down) proceed, while a
+    // change of MEANING still invalidates the row with no revision change.
+    const assignmentPath = fixture.documents[OWN_PLAN]!.assignmentPath;
+    const assignmentText = readFileSync(assignmentPath, "utf8");
+    writeFileSync(assignmentPath, `${assignmentText}\n<!-- reviewer note: formatting only -->\n`);
+    const formatted = await lifecycleProgress(
+      fixture,
+      fixture.seat,
+      OWN_PLAN,
+      "progress-after-formatting",
+      "InReview",
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(formatted.replayed).toBe(false);
+    expect(formatted.data.plan.status).toBe("InReview");
+    writeFileSync(assignmentPath, assignmentText.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+    const gateToken = await planTokenOf(fixture, OWN_PLAN);
+    const reworded = await refusalOf(async () =>
+      lifecycleProgress(fixture, fixture.seat, OWN_PLAN, "progress-after-gate-change", "InReview", gateToken),
+    );
+    expect(reworded.code).toBe("coordination.assignment-stale");
+    writeFileSync(assignmentPath, `${assignmentText}\n<!-- reviewer note: formatting only -->\n`);
+
+    // (A01) The row already records InReview: the ordinary handoff writes the
+    // seal and NOTHING else — one plan revision, one receipt, and the report the
+    // row already carried stays byte-for-byte the report it carried.
+    const before = planFootprint(context, OWN_PLAN);
+    const first = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-ordinary", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    expect(first.replayed).toBe(false);
+    expect(first.recovery).toMatchObject({
+      outcome: "applied",
+      applied: [`handoff on plan ${OWN_PLAN}`],
+      commitState: "committed",
+    });
+    const ordinary = storedPlanRow(context, OWN_PLAN);
+    expect(ordinary.state.status).toBe("InReview");
+    expect(ordinary.coordination.progress).toEqual(parsedJson(before.plan_coordination).progress);
+    const afterOrdinary = planFootprint(context, OWN_PLAN);
+    expect(afterOrdinary.plan_revision).toBe((before.plan_revision as number) + 1);
+    expect(afterOrdinary.store_revision).toBe((before.store_revision as number) + 1);
+    expect(afterOrdinary.operations).toBe((before.operations as number) + 1);
+
+    // (R5) The coordinator accepts the attempt and returns it. The returned row
+    // records InProgress by the return's own effect (the plan is being worked on
+    // again) and the plan session hands off again without re-reporting the state:
+    // the review is already delivered, so the InReview recording is entailed and
+    // commits WITH the seal — one call, one revision, no separate progress call
+    // and no second record of the report.
+    const handoffId = first.data.coordination!.handoff!.id;
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-entailed", { kind: "accept", handoffId });
+    const returned = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "return-entailed", {
+      kind: "return",
+      handoffId,
+      reason: "rework one slice",
+    });
+    expect(returned.data.plan.status).toBe("InProgress");
+    expect(returned.data.executionLease).toMatchObject({ holder: PLAN_PM_ID, status: "held" });
+
+    const beforeSecond = planFootprint(context, OWN_PLAN);
+    const second = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-entailed", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    expect(second.replayed).toBe(false);
+    expect(second.data.plan.status).toBe("InReview");
+    expect(second.data.coordination!.handoff).toMatchObject({
+      state: "submitted",
+      attempt: 2,
+      submitted_by: PLAN_PM_ID,
+    });
+    const entailed = storedPlanRow(context, OWN_PLAN);
+    expect(entailed.state.status).toBe("InReview");
+    // The entailed recording and the seal are ONE commit: one plan revision,
+    // one shared store revision and one receipt for both facts.
+    const afterSecond = planFootprint(context, OWN_PLAN);
+    expect(afterSecond.plan_revision).toBe((beforeSecond.plan_revision as number) + 1);
+    expect(afterSecond.store_revision).toBe((beforeSecond.store_revision as number) + 1);
+    expect(afterSecond.operations).toBe((beforeSecond.operations as number) + 1);
+    expect(entailed.coordination.progress).toEqual(ordinary.coordination.progress);
+    expect(entailed.coordination.handoff).toMatchObject({ state: "submitted", attempt: 2 });
+  });
+
+  test("entailed bookkeeping: the ordinary Todo → InProgress → InReview sequence records each state once (A01)", async () => {
+    const fixture = await liveWorkflow("entailed-ordinary-sequence");
+    const { context, planTokens } = fixture;
+    const created = planFootprint(context, OWN_PLAN);
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("Todo");
+
+    // `prepare` seals the reviewed Assignment and its anchors; it claims nothing,
+    // so the recorded status is exactly where creation left it.
+    const prepared = await prepareCall(fixture, OWN_PLAN, "prepare-ordinary", planTokens[OWN_PLAN]!);
+    expect(prepared.replayed).toBe(false);
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("Todo");
+    const afterPrepare = planFootprint(context, OWN_PLAN);
+    expect(afterPrepare.plan_revision).toBe((created.plan_revision as number) + 1);
+
+    // The bind claims the plan's execution lease: `Todo → InProgress` is the
+    // claim's own recording (claim-before-InProgress), not a second verb.
+    const planPm = await bindPlanPm(fixture, OWN_PLAN, "ordinary-sequence");
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("InProgress");
+    const afterBind = planFootprint(context, OWN_PLAN);
+    expect(afterBind.plan_revision).toBe((afterPrepare.plan_revision as number) + 1);
+    expect(afterBind.own_lease).not.toBe(afterPrepare.own_lease);
+
+    // ... and the ordinary progress report records InReview.
+    const progressed = await progressExecutionPlan(domainContext(context, trustedCaller(PLAN_PM_ID, "plan-pm", OWN_PLAN)), {
+      operationId: "progress-ordinary",
+      session: planPm,
+      expected: await planTokenOf(fixture, OWN_PLAN),
+      planId: OWN_PLAN,
+      operation: {
+        kind: "progress",
+        progress: { status: "InReview", summary: "reviewed on the ordinary path", evidence_paths: [] },
+      },
+    });
+    expect(progressed.replayed).toBe(false);
+    expect(progressed.data.plan.status).toBe("InReview");
+    const afterProgress = planFootprint(context, OWN_PLAN);
+    expect(afterProgress.plan_revision).toBe((afterBind.plan_revision as number) + 1);
+    expect(afterProgress.store_revision).toBe((afterBind.store_revision as number) + 1);
+    // Each step recorded ONE thing: the progress block names the report and the
+    // sealed Assignment is exactly the one `prepare` sealed (no regression from
+    // the entailed path, and no extra recording anywhere in the sequence).
+    expect(storedPlanRow(context, OWN_PLAN).coordination).toMatchObject({
+      prepared: parsedJson(afterBind.plan_coordination).prepared,
+      progress: { status: "InReview", summary: "reviewed on the ordinary path", evidence_paths: [] },
+    });
+  });
+
+  test("missing acceptance: an unaccepted attempt is not integrated and only the missing decision is named", async () => {
+    const fixture = await lifecycleFixture("missing-acceptance", "integration");
+    const { context } = fixture;
+    const handed = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-unaccepted", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    const handoffId = handed.data.coordination!.handoff!.id;
+    const before = planStateFootprint(context, OWN_PLAN);
+
+    const refusal = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-unaccepted", {
+        kind: "integration-start",
+        handoffId,
+      }),
+    );
+    expect(refusal.code).toBe("coordination.invalid-transition");
+    const recovery = refusal.details!.recovery as {
+      outcome?: string;
+      commitState?: string;
+      applied?: readonly unknown[];
+      unresolved?: Array<Record<string, unknown>>;
+    };
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    expect(recovery.applied).toEqual([]);
+    const problem = recovery.unresolved![0]!;
+    expect(problem.component).toBe("plan-handoff");
+    expect(problem.path).toBe("handoff.state");
+    expect(problem.code).toBe("coordination.invalid-transition");
+    expect(problem.currentFacts as string[]).toContain(`plan ${OWN_PLAN} handoff ${handoffId} records submitted`);
+    expect(String(problem.needed)).toContain("obtain the decision");
+    expect(String(problem.needed)).toContain("accepted");
+    expect((problem.availableWork as string[]).join("; ")).toContain(`read plan ${OWN_PLAN}`);
+    // No fabrication and no collateral: the sealed attempt, the row, its lease
+    // and every revision are exactly as they were, and the only thing asked for
+    // is the missing acceptance.
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual(before);
+
+    // The one necessary interaction completes the transition.
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-decision", { kind: "accept", handoffId });
+    const started = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-decision", {
+      kind: "integration-start",
+      handoffId,
+    });
+    expect(started.data.coordination!.handoff!.state).toBe("integrating");
+
+    // The entailed InReview recording is CONDITIONAL on the reviewed decision:
+    // with the attempt returned and the acceptance report genuinely absent, the
+    // handoff records nothing at all — no status, no seal, no revision — and
+    // names only the document it needs.
+    const negative = await lifecycleFixture("missing-acceptance-entailed", "integration");
+    const sealedNegative = await planMutation(negative, negative.seat, OWN_PLAN, "handoff-negative", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(negative),
+    });
+    const negativeId = sealedNegative.data.coordination!.handoff!.id;
+    await planMutation(negative, negative.coordinatorSeat, OWN_PLAN, "accept-negative", {
+      kind: "accept",
+      handoffId: negativeId,
+    });
+    await planMutation(negative, negative.coordinatorSeat, OWN_PLAN, "return-negative", {
+      kind: "return",
+      handoffId: negativeId,
+      reason: "rework the slice",
+    });
+    expect(storedPlanRow(negative.context, OWN_PLAN).state.status).toBe("InProgress");
+    const beforeNegative = planStateFootprint(negative.context, OWN_PLAN);
+    const absent = await refusalOf(() =>
+      planMutation(negative, negative.seat, OWN_PLAN, "handoff-negative-absent", {
+        kind: "handoff",
+        evidence: {
+          ...handoffEvidenceOf(negative),
+          qa: {
+            gate: "mandatory",
+            decision: "pass",
+            report: join(negative.harnessRoot, "sdd", OWN_PLAN, "absent-qa.md"),
+          },
+        },
+      }),
+    );
+    expect(absent.code).toBe("coordination.invalid-input");
+    expect(String(absent.details!.field)).toBe("evidence.qa.report");
+    expect(storedPlanRow(negative.context, OWN_PLAN).state.status).toBe("InProgress");
+    expect(planStateFootprint(negative.context, OWN_PLAN)).toEqual(beforeNegative);
+  }, 30000);
+
+  test("interrupted integration: a proven merge is finished without a second merge and keeps its ownership record", async () => {
+    const fixture = await lifecycleFixture("interrupted-integration", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "interrupted");
+    const attempt = recordedAttempt(context, OWN_PLAN);
+
+    // The coordinator merged what it claimed and died before the result was
+    // recorded: the attempt block, both leases and the merge in the checkout are
+    // the durable facts a resumption starts from.
+    const mergeSha = mergeIntoIntegration(fixture);
+    const interrupted = planStateFootprint(context, OWN_PLAN);
+
+    const resumed = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-start-resumed", {
+      kind: "integration-start",
+      handoffId,
+    });
+    expect(resumed.replayed).toBe(false);
+    const resumedHandoff = resumed.data.coordination!.handoff!;
+    expect(resumedHandoff.state).toBe("integrating");
+    // The same attempt, not a re-pinned one: the recorded base and start are the
+    // ones the coordinator recorded, so no second merge is asked for.
+    expect(resumedHandoff.integration).toMatchObject({
+      base_sha: attempt.base_sha,
+      started_at: attempt.started_at,
+      target_branch: `integration/${OWN_PLAN}`,
+    });
+    expect(resumed.data.integrationLease).toMatchObject({
+      holder: COORDINATOR_ID,
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+      target_branch: `integration/${OWN_PLAN}`,
+    });
+    // No second merge: the integration branch is exactly where the interruption
+    // left it, with ONE merge of the pinned source onto the recorded base.
+    expect(headOf(fixture.integrationPath)).toBe(mergeSha);
+    expect(firstParentMerges(fixture.integrationPath, String(attempt.base_sha), mergeSha)).toEqual([mergeSha]);
+    // No lost ownership record: the coordinator still holds the plan's execution
+    // lease and this attempt's own merge claim, unchanged by the resumption.
+    expect(resumed.data.executionLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({
+      holder: COORDINATOR_ID,
+      plan_id: OWN_PLAN,
+      source_branch: `feature/${OWN_PLAN}`,
+    });
+    // The resumption is an accepted operation, so it spends its own plan
+    // revision (§3.1) and re-pins nothing else: the block, the leases and the
+    // merge are byte-for-byte the interrupted state (the same assertion the
+    // started-attempt retry already carries).
+    expect(planStateFootprint(context, OWN_PLAN)).toEqual({
+      ...interrupted,
+      plan_revision: (interrupted.plan_revision as number) + 1,
+    });
+
+    // The bookkeeping is finished internally from the observed merge: the result
+    // is recorded, the row stays InReview and both leases stay held until the
+    // completion that owns the release.
+    const merged = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-interrupted", {
+      kind: "integration-accept",
+      handoffId,
+    });
+    expect(merged.data.coordination!.handoff).toMatchObject({
+      state: "merged",
+      integration: { base_sha: attempt.base_sha, result_sha: mergeSha },
+    });
+    expect(merged.data.plan.status).toBe("InReview");
+    expect(merged.data.executionLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(merged.data.integrationLease).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(headOf(fixture.integrationPath)).toBe(mergeSha);
+  }, 30000);
+});
+
 describe("execution-reconcile: §3/§4.2 crash recovery and explicit stopped-owner evidence", () => {
   test("reconcile classifies an abandoned attempt, completes a proven one, and replays read-only", async () => {
     const fixture = await lifecycleFixture("reconcile-classify", "integration");
@@ -3264,4 +3694,332 @@ describe("execution-concurrency: §3.1/§4.1 concurrent accepted plan operations
       summary: "second",
     });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * W6 — the close composes fulfilment → row Done → terminal removal
+ * (E10; §R5/§R10, A14/A17–A20/#270)
+ * ------------------------------------------------------------------------ */
+
+/** The workflow header one lifecycle test reads from the store. */
+function storedWorkflow(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(context, `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+  if (row === undefined) throw new Error("fixture: the workflow holds no stored header");
+  return parsedJson(row.state_json);
+}
+
+/** §3 one PUBLISHED workflow call, at the token the store serves right now. */
+async function workflowMutationOn(
+  fixture: LifecycleFixture,
+  operationId: string,
+  operation: Record<string, unknown>,
+  expected?: ExecutionToken,
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const workflow = (await readExecutionState(fixture.context)).data.workflows.find(
+    (candidate) => candidate.state.id === WORKFLOW_ID,
+  );
+  if (workflow === undefined) throw new Error("fixture: the workflow is not registered");
+  return mutateExecutionWorkflow(domainContext(fixture.context, fixture.coordinatorCaller), {
+    operationId,
+    session: fixture.coordinator,
+    expected: expected ?? workflow.workflowToken,
+    workflowId: WORKFLOW_ID,
+    operation,
+  } as never);
+}
+
+/**
+ * The residue a registration leaves when it declared its completion policy but
+ * never recorded the fulfilment: nothing about the ACCEPTED report is missing,
+ * only the workflow's own projection of it.
+ */
+function clearRecordedFulfilment(context: StoreContext): void {
+  withRaw(context, (db) => {
+    db.prepare(
+      `update execution_workflows set state_json = json_remove(state_json, '$.delivery') where workflow_id = ?`,
+    ).run(WORKFLOW_ID);
+  });
+}
+
+/** One plan row's status planted directly, without moving its revision. */
+function plantRowStatus(context: StoreContext, planId: string, status: string): void {
+  withRaw(context, (db) => {
+    const row = db
+      .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(WORKFLOW_ID, planId) as { state_json?: unknown } | undefined;
+    if (row === undefined) throw new Error(`fixture: no plan row ${planId}`);
+    const state = parsedJson(row.state_json);
+    state.status = status;
+    db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(
+      JSON.stringify(state),
+      WORKFLOW_ID,
+      planId,
+    );
+  });
+}
+
+/** Everything a refused or composed close must account for, as one comparable value. */
+function closeFootprint(context: StoreContext): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    "select (select revision from execution_meta where id = 1) as root_revision, " +
+      "(select revision from store_meta where id = 1) as store_revision, " +
+      `(select revision from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_revision, ` +
+      `(select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_state, ` +
+      `(select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+      `(select group_concat(plan_id || ':' || json_extract(state_json, '$.status')) from execution_plans where workflow_id = '${WORKFLOW_ID}') as rows, ` +
+      "(select count(*) as n from execution_operations) as operations, " +
+      "(select count(*) as n from execution_sessions) as sessions, " +
+      "(select count(*) as n from execution_leases) as leases",
+  );
+  return row!;
+}
+
+/** The development delivery tail this route's close consults (contract §4c/§4d/§4f). */
+const DEVELOPMENT_TAIL = {
+  compound: { outcome: "created" },
+  pr: { repo: "o/r", head: `feature/${OWN_PLAN}`, target: "main" },
+  merge: { provider: "github", evidence: "PR #255 merged" },
+} as const;
+
+describe("execution-close-composition: §R5/§R10 the close composes what the rows' evidence entails", () => {
+  test("report.only recovery: ONE close records the fulfilment, completes the row and unregisters (A17/#270, no Git)", async () => {
+    const fixture = await lifecycleFixture("close-report-only", "report-only");
+    const { context } = fixture;
+    // The accepted report exists; the workflow's fulfilment projection does not.
+    clearRecordedFulfilment(context);
+    const handoffId = await acceptedAttempt(fixture, "close-report-only");
+    expect(storedWorkflow(context).delivery).toBeUndefined();
+    const before = closeFootprint(context);
+
+    // ONE ordinary close intent. The route owns no branch, no integration
+    // checkout and no PR identity, and the close demands none of them.
+    const closed = await workflowMutationOn(fixture, "op-close-report-only", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+
+    // Routing is gone from the receipt's own graph, and the history stayed.
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const stored = storedWorkflow(context);
+    // The fulfilment it recorded names the REGISTERED policy and the accepted
+    // report the decision was sealed against — resolved, never invented.
+    expect(stored.delivery).toMatchObject({
+      completion: { policy: "acceptance report", evidence: fixture.evidence[OWN_PLAN]!.qa },
+    });
+    expect(stored.status).toBe("completed");
+    expect(String(stored.ended_at)).not.toBe("");
+    // The row is Done with its completed handoff, and its ownership was
+    // RELEASED with provenance rather than deleted.
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+      release_reason: "close",
+    });
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+
+    // ONE handle: the workflow, the store and the root each advance exactly once.
+    const after = closeFootprint(context);
+    expect({
+      root: Number(after.root_revision) - Number(before.root_revision),
+      store: Number(after.store_revision) - Number(before.store_revision),
+      workflow: Number(after.workflow_revision) - Number(before.workflow_revision),
+    }).toEqual({ root: 1, store: 1, workflow: 1 });
+  }, 30000);
+
+  test("report.only recovery: a Done row whose fulfilment was never recorded gets the projection repaired, never rewritten (A17/A20)", async () => {
+    const fixture = await lifecycleFixture("close-report-only-done", "report-only");
+    const { context } = fixture;
+    clearRecordedFulfilment(context);
+    await acceptedAttempt(fixture, "close-report-only-done");
+    // The residue a foreign writer leaves: the row records its COMPLETED shape
+    // (Done, completed handoff, no held lease) while the workflow's own
+    // fulfilment projection was never written. The close owes the projection —
+    // not a second row write.
+    const completedAt = "2026-01-03T00:00:00.000Z";
+    withRaw(context, (db) => {
+      const row = db
+        .prepare("select state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, OWN_PLAN) as { state_json: string; coordination_json: string };
+      const state = parsedJson(row.state_json);
+      state.status = "Done";
+      const coordination = parsedJson(row.coordination_json);
+      const handoff = coordination.handoff as Record<string, unknown>;
+      handoff.state = "completed";
+      handoff.completed_at = completedAt;
+      db.prepare(
+        "update execution_plans set state_json = ?, coordination_json = ? where workflow_id = ? and plan_id = ?",
+      ).run(JSON.stringify(state), JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+      db.prepare(
+        "update execution_leases set lease_json = json_set(lease_json, '$.status', 'released') " +
+          "where workflow_id = ? and plan_id = ?",
+      ).run(WORKFLOW_ID, OWN_PLAN);
+    });
+    const rowBefore = planFootprint(context, OWN_PLAN);
+
+    const closed = await workflowMutationOn(fixture, "op-close-report-only-done", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(storedWorkflow(context).delivery).toMatchObject({
+      completion: { policy: "acceptance report", evidence: fixture.evidence[OWN_PLAN]!.qa },
+    });
+    // The completed row was NOT rewritten: its own bytes, its coordination and
+    // its revision are exactly what they were.
+    const rowAfter = planFootprint(context, OWN_PLAN);
+    expect({
+      plan_state: rowAfter.plan_state,
+      plan_coordination: rowAfter.plan_coordination,
+      plan_revision: rowAfter.plan_revision,
+    }).toEqual({
+      plan_state: rowBefore.plan_state,
+      plan_coordination: rowBefore.plan_coordination,
+      plan_revision: rowBefore.plan_revision,
+    });
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+  }, 30000);
+
+  test("report.only recovery: a genuinely absent acceptance keeps the work and names only that decision (A18)", async () => {
+    const fixture = await lifecycleFixture("close-report-only-absent", "report-only");
+    const { context } = fixture;
+    clearRecordedFulfilment(context);
+    // The report exists but nobody accepted it: the ONE decision the close
+    // cannot supply is the acceptance, not a route's fields.
+    const handed = await planMutation(fixture, fixture.seat, OWN_PLAN, "handoff-close-absent", {
+      kind: "handoff",
+      evidence: handoffEvidenceOf(fixture),
+    });
+    const handoffId = handed.data.coordination!.handoff!.id;
+    const before = closeFootprint(context);
+
+    const refused = await refusalOf(() =>
+      workflowMutationOn(fixture, "op-close-report-only-absent", {
+        kind: "lifecycle",
+        status: "completed",
+        reason: "close",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    const recovery = refused.details!.recovery as {
+      outcome?: string;
+      commitState?: string;
+      applied?: readonly unknown[];
+      unresolved?: Array<Record<string, unknown>>;
+    };
+    expect(recovery.outcome).toBe("unresolved");
+    expect(recovery.commitState).toBe("none");
+    expect(recovery.applied).toEqual([]);
+    const problem = recovery.unresolved![0]!;
+    expect(problem.component).toBe("plan-handoff");
+    expect(problem.path).toBe("handoff.state");
+    expect(String(problem.needed)).toContain("accepted");
+    expect(String(problem.needed)).toContain(`plan ${OWN_PLAN}`);
+    // Nothing was composed, nothing was registered twice: no phantom state.
+    expect(closeFootprint(context)).toEqual(before);
+
+    // The one necessary interaction (the acceptance) makes the same close succeed.
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "accept-close-absent", { kind: "accept", handoffId });
+    const closed = await workflowMutationOn(fixture, "op-close-report-only-absent", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "close",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("Done");
+    expect(storedWorkflow(context).status).toBe("completed");
+  }, 30000);
+
+  test("evidence before Done: development evidence captured early is used by the close (A19)", async () => {
+    const fixture = await lifecycleFixture("close-development", "development");
+    const { context } = fixture;
+    const handoffId = await acceptedAttempt(fixture, "close-development");
+
+    // The external evidence (compound disposition, PR identity, verified-merge
+    // record) arrives BEFORE the row's `Done` projection: capturing it is legal,
+    // and the close composes that projection from the same evidence.
+    const captured = await workflowMutationOn(fixture, "op-close-delivery-early", {
+      kind: "delivery",
+      delivery: DEVELOPMENT_TAIL,
+    });
+    expect(captured.data.workflows[0]!.state.delivery).toMatchObject({
+      compound: { outcome: "created" },
+      pr: { head: `feature/${OWN_PLAN}`, target: "main" },
+      merge: { evidence: "PR #255 merged" },
+    });
+    expect(storedPlanRow(context, OWN_PLAN).state.status).toBe("InReview");
+
+    const closed = await workflowMutationOn(fixture, "op-close-development", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "delivery evidence verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const stored = storedWorkflow(context);
+    expect(stored.status).toBe("completed");
+    expect(stored.delivery).toMatchObject({ merge: { evidence: "PR #255 merged" } });
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({ status: "released" });
+  }, 30000);
+
+  test("interrupted integration: the close resumes the proven merge's bookkeeping without merging again (A14)", async () => {
+    const fixture = await lifecycleFixture("close-integration", "integration");
+    const { context } = fixture;
+    const handoffId = await startedAttempt(fixture, "close-integration");
+    const base = headOf(fixture.integrationPath);
+    // The merge RAN and the process died before the attempt was recorded: E09's
+    // seam finishes that bookkeeping from the OBSERVED merge (no re-merge).
+    const merged = mergeIntoIntegration(fixture);
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "integration-accept-close", {
+      kind: "integration-accept",
+      handoffId,
+    });
+    expect(recordedAttempt(context, OWN_PLAN).result_sha).toBe(merged);
+
+    // The other owned row is already Done and the delivery tail is recorded, so
+    // this close's whole work is the interrupted row.
+    plantRowStatus(context, PEER_PLAN, "Done");
+    await workflowMutationOn(fixture, "op-close-integration-delivery", { kind: "delivery", delivery: DEVELOPMENT_TAIL });
+    const headBefore = headOf(fixture.integrationPath);
+    const mergesBefore = firstParentMerges(fixture.integrationPath, base, headBefore);
+
+    const closed = await workflowMutationOn(fixture, "op-close-integration", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "integration result verified",
+    });
+
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    // No second merge, no re-pin: HEAD is where the interruption left it, with
+    // exactly ONE merge of the pinned source.
+    expect(headOf(fixture.integrationPath)).toBe(headBefore);
+    expect(firstParentMerges(fixture.integrationPath, base, headBefore)).toEqual(mergesBefore);
+    expect(firstParentMerges(fixture.integrationPath, base, headBefore)).toHaveLength(1);
+    // The completion is recorded and BOTH ownership records survive as
+    // provenance-bearing releases.
+    const row = storedPlanRow(context, OWN_PLAN);
+    expect(row.state.status).toBe("Done");
+    expect(row.coordination.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(recordedAttempt(context, OWN_PLAN).result_sha).toBe(merged);
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released",
+      released_by: COORDINATOR_ID,
+    });
+    expect(mergeLeaseRowOf(context).lease).toMatchObject({
+      status: "released",
+      plan_id: OWN_PLAN,
+      prior_holder: COORDINATOR_ID,
+      released_by: COORDINATOR_ID,
+    });
+    expect(storedWorkflow(context).status).toBe("completed");
+    expect(Number(closeFootprint(context).registered)).toBe(0);
+  }, 30000);
 });

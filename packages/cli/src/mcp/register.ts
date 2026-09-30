@@ -16,12 +16,41 @@ export function mcpToolName(commandId: string): string {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
 }
 
-function inputSchema(definition: CommandDefinition) {
-  if (!(definition.input instanceof z.ZodObject)) return definition.input;
+/**
+ * The MCP-facing input shape: the command's own input plus the domain-owned
+ * payload contracts, so a caller can construct a declared payload from
+ * `tools/list` instead of guessing at an opaque field. Payload fields are
+ * optional here and the value keeps its object form — a caller sends the
+ * document, never a JSON-encoded string (MCP has no `--file` transport). The
+ * handler decodes and validates through the same descriptor, so the published
+ * schema and the enforced contract are one schema.
+ *
+ * A descriptor is composed only when its key is a declared field the family
+ * left as a permissive `z.unknown()` placeholder: that placeholder gains the
+ * domain-owned shape. A field the input schema already shapes stays that
+ * schema (it is the family's own transport contract — the workflow `--file`
+ * path, which must stay a pathname), and a key that names no input field at
+ * all is never injected, because a tool field the handler does not read is a
+ * capability `tools/list` must not advertise. Descriptor keys are not required
+ * to be payload field names — `persist.write` keys its per-kind contracts by
+ * `kind` value — so they are published by the `schema` family alone.
+ */
+export function mcpToolInputSchema(definition: CommandDefinition) {
+  const input = definition.input;
+  if (!(input instanceof z.ZodObject)) return input;
   const sessionId = definition.cli.options.some((option) => option.context === "sessionId");
-  return definition.id === "judgment.review-advice"
-    ? definition.input.extend({ input: z.string().optional(), ...(sessionId ? { sessionId: z.string().optional() } : {}) })
-    : sessionId ? definition.input.extend({ sessionId: z.string().optional() }) : definition.input;
+  const composed = Object.fromEntries(
+    Object.entries(definition.payloads ?? {}).flatMap(([field, descriptor]) => {
+      const declared = input.shape[field];
+      const placeholder = declared instanceof z.ZodUnknown
+        || (declared instanceof z.ZodOptional && declared.unwrap() instanceof z.ZodUnknown);
+      if (!placeholder) return [];
+      return [[field, descriptor.schema.optional()] as const];
+    }),
+  );
+  const extended = Object.keys(composed).length > 0 ? input.extend(composed) : input;
+  if (definition.id === "judgment.review-advice") return extended.extend({ input: z.string().optional() });
+  return sessionId ? extended.extend({ sessionId: z.string().optional() }) : extended;
 }
 
 function handlerInput(definition: CommandDefinition, input: unknown): unknown {
@@ -57,7 +86,7 @@ export function registerMcpCommands(
   for (const { definition, name } of tools) {
     server.registerTool(name, {
       description: definition.description,
-      inputSchema: inputSchema(definition),
+      inputSchema: mcpToolInputSchema(definition),
       outputSchema: definition.output,
     }, async (input, extra) => {
       const invocationInput = handlerInput(definition, input);

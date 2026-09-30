@@ -12,8 +12,8 @@ import {
 } from "@mstar-harness/commands";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 
-export function usageEnvelope(command: string, message: string): CommandEnvelope {
-  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
+  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(details === undefined ? {} : { details }) };
 }
 
 export function writeEnvelope(envelope: CommandEnvelope, signal?: NodeJS.Signals): void {
@@ -100,6 +100,46 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
     if (Number.isFinite(number)) decoded[option.key] = number;
   }
   return decoded;
+}
+function decodePayloadInputs(
+  definition: CommandDefinition,
+  input: Record<string, unknown>,
+): { input: Record<string, unknown>; diagnostics: readonly Record<string, unknown>[] } {
+  if (definition.payloads === undefined) return { input, diagnostics: [] };
+  const decoded = { ...input };
+  const diagnostics: Record<string, unknown>[] = [];
+  for (const [field, descriptor] of Object.entries(definition.payloads)) {
+    if (!Object.hasOwn(decoded, field)) continue;
+    let value = decoded[field];
+    if (typeof value === "string") {
+      try {
+        value = JSON.parse(value) as unknown;
+        decoded[field] = value;
+      } catch {
+        diagnostics.push({ path: field, code: "invalid_json", message: `${field} must contain valid JSON` });
+        continue;
+      }
+    }
+    const parsed = descriptor.schema.safeParse(value);
+    if (parsed.success) {
+      decoded[field] = parsed.data;
+      continue;
+    }
+    for (const issue of parsed.error.issues) {
+      const suffix = issue.path.reduce((path: string, part: string | number | symbol) =>
+        typeof part === "number" ? `${path}[${String(part)}]` : `${path}.${String(part)}`,
+      "");
+      const path = `${field}${suffix}`;
+      const index = issue.path.find((part) => typeof part === "number");
+      diagnostics.push({
+        path,
+        code: issue.code,
+        message: issue.message,
+        ...(typeof index === "number" ? { index } : {}),
+      });
+    }
+  }
+  return { input: decoded, diagnostics };
 }
 function collectInput(definition: CommandDefinition, args: readonly unknown[]): Record<string, unknown> {
   const input: Record<string, unknown> = {};
@@ -234,14 +274,19 @@ export function registerCliCommands(
       const services: Array<{ close(): Promise<void> }> = [];
       try {
         const collected = decodeCliOptions(definition, collectInput(definition, args));
-        const input = definition.decodeCliInput?.(collected);
+        const payload = decodePayloadInputs(definition, collected);
+        if (payload.diagnostics.length > 0) {
+          writeEnvelope(usageEnvelope(definition.id, "Invalid command payload.", { diagnostics: payload.diagnostics }));
+          return;
+        }
+        const input = definition.decodeCliInput?.(payload.input);
         if (definition.decodeCliInput !== undefined && input === null) {
           writeEnvelope(usageEnvelope(definition.id, "Invalid command input."));
           return;
         }
         const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
         const sessionId = sessionOption === undefined ? undefined : collected[sessionOption.key];
-        const envelope = await executeCommand(definition.id, input ?? collected, {
+        const envelope = await executeCommand(definition.id, input ?? payload.input, {
           ...baseContext,
           ...(typeof sessionId === "string" ? { sessionId } : {}),
           signal: controller.signal,

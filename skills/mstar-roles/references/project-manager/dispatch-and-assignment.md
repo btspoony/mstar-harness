@@ -17,6 +17,8 @@ The concise gate summary remains in `references/project-manager.md`.
 - **Plan scope travels with the Assignment**: `Plan Path`, `plan_id`, `SDD dir`, `Control harness root` are absolute and portable. The child **inherits** the dispatching PM's plan scope; it may not select or prepare a plan, mutate the workflow snapshot / root register / shared indexes, or release `execution_lease` / `integration_merge_lease`.
 - **No write authority travels with the Assignment**: a child never receives a session file path, a session **reference** (`exec-session-v1:<base64url>`), a `--expect` value (row revision or full execution token) or an operation id, and never runs a coordination verb itself. A reference or token is not a credential that authorizes its holder — it grants nothing without the caller identity the engine compares inside its own transaction — and handing one to a leaf breaks the scoped boundary even when the resulting command would have succeeded (`mstar-iteration/references/plan-scoped-pm.md` §8). A leaf that receives any of them stops and reports it.
 
+For a scoped handoff, PM keeps the lifecycle intent and its receipt in the primary session. Derived binding/prerequisites are resolved by the public action; do not make a leaf perform an extra bookkeeping command. If a genuine choice or foreign-holder authorization remains, preserve any applied components, name the exact missing fact, and schedule independent ready work without forwarding a session file/reference/token/operation id.
+
 ## Executor Anti-Recursion Rules
 
 For assignees (non-PM):

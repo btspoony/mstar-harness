@@ -38,6 +38,7 @@ import {
   type RowValidationRoute,
 } from "./coordination-write.js";
 import { validateExecutionLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { unresolvedRecovery, type RecoveryProblem } from "./recovery-intent.js";
 import type { ValidationResult } from "./core.js";
 import { assertSafePathComponent } from "./path.js";
 import { _DEFAULT_PROJECT } from "./project.js";
@@ -636,26 +637,6 @@ export function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
 }
 
 /**
- * The caller-supplied half of one handoff, as the request hash records it:
- * every path, revision and decision the caller stated, and none of the digests
- * this route derives from the files themselves — a retry of the same request
- * is the same request even when the bytes behind a path moved.
- */
-export function handoffEvidencePayload(input: HandoffEvidenceInput): Record<string, unknown> {
-  return {
-    source_sha: input.source_sha,
-    review_base: input.review_base,
-    review_head: input.review_head,
-    qc: {
-      decision: input.qc_decision,
-      reports: input.qc_reports.map((ref) => ref.path),
-      consolidated: input.qc_consolidated.path,
-    },
-    qa: { gate: input.qa_gate, decision: "pass", report: input.qa_report.path },
-  };
-}
-
-/**
  * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
  * integration-start, integration-accept and complete all re-check that the QC
  * and QA reports still are the bytes their verdicts were recorded against.
@@ -721,6 +702,96 @@ export function requireRowStatus(
   }
 }
 
+/* ------------------------------------------------------------------------ *
+ * §R5 the entailed bookkeeping of a transition, and the decision it cannot supply
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R5/§6.1 the row status one `handoff` ENTAILS — the recording step the
+ * transition applies itself, inside the same commit that seals the handoff, so
+ * a harmless out-of-order call never needs a second `progress` report:
+ *
+ * - the row already records `InReview`: `null`, nothing is recorded, and the
+ *   ordinary fully-specified sequence is exactly what it was (A01);
+ * - the row records `InProgress` while its claim is recorded: `InReview`,
+ *   because the handoff's own evidence — the accepted QC verdict, the reviewed
+ *   range Git proves, and the passing QA decision, all re-proved by the route
+ *   before the commit — IS the persisted evidence of the reviewed state, so the
+ *   report is bookkeeping rather than a new decision. The claim itself is not
+ *   this rule's business: the file route's row binding and the DB route's held
+ *   lease are proved by the transport before any transition runs;
+ * - anything else (`Todo`, `Blocked`, an absent status) is NOT bookkeeping: a
+ *   claim is ownership, so the transition refuses and names the recorded state.
+ *
+ * Bookkeeping is applied only when it is entailed. A missing verdict, report,
+ * acceptance or merge is never inferred here: the evidence gates above and the
+ * coordinator verbs' own decision gates still refuse those, naming the one fact
+ * the caller must obtain (R5's second half, A18).
+ */
+export function entailedHandoffStatus(row: PlanRow, planId: string): "InReview" | null {
+  const status = rowStatusOf(row);
+  if (status === "InReview") return null;
+  if (status === "InProgress") return "InReview";
+  throw new CoordinationError(
+    "coordination.invalid-transition",
+    `handoff requires plan ${planId} to have recorded InReview \u2014 it is ${status || "unstatused"}, and an unclaimed row's status ` +
+      "is ownership rather than a reporting step this call may supply",
+    { plan_id: planId, status: row.status },
+  );
+}
+
+/**
+ * §6.2/§R5 (A18) the refusal of a transition whose prerequisite is a recorded
+ * DECISION — a submission the coordinator accepts, a verdict, a report, an
+ * acceptance, a merge — rather than the bookkeeping this module applies itself.
+ * The report names the record that is absent, the facts that are true now, the
+ * ONE decision or work item that is genuinely missing and the work that remains
+ * available; nothing is fabricated to let the transition proceed, and no
+ * unrelated field is demanded. Both transports consume the same object: the DB
+ * route reports it directly, the file route's row frame carries it into the
+ * refusal sidecar it already attaches.
+ */
+export function missingDecision(input: {
+  planId: string;
+  what: string;
+  component: string;
+  path: string;
+  currentFacts: readonly string[];
+  needed: string;
+  availableWork?: readonly string[];
+}): CoordinationError {
+  const problem: RecoveryProblem = {
+    component: input.component,
+    path: input.path,
+    code: "coordination.invalid-transition",
+    sourcesTried: [
+      `the addressed plan ${input.planId} as this call reads it`,
+      `the ${input.what} transition's own decision gate`,
+    ],
+    currentFacts: [...input.currentFacts],
+    needed: input.needed,
+    withheldEffect:
+      `the ${input.what} transition and its whole commit: plan ${input.planId}, its coordination block and every revision are ` +
+      "exactly as they were",
+    availableWork: [
+      ...(input.availableWork ?? [
+        `read plan ${input.planId} and its recorded evidence`,
+        "independent operations on other rows, plans and workflows continue",
+      ]),
+    ],
+  };
+  return new CoordinationError("coordination.invalid-transition", `${input.what}: ${problem.needed}`, {
+    plan_id: input.planId,
+    component: problem.component,
+    path: problem.path,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    withheld_effect: problem.withheldEffect,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: { planId: input.planId }, unresolved: [problem] }),
+  });
+}
+
 /** The handoff states one coordinated transition starts from (spec §D/§E). */
 export function requireHandoffState(
   handoff: PlanHandoff,
@@ -729,11 +800,28 @@ export function requireHandoffState(
   what: string,
 ): void {
   if (!states.includes(handoff.state)) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${planId} handoff is ${handoff.state} \u2014 ${what} requires ${states.join(" or ")}`,
-      { plan_id: planId, state: handoff.state },
-    );
+    // §R5 (A18) the recorded decision this transition starts from is absent:
+    // an acceptance, an integration attempt or a completed attempt is a
+    // decision (or the work behind it), never bookkeeping — it is asked for,
+    // named on its own, and nothing is recorded in its place.
+    throw missingDecision({
+      planId,
+      what,
+      component: "plan-handoff",
+      path: "handoff.state",
+      currentFacts: [
+        `plan ${planId} handoff ${handoff.id} records ${handoff.state}`,
+        `the sealed attempt owns the plan's transition, and ${what} starts from ${states.join(" or ")}`,
+      ],
+      needed:
+        `${what} requires ${states.join(" or ")} for plan ${planId}, and its handoff ${handoff.id} records ${handoff.state} \u2014 ` +
+        "obtain the decision (or the work it needs), then retry",
+      availableWork: [
+        `read plan ${planId} and its sealed handoff ${handoff.id}`,
+        `obtain the missing decision (${states.join(" or ")}) for plan ${planId}, then retry ${what}`,
+        "independent operations on other rows, plans and workflows continue",
+      ],
+    });
   }
 }
 

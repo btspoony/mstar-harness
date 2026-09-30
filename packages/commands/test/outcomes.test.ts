@@ -8,6 +8,31 @@ describe("command outcome envelopes", () => {
     expect(commandEnvelopeSchema.safeParse({ version: 1, command: "status.show", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Missing selector" }).success).toBe(true);
     expect(commandEnvelopeSchema.safeParse({ version: 1, command: "sdd.exec", status: "error", code: "command.internal", exitCode: 1, message: "Execution failed" }).success).toBe(true);
   });
+  test("retains partial outcome details and indexed field paths", () => {
+    const details = {
+      recovery: {
+        outcome: "partial",
+        applied: ["first"],
+        unresolved: [{ component: "entry", path: "items[2].title", code: "required", sourcesTried: [], currentFacts: [], needed: "title", withheldEffect: "capture", availableWork: ["other entries"] }],
+        target: {},
+        resolvedFrom: [],
+        warnings: [],
+        commitState: "partial",
+      },
+      diagnostics: [{ index: 2, path: "items[2].title" }],
+    };
+    const parsed = commandEnvelopeSchema.parse({
+      version: 1,
+      command: "plan.issue-add",
+      status: "refused",
+      code: "intent.partial",
+      exitCode: 1,
+      message: "Some entries remain unresolved",
+      details,
+    });
+    expect(parsed).toMatchObject({ details });
+  });
+
 
   test("preserves command-defined child exit codes including timeout, missing binary, and signal exits", () => {
     for (const exitCode of [3, 124, 127, 128, 130, 143]) {

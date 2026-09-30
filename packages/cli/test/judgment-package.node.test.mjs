@@ -16,23 +16,13 @@ import {
   PILOT_SCHEMA,
   TOKEN_POLICY_METHOD,
   TOKEN_RESERVATION_PER_ATTEMPT,
-  assessShadowRun,
   buildA05Request,
-  buildCandidatePairs,
-  buildDockerLaunchArgs,
-  buildShadowPack,
   canonicalJsonBytes,
   connectEvaluatorChannel,
-  createEvaluatorMailbox,
   evaluateNative,
-  freezeBaseline,
-  recordWorkUnitDisposition,
-  runReviewAdvice,
-  runShadowSupervisor,
   validatePack,
   validatePilot,
 } from "../../judgment/dist/index.js";
-import { runShadowCommand } from "@mstar-harness/judgment/shadow";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../..");
@@ -258,21 +248,6 @@ test("packaged CLI refuses caller-forged mounted mailbox without request writes"
   assert.deepEqual(readdirSync(requestDirectory), []);
 });
 
-test("judgment package exposes the required runtime and shadow entrypoint APIs", () => {
-  for (const value of [
-    buildCandidatePairs,
-    buildShadowPack,
-    connectEvaluatorChannel,
-    createEvaluatorMailbox,
-    runReviewAdvice,
-    runShadowSupervisor,
-    freezeBaseline,
-    recordWorkUnitDisposition,
-    assessShadowRun,
-    buildDockerLaunchArgs,
-    runShadowCommand,
-  ]) assert.equal(typeof value, "function");
-});
 
 test("native evaluator context reports missing credentials and provider failure without returning advice", async () => {
   const root = temporaryRoot("evaluator");

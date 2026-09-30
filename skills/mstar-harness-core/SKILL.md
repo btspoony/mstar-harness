@@ -136,7 +136,9 @@ Read **`mstar-host`** after this skill; it detects the active host and routes to
 - **验证按变更映射。** 可执行逻辑使用对应单测；非可执行文档与 prompt/skill 策略使用真实定向静态或 before/after 证据，不制造测试文件。SDD 的 `Verification mode: scoped-check` 格式与适用性 → `mstar-sdd/references/file-handoffs.md`。报告结构校验不证明命令执行或 diff 适用性，也不是任意 shell 拦截器。
 - **只使受影响证据失效。** HEAD 或 Review range 改变不等于全部重跑；复用仍有效的 L1/CI/先前 QA 证据，记明原范围及仍适用的理由。fix 只验证相关回归；QC 复审只看归属 finding、fix delta 与直接接口。`full tri-review` 表示席位数量，不授权全仓 review；QC 不运行 test/build/install。
 - **QA 仅定向单元测试与验收证据映射。** 模式仅 `acceptance-only` / `targeted` / `report-only`。用户许可的本地全量由实现 owner 或 ops 另接明确行动，QA 只消费证据。真实浏览器、真机、安装/部署 E2E 仅由用户显式启动独立 `mstar-e2e` workflow，PM 编排、ops 执行；**不作为迭代 QA gate，也不作为开发 plan 的 task 或任何 gate 的证据义务**——各层以自身单测/集成测试自证；真实环境验证只在该独立 workflow 内发生，其命名场景即该 workflow 的 plan rows。未验证的真实环境行为如实记录，不伪称通过。
+- **开发验收禁止外部环境收据。** Prepare 时将开发 plan 的 AC/任务门禁中要求 live API、provider receipt、具名/已认证 host 或 account、已安装 plugin/artifact、真实 browser/device 或 deployed environment 证明的条目退回并在同一轮改为隔离 fixture、单元/组件/集成测试或本地构建 CLI/MCP 的可复现证据。QA/QC 不得重新要求这些收据；缺少真实环境证明只如实记未验证。用户另行授权的独立运维/E2E workflow 不受此开发 AC 禁令取消；不设关键词机器门禁。
 - **依赖允许即并行。** PM 对无依赖、写所有权及 worktree 隔离的 ready tasks 并行派发；共享写目标、同一 session/ledger、前置接口与 integration merge 才按具体约束串行。leaf 不因并行策略获得派发权限。
+- **恢复走原意图。** 当前引擎可推导的 root、binding、token 与前置 bookkeeping 不要求操作者先复制/修补；先用目标动作并读取 `applied` / `partial` / replay 收据。只有不可推导的身份、目标选择、授权或真实冲突才要求补充事实；partial 保留已提交部分，不能宣称整个动作 mutation-free。leaf 不接收凭据。
 - **完成即交付。** Assignment 给出任务、输入、所有权、允许检查与可观察结果；执行者只解答这些问题，不重复分析已解决内容、不顺手修复或增加“保险”检查。真实范围缺口返回 PM，已有证据充分即停止。
 
 ## 核心研发守则

@@ -68,7 +68,7 @@ If plan drift appears, request plan update before continuing.
 
 1. API/business/data implementation
 2. Fullstack integration where needed
-3. Test implementation for assigned scope
+3. Test implementation for assigned scope; follow `mstar-coding-behavior` §4 "Test admission" and delete incidental tests rather than re-pin them.
 4. Self-verification and evidence generation
 
 ## Skill Preset (PM-Activated)

@@ -90,6 +90,18 @@ function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
   return value;
 }
+function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[]): void {
+  const missing = fields.filter((field) => {
+    const value = input[field];
+    return typeof value !== "string" || value.trim() === "";
+  });
+  if (missing.length > 0) {
+    throw new SddScriptError(
+      `${missing.map((field) => `--${field}`).join(", ")} ${missing.length === 1 ? "is" : "are"} required`,
+      2,
+    );
+  }
+}
 
 async function execute(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {
@@ -132,6 +144,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         });
       }
       case "store.activate": {
+        requireInputs(input, ["manifest", "attestation"]);
         const manifest = jsonFile<MigrationManifest>(required(input.manifest, "--manifest"), "--manifest");
         const attestation = jsonFile<ActivationAttestation>(required(input.attestation, "--attestation"), "--attestation");
         const applied = await appliedReceiptFor(context, manifest);

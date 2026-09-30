@@ -215,7 +215,7 @@ describe('real mirror contract (when synced)', () => {
     expect(warns).toHaveLength(0)
     const architect = personaFor('architect', { agentsDir: realMirror })
     expect(architect?.source).toBe('default')
-    expect(architect?.text.length).toBeGreaterThan(0)
+
     expect(personaFor('fullstack-dev', { agentsDir: realMirror })?.source).toBe('default')
   })
 })

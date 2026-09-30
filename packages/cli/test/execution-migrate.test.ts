@@ -702,11 +702,19 @@ describe("mstar store execution \u2014 the operator family over populated input"
     writeJson(attestationPath, stopAttestation([COORDINATOR_SESSION, PLAN_SESSION]));
     const applyArgs = applyFamily(fixture, reviewed, point.receiptPath, "refusal-apply");
 
-    // Missing --coverage: usage, and nothing staged.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--coverage"), fixture), "apply", "--coverage");
-    // Missing --inventory: the manifest records an explicit scope, so the
-    // boundary's own discovery would not be the reviewed one.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--inventory"), fixture), "apply", "--inventory");
+    // Missing --coverage on a manifest WITH a reviewed inventory derives the
+    // non-control coverage instead of refusing (execution.ts: the refusal is
+    // reserved for a control-root-only manifest); covered by the dedicated
+    // derived-coverage test below. This fixture stays refusal-only so its
+    // no-write invariant holds for every member.
+
+    // An explicitly SUPPLIED inventory path that differs from the manifest's
+    // reviewed scope is the one inventory refusal: the derivation only fills
+    // an omission, it never overrides a mismatched claim.
+    const mismatchedInventory = join(fixture.root, "refusal-mismatched-inventory.json");
+    writeJson(mismatchedInventory, { scope: "not-the-reviewed-boundary" });
+    const mismatchedArgs = applyArgs.map((arg) => (arg === fixture.inventoryPath ? mismatchedInventory : arg));
+    expectUsageRefusal(runCli(mismatchedArgs, fixture), "apply", "--inventory");
     // A coverage set of ANOTHER manifest is never applied under this one.
     const foreignCoverage = join(fixture.root, "refusal-foreign-coverage.json");
     const coverageDocument = JSON.parse(readFileSync(reviewed.coveragePath, "utf8")) as Record<string, unknown>;
@@ -809,6 +817,24 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // execution authority never left legacy.
     expect(stagedManifestCount(fixture)).toBe(0);
     expect(executionAuthorityOf(fixture).authority_state).toBe("legacy");
+  });
+
+  test("a manifest WITH a reviewed inventory derives --coverage instead of refusing it", async () => {
+    const fixture = await legacyFixture("cli-c6-derived-coverage");
+    const reviewed = previewAndCover(fixture, "derived");
+    const point = takeRecoveryPoint(fixture, "derived");
+    const attestationPath = join(fixture.root, "derived-attestation.json");
+    writeJson(attestationPath, stopAttestation([COORDINATOR_SESSION, PLAN_SESSION]));
+    const applyArgs = applyFamily(fixture, reviewed, point.receiptPath, "derived-apply");
+
+    // execution.ts: --coverage is only REQUIRED for a control-root-only
+    // manifest (nothing to derive non-control coverage from). With a reviewed
+    // inventory the flag is omitted and the coverage set is derived.
+    const derived = runCli(withoutFlag(applyArgs, "--coverage"), fixture);
+    expect(derived.exitCode).toBe(0);
+    expectSuccess(derived, "apply");
+    expect(dataOf(derived).phase).toBe("staged");
+    expect(stagedManifestCount(fixture)).toBe(1);
   });
 
   test("store activate remains a distinct CLI route from execution activation", async () => {

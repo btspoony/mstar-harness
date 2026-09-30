@@ -46,6 +46,16 @@ Dispatch:
     docs/policy may use scoped-check evidence; verify its applicability
     against the diff, never invent a test obligation. Stop once the
     assigned acceptance questions are answered.
+    Independently inspect whether changed executable behavior is protected by
+    meaningful consumer-visible tests, invariants, boundaries, or a fails-first
+    regression (`mstar-coding-behavior` § Test admission). Existing affected
+    evidence is enough when applicable; do not demand a new test per edit.
+    Reject tests that only pin wording/source shape, forwarding echoes,
+    duplicated producer checks, or environment-dependent bytes. For changed
+    planning documents in scope (delivery compass, plans, specs, knowledge),
+    check the edit's local seat/model/timestamp/iteration attribution; an
+    explicitly `unknown` model is honest when the ID is unavailable. Do not
+    infer a model from the reviewer session or demand invented identity.
     The task diff plus directly affected interfaces are this review's budget
     (default bounded-seat cap → `mstar-harness-core` § 定向执行与验证边界);
     when it is reached, stop expanding there and disclose the cut once, in the

@@ -77,17 +77,32 @@ import {
   isNonEmptyString,
   isPlainObject,
   sha256Bytes,
+  type CoordinationErrorCode,
 } from "./coordination-write.js";
 import {
+  PLAN_PARALLELISM_VALUES,
   gitRead,
   pinGitRefWitness,
+  prepareAmendmentComponent,
   revalidateGitRefWitness,
   type GitRefWitness,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
+  applyEntailedCompletion,
+  completionFrameFor,
+  readEntailedCompletions,
+  releaseStoppedExecutionLeases,
+  releaseStoppedMergeClaim,
+  resolveSparseOwnSession,
+  type DeliveryRoutePin,
+  type EntailedRowCompletion,
+  type ExecutionMutationIntent,
+} from "./execution-coordination.js";
+import {
   ExecutionError,
   advanceWorkflowHeaderRevision,
+  assertAuthorityGeneration,
   assertExecutionToken,
   assertOperationId,
   bindRecoveredSession,
@@ -100,12 +115,15 @@ import {
   readWorkflowSessionRows,
   recordRootMembershipLoss,
   requireWorkflowState,
+  resolveTokenFreshness,
   resolveWorkflowSession,
   resolveWorkflowWrite,
   revokeSessionRow,
+  semanticRequestHash,
   serializeExecutionValue,
   transferExecutionLease,
   withExecutionTransaction,
+  withRecoveryDetails,
   writeOperationReceipt,
   writeWorkflowState,
   type ExecutionCaller,
@@ -129,6 +147,16 @@ import {
   type PhaseGateOptions,
 } from "./iteration.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import { readExecutionAuthority } from "./execution-read.js";
+import {
+  WORKFLOW_OPERATION_SEMANTICS,
+  selectSemanticFields,
+  unresolvedRecovery,
+  type RecoveryDetails,
+  type RecoveryProblem,
+  type ResolutionSource,
+  type ResolutionWarning,
+} from "./recovery-intent.js";
 import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
@@ -169,6 +197,16 @@ export type WorkflowExecutionOperation =
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
   ExecutionMutation & { workflowId: string; operation: Operation };
+
+/**
+ * §3 one DB workflow-operation INTENT: the same request with the facts the
+ * engine can derive left out (§ One resolver path, S2/E02). `operationId` and
+ * the operation are always the caller's own intent; the coordinator session,
+ * the workflow token and the addressed workflow id are optional, and an
+ * explicitly supplied value is a CONSTRAINT rather than a prerequisite.
+ */
+export type ExecutionWorkflowIntent<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
+  ExecutionMutationIntent & { workflowId?: string; operation: Operation };
 
 /** §3 one resolved workflow operation: the validated envelope plus the authorized address. */
 type ResolvedWorkflowOperation<Operation extends WorkflowExecutionOperation> = {
@@ -272,50 +310,132 @@ function resolveWorkflowOperationRequest<Operation extends WorkflowExecutionOper
 }
 
 /**
- * §3.1 the canonical payload half of a workflow-operation request hash: the
- * operation's own fields, never the envelope (kind, scope, token and caller are
- * hashed beside it by `workflowOperationRequestHash`).
+ * §4.2 the field path one workflow operation addresses, as the intent names it:
+ * the ONE field the operation writes, and therefore the field whose current
+ * value decides whether its effect is already held (R6/R7/A09/A12) or
+ * genuinely conflicts (A11).
  */
-function workflowOperationPayload(operation: WorkflowExecutionOperation): Record<string, unknown> {
+function workflowOperationField(operation: WorkflowExecutionOperation): string {
   switch (operation.kind) {
     case "phase":
-      return { phase: operation.phase, compass_path: operation.compassPath };
+      return "operation.phase";
     case "lifecycle":
-      return { status: operation.status, reason: operation.reason };
+      return "operation.status";
     case "execution-policy":
-      return { policy: operation.policy };
+      return "operation.policy";
     case "integration-worktree":
-      return { path: operation.path };
+      return "operation.path";
     case "delivery":
-      return { delivery: operation.delivery };
+      return "operation.delivery";
   }
 }
 
-/** §3.1 request hash: operation kind, exact scope, expected token, caller identity and payload. */
+/** The stored value the addressed field carries right now, as one comparable canonical value. */
+function storedOperationValue(state: Record<string, unknown>, operation: WorkflowExecutionOperation): unknown {
+  switch (operation.kind) {
+    case "phase":
+      return state.phase;
+    case "lifecycle":
+      return state.status;
+    case "execution-policy":
+      return state.execution_policy;
+    case "integration-worktree":
+      return state.integration_worktree_path;
+    case "delivery":
+      return state.delivery;
+  }
+}
+
+/** The value this operation would store for its own field, in its stored form. */
+function requestedOperationValue(operation: WorkflowExecutionOperation): unknown {
+  switch (operation.kind) {
+    case "phase":
+      return operation.phase;
+    case "lifecycle":
+      return operation.status;
+    case "execution-policy":
+      return operation.policy;
+    // The transition records the checkout's CANONICAL path, so a repeat of the
+    // same checkout is the same effect however the caller spelled the path.
+    case "integration-worktree":
+      return canonicalTarget(operation.path);
+    case "delivery":
+      return operation.delivery;
+  }
+}
+
+/**
+ * §4.2 (R6/R7/A09/A12) whether the requested effect is ALREADY held by the state
+ * this transaction reads. The comparison is the operation's own addressed field
+ * against the value the transition would store for it — the semantic read set of
+ * the effect, never the whole header, the revisions or the receipt's history. A
+ * satisfied effect is a current success even when the caller's token or receipt
+ * is stale, and it must not spend a revision, a timestamp or a receipt row.
+ */
+function workflowIntentHeld(state: Record<string, unknown>, operation: WorkflowExecutionOperation): boolean {
+  const stored = storedOperationValue(state, operation);
+  if (stored === undefined) return false;
+  const requested = requestedOperationValue(operation);
+  if (requested === undefined) return false;
+  return serializeExecutionValue(stored) === serializeExecutionValue(requested);
+}
+
+/**
+ * §3.1/§4.2 the request fingerprint of one workflow operation: the operation
+ * kind, the addressed workflow, the caller identity the receipt is bound to and
+ * E01's semantic selection for that kind — never the transport freshness
+ * (`expected` token, `session` reference, `operationId`) the caller happened to
+ * present. A repeat after a lost response is the same intent even when the
+ * caller re-read the state and re-presented a fresh token (design R6/R7), so the
+ * fingerprint must not move with it; a different business payload still moves it
+ * and stays an operation conflict (A13).
+ */
 function workflowOperationRequestHash(
   caller: ExecutionCaller,
-  kind: string,
   workflowId: string,
-  expected: ExecutionToken,
-  payload: unknown,
+  operation: WorkflowExecutionOperation,
 ): string {
-  return createHash("sha256")
-    .update(
-      serializeExecutionValue({
-        operation: kind,
-        workflow_id: workflowId,
-        expected,
-        caller: {
-          session_id: caller.sessionId,
-          role: caller.role,
-          workflow_id: caller.workflowId,
-          plan_id: caller.planId,
-        },
-        payload,
-      }),
-      "utf8",
-    )
-    .digest("hex");
+  return semanticRequestHash({
+    operation: operation.kind,
+    address: { workflow_id: workflowId },
+    caller,
+    intent: selectSemanticFields({ workflowId, operation }, WORKFLOW_OPERATION_SEMANTICS[operation.kind]),
+  });
+}
+
+/**
+ * §4.1 the sidecar of one workflow-frame result: what this call did with the
+ * intent, the workflow it addressed, the facts it reconciled and the commit
+ * boundary the caller can rely on. It is the same object shape a refusal carries
+ * under `error.details.recovery`, so one contract covers both paths.
+ */
+function workflowRecovery(input: {
+  workflowId: string;
+  outcome: RecoveryDetails["outcome"];
+  applied: readonly string[];
+  commitState: RecoveryDetails["commitState"];
+  resolvedFrom?: readonly ResolutionSource[];
+  warnings?: readonly ResolutionWarning[];
+}): RecoveryDetails {
+  return {
+    outcome: input.outcome,
+    target: { workflowId: input.workflowId },
+    applied: [...input.applied],
+    unresolved: [],
+    resolvedFrom: [...(input.resolvedFrom ?? [])],
+    warnings: [...(input.warnings ?? [])],
+    commitState: input.commitState,
+  };
+}
+
+/** One comparable value, as the typed causes quote it. */
+function describeValue(value: unknown): string {
+  if (value === undefined) return "absent";
+  try {
+    return serializeExecutionValue(value);
+  } catch {
+    return JSON.stringify(value) ?? String(value);
+  }
 }
 
 /* ------------------------------------------------------------------------ *
@@ -355,6 +475,15 @@ type WorkflowEvidence = {
   gitWitness?: GitRefWitness;
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
+  /**
+   * §R5/§R10 (E10) the row completions a terminal `completed` close composes,
+   * derived before SQLite ownership from each owned row's recorded evidence.
+   * Empty for a close that has nothing to compose, and absent for every other
+   * transition.
+   */
+  completions?: readonly EntailedRowCompletion[];
+  /** The delivery route/policy pair those completions were proved against (§4.1). */
+  pinned?: DeliveryRoutePin;
 };
 
 /**
@@ -542,12 +671,46 @@ async function readWorkflowEvidence(
       return readPhaseEvidence(context, workflowId, operation);
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
+    case "lifecycle":
+      // §R5/§R10 a terminal `completed` close composes the fulfilment and the
+      // row completions its owned rows' recorded evidence entails. Every
+      // external read that composition needs (the report-only policy
+      // resolution, the development source proof, the integration merge proof
+      // and the findings gate) happens HERE, before SQLite ownership; the
+      // transaction re-verifies the pinned route, the digests and the Git
+      // witness at the commit boundary.
+      return operation.status === "completed"
+        ? readCloseEvidence(context, workflowId)
+        : {};
     default:
-      // The stored transitions (lifecycle, execution-policy, delivery) read no
-      // external evidence: their inputs are the store's own rows, which the
-      // transaction reads itself.
+      // The other stored transitions (phase-less lifecycle, execution-policy,
+      // delivery) read no external evidence: their inputs are the store's own
+      // rows, which the transaction reads itself.
       return {};
   }
+}
+
+/**
+ * §R5/§R10 the evidence of one terminal `completed` close. A workflow that is
+ * no longer a registered active lifecycle — an exact retry whose receipt the
+ * transaction below still serves — deliberately yields NO pending completion:
+ * the close's own registry absence is not this preflight's to report, and the
+ * transaction is the authority on why the address no longer resolves.
+ */
+async function readCloseEvidence(context: ExecutionContext, workflowId: string): Promise<WorkflowEvidence> {
+  let state;
+  try {
+    state = await readExecutionState(context);
+  } catch {
+    // The transaction's own reads report the store's actual state (staged,
+    // corrupt or unavailable); swallowing it here keeps a completed retry
+    // reaching its recorded receipt instead of failing on a preflight read.
+    return {};
+  }
+  const workflow = state.data.workflows.find((candidate) => candidate.state.id === workflowId);
+  if (workflow === undefined) return {};
+  const derived = await readEntailedCompletions(context, workflow);
+  return { completions: derived.completions, pinned: derived.pinned };
 }
 
 /** §4.1 the commit-window half of the pinned evidence: the same bytes, or a refusal. */
@@ -579,6 +742,235 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
 }
 
 /* ------------------------------------------------------------------------ *
+ * §4.1 the typed causes of a withheld workflow effect
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §4.1 the stable code of a refusal this frame is about to report: the domain
+ * classes carry theirs (`CoordinationError`, `ExecutionError`, `StoreError`), and
+ * anything else is reported as an unclassified cause rather than guessed.
+ */
+function refusalCodeOf(error: unknown): string | undefined {
+  if (error instanceof CoordinationError || error instanceof ExecutionError || error instanceof StoreError) {
+    return error.code;
+  }
+  return undefined;
+}
+
+/**
+ * §R5/§6.2 the report a refusal declared for ITSELF, when it carries one. A
+ * transition that names the ONE decision it cannot supply (the §6.2 shape both
+ * transports emit) is not relabelled by the frames around it: they add their own
+ * boundary facts and leave the report intact.
+ */
+function declaredRecoveryOf(error: unknown): RecoveryDetails | undefined {
+  if (!(error instanceof Error) || !("details" in error)) return undefined;
+  const details: unknown = error.details;
+  const recovery = isPlainObject(details) ? details.recovery : undefined;
+  if (!isPlainObject(recovery)) return undefined;
+  // Boundary cast: the sidecar is written by this engine's own recovery helpers
+  // (`unresolvedRecovery` / `withRecoveryDetails`), and the guard above proves it
+  // is the object shape they emit.
+  return recovery as unknown as RecoveryDetails;
+}
+
+/**
+ * §4.1/§4.2 (A25) the typed cause of a transition whose external prerequisite is
+ * unavailable: the refusal the evidence produced, unchanged, with the recovery
+ * sidecar that states the stage it failed at, the known commit boundary (none —
+ * the evidence is read before the store is written, and an in-transaction
+ * mismatch rolls the whole transaction back) and what remains possible without
+ * it. The cause is reported, never invented: no field is added to the refusal
+ * and no substitute fact is fabricated.
+ */
+function prerequisiteCause(
+  error: unknown,
+  input: { workflowId: string; operation: WorkflowExecutionOperation; stage: "read" | "revalidate" },
+): unknown {
+  const code = refusalCodeOf(error);
+  // An ADDRESS verdict ("this store holds no such active lifecycle") is not an
+  // unavailable prerequisite: it is reported by its own precise refusal, never
+  // relabelled as a capability the transition could not read.
+  if (code === "coordination.workflow-not-found") return error;
+  const message = error instanceof Error ? error.message : String(error);
+  // §R5/§6.2 a refusal that DECLARED its own report — the ONE decision a
+  // transition cannot supply, in the §6.2 shape both transports emit — keeps it:
+  // the frame adds only its own read stage and the known commit boundary,
+  // instead of replacing the decision the caller must obtain with a generic
+  // prerequisite problem (the same rule the file route's row frame applies).
+  const declared = declaredRecoveryOf(error);
+  if (declared !== undefined) {
+    return withRecoveryDetails(error, { workflow_id: input.workflowId, stage: input.stage, commit_state: "none" });
+  }
+  // The evidence a transition reads depends on the transition: a phase /
+  // integration-worktree transition reads the registered compass and its Git
+  // probes, while a terminal close reads its owned rows' recorded completion
+  // evidence (and the Git proof a development/integration row's completion
+  // needs). The report names what THIS transition actually reads instead of a
+  // generic inventory.
+  const readsCompassFacts = input.operation.kind === "phase" || input.operation.kind === "integration-worktree";
+  const problem: RecoveryProblem = {
+    component: "operation-prerequisite",
+    path: workflowOperationField(input.operation),
+    code: code ?? "execution.prerequisite-unavailable",
+    sourcesTried: [
+      `the workflow ${input.workflowId} header and rows this store owns`,
+      readsCompassFacts
+        ? "the lifecycle's registered compass and the Git probes its checkouts answer"
+        : "the recorded completion evidence of the rows this transition composes",
+    ],
+    currentFacts: [
+      input.stage === "read"
+        ? readsCompassFacts
+          ? `the ${input.operation.kind} transition reads external evidence (the lifecycle's registered compass and its ` +
+            `checkout probes) before it can decide, and this call did not get past that read`
+          : `the ${input.operation.kind} transition reads its owned rows' recorded completion evidence (and the Git proof a ` +
+            `completion needs) before it can decide, and this call did not get past that read`
+        : `the ${input.operation.kind} transition re-read its external evidence in the commit window, and it no longer ` +
+          `matches what the transition decided against`,
+      `the refusal reports: ${message}`,
+    ],
+    needed: message,
+    withheldEffect: "the whole transition: nothing was written, no revision advanced and no receipt was recorded",
+    availableWork: [
+      `read workflow ${input.workflowId}, its plan rows and its current phase`,
+      "transitions whose inputs are stored rows only (lifecycle, execution-policy, delivery) remain available",
+      "retry once the named prerequisite is readable again",
+    ],
+  };
+  return withRecoveryDetails(error, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    stage: input.stage,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    commit_state: "none",
+    recovery: unresolvedRecovery({
+      target: { workflowId: input.workflowId },
+      unresolved: [problem],
+    }),
+  });
+}
+
+/**
+ * §4.1/§4.2 (A11) the typed cause of a transition the current state refuses: the
+ * refusal the transition produced — code, message and its own details untouched —
+ * plus the exact conflicting field, the value it holds now, the value the request
+ * asks for, the ONE decision the caller must make and what still works. This is
+ * the grouped decision of a relevant conflict, not a bare refusal.
+ */
+function workflowConflictCause(
+  error: unknown,
+  input: { workflowId: string; operation: WorkflowExecutionOperation; state: Record<string, unknown> },
+): unknown {
+  const code = refusalCodeOf(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const field = workflowOperationField(input.operation);
+  const stored = describeValue(storedOperationValue(input.state, input.operation));
+  const requested = describeValue(requestedOperationValue(input.operation));
+  const problem: RecoveryProblem = {
+    component: "workflow-header",
+    path: field,
+    code: code ?? "coordination.invalid-transition",
+    sourcesTried: [
+      `workflow ${input.workflowId} as this transaction reads it`,
+      `the ${input.operation.kind} transition's own rules for ${field}`,
+    ],
+    currentFacts: [`${field} holds ${stored}`, `the request asks for ${requested}`, `the refusal reports: ${message}`],
+    needed: message,
+    withheldEffect:
+      `the ${input.operation.kind} transition: ${field} was not overwritten, no revision advanced and no receipt ` +
+      `was recorded`,
+    availableWork: [
+      `read the current state of workflow ${input.workflowId}`,
+      `retry the ${input.operation.kind} transition once the conflicting fact is resolved`,
+      "independent operations on other workflows and plans continue",
+    ],
+  };
+  return withRecoveryDetails(error, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    current_value: stored,
+    requested_value: requested,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({
+      target: { workflowId: input.workflowId },
+      unresolved: [problem],
+    }),
+  });
+}
+
+/**
+ * §4.1/§4.2 (A13) the refusal of a receipt whose effect a later accepted
+ * operation superseded: the recorded receipt is historical evidence and is never
+ * served as current state, and the typed cause names both facts with the one
+ * choice that remains — accept what is stored now, or express the desired effect
+ * as a NEW operation under a new operation id.
+ */
+function supersededEffectCause(input: {
+  workflowId: string;
+  operationId: string;
+  operation: WorkflowExecutionOperation;
+  state: Record<string, unknown>;
+}): ExecutionError {
+  const code = "execution.effect-superseded";
+  const field = workflowOperationField(input.operation);
+  const stored = describeValue(storedOperationValue(input.state, input.operation));
+  const recorded = describeValue(requestedOperationValue(input.operation));
+  const problem: RecoveryProblem = {
+    component: "workflow-header",
+    path: field,
+    code,
+    sourcesTried: [
+      `execution_operations(epoch, ${JSON.stringify(input.operationId)}) \u2014 the recorded receipt`,
+      `workflow ${input.workflowId} as this transaction reads it`,
+    ],
+    currentFacts: [
+      `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}`,
+      `${field} holds ${stored} now, so a later accepted operation superseded that effect`,
+    ],
+    needed:
+      `accept the current state of workflow ${input.workflowId}, or express the desired ${input.operation.kind} effect ` +
+      `again as a new operation with a NEW operation id`,
+    withheldEffect: `the recorded receipt: it is historical evidence and is never restored as current state`,
+    availableWork: [
+      `read the current state of workflow ${input.workflowId}`,
+      `express the desired effect under a new operation id`,
+      "independent operations on other workflows and plans continue",
+    ],
+  };
+  return new ExecutionError(
+    code,
+    `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}, but workflow ${input.workflowId} ` +
+      `holds ${stored} now \u2014 a later accepted operation superseded that effect, and a superseded receipt is never ` +
+      `restored. Nothing was written.`,
+    {
+      component: problem.component,
+      path: problem.path,
+      workflow_id: input.workflowId,
+      operation_id: input.operationId,
+      current_value: stored,
+      recorded_value: recorded,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      needed: problem.needed,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: input.workflowId },
+        unresolved: [problem],
+      }),
+    },
+  );
+}
+
+/* ------------------------------------------------------------------------ *
  * §3 `mutateExecutionWorkflow` — the published workflow verb surface
  * ------------------------------------------------------------------------ */
 
@@ -589,33 +981,144 @@ export function setWorkflowWitnessGapForTest(callback: (() => void) | undefined)
 }
 
 /**
+ * §4.1/E08 the SHARED amendment-component identity of one transition: the
+ * `execution-policy` and `integration-worktree` transitions are the two
+ * components of the compound Prepare amendment this route performs, so their
+ * `recovery.applied` entry is the SAME identity the file route's
+ * `amendPrepareWorkflow` emits for the same component value (`execution-policy
+ * parallel`, `integration-worktree <checkout>`). A transport therefore consumes
+ * one component vocabulary without caring which authority committed the effect.
+ *
+ * `undefined` for the transitions the file route does not carry (phase,
+ * lifecycle, delivery): those keep the lifecycle-scoped entry below, because
+ * they are not amendment components and have no counterpart to be identical to.
+ */
+function amendmentComponentOf(operation: WorkflowExecutionOperation): string | undefined {
+  if (operation.kind === "integration-worktree") {
+    return prepareAmendmentComponent("integration-worktree", canonicalTarget(operation.path));
+  }
+  if (operation.kind === "execution-policy") {
+    const parallelism = isPlainObject(operation.policy) ? operation.policy.plan_parallelism : undefined;
+    return typeof parallelism === "string" && parallelism !== ""
+      ? prepareAmendmentComponent("execution-policy", parallelism)
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * § One resolver path: no workflow was stated and the trusted caller's own
+ * identity names none. The refusal is the caller's question — the one
+ * selection that would release the addressed transition — in the frozen
+ * problem shape, never a guess at the only or most recent workflow.
+ */
+function unresolvedWorkflowAddress(caller: ExecutionCaller): CoordinationError {
+  const bound =
+    caller?.role === "coordinator" || caller?.role === "plan-pm"
+      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)}`
+      : "the trusted caller carries no usable session identity";
+  const code: CoordinationErrorCode = "coordination.invalid-input";
+  const problem: RecoveryProblem = {
+    component: "target",
+    path: "workflowId",
+    code,
+    sourcesTried: ["workflowId (intent.explicit)", "the trusted caller identity (association)"],
+    currentFacts: [bound, "no workflow id was stated by this transition intent"],
+    needed: "which workflow this transition addresses",
+    withheldEffect:
+      "the addressed workflow transition - no target was guessed, so no workflow row, session or CAS token was read for it",
+    availableWork: ["address the workflow explicitly (workflowId)", "coordinate the lifecycle this transition belongs to"],
+  };
+  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+    component: problem.component,
+    path: problem.path,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
+  });
+}
+
+/**
+ * § One resolver path (S2/E02) for the workflow route: the addressed workflow
+ * (the explicit id, else the trusted coordinator's OWN workflow), the current
+ * authority route that selects the DB, the caller's OWN live coordinator
+ * binding reconstructed from its durable session row (E03/R8/A09) and the
+ * workflow token the authority read returned. An explicitly supplied value is
+ * passed through untouched, so a fully specified call keeps the strict frame's
+ * exact behavior; a caller that omits all three still resolves to the same
+ * strict request shape, and its resolved inputs stay strict.
+ */
+async function resolveWorkflowIntent<Operation extends WorkflowExecutionOperation>(
+  context: ExecutionContext,
+  request: ExecutionWorkflowIntent<Operation>,
+): Promise<WorkflowOperationRequest<Operation>> {
+  const workflowId = isNonEmptyString(request.workflowId) ? request.workflowId : context.caller?.workflowId;
+  if (!isNonEmptyString(workflowId)) throw unresolvedWorkflowAddress(context.caller);
+  if (request.session !== undefined && request.expected !== undefined) {
+    return { operationId: request.operationId, session: request.session, expected: request.expected, workflowId, operation: request.operation };
+  }
+  const session = request.session ?? (await resolveSparseOwnSession(context, "a workflow transition"));
+  const expected = request.expected ?? (await readExecutionAuthority(context, { workflowId })).token;
+  return { operationId: request.operationId, session, expected, workflowId, operation: request.operation };
+}
+
+/**
  * §3 the workflow-level transition surface of the DB authority: one coordinator
  * call carrying the §3.1 mutation envelope (operation id, coordinator session
- * reference, exact workflow token) and the operation itself, whose member of the
- * closed union selects the transition.
+ * reference, workflow token) and the operation itself, whose member of the closed
+ * union selects the transition.
  *
- * The frame is the plan frame's sibling and enforces the same rules in the same
- * order: an active authority, the caller's own live coordinator binding, the
- * exact CAS token, ONE revision advance for the accepted operation and a
- * committed receipt that makes an identical retry a replay. It adds nothing a
+ * § One resolver path (S2/E02) the entry point accepts the SPARSE intent: the
+ * coordinator session reference, the workflow token and even the addressed
+ * workflow id may be omitted and are resolved here before the strict frame
+ * below — the caller states only the intent it owns. A `workflowId` the token
+ * cannot be derived for (a terminal or unregistered lifecycle, whose history
+ * the ACTIVE read does not serve) is refused instead of invented: present the
+ * token the recorded operation returned.
+ *
+ * The frame is the plan frame's sibling and enforces the same rules: an active
+ * authority, the caller's own live coordinator binding, the authority generation
+ * the caller's reference and token were read under, ONE revision advance for an
+ * accepted operation and a committed receipt that makes an identical retry a
+ * replay. The supplied token's ADDRESS and generation are strict; its REVISION is
+ * transport freshness, so the frame recomputes the intent against the state it
+ * reads now: a satisfied effect is a current success with no mutation (R6/A09/
+ * A12), a relevant conflict is refused with the exact field (A11), a superseded
+ * receipt is disclosed instead of restored (A13), and a superseded authority
+ * generation is re-resolved before anything is replayed (A26). It adds nothing a
  * caller can turn into permission: no gate verdict is read from the request, no
  * header field outside the operation's own member is writable, and identity
  * anchors are refused by the shape gate before the store is opened.
+ *
+ * §R11/A21 an explicit `failed`/`stopped` intent additionally settles the
+ * lifecycle's OWN claims whose holder session has stopped, inside this
+ * transaction and BEFORE the whole-view witness — the state a stopped holder
+ * leaves is exactly what that reader refuses, so settling it first is what makes
+ * the terminal outcome reachable. A live holder's claim is never released.
  */
 export async function mutateExecutionWorkflow(
   context: ExecutionContext,
-  request: ExecutionMutation & { workflowId: string; operation: WorkflowExecutionOperation },
+  request: ExecutionWorkflowIntent,
 ): Promise<ExecutionReceipt<ExecutionState>> {
-  const resolved = resolveWorkflowOperationRequest(context.caller, request);
+  // The shape gate runs BEFORE the sparse resolver: `operation` is the
+  // caller's own intent and needs no store fact, while the resolver may open
+  // the authority to derive the omitted session/token — a malformed payload
+  // must be an input-shape refusal, never a store-side diagnostic. A null or
+  // non-object request takes the same typed path (assertWorkflowOperationShape
+  // reads through the optional chain), never a raw TypeError.
+  assertWorkflowOperationShape(request == null ? request : (request as { operation?: unknown }).operation);
+  const strictRequest = await resolveWorkflowIntent(context, request);
+  const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
-  const evidence = await readWorkflowEvidence(context, resolved);
-  const requestHash = workflowOperationRequestHash(
-    context.caller,
-    operation.kind,
-    resolved.read.workflowId,
-    resolved.call.expected,
-    workflowOperationPayload(operation),
-  );
+  const workflowId = resolved.read.workflowId;
+  let evidence: WorkflowEvidence;
+  try {
+    evidence = await readWorkflowEvidence(context, resolved);
+  } catch (error) {
+    throw prerequisiteCause(error, { workflowId, operation, stage: "read" });
+  }
+  const requestHash = workflowOperationRequestHash(context.caller, workflowId, operation);
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -625,37 +1128,132 @@ export async function mutateExecutionWorkflow(
           `A staged store is inspectable only through migration diagnostics.`,
       );
     }
-    // §3.1 an identical retry returns its recorded receipt — but only after the
-    // CURRENT authority is revalidated, so a revoked or epoch-invalidated
-    // coordinator never replays a receipt it may no longer own. The receipt
-    // addresses the whole graph, so its token is the ROOT token.
+    // §2.1/§4.1 (A26) the generation fences run FIRST: a reference or token from
+    // a superseded epoch is re-resolved, never answered from a receipt recorded
+    // under a generation that no longer exists.
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: resolved.read.referenceStoreId,
+      referenceEpoch: resolved.read.referenceEpoch,
+      target: { workflowId },
+    });
+    const stored = requireWorkflowState(tx, workflowId);
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      { kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [workflowId], revision: stored.revision },
+      { target: { workflowId } },
+    );
+    // §4.2 the supplied token's ADDRESS and generation are fenced above; its
+    // revision is transport freshness. A token whose revision moved is recorded
+    // as provenance, not refused (A10): the intent below is recomputed against
+    // the state this transaction reads.
+    const warnings: readonly ResolutionWarning[] = freshness.current
+      ? []
+      : [
+          {
+            code: "execution.token-drifted",
+            path: "expected",
+            message:
+              `the token carries revision ${freshness.readRevision} while workflow ${workflowId} is at revision ` +
+              `${freshness.currentRevision}: the revision is transport freshness, so the intent was recomputed against ` +
+              `the current state instead of being refused`,
+          },
+        ];
+    // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
+    // after the CURRENT authority is revalidated (a revoked or epoch-invalidated
+    // coordinator never replays a receipt it may no longer own) and only while
+    // the effect it recorded is still held: a superseded effect is disclosed, not
+    // restored (A13). The receipt addresses the whole graph, so its token is the
+    // ROOT token. Looking the receipt up before the registry witness is what lets
+    // a terminal close's own retry answer, instead of "workflow not found".
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
-      workflowId: resolved.read.workflowId,
+      workflowId,
       planId: null,
       token: { kind: "root", key: [] },
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      return replay;
+      if (!workflowIntentHeld(stored.state, operation)) {
+        throw supersededEffectCause({
+          workflowId,
+          operationId: resolved.call.operationId,
+          operation,
+          state: stored.state,
+        });
+      }
+      return {
+        ...replay,
+        recovery: workflowRecovery({
+          workflowId,
+          outcome: "already-satisfied",
+          applied: [],
+          commitState: "committed",
+          resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
+          warnings: [...warnings, { code: "execution.receipt-replayed", message: "the recorded receipt of this operation id is served; nothing was written." }],
+        }),
+      };
+    }
+    // §R11/A21 the failed/stopped close settles its OWN stopped claims BEFORE
+    // the whole-view witness: a held lease whose holder session stopped is
+    // exactly the state that reader refuses (`assertLeaseOwnership` cannot
+    // represent it), so settling those first is what makes the terminal outcome
+    // reachable at all — an unreachable terminal state forces an unguarded
+    // operation. Authorization is this caller's own live coordinator binding,
+    // resolved exactly as the witness resolves it, and the cleanup inherits this
+    // transaction: a close that refuses afterwards rolls it back whole.
+    // `at` is the ONE timestamp of this accepted operation, so the settled
+    // claims carry the same instant the close records.
+    const at = new Date().toISOString();
+    if (operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")) {
+      const session = resolveWorkflowSession(tx, resolved.read);
+      releaseStoppedExecutionLeases(tx, { workflowId, releasedBy: session.sessionId, at });
     }
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
-    assertExecutionToken(resolved.call.expected, {
-      kind: "workflow",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [witness.workflowId],
-      revision: witness.revision,
-    });
-    revalidateWorkflowEvidence(evidence);
-    const at = new Date().toISOString();
+    // §4.2 (R6/R7/A09/A12) the effect is ALREADY held: the current state is the
+    // success the caller asked for, so this call reports it and spends nothing —
+    // no revision, no timestamp, no receipt row. Stale evidence is not consulted:
+    // a satisfied effect does not depend on the precursor file it once read.
+    //
+    // §R10/A20 the ONE exception is a TERMINAL lifecycle intent: its effect
+    // includes losing the ACTIVE registry row, so a workflow that already
+    // records the terminal status while still holding its membership is exactly
+    // the residue this close repairs — it is never "already satisfied" here
+    // (this point is reached only through a readable registry row, so the
+    // membership fact is already established).
+    const terminalLifecycle =
+      operation.kind === "lifecycle" && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(operation.status);
+    if (!terminalLifecycle && workflowIntentHeld(stored.state, operation)) {
+      return {
+        ...readExecutionStateGraph(tx),
+        operationId: resolved.call.operationId,
+        replayed: true,
+        recovery: workflowRecovery({
+          workflowId,
+          outcome: "already-satisfied",
+          applied: [],
+          commitState: "none",
+          resolvedFrom: [{ path: workflowOperationField(operation), source: "stored workflow header" }],
+          warnings,
+        }),
+      };
+    }
+    try {
+      revalidateWorkflowEvidence(evidence);
+    } catch (error) {
+      throw prerequisiteCause(error, { workflowId, operation, stage: "revalidate" });
+    }
     // §3.1 the ONE revision advance of this accepted multi-domain transaction:
     // header changes advance the addressed workflow once and the store once; a
     // registry membership loss adds the ROOT advance without a second store
     // bump, so the accepted operation advances the store revision exactly once.
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
-    const receipt = applyWorkflowOperation({ tx, witness, operation, evidence, at });
+    let receipt: ExecutionRead<ExecutionState>;
+    try {
+      receipt = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
+    } catch (error) {
+      throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
+    }
     writeOperationReceipt(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -664,7 +1262,19 @@ export async function mutateExecutionWorkflow(
       receipt,
       now: at,
     });
-    return { ...receipt, operationId: resolved.call.operationId, replayed: false };
+    return {
+      ...receipt,
+      operationId: resolved.call.operationId,
+      replayed: false,
+      recovery: workflowRecovery({
+        workflowId,
+        outcome: "applied",
+        applied: [amendmentComponentOf(operation) ?? `${operation.kind} on workflow ${workflowId}`],
+        commitState: "committed",
+        resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
+        warnings,
+      }),
+    };
   });
 }
 
@@ -675,33 +1285,83 @@ export async function mutateExecutionWorkflow(
  * lifecycle additionally loses its registry membership in the SAME transaction,
  * so a close that refuses leaves both the routing and the terminal state
  * exactly where they were.
+ *
+ * §R5/§R10 a terminal `completed` close composes the bookkeeping its owned rows'
+ * recorded evidence entails (E10) — the report-only fulfilment, the row
+ * `Done`/completed-handoff delta and the ownership release — BEFORE the terminal
+ * decision, through the same completion rules the plan route's `complete`
+ * applies. Everything therefore commits on ONE handle in ONE transaction: a
+ * crash leaves either the whole close or none of it, and the terminal decision
+ * judges the rows this transaction just completed.
+ *
+ * §R11/A21 a `failed`/`stopped` close composes no row bookkeeping at all (no
+ * successful-delivery precondition): it settles the workflow's own stopped
+ * claims — the held execution leases before the witness, the integration claim
+ * here — and the terminal decision then judges exactly the ownership this
+ * transaction leaves behind.
  */
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
   witness: ExecutionWorkflowWitness;
+  read: ResolvedWorkflowWrite;
   operation: WorkflowExecutionOperation;
   evidence: WorkflowEvidence;
   at: string;
 }): ExecutionRead<ExecutionState> {
-  const { tx, witness, operation, evidence, at } = input;
+  const { tx, witness, read, operation, evidence, at } = input;
   const workflowId = witness.workflowId;
   const current = witness.view.state as unknown as WorkflowSnapshot;
-  if (isTerminalSnapshot(current)) {
+  // §R10/A20 a RESTATEMENT of the status a terminal lifecycle already records is
+  // its own membership repair: the outcome and its `ended_at` stay exactly as
+  // they were recorded, and only the outstanding ACTIVE registry row is cleaned
+  // up in this transaction. Every other request against a closed lifecycle is
+  // refused — a terminal outcome is never rewritten.
+  const residueRepair = isTerminalSnapshot(current) && operation.kind === "lifecycle" && operation.status === current.status;
+  if (isTerminalSnapshot(current) && !residueRepair) {
     throw invalidWorkflowTransition(
       `workflow ${workflowId} is ${current.status} \u2014 a closed lifecycle is never amended, and its history stays exactly as ` +
         `it was recorded`,
       { workflow_id: workflowId, status: current.status },
     );
   }
-  const rows = witness.view.plans.map((plan) => plan.plan as unknown as PlanRow);
-  const header = { ...(witness.view.state as unknown as Record<string, unknown>) };
+  const composed =
+    !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
+      ? composeEntailedCompletions({ tx, witness, read, evidence, at })
+      : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
+  // §R11/A21 the integration-claim half of a failed/stopped close's own-claim
+  // cleanup, under the same rule the execution leases were settled by: the
+  // workflow's OWN merge claim goes when its holder's session is not active at
+  // this epoch, and stays when that holder is live. It reads the claim from the
+  // witness this transaction already holds (the whole-view reader carries a
+  // merge claim whatever its holder's state), so a settled claim re-reads the
+  // witness below.
+  const claim = operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")
+    ? witness.view.integrationLease
+    : null;
+  const settledClaim =
+    claim !== null && releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: witness.session.sessionId, at });
+  // §R5 the rows the terminal decision reads are the ones this transaction just
+  // completed, and the ownership it reads is the ownership this transaction just
+  // released: both are re-read from the handle the transaction owns.
+  const effective = composed.completions.length === 0 && !settledClaim ? witness : readExecutionWorkflowWitness(tx, read);
+  const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
+  const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
+  if (composed.fulfilment !== null) {
+    // The report-only fulfilment is the ONE member recorded BEFORE the row is
+    // marked `Done` (contract §1): the composition records it first, in the same
+    // atomic state the completion commits — never a second caller step and never
+    // a re-point of a fulfilment the row's `Done` was already authorized against
+    // (`entailedFulfilment` refuses that).
+    const stored = isPlainObject(header.delivery) ? (header.delivery as Record<string, unknown>) : {};
+    header.delivery = { ...stored, completion: composed.fulfilment };
+  }
   let membershipLost = false;
   switch (operation.kind) {
     case "phase":
       applyPhaseTransition({ header, rows, workflowId, operation, evidence });
       break;
     case "lifecycle":
-      membershipLost = applyLifecycleTransition({ header, rows, witness, workflowId, operation, at });
+      membershipLost = applyLifecycleTransition({ header, rows, witness: effective, workflowId, operation, at });
       break;
     case "execution-policy":
       header.execution_policy = applyExecutionPolicy(workflowId, operation.policy);
@@ -718,6 +1378,62 @@ function applyWorkflowOperation(input: {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
   return readExecutionStateGraph(tx);
+}
+
+/**
+ * §R5/§R10 the row completions and the report-only fulfilment one terminal
+ * `completed` close composes, applied inside the close's own transaction. Each
+ * proof is matched to the row the transaction reads RIGHT NOW: a row that
+ * already records `Done` in that read composes nothing (a sibling operation in
+ * the window is never rewritten), and a row the preflight proved is completed
+ * here through the same rules `complete` applies.
+ */
+function composeEntailedCompletions(input: {
+  tx: ExecutionTransaction;
+  witness: ExecutionWorkflowWitness;
+  read: ResolvedWorkflowWrite;
+  evidence: WorkflowEvidence;
+  at: string;
+}): { completions: readonly EntailedRowCompletion[]; fulfilment: { policy: string; evidence: string } | null } {
+  const { tx, witness, read, evidence, at } = input;
+  const proofs = evidence.completions ?? [];
+  const pinned = evidence.pinned;
+  if (proofs.length === 0 || pinned === undefined) return { completions: [], fulfilment: null };
+  let fulfilment: { policy: string; evidence: string } | null = null;
+  const applied: EntailedRowCompletion[] = [];
+  for (const proof of proofs) {
+    // Each proof is matched to the row this transaction reads RIGHT NOW, and the
+    // ownership facts are read with it: a row another step of THIS transaction
+    // just completed is skipped, and a release composed for an earlier row is
+    // already visible to the next one instead of being re-derived from a stale
+    // sibling view.
+    const current = readExecutionWorkflowWitness(tx, read);
+    const row = current.view.plans.find((candidate) => candidate.plan.id === proof.planId);
+    if (row === undefined) continue;
+    if (proof.completesRow && rowStatusOf(row.plan as unknown as PlanRow) === "Done") continue;
+    const snapshot = {
+      ...(current.view.state as unknown as Record<string, unknown>),
+      plans: current.view.plans.map((plan) => plan.plan as unknown as PlanRow),
+      ...(current.view.integrationLease === null ? {} : { integration_merge_lease: current.view.integrationLease }),
+    } as unknown as WorkflowSnapshot;
+    applyEntailedCompletion({
+      tx,
+      frame: completionFrameFor({
+        workflow: current.view,
+        planId: proof.planId,
+        sessionId: witness.session.sessionId,
+      }),
+      snapshot,
+      pinned,
+      handoffId: proof.handoffId,
+      proof,
+      at,
+      what: "close",
+    });
+    if (proof.fulfilment !== null) fulfilment = proof.fulfilment;
+    applied.push(proof);
+  }
+  return { completions: applied, fulfilment };
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
@@ -803,9 +1519,15 @@ function applyPhaseTransition(input: {
  * released only by the explicit completion/reconcile transitions. A terminal
  * status additionally runs the existing rules: `completed` needs every owned row
  * `Done` and the existing delivery-evidence consultation to be clean, every
- * terminal status needs the lifecycle to own no execution or integration lease
+ * terminal status needs the lifecycle to own no lease a LIVE holder still holds
  * (the snapshot validator's terminal invariant, read from the rows that own
  * them), and the loss of registry membership commits with the terminal state.
+ *
+ * §R11/A21 `failed`/`stopped` demands NO successful-delivery evidence, and the
+ * claims this workflow owns whose holder has stopped are settled before this
+ * decision runs (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`),
+ * so what is left dangling here is exactly a live holder's claim — which this
+ * route refuses on rather than releasing a claim that is another session's.
  *
  * A restatement of the status the lifecycle is already in is ACCEPTED as an
  * ordinary operation (it changes only `updated_at`): the state machine has no
@@ -825,7 +1547,14 @@ function applyLifecycleTransition(input: {
 }): boolean {
   const { header, rows, witness, workflowId, operation, at } = input;
   const status = operation.status;
-  if (header.status === status) return false;
+  if (header.status === status) {
+    // §R10/A20 a RESTATEMENT of the status a terminal lifecycle already records
+    // is its own cleanup: the recorded outcome and its `ended_at` stay exactly
+    // as they were, and losing the outstanding ACTIVE registry row is the whole
+    // effect — the residue a crash or a foreign writer left behind. A running
+    // restatement remains the ordinary no-op it was.
+    return (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status);
+  }
   if (!(WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) {
     header.status = status;
     delete header.ended_at;
@@ -852,9 +1581,13 @@ function applyLifecycleTransition(input: {
   const dangling = danglingOwnership(witness);
   if (dangling.length > 0) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
-        `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
-        `reconcile transition first`,
+      status === "completed"
+        ? `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
+          `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
+          `reconcile transition first`
+        : `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 this close settles only the ` +
+          `claims it owns whose holder has stopped, and a LIVE holder's claim needs that holder's own stop or transfer ` +
+          `(reconcile records the prior holder and the decision) before this lifecycle can end`,
       { workflow_id: workflowId, status },
     );
   }
@@ -863,7 +1596,14 @@ function applyLifecycleTransition(input: {
   return true;
 }
 
-/** The outstanding ownership a terminal lifecycle may not carry, as named facts. */
+/**
+ * The outstanding ownership a terminal lifecycle may not carry, as named facts.
+ * A failed/stopped close reaches it only after its own stopped claims were
+ * settled (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`), so
+ * what remains here is a claim a live holder still holds — plus an
+ * earlier-epoch claim the store cannot authorize at this epoch, which is left
+ * exactly where §2.3 says it stays.
+ */
 function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
   const dangling: string[] = [];
   for (const plan of witness.view.plans) {
@@ -880,39 +1620,48 @@ function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
 /**
  * §3 the `execution-policy` transition: the closed policy object the snapshot
  * schema defines. `plan_parallelism` is the ONE key the approved concurrency
- * contract names values for (`coordination.ts`'s Prepare-amendment rule — the
- * same closed set, `serial | parallel`); `worktree_mode` / `push_policy` stay
- * the accepted-but-opaque keys the snapshot validator declares them to be, and
- * an unknown key is refused instead of stored.
+ * contract names values for — the SAME closed set `coordination.ts` exports
+ * (`PLAN_PARALLELISM_VALUES`) and the file route's Prepare amendment applies, so
+ * the two authority routes share one rule instead of two lists that can drift
+ * (E08); `worktree_mode` / `push_policy` stay the accepted-but-opaque keys the
+ * snapshot validator declares them to be, and an unknown key is refused instead
+ * of stored.
  *
  * The operation REPLACES the block: the union member is the whole policy, so a
  * key the payload omits is removed rather than retained. There is no partial
  * policy patch here, because a header patch is exactly what this route must not
  * offer.
  */
-function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
-  const declared = policy as unknown as Record<string, unknown>;
-  assertExactKeys(declared, ["plan_parallelism", "worktree_mode", "push_policy"], `workflow ${workflowId} execution_policy`);
-  const parallelism = declared.plan_parallelism;
+export function workflowExecutionPolicyViolations(value: unknown, workflowId = "workflow"): string[] {
+  if (!isPlainObject(value)) return ["execution_policy must be an object"];
+  const unknown = Object.keys(value).filter((key) => !["plan_parallelism", "worktree_mode", "push_policy"].includes(key));
+  const violations = unknown.length === 0 ? [] : [`workflow ${workflowId} execution_policy has unknown key(s) ${unknown.join(", ")}`];
+  const parallelism = value.plan_parallelism;
   if (parallelism !== undefined && (typeof parallelism !== "string" || !PLAN_PARALLELISM_VALUES.includes(parallelism))) {
-    throw invalidWorkflowInput(
-      `workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")} \u2014 ` +
-        `got ${JSON.stringify(parallelism ?? null)}`,
-    );
+    violations.push(`workflow ${workflowId} execution_policy.plan_parallelism must be one of ${PLAN_PARALLELISM_VALUES.join(" | ")}`);
   }
-  return { ...policy };
+  return violations;
 }
 
-/**
- * The only `plan_parallelism` values the approved concurrency contract names.
- *
- * simplify: this two-value set is mirrored from `coordination.ts`
- * (`PLAN_PARALLELISM_VALUES`, the Prepare-amendment rule) because that module is
- * not this task's to edit; the upgrade path is to export the set from a shared
- * module once the file route is retired. The mirror is small, closed and named
- * here so a drift would be found by reading the one comment.
- */
-const PLAN_PARALLELISM_VALUES: readonly string[] = ["serial", "parallel"];
+function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
+  // The unknown-key refusal is the closed-vocabulary guard (`forbidden-field`,
+  // the same class the operation's own exact-keys gate raises), while a KNOWN
+  // key carrying a malformed value is an input-shape refusal.
+  if (isPlainObject(policy)) {
+    const unknown = Object.keys(policy).filter((key) => !["plan_parallelism", "worktree_mode", "push_policy"].includes(key));
+    if (unknown.length > 0) {
+      throw new CoordinationError(
+        "coordination.forbidden-field",
+        `workflow ${workflowId} execution_policy accepts only plan_parallelism, worktree_mode, push_policy ` +
+          `\u2014 unexpected key(s): ${unknown.join(", ")}`,
+        { unexpected: unknown, allowed: ["plan_parallelism", "worktree_mode", "push_policy"] },
+      );
+    }
+  }
+  const violations = workflowExecutionPolicyViolations(policy, workflowId);
+  if (violations.length > 0) throw invalidWorkflowInput(violations.join("; "));
+  return { ...policy };
+}
 
 /**
  * §3 the `delivery` transition: the same evidence rules the file route's
@@ -983,18 +1732,14 @@ function applyDeliveryEvidence(input: {
       );
     }
   }
-  const tail = members.filter((member) => member !== "completion");
-  if (tail.length > 0) {
-    const notDone = rows.filter((row) => rowStatusOf(row) !== "Done");
-    if (notDone.length > 0) {
-      throw invalidWorkflowTransition(
-        `workflow ${workflowId} cannot record the delivery tail (${tail.join(", ")}) while ` +
-          `${notDone.map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`).join(", ")} ` +
-          `${notDone.length === 1 ? "is" : "are"} not Done (contract \u00A73: row Done \u2192 compound disposition \u2192 PR identity \u2192 verified-merge record)`,
-        { workflow_id: workflowId },
-      );
-    }
-  }
+  // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence that
+  // arrives when it arrives: the engine captures it whenever it is observed and
+  // never makes the row's `Done` projection an ordering prerequisite, because
+  // the close composes that projection itself from the same evidence (E10). The
+  // semantic boundary is the CLOSE, which still requires the declared kind's
+  // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
+  // so the ordering is bookkeeping rather than a caller ceremony.
+  //
   // The mirror rule for the ONE member recorded BEFORE the row is Done
   // (contract §1: a report-only row "completes from an accepted handoff plus a
   // recorded fulfilment of that policy — the fulfilment is recorded before the

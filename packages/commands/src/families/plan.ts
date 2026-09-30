@@ -23,6 +23,10 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
+const progressPayloadSchema = z.record(z.string(), z.unknown());
+const entryPayloadSchema = z.record(z.string(), z.unknown());
+const entriesPayloadSchema = z.array(entryPayloadSchema);
+const evidencePayloadSchema = z.record(z.string(), z.unknown());
 const inputSchema = z.object({
   session: z.string().min(1).optional(),
   sessionRef: z.string().min(1).optional(),
@@ -39,11 +43,11 @@ const inputSchema = z.object({
   operation: z.string().min(1).optional(),
   handoff: z.string().min(1).optional(),
   reason: z.string().min(1).optional(),
-  progress: z.unknown().optional(),
-  entries: z.array(z.unknown()).optional(),
+  progress: progressPayloadSchema.optional(),
+  entries: entriesPayloadSchema.optional(),
   issue: z.string().min(1).optional(),
   disposition: z.enum(["resolved", "waived", "duplicate", "superseded"]).optional(),
-  evidence: z.unknown().optional(),
+  evidence: evidencePayloadSchema.optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
 type PlanInput = z.infer<typeof inputSchema>;
@@ -336,6 +340,12 @@ const writeCommands: Record<string, true> = {
   "residual-close": true,
 };
 const commandNames = ["bind", "show", "prepare", "progress", "issue-add", "issue-close", "handoff", ...transitions.map(([verb]) => verb), "residual-add", "residual-close"] as const;
+const payloadFieldsByVerb: Partial<Record<(typeof commandNames)[number], readonly (keyof typeof inputSchema.shape)[]>> = {
+  progress: ["progress"],
+  "issue-add": ["entries"],
+  "issue-close": ["evidence"],
+  handoff: ["evidence"],
+};
 export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
   return commandNames.map((verb) => {
     const id = `plan.${verb}`;
@@ -351,6 +361,9 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         ],
       },
       input: inputSchema,
+      payloads: Object.fromEntries(
+        (payloadFieldsByVerb[verb] ?? []).map((field) => [field, { schema: inputSchema.shape[field] }]),
+      ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
       description: transitions.find(([name]) => name === verb)?.[1] ?? `Scoped plan ${verb} operation; engine enforces ownership, state and concurrency guards.`,

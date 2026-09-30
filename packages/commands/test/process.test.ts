@@ -92,6 +92,13 @@ describe("process command family", () => {
     ]);
     expect(definition("pr-review.worktree-setup").cli.path).toEqual(["pr-review", "worktree-setup"]);
   });
+  test("process descriptors expose argv and scoped cleanup inputs", () => {
+    expect(definition("sdd.exec").payloads?.argv?.schema.safeParse(["node", "-e", "0"]).success).toBe(true);
+    expect(definition("sdd.exec").payloads?.argv?.schema.safeParse("node -e 0").success).toBe(false);
+    expect(definition("worktree.cleanup").payloads?.worktree?.schema.safeParse(["/tmp/owned"]).success).toBe(true);
+    expect(definition("worktree.cleanup").payloads?.worktree?.schema.safeParse("/tmp/owned").success).toBe(false);
+  });
+
 
   test("spawn returns actual child output and exact exit status without a shell", async () => {
     const result = await spawnProcess({ argv: [process.execPath, "-e", "process.stdout.write(process.argv[1]); process.stderr.write('err'); process.exit(124)", "literal;value"], cwd: process.cwd(), env: {}, signal: new AbortController().signal });
@@ -129,7 +136,7 @@ describe("process command family", () => {
     expect(result.status).toBe("error");
   });
 
-  test("sdd exec returns child streams and preserves a nonzero exit code", async () => {
+  test("sdd exec preserves an unknown effect outcome as an error", async () => {
     const control = context();
     git(["init", "-q", "-b", "main"], control.cwd);
     git(["config", "user.name", "Process Test"], control.cwd);
@@ -144,11 +151,17 @@ describe("process command family", () => {
     git(["worktree", "add", "-q", "-b", "feature/smoke", featureCwd], control.cwd);
     const contextPath = path.join(control.cwd, "sdd-context.json");
     writeFileSync(contextPath, JSON.stringify({ planId: "smoke", controlHarnessRoot: path.join(control.cwd, ".mstar"), featureCwd, workingBranch: "feature/smoke", planFile, sddDir: path.join(control.cwd, ".mstar", "sdd", "smoke") }));
+    control.effects.spawn = async () => ({ exitCode: null, signal: null, stdout: "partial", stderr: "status unavailable" });
     const result = await definition("sdd.exec").execute(
-      { context: contextPath, argv: [process.execPath, "-e", "process.stdout.write('out'); process.stderr.write('err'); process.exit(124)"] },
+      { context: contextPath, argv: [process.execPath, "-e", "process.exit(0)"] },
       { ...control, cwd: featureCwd },
     );
-    expect(result).toMatchObject({ status: "error", code: "sdd.exec.child-exit", exitCode: 124, details: { stdout: "out", stderr: "err" } });
+    expect(result).toMatchObject({
+      status: "error",
+      code: "sdd.exec.child-exit",
+      exitCode: 1,
+      details: { stdout: "partial", stderr: "status unavailable", signal: null },
+    });
   });
   test("cleanup defaults to a guarded read-only dry-run", async () => {
     const { ctx, worktree } = cleanupFixture();
@@ -157,12 +170,17 @@ describe("process command family", () => {
     expect(existsSync(worktree)).toBe(true);
   });
 
-  test("cleanup --apply removes only the guarded, merged fixture worktree and branch", async () => {
+  test("owned cleanup removes only its guarded merged worktree and preserves foreign ownership", async () => {
     const { ctx, worktree, branch } = cleanupFixture();
+    const foreignWorktree = path.join(ctx.cwd, "worktrees", "foreign");
+    mkdirSync(path.dirname(foreignWorktree), { recursive: true });
+    git(["worktree", "add", "-q", "-b", "foreign/unclaimed", foreignWorktree], ctx.cwd);
     const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
     expect(result.status).toBe("ok");
     expect(existsSync(worktree)).toBe(false);
     expect(() => git(["show-ref", "--verify", `refs/heads/${branch}`], ctx.cwd)).toThrow();
+    expect(existsSync(foreignWorktree)).toBe(true);
+    expect(git(["show-ref", "--verify", "refs/heads/foreign/unclaimed"], ctx.cwd)).toBeTruthy();
   });
   test("cleanup apply preserves branch/worktree without merged evidence", async () => {
     const { ctx, worktree, branch } = cleanupFixture(false);

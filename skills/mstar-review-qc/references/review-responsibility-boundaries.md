@@ -30,6 +30,8 @@ PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-mat
 
 Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive each task from scratch; they review changed cross-task interfaces for gaps L2 could not see. Full tri denotes three seats, not full scope; do not repeat unchanged L2 work or survey the repository.
 
+L2 independently judges whether affected executable behavior has meaningful product-behavior test evidence, accepting applicable existing evidence rather than requiring fresh tests per task. L3 independently checks the plan diff for uncovered cross-task behavior and test-quality gaps, consuming L1/L2 evidence rather than running tests or repeating task review. A test that only pins wording/source shape, forwards or copies an echo, duplicates its producer check, or depends on platform bytes is not coverage (`mstar-coding-behavior` § Test admission); docs/policy use scoped evidence instead. For touched planning documents (delivery compass, plans, specs, knowledge), both seats check local edit attribution (seat, model, ISO-8601 timestamp, iteration); record `unknown` when a model ID cannot be obtained, never guess another seat's model. Report a concrete missing attribution or inadequate evidence within reviewed scope, not an automatic missing-test finding.
+
 ## Plan QC tri (SDD mandatory)
 
 - Assignment: **`QC mode: full tri-review`** (implicit when `Execution mode: sdd`; PM may state explicitly).
@@ -54,3 +56,5 @@ Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive eac
 ## Minor findings
 
 Task reviewer Minor → `{SDD_DIR}/progress.md` § Minor. Plan QC Minor → `{SDD_DIR}/review/qcN.md` + optional residual via PM.
+
+QC review and QA gate dispositions must not demand real-environment evidence for development plans: live API/provider receipts, named or authenticated hosts or accounts, installed plugins or deployed artifacts, real browser or device interaction, or deployed-environment output are **not** acceptable gate conditions for code-level deliverables. Each layer proves itself with isolated unit/integration tests and built-command smoke; real-environment verification only occurs in a separately requested `mstar-e2e` workflow.

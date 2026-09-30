@@ -263,6 +263,10 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Resolve harness, specs, workflow, and project directories from a start directory.",
       async execute(input, context) {
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
+        // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
+        // as `workspaceRoot` makes the resolver refuse the very harness it
+        // sits inside (the boundary contains the answer). Resolve from the
+        // start directory alone, as the contract's canonical form does.
         const harnessDir = resolveHarnessDir(startDir);
         if (harnessDir === null) {
           return refused("path.resolve", "path.harness-not-found", `no harness dir found from ${startDir}`, {

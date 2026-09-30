@@ -20,7 +20,8 @@
  *    uninitialized/staged store (pre-activation) does not.
  * 5. The current phase/leases still come from the JSON execution authority.
  */
-import { mkdir, mkdtemp, rm, symlink, unlink } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
@@ -60,6 +61,15 @@ afterEach(async () => {
 async function appWithRoot(name: string, enforcement?: 'hard' | 'soft'): Promise<{ app: BootResult; harnessDir: string }> {
   const root = await mkdtemp(join(tmpdir(), `dsh-${name}-`))
   roots.push(root)
+  // The root is a real git worktree, like every other engine/dsh fixture that
+  // goes through `storeDbPath`. That path resolves its context through
+  // `resolveProcessHarnessDir` → `resolveHarnessDir`, whose candidate probe
+  // counts a bare `plans/` CHILD as a harness root: once a test seeds
+  // `{HARNESS_DIR}/plans/` (the plan-document source of a registration review),
+  // a non-git root would re-resolve the store to `{HARNESS_DIR}/plans/store.db`.
+  // In a git root the `.mstarc` declaration in `bootApp` wins and the harness
+  // marker itself is returned stably, so the seeded plan dir cannot move it.
+  execFileSync('git', ['init', '-q'], { cwd: root })
   const app = booted = await bootApp({ root, ...(enforcement !== undefined ? { enforcement } : {}) })
   return { app, harnessDir: app.harnessDir }
 }
@@ -206,6 +216,11 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
     rootKind: 'plans',
     relativePath: 'elsewhere.md',
   }, { operationId: 'seed-conflict', actor: 'project-manager' })
+  // The registration derives id/title from the selected document (the plan
+  // document is the registered title source), so the declared plan file must
+  // exist and declare the registered title.
+  await mkdir(join(harnessDir, 'plans'), { recursive: true })
+  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
   setArtifactStore(createFsStore(harnessDir))
   await expect(registerShippedCatalogExecution({ harnessDir }, planRegistration(harnessDir, operationId))).rejects.toThrow(
     /catalog\.duplicate/,

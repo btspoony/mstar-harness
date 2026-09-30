@@ -40,6 +40,8 @@ Do not load for:
 
 ### 1. Task → command family
 
+
+Start with the intended verb and its current help, not a universal preflight chain. Supply the non-derivable inputs it requires: on the active route, session reference, full execution token and operation id; pre-activation, session envelope and row revision; for a fresh plan-PM bind, explicit operator `--session-id`. Acquire the current expectation from an authoritative read. Inspect the `applied` or `replayed` receipt; preserve already-applied components only where the verb documents action-local partial semantics. A refusal identifies the missing input or genuine conflict. Do not repair state through a separate command before replaying a normal action.
 Find the task, run the family, then read its owning skill for the rules around it.
 
 | Task | Family | Owning skill |
@@ -87,55 +89,15 @@ Find the task, run the family, then read its owning skill for the rules around i
 
 Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — is in the references listed at the end. Validator and lint families are indexed in `references/checks-and-lints.md`.
 
-### 2. Precondition ladder
+### 2. Conflict diagnostics (not a preflight chain)
 
-Take the rungs in order. Each one fails closed: a command that cannot establish a rung refuses instead of silently falling back to a different root or a different identity.
+Use `references/preconditions.md` when the intended verb refuses for a required fact: supply its explicit session address, current expectation and operation id as appropriate to the route, then resolve a genuinely ambiguous root/target, foreign live holder, missing independent caller identity or unavailable authorization with the owner. A stale raw-replacement byte version requires a fresh read. Do not make `persist` or rebind a routine prerequisite for an ordinary lifecycle action; preserve components already applied where that verb documents partial-applied semantics.
 
-1. **Root.** Every command that touches harness state resolves a harness directory, and two resolutions exist: a *process root* derived from the main worktree (so a command run inside a linked worktree still addresses the control harness) and a *local probe* that walks up from the cwd, bounded by the workspace root. They can disagree from the same cwd, and a linked worktree usually carries no harness root of its own. Read `mstar path resolve` first when unsure, and name the root explicitly (`--harness <absolute-path>`, `MSTAR_HARNESS_DIR`, or the positional control root where the command takes one).
-2. **Residency.** Coordinator verbs belong to the main worktree — or to the recorded integration worktree where a sequence says so. Product edits stay in the feature worktree; process documents stay in the control root.
-3. **cwd neutrality.** Git-derived checks derive the main worktree and branch facts from the process cwd. Run them from a neutral cwd so the derivation matches what the snapshot recorded.
-4. **Identity.** Which transport a coordinated write takes is decided by the harness's execution authority, never by mixing flags. **Active** (canonical): the caller identity is independently acquired for the invocation, and the write carries `--session-ref <wire>` + the scope's full execution token as `--expect` + `--operation <id>`. **Pre-activation** (only while that authority is not active): `--session <absolute-json>` names the engine-generated envelope obtained from the bind verb, with a row revision as `--expect`. A reference is a lookup, not a bearer credential, and no reference or token may be forwarded to a leaf. There is no force, no takeover, no holder or role input, and no lease-release verb; a resume is read-only and is never recovery.
-5. **Tokens.** Never interchangeable: the scope's full execution token on the active route (`mstar status validate` prints the root and per-workflow tokens), the pre-activation row revision and snapshot byte version (both from `mstar plan show --json`), and the issue revision a scoped issue close echoes back as `--expect-issue` (from `mstar plan issue-add` or `mstar issue show`).
-6. **Re-read after a refusal.** Refusals are mutation-free; a stale token is recovered by reading again, never by forcing or retrying blind.
+### 3. Lifecycle shape
 
-Full treatment of every rung, including the failure each one produces: `references/preconditions.md`.
+The public lifecycle verbs remain `handoff → accept → [iteration integration-start → operator merge → integration-accept] → complete`; a standalone development row completes from accepted handoff, while report-only follows its registered completion policy rather than inventing Git integration. Use current verb help for supported arguments and inspect the receipt after each intent. `return` and `reconcile` address their specific failed/crashed attempt; neither is a universal preparatory repair. `references/plan-and-workflow.md` describes role boundaries and exceptional conflicts.
 
-### 3. Two canonical sequences
-
-Both are protocol shapes, not scripts — supply the placeholders, take the flags from the family's help.
-
-Protected document, versioned read-modify-write (**pre-activation store face**; on an ACTIVE authority the coordination verbs own these documents):
-
-```sh
-# 1. read the current bytes and their version token
-mstar persist get snapshot --key <workflow-id> --versioned
-
-# 2. modify the payload locally, keeping the document's schema intact
-
-# 3. replace it against exactly that token (nothing is merged)
-mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json --session <coordinator-envelope>
-```
-
-`status` always uses the key `root`; the `residuals` kind still reads the migrated project register but refuses a replacement — that register is migration history and open items are store issues. For a document that does not exist yet the token is the literal `absent`.
-
-Plan completion, coordinator side, after the plan session handed off. Every write runs under an independently acquired identity and takes the scope's full execution token, read immediately before the call:
-
-```sh
-mstar plan handoff --session-ref <plan-pm-wire> --file handoff.json --expect <plan-token> --operation handoff-1
-mstar plan accept  --session-ref <coordinator-wire> --plan <plan-id> --handoff <live-handoff-id> --expect <plan-token> --operation accept-1
-
-# iteration route only (type: iteration, or any non-standalone workflow)
-mstar plan integration-start  --session-ref <coordinator-wire> --plan <plan-id> --handoff <live-handoff-id> --expect <plan-token> --operation int-start-1
-git merge --no-ff --no-edit <source-sha>          # operator action, in the recorded integration worktree
-mstar plan integration-accept --session-ref <coordinator-wire> --plan <plan-id> --handoff <live-handoff-id> --expect <plan-token> --operation int-accept-1
-
-# both routes end here; a standalone development plan completes straight from the accepted handoff
-mstar plan complete --session-ref <coordinator-wire> --plan <plan-id> --handoff <live-handoff-id> --expect <plan-token> --operation complete-1
-```
-
-Pre-activation the same sequence swaps `--session-ref <wire>` for `--session <absolute-json>` and the full token for a row revision, and drops `--operation`; those forms refuse on an ACTIVE harness rather than being reinterpreted.
-
-`complete` releases only the row's lease on the standalone route and both leases on the iteration route; a standalone workflow stays running until its delivery evidence and the workflow close. `mstar plan return` handles a failed attempt; `mstar plan reconcile` finishes an attempt after a crash without a second merge — on the standalone route it only replays an already-completed row. `repair-delivery-source` exists solely for pre-fix snapshots whose registered source branch wrongly equals the target. Every `--expect` comes from a fresh read, because the previous call consumed it. Per-step preconditions and failure behavior: `references/plan-and-workflow.md`.
+`complete` releases only the row's lease on the standalone route and both leases on the iteration route; a standalone workflow remains running until delivery evidence and workflow close. `repair-delivery-source` is only for a pre-fix snapshot whose registered source branch equals its target, never normal progress.
 
 ## Decision Rules
 

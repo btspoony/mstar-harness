@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bindPlanSession } from "./coordination.js";
+import { withStoreRead, queryDashboard } from "./store-read.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
 import { createFsStore, setArtifactStore } from "./store.js";
@@ -151,5 +152,11 @@ test("schema-4 stores list and read issue details without milestone columns", as
   const oldContext: StoreContext = { harnessDir: oldHarness };
   expect((await listIssues(oldContext, { projectId: "old-project" })).items[0]?.milestoneId).toBeNull();
   expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
+  // The dashboard issues views share the same SQL surface and must serve the
+  // pre-migration-7 store too (no milestone_id column, no SQLite column error).
+  expect(await withStoreRead(oldContext, queryDashboard("issues"))).toMatchObject({ data: { total: 1 } });
+  expect(
+    await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
+  ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });
   rmSync(oldHarness, { recursive: true, force: true });
 });

@@ -102,13 +102,10 @@ describe('registry peer contract (npm, no link farm)', () => {
     ).toEqual(expect.any(String))
   })
 
-  it('no install-time side effects; prepare, dsh:link scripts and the link-farm script are gone', () => {
+  it('no install-time side effects; the prepare script is gone', () => {
     // 787957b deliberately dropped the prepare script: the monorepo builds
     // packages explicitly (no build on install), matching cli/opencode.
     expect(pkg.scripts.prepare).toBeUndefined()
-    expect(pkg.scripts['dsh:link']).toBeUndefined()
-    expect(pkg.scripts['dsh:link:check']).toBeUndefined()
-    expect(existsSync(join(pkgDir, 'scripts', 'setup-dsh-links.ts'))).toBe(false)
   })
 
   it('package is tagged dsh / dsh-plugin for npm discovery', () => {

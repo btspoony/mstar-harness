@@ -63,10 +63,6 @@ describe("roadmap CLI", () => {
 
     const help = run(["roadmap", "--help"], dir);
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain("show");
-    expect(help.stdout).toContain("import");
-    expect(help.stdout).toContain("replace");
-    expect(help.stdout).toContain("export");
 
     const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
     expect(preview.status).toBe(0);

@@ -28,7 +28,7 @@ Shared contract (permission suspension + `mstar-audit` process + mode lock + rea
 1. Implement pages/components/interactions with maintainable frontend architecture
 2. Maintain component consistency and DESIGN.md alignment — read design tokens before writing styled components
 3. Ensure accessibility and frontend performance quality
-4. Add or update frontend tests where assigned
+4. Add or update assigned tests under `mstar-coding-behavior` §4 "Test admission"; delete incidental tests rather than re-pin them.
 
 ## Scope Boundaries
 

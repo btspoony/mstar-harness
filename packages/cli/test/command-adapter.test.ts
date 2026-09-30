@@ -8,8 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { registerMcpCommand } from "../src/mcp/command";
+import { mcpToolInputSchema } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
-import type { InvocationContext } from "@mstar-harness/commands";
+import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 const census = [
   "harness.scaffold", "doctor", "plugin.validate", "path.resolve", "status.validate", "status.workflow-close",
@@ -94,6 +95,85 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
+    const definitions = getCommandDefinitions();
+    const definition = (id: string): CommandDefinition => {
+      const found = definitions.find((entry) => entry.id === id);
+      if (found === undefined) throw new Error(`missing command definition: ${id}`);
+      return found;
+    };
+
+    // An issue verb's placeholder `payload: z.unknown().optional()` becomes the
+    // per-verb domain schema, so `tools/list` carries the constructible shape.
+    const schema = mcpToolInputSchema(definition("issue.add")).toJSONSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+      required?: readonly string[];
+    };
+    expect(schema.properties.payload).toMatchObject({ type: "object" });
+    // The published payload carries the real domain contract, not `{}`.
+    expect(schema.properties.payload.required).toContain("rootCauseKey");
+    expect(Object.keys((schema.properties.payload.properties ?? {}) as object)).toContain("title");
+    // …and stays transport-optional: the domain handler owns the requirement.
+    expect(schema.required ?? []).not.toContain("payload");
+
+    // A field the family itself shapes stays its own contract: the workflow
+    // `--file` descriptor must not turn an absolute pathname into a document.
+    const policy = mcpToolInputSchema(definition("workflow.execution-policy")).toJSONSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(policy.properties.file).toMatchObject({ type: "string" });
+
+    // A descriptor keyed by a VALUE of the command's own argument
+    // (`persist.write` declares one contract per `kind`) names no input field,
+    // so it is never injected: a published tool field the handler does not read
+    // is a capability `tools/list` must not advertise. The handler reads the
+    // document from `input`/`file` only.
+    const persist = mcpToolInputSchema(definition("persist.write")).toJSONSchema() as {
+      properties: Record<string, unknown>;
+      required?: readonly string[];
+    };
+    for (const field of ["status", "snapshot", "review", "json"]) {
+      expect(Object.keys(persist.properties)).not.toContain(field);
+      expect(persist.required ?? []).not.toContain(field);
+    }
+    // …and the transport the handler does read stays published.
+    expect(Object.keys(persist.properties)).toContain("input");
+    expect(Object.keys(persist.properties)).toContain("file");
+  });
+
+  test("a workflow --file pathname reaches the domain reader instead of being JSON-decoded", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mstar-workflow-file-"));
+    try {
+      const file = path.join(dir, "delivery.json");
+      writeFileSync(file, JSON.stringify({ compound: { outcome: "created" } }));
+      const result = await run(["workflow", "evidence", "--workflow", "cli-payload-probe", "--file", file]);
+      const body = JSON.parse(result.stdout) as { code?: string; status?: string; message?: string };
+      // The path must not be parsed as a JSON document: a payload-decode
+      // failure is exactly the regression this guards.
+      expect(body.message ?? "").not.toContain("Invalid command payload");
+      expect(body.code).not.toBe("command.invalid-input");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an issue --payload is decoded and validated by its own descriptor with pathful diagnostics", async () => {
+    const invalid = await run(["issue", "add", "--payload", "{}", "--operation-id", "probe", "--actor", "project-manager"]);
+    const body = JSON.parse(invalid.stdout) as {
+      code?: string;
+      message?: string;
+      details?: { diagnostics?: Array<{ path: string }> };
+    };
+    // The shared decoder must be the one that rejects it: the descriptor is
+    // bound to the `payload` input field, so the refusal carries indexed
+    // `payload.<field>` paths rather than falling through to the family parser.
+    expect(body.code).toBe("command.invalid-input");
+    expect(body.message).toContain("Invalid command payload");
+    const paths = (body.details?.diagnostics ?? []).map((entry) => entry.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
+  });
+
   test("report census accounts for every canonical identity and excludes installer init", () => {
     const ids = getCommandDefinitions().map(({ id }) => id);
     expect(new Set(ids)).toEqual(new Set(census));
@@ -227,6 +307,32 @@ describe("generated CLI adapter", () => {
     const result = await run(["schema", "CaptureInput", "--nope"]);
     expect(result.status).toBe(2);
     expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
+  });
+});
+test("payload decoding reports malformed JSON as usage without executing the command", async () => {
+  const result = await run(["report", "--arguments", "[not-json"]);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    command: "report",
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+  });
+});
+
+test("sparse input reaches the command resolver without transport defaulting", async () => {
+  const result = await run(["report"]);
+  expect(JSON.parse(result.stdout)).toMatchObject({ command: "report", status: "ok" });
+});
+test("plan payload decode returns indexed field paths in the usage envelope", async () => {
+  const result = await run(["plan", "issue-add", "--entries", "[{},5]"]);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    command: "plan.issue-add",
+    status: "usage",
+    details: {
+      diagnostics: [{ path: "entries[1]", index: 1 }],
+    },
   });
 });
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {

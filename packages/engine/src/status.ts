@@ -174,6 +174,11 @@ export function normalizeSeverity(value: unknown): unknown {
   return value;
 }
 
+// The literal lives in the acyclic leaf `persist-payload-schemas.ts` (same
+ // reason as WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA: coordination.ts reads it at
+ // module evaluation time). Re-exported to keep every existing import working.
+export { STATUS_V2_PAYLOAD_SCHEMA } from "./persist-payload-schemas.js";
+
 /**
  * jq semantics: an entry is open when `.lifecycle // "open"` equals `"open"`
  * (rollup `is_open`; status-and-residuals.md § lifecycle).

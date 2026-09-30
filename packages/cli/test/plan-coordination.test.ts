@@ -1105,6 +1105,9 @@ describe("mstar plan — linked-control-root", () => {
       ],
       linked,
     );
+    // A handoff id that does not exist is refused by the pre-check's own
+    // verdict, read THROUGH the pinned store — not by an unpinned store
+    // mismatch, and not silently absorbed.
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale).code).toBe("coordination.handoff-pin");
   }, CLI_INTEGRATION_TIMEOUT);
@@ -1164,7 +1167,7 @@ describe("mstar plan — scoped-operations", () => {
     submitHandoff(fixture, planSession);
   });
 
-  test("a stale row revision is refused and the authoritative bytes do not change", () => {
+  test("a stale row revision is transport drift, not a refusal (A10)", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
@@ -1178,12 +1181,16 @@ describe("mstar plan — scoped-operations", () => {
       ["plan", "progress", "--session", planSession, "--file", payloadPath, "--expect", String(revision - 1), "--json"],
       fixture.root,
     );
-    expect(stale.exitCode).toBe(1);
+    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
+    // provenance, not a refusal: the intent is recomputed against the state the
+    // store reads now and the drift is disclosed. The authoritative bytes do
+    // not change either way.
+    expect(stale.exitCode).toBe(0);
     const payload = jsonOf(stale);
-    expect(payload.code).toBe("coordination.version-conflict");
-    expect(payload.expected).toBe(revision - 1);
-    expect(payload.actual).toBe(revision);
-    expect(snapshotBytes(fixture)).toBe(before);
+    expect(payload.status).toBe("ok");
+    // The drift is disclosed as provenance and the progress still lands.
+    expect(JSON.stringify(payload)).toContain("token-drifted");
+    expect(snapshotBytes(fixture)).not.toBe(before);
   });
 
   test("a global field in the payload is refused, not silently dropped", () => {
@@ -1324,6 +1331,9 @@ describe("mstar plan — scoped-operations", () => {
       ],
       fixture.root,
     );
+    // A stale/forward issue revision is a CONFLICT on the addressed row's own
+    // CAS (the `--expect-issue` claim names a revision that does not hold),
+    // refused before anything is written.
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale).code).toBe("issue.revision-conflict");
     expect(listedIssues(fixture)[0]!.disposition).toBe("open");
@@ -2222,6 +2232,14 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   rmSync(fixture.snapshotPath, { force: true });
   rmSync(join(fixture.harness, "status.json"), { force: true });
 
+  // The registration producer DERIVES the row identity and title from the
+  // selected plan document (contract R1: the document is the registration
+  // authority), so the shared fixture's `# plan a` placeholder — which declares
+  // no `plan_id` — is not registrable. Seed the document the registration is
+  // reviewed against; the title must agree with the `--plan-title` below, which
+  // is a constraint against the document rather than an override of it.
+  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Plan ${PLAN_ID}\n`);
+
   // A real feature checkout: `handoff` and `accept` read the pinned source
   // commit and the branch it was made on. A report-only workflow owns no
   // delivery branch, so this commit is the inspected source, never a merge
@@ -2430,7 +2448,7 @@ describe("report-only completion", () => {
     expect(gitOut(["branch", "--format=%(refname:short)"], fixture.root).split("\n")).not.toContain(INTEGRATION_BRANCH);
   }, RECOVERY_TIMEOUT);
 
-  test("missing policy evidence refuses complete and close, and only the record unblocks it", () => {
+  test("missing policy evidence refuses complete; the close records the entailed fulfilment and completes (A17)", () => {
     const fixture = makeAcceptedReportOnlyFixture();
     const before = snapshotBytes(fixture);
 
@@ -2445,20 +2463,25 @@ describe("report-only completion", () => {
     expect(recordedHandoffState(fixture)).toBe("accepted");
     expect(snapshotBytes(fixture)).toBe(before);
 
-    // No fabricated Done state: the close refuses the unfinished row too.
+    // §R5/A17 (#270) the CLOSE is the one call that records the completion
+    // fulfilment, and the ACCEPTED handoff above is its basis: it derives the
+    // policy/evidence pair from that handoff, writes it, completes the row and
+    // unregisters — "fulfilment before Done" is satisfied by that recording, so
+    // the close does NOT refuse here. (Only `complete` without recorded evidence
+    // is refused, asserted above.)
     const closed = closeReportOnly(fixture);
-    expect(closed.exitCode).toBe(1);
-    expect(String(jsonOf(closed).message)).toContain("every plan row must be Done");
-    expect(readJson(fixture.snapshotPath).status).toBe("running");
-    expect(snapshotBytes(fixture)).toBe(before);
-
-    // The very same accepted handoff completes once its evidence is recorded.
-    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
-    const completed = transition(fixture, "complete", fixture.coordinator, fixture.handoffId);
-    expect(completed.exitCode).toBe(0);
+    expect(closed.exitCode).toBe(0);
+    const closedDoc = readJson(fixture.snapshotPath) as { status?: string; delivery?: { completion?: { policy?: string } } };
+    expect(closedDoc.status).toBe("completed");
     expect(rowOf(fixture).status).toBe("Done");
-    expect(closeReportOnly(fixture).exitCode).toBe(0);
+    expect(closedDoc.delivery?.completion?.policy).toBe(REPORT_ONLY_POLICY);
+
+    // The close has already recorded the entailed fulfilment, so the ordinary
+    // `complete` route has nothing left to do — the workflow is terminal and a
+    // post-close evidence record is refused rather than re-opened.
+    expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(1);
     expect(readJson(fixture.snapshotPath).status).toBe("completed");
+    expect(rowOf(fixture).status).toBe("Done");
   }, RECOVERY_TIMEOUT);
 
   test("mismatched completion policy refuses complete and preserves the recorded evidence", () => {
@@ -2732,36 +2755,41 @@ describe("Prepare workflow amendment", () => {
     expect(readText(fixture.snapshotPath)).toBe(before);
   }, 60000);
 
-  test("a stale compass token refuses with the structured failure and leaves the protected bytes byte-identical", () => {
+  test("a stale compass token is TRANSPORT DRIFT, not a refusal: the amendment is decided against the compass it reads", () => {
     const fixture = makePrepareFixture();
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    const before = readText(fixture.snapshotPath);
-    const beforeStatus = readText(fixture.statusPath);
     const stale = `sha256:${"0".repeat(64)}`;
 
-    const refused = runCli(
+    // §4.1/A06/A29: the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
+    // are a COMPARISON BASIS, not a lock. A token that no longer matches is
+    // reported as `coordination.token-drifted` and the amendment is decided
+    // against the rows and documents read under the lock — it does not refuse,
+    // and it does not silently accept the caller's stale view either.
+    const amended = runCli(
       amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: stale }),
       fixture.root,
     );
-
-    expect(refused.exitCode).toBe(1);
-    const payload = jsonOf(refused);
-    expect(payload.ok).toBe(false);
+    expect(amended.exitCode).toBe(0);
+    const payload = jsonOf(amended);
+    expect(payload.ok).toBe(true);
     expect(payload.operation).toBe("amend-prepare");
-    expect(payload.code).toBe("coordination.prepare-amendment.stale");
-    expect(String(payload.message)).toContain("compass");
-    expect(readText(fixture.snapshotPath)).toBe(before);
-    expect(readText(fixture.statusPath)).toBe(beforeStatus);
+    expect(String(payload.code)).toContain("amend-prepare");
+    expect(String((payload.data as Record<string, unknown>).outcome)).toBe("amended");
+    // The amendment landed against the compass it read, and the returned tokens
+    // are re-read from the committed bytes rather than echoed from the call.
+    const amendedView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    expect(amendedView.allowed).toBe(true);
+    expect(amendedView.compassVersion).not.toBe(stale);
 
-    // Human mode keeps stdout machine-only and names the family it refused.
+    // Human mode keeps stdout machine-only.
+    const silentFixture = makePrepareFixture();
+    const silentView = jsonOf(runCli(showPrepareArgs(silentFixture), silentFixture.root));
     const human = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: stale }, false),
-      fixture.root,
+      amendPrepareArgs(silentFixture, { snapshot: String(silentView.snapshotVersion), compass: stale }, false),
+      silentFixture.root,
     );
-    expect(human.exitCode).toBe(1);
-    expect(JSON.parse(human.stdout)).toMatchObject({ command: "workflow.amend-prepare", status: "refused", exitCode: 1 });
+    expect(human.exitCode).toBe(0);
     expect(human.stderr).toBe("");
-    expect(readText(fixture.snapshotPath)).toBe(before);
   });
 
   test("a duplicate plan id refuses through the CLI while the read stays available", () => {
@@ -2769,8 +2797,26 @@ describe("Prepare workflow amendment", () => {
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const patch = preparePatchOf(fixture);
     const appends = patch.appendPlans as Array<Record<string, unknown>>;
-    writeJson(fixture.patchPath, { ...patch, appendPlans: [{ ...appends[0]!, id: PREPARE_ROW }] });
-    const before = readText(fixture.snapshotPath);
+    // Re-declare the EXISTING row COHERENTLY: id, title, document and branch all
+    // name `plan-prepare`'s own facts. Keeping the append's `plan-append.md`
+    // pointer under the id `plan-prepare` (or its `feature/plan-append` branch)
+    // is an incoherent declaration the resolver refuses earlier as `invalid-plan`,
+    // which would mask the duplicate check this case is about.
+    writeJson(fixture.patchPath, {
+      ...patch,
+      appendPlans: [
+        {
+          ...appends[0]!,
+          id: PREPARE_ROW,
+          title: `Plan ${PREPARE_ROW}`,
+          file: join(fixture.planDir, `${PREPARE_ROW}.md`),
+          metadata: {
+            ...(appends[0]!.metadata as Record<string, unknown>),
+            working_branch: `feature/${PREPARE_ROW}`,
+          },
+        },
+      ],
+    });
 
     const refused = runCli(
       amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
@@ -2782,8 +2828,12 @@ describe("Prepare workflow amendment", () => {
     expect(payload.ok).toBe(false);
     expect(payload.operation).toBe("amend-prepare");
     expect(payload.code).toBe("coordination.prepare-amendment.duplicate-plan");
-    expect(readText(fixture.snapshotPath)).toBe(before);
-    // The stale-read route still works: the review can be re-read and re-applied.
+    // Components are independent (§4.1/A23/A27): the DUPLICATE is withheld while
+    // this patch's unrelated components (the checkout and the policy) still land,
+    // so the snapshot legitimately moves. What must hold is that the row was not
+    // re-declared and the review stays readable and re-appliable.
+    const after = JSON.parse(readText(fixture.snapshotPath)) as { plans: Array<{ id: string }> };
+    expect(after.plans.filter((row) => row.id === PREPARE_ROW)).toHaveLength(1);
     expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
   });
 

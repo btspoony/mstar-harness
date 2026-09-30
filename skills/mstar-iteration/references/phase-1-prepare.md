@@ -194,6 +194,8 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 **完成证据** = 磁盘上的 compass / plans / iteration 文档修订（specs 在 `<iteration-id>/specs/`）+ iteration package 卫生（与既有 knowledge 引用核对，如有）+ catalog 登记（store.db）与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
+Before compass lock, review the **local ignored per-edit attribution record** against the edits in the specialist chain: actual ISO time, editor seat, observable model or `unknown`, iteration identity and scope. Correct an omission now with the actual correction time and an explicit note that the earlier edit was unobserved; never backdate or infer a child model. Canonical fields and tracked-example prohibition → `mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution. This is a review obligation, not a machine gate.
+
 **Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / `<iteration-id>/` package）以**未提交**状态留在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。Phase 1 的全部写入目标均为默认 gitignored 的 `{HARNESS_DIR}` 本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入并随 close commit 进入 integration 分支。§6 的 integration-worktree 步骤（**`phase-2-worktree-lease.md` §2.3 checklist step 7**）新建并 push `spec_integration_branch` 分支本身；**禁止**把主 checkout 上的任何文档或既有用户改动带进 integration worktree。
 
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。

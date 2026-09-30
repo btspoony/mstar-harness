@@ -206,17 +206,43 @@ describe("mstar status workflow-close", () => {
     );
   });
 
-  test("unfinished plan row refuses before write (exit 1, bytes unchanged)", () => {
+  test("an authorized coordinator cannot close an unfinished plan row (exit 1, bytes unchanged)", () => {
     setupHarness(
       (harness, { snapshot, root }) => {
         const beforeSnapshot = readFileSync(snapshot, "utf8");
         const beforeRoot = readFileSync(root, "utf8");
 
-        const result = runCli(closeArgs(harness));
-        expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("every plan row must be Done");
+        // The COORDINATED form of this refusal: the session gate must PASS
+        // (this fixture binds a well-formed coordinator) so the row gate
+        // itself is what refuses the unfinished row.
+        const sessionId = "11111111-2222-3333-4444-555555555555";
+        const sessionFile = join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json");
+        mkdirSync(join(harness, "workflows", WORKFLOW_ID, "sessions"), { recursive: true });
+        writeFileSync(
+          sessionFile,
+          JSON.stringify(
+            { schema_version: 1, role: "coordinator", session_id: sessionId, workflow_id: WORKFLOW_ID, harness_root: harness },
+            null,
+            2,
+          ),
+        );
+        const coordinated = snapshotDoc({
+          coordination: {
+            coordinator: { session_id: sessionId, session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" },
+          },
+          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
+        });
+        writeFileSync(snapshot, JSON.stringify(coordinated, null, 2), "utf8");
 
-        expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
+        const result = runCli(closeArgs(harness, ["--session", sessionFile]));
+        expect(result.exitCode).toBe(1);
+        // Stable code, not prose: with the session gate PASSED (the bound
+        // coordinator is calling), the ROW gate is what refuses the unfinished
+        // row — this is the authorized-coordinator close refusal, not the
+        // session-mismatch shortcut the uncoordinated form hits.
+        expect(envelope(result).code).toBe("coordination.not-prepared");
+
+        expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(coordinated, null, 2));
         expect(readFileSync(root, "utf8")).toBe(beforeRoot);
       },
       {
@@ -232,7 +258,10 @@ describe("mstar status workflow-close", () => {
       (harness, { snapshot }) => {
         const result = runCli(["status", "workflow-close", "--workflow", "wf-missing", "--harness", harness]);
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("workflow snapshot not found");
+        // The refusal is asserted by its STABLE code, not its prose: the
+        // coordinated-writer frame reports the unresolved target
+        // (`coordination.workflow-not-found`) and names what it withheld.
+        expect(envelope(result).code).toBe("coordination.workflow-not-found");
         // No snapshot, no dir side effect for the unknown id.
         expect(existsSync(snapshot)).toBe(false);
         expect(existsSync(join(harness, "workflows", "wf-missing"))).toBe(false);
@@ -266,16 +295,18 @@ describe("mstar status workflow-close", () => {
     );
   });
 
-  test("unregister failure reports a partial close; the retry finishes it without changing ended_at", () => {
+  test("an unaddressable root register reports a partial close; the retry finishes it without changing ended_at", () => {
     setupHarness((harness, { snapshot, root }) => {
-      // Round 1: a v1 root refuses the unregister — the snapshot close is
-      // already durable, so the failure must surface as a partial close and
-      // the root bytes must be preserved.
+      // Round 1: a v1 root is unaddressable by the v2 JSON writer, so the
+      // register entry cannot be REMOVED. Contract §3 (close row): "root-removal
+      // failure is explicit partial closure" — the terminal snapshot is already
+      // durable and is never rolled back, but the close is refused and says so.
       const v1Root = JSON.stringify({ version: 1, updated_at: "2026-08-19", plans: [] }, null, 2);
       writeFileSync(root, v1Root);
       const partial = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(partial.exitCode).toBe(1);
-      expect(message(partial)).toContain("partial close");
+      expect(envelope(partial).code).toBe("coordination.root-register-unwritable");
+      expect(message(partial)).toContain("PARTIAL");
 
       const afterPartial = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(afterPartial.status).toBe("completed");
@@ -284,7 +315,7 @@ describe("mstar status workflow-close", () => {
 
       // Round 2: the root is migrated (v2 + the stale entry); the retry only
       // finishes the unregister — a DIFFERENT --ended-at must not touch the
-      // already-terminal snapshot.
+      // already-terminal snapshot, which keeps the FIRST close's timestamp.
       writeFileSync(root, JSON.stringify(rootDoc([rootEntry()]), null, 2));
       const retry = runCli(closeArgs(harness, ["--ended-at", "2026-09-20"]));
       expect(retry.exitCode).toBe(0);
@@ -403,7 +434,7 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
       const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("every plan row must be Done");
+      expect(envelope(result).code).toBe("coordination.not-prepared");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
@@ -417,8 +448,11 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
       writeCoordinatorSession(harness);
 
       const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
-      expect(result.exitCode).toBe(2);
-      expect(message(result)).toContain("--session must be an absolute path");
+      // The relative path is refused by the coordinated-writer frame with its
+      // stable code; the refusal is still raised before any byte is written.
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("coordination.invalid-input");
+      expect(String(envelope(result).message)).toContain("sessionPath must be an absolute path");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
     });
   });
@@ -504,7 +538,7 @@ describe("mstar iteration gate --phase 6", () => {
       (harness) => {
         const result = runCli(gateArgs(harness, "wf-missing"));
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("workflow snapshot not found");
+        expect(envelope(result).code).toBe("iteration.gate.snapshot-not-found");
       },
       { snapshot: null, root: null },
     );

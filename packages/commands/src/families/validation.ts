@@ -164,7 +164,15 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const violations: Violation[] = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
         if (!readOnly) {
           const forms = parseAssignmentBranchForms(text);
-          const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? input.branch ?? process.env.MSTAR_WORKING_BRANCH;
+          const declaredBranch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
+          const branch = declaredBranch ?? input.branch ?? process.env.MSTAR_WORKING_BRANCH;
+          if (declaredBranch !== undefined && input.branch !== undefined && declaredBranch.trim() !== input.branch.trim()) {
+            violations.push({
+              ok: false, severity: "high", code: "dispatch.branch.conflict",
+              message: `--branch "${input.branch}" conflicts with Assignment branch "${declaredBranch}"`,
+              fix: "use the branch declared by the Assignment or update the Assignment",
+            });
+          }
           if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
         }
         const gate = { ok: violations.length === 0, violations };

@@ -60,6 +60,8 @@ PM 批量触发后须：
 2. 对该 catalog project，从 roadmap 域**读** store 当前正文及 project/roadmap revisions。存在正文时**导出为独立 Markdown 候选**并编辑候选中的 status / goal items；已知项目无记录时明确创建新候选并在 replacement 中预期 absent，**不**从 `roadmap.md` 补读。review 后使用 revision-guarded roadmap replacement 更新完整正文；若版本变化，重读权威并重新 review，不能盲目重试。**绝不编辑 live `projects/<id>/roadmap.md`**。读写/校验的唯一规则家 → **`mstar-project-governance`**；命令选项 → built `mstar roadmap --help`。
 3. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
+At close, review the local ignored per-edit attribution record for this iteration against delivered edits and plan-QC references (`mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution). Record actual correction time for a missed row and disclose the unobserved prior edit; unknown model remains `unknown`. Do not paste real runtime provenance into tracked artifacts or turn this review into a machine completeness check.
+
 ## 3.4 标记迭代完成
 
 1. compass **YAML frontmatter**：`status: completed`，`end_date: YYYY-MM-DD`（必须；见 §3.0.5）

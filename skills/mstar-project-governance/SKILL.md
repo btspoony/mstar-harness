@@ -55,6 +55,8 @@ description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_D
 - **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以契约 §7 的 activation 完成为准 —— staged store 会被拒（`store.not-active`）。live 切换（apply → activate → retire）归 cutover plan 的授权 ops 任务，skill 文本不代替该门禁。
 - issue 与 plan 解耦（plan 外的确认发现同样可捕获）；store 的路径与权威分界 → **`mstar-conventions`**。
 
+Payload authoring: consult `mstar-harness schema CaptureInput` for `issue add`, `OccurrenceInput` for recurrence, `IssueTriage` for triage, `ClosureEvidence` for each terminal disposition, and `IssueLink` for provenance/relation links. The schema lists required and disposition-specific fields; the verb's help supplies flags. Prepare complete JSON from observed evidence before writing, never guess a minimal payload through successive refusal messages. The actor and intended operation are not derivable from the payload and remain explicit.
+
 ## Register 生命周期（`projects/<id>/residuals.json`）
 
 > **本节的定位**：register 是**迁移历史**，open item 的 SSOT 是 **issue store**（→ 上文 § Issue capture）——`mstar status backlog-register` / `backlog-close` 已退役并指向 issue 动词。下面的字段与生命周期规则保留为契约 §7 的**迁移映射来源**（preview / apply / retire 按此把 register 行映射为 issue）。

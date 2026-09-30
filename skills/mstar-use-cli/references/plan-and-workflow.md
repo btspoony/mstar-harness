@@ -4,6 +4,10 @@ This file carries the two coordination command families: scoped plan coordinatio
 
 What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belong to `mstar-artifacts`; phase semantics to `mstar-iteration`; checkout rules to `mstar-branch-worktree`. This file records only what command help cannot express — role boundaries, tokens, refusal codes, envelopes and sequence order.
 
+Normal route: choose the intended public verb from current help and invoke it with its required inputs; inspect the receipt before deciding what remains. Do not interpose a mandatory top-down `persist`/rebind/repair ladder merely to replay normal progress. A refusal names the missing non-derivable input or conflict: active writes take the session reference, full execution token and operation id; pre-activation writes take the session envelope and row revision; a fresh plan-PM bind takes explicit operator `--session-id`. Acquire the required current token from the authoritative read, not by guessing it. `applied` and `replayed` are receipt outcomes; preserve components already applied only where the verb documents action-local partial semantics (for example, an integration-start retry no-op). Foreign ownership or stop authorization remains an operator decision; never forward credentials to a leaf.
+
+Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress` JSON and `mstar-harness schema HandoffEvidence` describes `plan handoff` JSON, including nested QC/QA fields. Build a complete JSON object from the schema before invoking `--file`; the CLI accepts an absolute JSON file, not a one-field-at-a-time trial. Actor identity and the intended operation/target remain operator inputs; a public action does not supply the caller's session reference, token or operation id. Historical `submit` is not a plan verb: bounded non-authoritative advice is `mstar-harness judgment review-advice` with its own help and review-pack input, not a lifecycle submission.
+
 ## Transports
 
 One control harness has one execution authority, and that authority's state decides which transport every coordination verb takes. The **active DB route** is the canonical one; the file forms survive only while that authority is not active.
@@ -122,7 +126,7 @@ The plan session hands off; the coordinator drives the rest. The engine selects 
 | **Standalone development** | `type: plan` with `delivery_kind: development` owning exactly one row | `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until its delivery evidence and the close |
 | **Standalone report-only** | `type: plan` with `delivery_kind: verification/report-only` owning exactly one row | record the fulfilment of the registered completion policy, then `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until the close |
 
-Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (ownership transfer, not integration acceptance). Each command needs a token read from the immediately preceding state, and Git is the operator's action, never a side effect of a verb.
+Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (ownership transfer, not integration acceptance). Invoke the intended public action under the correct actor with its required session address, current expectation and operation id, then inspect its receipt; use a refusal to identify a missing input or conflict rather than running a mandatory preflight ladder. Explicit pinned Git merge is the operator's action, never a verb side effect.
 
 | Step | Session | What it records | Notes |
 |---|---|---|---|
@@ -140,55 +144,9 @@ A retried start never moves the recorded base; that is what makes the pinned att
 
 The handoff is a **byte-level pin**, not just a pointer: the digest of every report it names is taken at submission, so a cited report that changes afterwards — even by appending a section — refuses the completion step with a stale-evidence code. Finalize the QC and QA reports before handing off. When a report genuinely must change after a handoff, `return` the handoff, re-sign it against the new bytes, and let the coordinator `accept` again; there is no way to complete against the old pin.
 
-Walkthrough with synthetic ids — a plan session drives its own row, the coordinator drives the lifecycle, and each token is read from the state the previous step left. This is the **active** transport: every write runs under an independently acquired identity, and every `--expect` is the scope's full execution token read immediately before the call.
+### Intent-first walkthrough
 
-```sh
-# coordinator: one launcher mints this child's identity; the identity is never a flag
-mstar session run --workflow wf-demo --role coordinator --harness <control-root> -- \
-  mstar plan bind --execution --workflow wf-demo --coordinator \
-    --expect <workflow-token> --operation bind-coordinator --json
-
-# coordinator: register the reviewed Assignment on the row
-mstar plan prepare --session-ref <coordinator-wire> --plan plan-a \
-  --assignment <control-root>/sdd/plan-a/assignment.md \
-  --expect <plan-token> --operation prepare-1 --json
-
-# plan session: its own acquired identity, its own reference, then the scope read
-mstar session run --workflow wf-demo --role plan-pm --plan plan-a --harness <control-root> -- \
-  mstar plan bind --execution --workflow wf-demo --plan plan-a \
-    --expect <plan-token> --operation bind-plan-pm --json
-mstar plan show --session-ref <plan-pm-wire> --json          # session-authorized view
-mstar plan show --workflow wf-demo --plan plan-a --json      # public authoritative read, no identity
-
-# plan session: resume read-only, then mutate only this row and its linked issues
-mstar plan bind --execution --resume-ref <plan-pm-wire> --json
-mstar plan progress  --session-ref <plan-pm-wire> --file progress.json --expect <plan-token> --operation progress-1 --json
-mstar plan issue-add --session-ref <plan-pm-wire> --file entries.json  --expect <plan-token> --operation issue-1 --json
-mstar plan handoff   --session-ref <plan-pm-wire> --file handoff.json  --expect <plan-token> --operation handoff-1 --json
-
-# coordinator: ownership, then the route its type and delivery kind select
-mstar plan accept --session-ref <coordinator-wire> --plan plan-a --handoff <live-handoff-id> \
-  --expect <plan-token> --operation accept-1 --json
-
-# iteration route only: pin the attempt, merge, verify the pinned result
-mstar plan integration-start  --session-ref <coordinator-wire> --plan plan-a --handoff <live-handoff-id> --expect <plan-token> --operation int-start-1 --json
-git merge --no-ff --no-edit <source-sha>
-mstar plan integration-accept --session-ref <coordinator-wire> --plan plan-a --handoff <live-handoff-id> --expect <plan-token> --operation int-accept-1 --json
-
-# report-only route only: record the fulfilment of the registered completion policy,
-# then complete; an absent or nonmatching policy refuses the completion
-mstar workflow evidence --workflow wf-demo --file completion.json --session-ref <coordinator-wire> \
-  --expect <workflow-token> --operation evidence-1 --json
-
-# every route ends here: a standalone development workflow reaches this line
-# straight from accept, the report-only route after recording its fulfilment above
-mstar plan complete --session-ref <coordinator-wire> --plan plan-a --handoff <live-handoff-id> \
-  --expect <plan-token> --operation complete-1 --json
-```
-
-Retrying the *same* argv replays the recorded receipt (`replayed: true`) instead of writing twice; a changed request against a consumed operation id refuses. Pass each child's own reference only to that child: a reference copied into another session's invocation fails the engine's caller comparison (→ the credential boundary in `mstar-iteration` `references/plan-scoped-pm.md` §8).
-
-**Pre-activation variant (only while the execution authority is not active).** The same sequence in file form — `mstar plan bind --coordinator --workflow wf-demo --session-id <coordinator-id>`, then `--session <absolute-json>` with a `--expect <revision>` on every write, `mstar plan bind --resume <absolute-json>` for the read-only resume, and no `--operation` at all. On an ACTIVE harness these forms refuse with `execution.consumer-not-ready`; do not mix them with the active flags.
+The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvidence`); the coordinator accepts it and follows the registered delivery kind in the table above. On the iteration route, start a pinned integration attempt, perform and verify the recorded Git merge, accept integration and complete. On standalone development, complete after accept; on report-only, record fulfilment of its registered policy before complete without inventing a Git step. At each point consult current verb help, supply the required address and expectation for the active or pre-activation route, and inspect the action's `applied` or `replayed` receipt. Do not turn those explicit inputs into a ceremonial top-down preflight ladder. A foreign owner, missing independent actor identity or ambiguous target is still an action-local refusal; preserve completed independent components only where the verb documents partial-applied semantics.
 
 The failure object at any step names the code; the row is unchanged, so the retry starts from a fresh read of the same row rather than from the step that failed.
 

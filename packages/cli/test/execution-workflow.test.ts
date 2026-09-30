@@ -134,7 +134,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   store.close();
   await initializeExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
-  writeText(planMarkdown, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, `# Active workflow transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
   return { root, harnessDir, context, planMarkdown };
 }
 
@@ -576,7 +576,10 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(paused.exitCode).toBe(0);
 
-    // The token that op just consumed is stale: the revision moved.
+    // The token that op just consumed is stale: the revision moved. Under the
+    // recovery-first contract (§4.2, A10) a drifted transport token is
+    // provenance, not refusal: the verb recomputes the intent against the
+    // state this transaction reads and discloses the drift as a warning.
     const reused = runCli(
       workflowVerbArgs("lifecycle", fixture, bound, firstToken, "lifecycle-reused", [
         "--status",
@@ -587,9 +590,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(reused.exitCode).toBe(1);
-    expect(String(jsonOf(reused).code)).toMatch(/^execution\./);
-    expect((await storedHeader(fixture)).status).toBe("paused");
+    expect(reused.exitCode).toBe(0);
+    expect(JSON.stringify(jsonOf(reused))).toContain("token-drifted");
+    expect((await storedHeader(fixture)).status).toBe("running");
 
     // A foreign identity (another workflow's coordinator) is refused.
     const foreign = coordinatorIdentity("wf-somewhere-else", "omp-foreign-session");
@@ -605,7 +608,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(wrongScope.exitCode).toBe(1);
     expect(String(jsonOf(wrongScope).code)).toMatch(/^coordination\./);
-    expect((await storedHeader(fixture)).status).toBe("paused");
+    expect((await storedHeader(fixture)).status).toBe("running");
 
     // The grammar verbs are ACTIVE-ONLY: `--session` is not one of their flags,
     // so a mixed invocation is commander's own usage refusal (exit 2) — the
@@ -682,7 +685,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(declare.exitCode).toBe(1);
     expect(String(jsonOf(declare).code)).toBe("execution.consumer-not-ready");
-    expect((await storedHeader(fixture)).status).toBe("paused");
+    expect((await storedHeader(fixture)).status).toBe("running");
   });
 
   test("the retired pre-activation registration path is refused while the authority is active", async () => {

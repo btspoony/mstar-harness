@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  persistPayloadContracts,
   createFsStore,
   getArtifactStore,
   guardInjectedStore,
@@ -20,6 +21,22 @@ import type { CommandDefinition, CommandEnvelope } from "../types.js";
 const kinds = ["status", "snapshot", "review", "json"] as const;
 const kindSchema = z.enum(kinds);
 type PersistKind = (typeof kinds)[number];
+function payloadSchema(fields: Readonly<Record<string, { readonly required: boolean; readonly type: string }>>): z.ZodType {
+  const shape = Object.fromEntries(Object.entries(fields).map(([name, field]) => {
+    const value = field.type === "string" ? z.string() : field.type === "number" ? z.number() : field.type === "array" ? z.array(z.unknown()) : field.type === "object" ? z.record(z.string(), z.unknown()) : z.unknown();
+    return [name, field.required ? value : value.optional()];
+  }));
+  return z.object(shape).passthrough();
+}
+
+const payloadContracts = persistPayloadContracts();
+
+const payloadSchemas = {
+  status: { schema: payloadSchema(payloadContracts.status.schema), help: "Status v2 root payload; required fields and full invariants are validated by the engine." },
+  snapshot: { schema: payloadSchema(payloadContracts.snapshot.schema), help: "Workflow snapshot payload; conditional lifecycle, row and lease rules are validated by the engine." },
+  review: { schema: payloadSchema(payloadContracts.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
+  json: { schema: z.unknown(), help: `${payloadContracts.json.reason} ${payloadContracts.json.alternative}` },
+} as const;
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "persist.ok", exitCode: 0, data };
@@ -35,6 +52,35 @@ function usage(command: string, message: string): CommandEnvelope<never> {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The one key contract for every persist verb (write / get / delete). A key is
+ * a **logical name inside a kind**, never a path: `json` is the single kind
+ * whose key is an absolute path (the store contract's escape hatch), and even
+ * there the store refuses `..` segments. Everything else must be a single safe
+ * component, so a key can neither climb out of its `kind/` namespace nor be
+ * silently reinterpreted as one. Returns the refusal message, or `null` when
+ * the key is admissible. The empty key is handled by the caller as a usage
+ * error (its pre-existing classification).
+ *
+ * The refusals are phrased as the store's own, because this is the same rule
+ * applied one layer earlier: the adapter rejects a key the store would have
+ * rejected anyway, before any payload is read.
+ */
+function invalidKey(kind: PersistKind, key: string): string | null {
+  if (key === "") return null;
+  const segments = key.split(/[\\/]+/);
+  if (kind === "json") {
+    if (!path.isAbsolute(key)) return `json key must be an absolute path \u2014 got ${JSON.stringify(key)}`;
+    if (segments.includes("..")) return `json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`;
+    return null;
+  }
+  if (segments.includes("..")) return `${kind} key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`;
+  if (path.isAbsolute(key) || segments.length > 1 || key === "." || !/^[A-Za-z0-9._-]+$/.test(key)) {
+    return `${kind} key must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") \u2014 got ${JSON.stringify(key)}`;
+  }
+  return null;
 }
 
 function errorCode(error: unknown, fallback: string): string {
@@ -109,12 +155,18 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         ],
       },
       input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional(), expectVersion: z.string().optional(), session: z.string().optional() }),
+      payloads: Object.fromEntries(Object.entries(payloadSchemas).map(([kind, descriptor]) => [
+        kind,
+        { schema: descriptor.schema, help: descriptor.help },
+      ])),
       output, effects: ["write"], description: "Persist one JSON coordination document.",
       async execute(input, context) {
         const id = "persist.write";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
         if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         const raw = readPayload(input.input, input.file, context.cwd, id);
         if (typeof raw !== "string") return raw;
         let payload: unknown;
@@ -158,6 +210,9 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.get";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
+        if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (input.versioned === true) {
@@ -205,6 +260,9 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.delete";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
+        if (input.key === "") return usage(id, "key must be non-empty");
+        const keyProblem = invalidKey(kind, input.key);
+        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (typeof store.delete !== "function") return usage(id, "store does not support delete");

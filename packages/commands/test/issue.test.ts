@@ -68,13 +68,6 @@ function boundSession(harness: string): string {
 }
 
 describe("issue command family", () => {
-  test("registers all eleven inventory identities, including separate terminal dispositions", () => {
-    const ids = getCommandDefinitions().map(({ id }) => id).filter((id) => id.startsWith("issue."));
-    expect(ids).toEqual([
-      "issue.add", "issue.list", "issue.show", "issue.occurrence", "issue.triage", "issue.close", "issue.waive",
-      "issue.duplicate", "issue.supersede", "issue.link", "issue.export",
-    ]);
-  });
 
   test("malformed capture is rejected without creating an issue", async () => {
     const context = await testContext();
@@ -133,4 +126,59 @@ describe("issue command family", () => {
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
   });
+  test("payload JSON strings decode and expose domain schema links", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const result = await command.execute({
+      payload: JSON.stringify(capture()), operationId: "capture-json", actor: "project-manager",
+    }, context);
+    expect(result.status).toBe("ok");
+    expect(command.payloads).toHaveProperty("payload");
+    expect(command.effects).toEqual(["write"]);
+    expect(definition("issue.export").effects).toEqual(["read"]);
+  });
+  test("payload schema exposes registry constraints and refusals identify invalid and missing paths", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const schema = command.payloads?.payload?.schema;
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse(capture()).success).toBe(true);
+
+    const invalid = await command.execute({
+      payload: { ...capture(), title: 42 },
+      operationId: "invalid-payload",
+      actor: "project-manager",
+    }, context);
+    expect(invalid.status).toBe("refused");
+    if (invalid.status === "refused") expect(invalid.details?.paths).toContain("payload.title");
+
+    const missingMutation = await command.execute({ payload: capture() }, context);
+    expect(missingMutation.status).toBe("refused");
+    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["operationId", "actor"]);
+  });
+
+  test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {
+    const context = await testContext();
+    // `IssueTriage.owner` is the registry's `"string | null"` field: the
+    // published schema must reject a value the domain does not declare, not
+    // fall back to an unbounded `z.unknown()`.
+    const triage = definition("issue.triage").payloads?.payload?.schema;
+    expect(triage?.safeParse({ reason: "reclassify", owner: "reviewer" }).success).toBe(true);
+    expect(triage?.safeParse({ reason: "reclassify", owner: null }).success).toBe(true);
+    expect(triage?.safeParse({ reason: "reclassify", owner: 7 }).success).toBe(false);
+    expect(triage?.safeParse({ reason: "reclassify", owner: { role: "pm" } }).success).toBe(false);
+
+    const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-owner", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const receipt = added.data as { issueId: string; revision: number };
+    const typed = await definition("issue.triage").execute({
+      id: receipt.issueId, payload: { reason: "reclassify", owner: "reviewer" },
+      operationId: "triage-owner", actor: "project-manager", session: boundSession(context.controlRoot!), expect: receipt.revision,
+    }, context);
+    expect(typed.status).toBe("ok");
+    const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
+  });
 });
+

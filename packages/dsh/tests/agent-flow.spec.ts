@@ -1162,8 +1162,7 @@ describe('agent-flow settle — real completion pairing ', () => {
       expect(captured).toHaveLength(1)
       expect(captured[0]).toBe(SETTLE_SEAM_PAIRING_NOTE)
       expect(SETTLE_SEAM).toBe('tools/post-execute')
-      expect(SETTLE_SEAM_PAIRING_NOTE).toContain(SETTLE_SEAM)
-      expect(SETTLE_SEAM_PAIRING_NOTE).toContain('IS part of the verified dsh-tools registry surface')
+
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

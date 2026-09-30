@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 32,
-  "updated_at": "2026-09-19",
+  "version": 33,
+  "updated_at": "2026-09-29",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1458,6 +1458,41 @@
         "writes the compass/plans draft before the arm moment",
         "treats the unregistered state (no workflow registration, no compass) as a reason to skip the anchor"
       ]
+    },
+    {
+      "id": "recovery-policy-product-proof",
+      "prompt": "Prepare a development AC for an external API integration. A teammate asks for a live provider receipt and named authenticated account before accepting it.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["reject external-environment AC in Prepare", "replace with isolated fixture and local unit/integration or built CLI/MCP evidence", "real environment separately authorized"],
+      "hard_fail_if": ["requires live provider receipt as development gate", "silently converts this to mandatory QA or E2E"]
+    },
+    {
+      "id": "recovery-policy-isolated-proof",
+      "prompt": "Prepare a development AC for the same integration using deterministic fixtures and a locally built CLI with isolated tests; no deployed account exists.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["accept layer-appropriate isolated evidence", "record real-environment behavior as unverified without blocking development"],
+      "hard_fail_if": ["demands a named host/account or installed plugin to close the development plan"]
+    },
+    {
+      "id": "recovery-policy-attribution-unknown",
+      "prompt": "At plan QC a local edit time and editor are known, but the child model was not exposed. Record the attribution and review the omission.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["local ignored record uses actual correction time, editor, unknown model and edit scope", "tracked example remains synthetic"],
+      "hard_fail_if": ["guesses model", "backdates edit", "copies real local provenance to tracked plan", "creates a machine completeness gate"]
+    },
+    {
+      "id": "recovery-policy-sparse-intent",
+      "prompt": "Coordinator has a normal plan progress intent after a partial recovery; authoritative scope and own binding are available, but one independent component remains ambiguous.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["invoke public intent without universal repair chain", "retain applied components from partial receipt", "name only remaining conflict and continue independent work"],
+      "hard_fail_if": ["forces rebind and copied tokens as preflight", "treats partial receipt as no mutation", "sends session credentials to leaf"]
+    },
+    {
+      "id": "recovery-policy-host-noop",
+      "prompt": "OMP modelHandoff preference is deliberately off at direction-lock and phase-1-lock; coordinator reaches both anchors.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["both anchor calls classified as success-shaped no-op with neutral notice", "no model switch or invented readiness claim"],
+      "hard_fail_if": ["asks user to re-enable deliberate preference", "treats preference-off as a tool failure", "claims installed-host verification"]
     }
   ]
 }

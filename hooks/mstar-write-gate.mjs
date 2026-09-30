@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative5, resolve as resolve3 } from "node:path";
+import { readFileSync as readFileSync2, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative5, resolve } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -25,29 +25,29 @@ import {
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
-import { dirname as dirname2, join as join2, resolve as resolvePath, sep } from "node:path";
-import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
+import { readFileSync as readFileSync3, statSync } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
+import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
-import { basename as basename10, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash16 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
-import { join as join32 } from "node:path";
+import { createHash as createHash11 } from "node:crypto";
+import { appendFileSync, readFileSync as readFileSync16 } from "node:fs";
+import { join as join27 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -712,7 +712,19 @@ var require_src = __commonJS(function(exports, module) {
     module.exports = require_node();
   }
 });
-
+var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+function readJson(filePath) {
+  if (!existsSync(filePath))
+    return {};
+  const content = readFileSync(filePath, "utf8").trim();
+  if (!content)
+    return {};
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
 class CoordinationError extends Error {
   code;
   details;
@@ -730,6 +742,21 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 var writeAuthorizations = new AsyncLocalStorage;
+var ASSIGNMENT_INTENT_FIELDS = [
+  "execution_scope",
+  "execute_as",
+  "delegation",
+  "control_harness_root",
+  "workflow_id",
+  "plan_id",
+  "plan_path",
+  "worktree_path",
+  "working_branch",
+  "sdd_dir",
+  "qa_gate",
+  "findings_cleanup",
+  "prepare_gate"
+];
 var HANDOFF_STATES = [
   "submitted",
   "accepted",
@@ -975,6 +1002,7 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
     "plan_sha256",
     "qa_gate",
     "findings_cleanup",
+    "assignment_intent",
     "prepared_by",
     "prepared_at"
   ];
@@ -984,8 +1012,25 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
+    if (key === "assignment_intent")
+      continue;
     if (!isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.assignment_intent !== undefined) {
+    const intent = value.assignment_intent;
+    if (!isPlainObject(intent)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
+    } else {
+      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
+      const unknown = Object.keys(intent).filter((key) => !ASSIGNMENT_INTENT_FIELDS.includes(key));
+      if (missing.length > 0) {
+        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`));
+      }
+      if (unknown.length > 0) {
+        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`));
+      }
     }
   }
   if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
@@ -1182,7 +1227,7 @@ function catalogRootDir(context, rootKind) {
   const harness = resolveProcessHarnessDir(start) ?? start;
   switch (rootKind) {
     case "repository":
-      return dirname2(harness);
+      return dirname3(harness);
     case "harness":
       return harness;
     case "plans":
@@ -1261,17 +1306,17 @@ function isFile(file) {
   }
 }
 function findMstarc(startDir, boundary) {
-  let dir = resolve2(startDir);
-  const bound = resolve2(boundary);
+  let dir = resolve3(startDir);
+  const bound = resolve3(boundary);
   for (;; ) {
     if (!isAtOrBelow(dir, bound))
       return null;
-    const candidate = join3(dir, MSTARC_FILE);
+    const candidate = join4(dir, MSTARC_FILE);
     if (isFile(candidate))
       return candidate;
     if (dir === bound)
       return null;
-    const parent = dirname3(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -1281,7 +1326,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -4224,10 +4269,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve3 = constructs2[index].resolveAll;
-    if (resolve3 && !called.includes(resolve3)) {
-      events = resolve3(events, context);
-      called.push(resolve3);
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
     }
   }
   return events;
@@ -10099,19 +10144,6 @@ function gfm(options) {
     gfmTaskListItem()
   ]);
 }
-var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-function readJson(filePath) {
-  if (!existsSync3(filePath))
-    return {};
-  const content3 = readFileSync3(filePath, "utf8").trim();
-  if (!content3)
-    return {};
-  try {
-    return JSON.parse(content3);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
-}
 function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -11237,7 +11269,7 @@ function resolvePlanDir(harnessDir) {
   if (declared !== null)
     return declared;
   const dir = resolve8(harnessDir);
-  const name = basename4(dir);
+  const name = basename5(dir);
   if (name === ".plans" || name === "plans")
     return dir;
   return join13(dir, "plans");
@@ -12300,7 +12332,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve15(targetPath);
-  const name = basename10(resolved);
+  const name = basename11(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -12347,7 +12379,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename10(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -12375,7 +12407,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename10(filePath)} content must be a JSON object`
+          message: `${basename11(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -12430,7 +12462,50 @@ var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 var ownedTransactions = new AsyncLocalStorage3;
-var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+class MilestoneError extends Error {
+  code;
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
+    this.name = "MilestoneError";
+    this.code = code2;
+  }
+}
+var fail = (code2, message) => {
+  throw new MilestoneError(code2, message);
+};
+function guard(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
+    fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
+  const active = db.prepare("select authority_state from store_meta where id=1").get();
+  if (active?.authority_state !== "active")
+    fail("store.not-active", "Milestone access requires an active store.");
+}
+function project(db, projectId) {
+  if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
+    fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
+}
+function readMilestonesOn(db, projectId, milestoneId) {
+  guard(db);
+  project(db, projectId);
+  if (milestoneId !== undefined) {
+    const owner = db.prepare("select project_id from project_milestones where milestone_id=?").get(milestoneId);
+    if (!owner)
+      return fail("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
+    if (owner.project_id !== projectId)
+      fail("milestone.project-mismatch", `Milestone ${milestoneId} does not belong to project ${projectId}.`);
+  }
+  const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
+  const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
+  const milestones = rows.map((r) => {
+    const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
+    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, resolvedIssues, otherRetiredIssues };
+  });
+  const issues = db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params).map((r) => ({ id: String(r.id), title: String(r.title), acceptance: String(r.acceptance), disposition: r.disposition, revision: Number(r.revision), milestoneId: String(r.milestone_id) }));
+  const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
+  return { projectId, milestones, issues, unassignedIssues: unassigned.count };
+}
 var PROJECTION_FORMAT_VERSION = 2;
 var PROJECTION_ROOT_FILE = "status.json";
 
@@ -12442,7 +12517,7 @@ class ProjectionError extends Error {
     this.code = code2;
   }
 }
-function sourceKeyOf2(kind, rootKind, relativePath) {
+function sourceKeyOf(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
 }
 function text4(value) {
@@ -12462,7 +12537,7 @@ function churnAfterRead(spec) {
 function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync21(spec.absolutePath, "utf8");
+    content3 = readFileSync16(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -12476,7 +12551,7 @@ function readSource(spec) {
     };
   }
   churnAfterRead(spec);
-  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash11("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -12773,11 +12848,11 @@ async function captureProjectionSources(context) {
     });
   };
   const rootSpec = {
-    sourceKey: sourceKeyOf2("root", "harness", PROJECTION_ROOT_FILE),
+    sourceKey: sourceKeyOf("root", "harness", PROJECTION_ROOT_FILE),
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join32(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join27(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -12797,11 +12872,11 @@ async function captureProjectionSources(context) {
   const workflowSpecs = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
-      sourceKey: sourceKeyOf2("workflow", "harness", relativePath),
+      sourceKey: sourceKeyOf("workflow", "harness", relativePath),
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join32(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join27(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -12811,11 +12886,11 @@ async function captureProjectionSources(context) {
     const root = catalogRootDir(context, binding.rootKind);
     const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
-      sourceKey: sourceKeyOf2("workflow", binding.rootKind, relativePath),
+      sourceKey: sourceKeyOf("workflow", binding.rootKind, relativePath),
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join32(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join27(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -12837,11 +12912,11 @@ async function captureProjectionSources(context) {
   }
   for (const doc of inputs.compassDocs) {
     const spec = {
-      sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath),
+      sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join32(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join27(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -12875,7 +12950,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash16("sha256").update(payload, "utf8").digest("hex");
+  return createHash11("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -13066,50 +13141,6 @@ async function refreshProjections(context) {
   return attempt.report;
 }
 
-class MilestoneError extends Error {
-  code;
-  constructor(code2, message) {
-    super(`[${code2}] ${message}`);
-    this.name = "MilestoneError";
-    this.code = code2;
-  }
-}
-var fail = (code2, message) => {
-  throw new MilestoneError(code2, message);
-};
-function guard(db) {
-  const schema = db.prepare("select max(version) as version from schema_version").get();
-  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
-    fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
-  const active = db.prepare("select authority_state from store_meta where id=1").get();
-  if (active?.authority_state !== "active")
-    fail("store.not-active", "Milestone access requires an active store.");
-}
-function project(db, projectId) {
-  if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
-    fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
-}
-function readMilestonesOn(db, projectId, milestoneId) {
-  guard(db);
-  project(db, projectId);
-  if (milestoneId !== undefined) {
-    const owner = db.prepare("select project_id from project_milestones where milestone_id=?").get(milestoneId);
-    if (!owner)
-      return fail("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
-    if (owner.project_id !== projectId)
-      fail("milestone.project-mismatch", `Milestone ${milestoneId} does not belong to project ${projectId}.`);
-  }
-  const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
-  const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
-  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
-  const milestones = rows.map((r) => {
-    const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
-    return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, resolvedIssues, otherRetiredIssues };
-  });
-  const issues = db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params).map((r) => ({ id: String(r.id), title: String(r.title), acceptance: String(r.acceptance), disposition: r.disposition, revision: Number(r.revision), milestoneId: String(r.milestone_id) }));
-  const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
-  return { projectId, milestones, issues, unassignedIssues: unassigned.count };
-}
 class StoreReadError extends Error {
   code;
   constructor(code2, message) {
@@ -13241,20 +13272,24 @@ async function withStoreRead(context, query) {
     handle.close();
   }
 }
-async function resolveExecutionReadRoute(context) {
+async function resolveCurrentAuthority(context) {
   let handle;
   try {
     handle = await openStore(context, "read");
   } catch (error) {
     if (error instanceof StoreError && error.code === "store.not-initialized")
-      return "files";
+      return { route: "files", handle: null };
     throw error;
   }
   try {
-    return handle.execution !== null && handle.execution.authorityState === "active" ? "execution" : "files";
+    const active = handle.execution !== null && handle.execution.authorityState === "active";
+    return active ? { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } } : { route: "files", handle: null };
   } finally {
     handle.close();
   }
+}
+async function resolveExecutionReadRoute(context) {
+  return (await resolveCurrentAuthority(context)).route;
 }
 function queryDashboard(view, filters = {}) {
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
@@ -13344,13 +13379,17 @@ function bindIssueFilter(filter) {
   }
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
+function issuesMilestoneColumn(db) {
+  return db.prepare("pragma table_info(issues)").all().some((row) => row.name === "milestone_id");
+}
 function readIssuePage(db, filter) {
   const { limit, offset } = paging(filter.limit, filter.offset);
   const { where, params } = bindIssueFilter(filter);
   const storeRevision = readMeta2(db).storeRevision;
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params);
+  const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db.prepare(`select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
+              issues.registered_at as registeredAt, issues.revision, ${milestoneExpr},
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`).all(...params, limit, offset);
   return {
@@ -13379,7 +13418,8 @@ function parseEvidenceText(json) {
   }
 }
 function readIssueDetail(db, id) {
-  const issue = db.prepare("select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id from issues where id = ?").get(id);
+  const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
+  const issue = db.prepare(`select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`).get(id);
   if (!issue)
     throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
   const occurrences = db.prepare("select id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at, imported from occurrences where issue_id = ? order by id asc").all(id).map((row) => ({
@@ -13440,7 +13480,7 @@ function readIssueDetail(db, id) {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
-    milestoneId: issue.milestone_id,
+    milestoneId: issue.milestone_id ?? null,
     occurrences,
     transitions,
     relations,
@@ -13832,6 +13872,7 @@ function readRoadmap(db, filters) {
     milestones
   };
 }
+var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
@@ -13876,7 +13917,7 @@ async function readAuthorityRoute(harnessDir) {
 }
 function hasEntry2(dir, name) {
   try {
-    statSync2(join4(dir, name));
+    statSync2(join(dir, name));
     return true;
   } catch {
     return false;
@@ -13892,22 +13933,22 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname4(dir));
-  return parentResolved !== null && resolve3(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
   try {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve3(dirname4(resolved), readlinkSync2(resolved));
+      return resolve(dirname(resolved), readlinkSync2(resolved));
     } catch {
-      let dir = dirname4(resolved);
+      let dir = dirname(resolved);
       for (;; ) {
         try {
-          return join4(realpathSync(dir), relative5(dir, resolved));
+          return join(realpathSync(dir), relative5(dir, resolved));
         } catch {
-          const parent = dirname4(dir);
+          const parent = dirname(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -13917,27 +13958,27 @@ function landedPathOf(resolved) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_NAMES.includes(basename2(target).toLowerCase()))
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname4(target));
+  return isHarnessRootDir(dirname(target));
 }
 function caseFoldedRegisterRoot(candidate) {
-  const target = resolve3(candidate);
-  if (!REGISTER_BASENAME.test(basename2(target)))
+  const target = resolve(candidate);
+  if (!REGISTER_BASENAME.test(basename(target)))
     return null;
-  let dir = dirname4(target);
+  let dir = dirname(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
       try {
         projectDir = resolveProjectDir(dir, { harnessDir: dir });
       } catch {
-        projectDir = join4(dir, PROJECT_DIR_NAME);
+        projectDir = join(dir, PROJECT_DIR_NAME);
       }
       if (REGISTER_SHAPE.test(relative5(projectDir, target)))
         return dir;
     }
-    const parent = dirname4(dir);
+    const parent = dirname(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -13999,7 +14040,7 @@ function displayTarget(targetPath, harnessDir) {
 }
 function readStdinJson() {
   try {
-    const raw = readFileSync(0, "utf8");
+    const raw = readFileSync2(0, "utf8");
     if (!raw.trim())
       return {};
     const parsed = JSON.parse(raw);
@@ -14036,7 +14077,7 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (statSync2(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
-    const current = readFileSync(targetPath, "utf8");
+    const current = readFileSync2(targetPath, "utf8");
     const first = current.indexOf(oldString);
     if (first === -1)
       return;
@@ -14063,11 +14104,11 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve3(isAbsolute4(rawPath) ? rawPath : join4(cwd, rawPath));
+    const targetPath = resolve(isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath));
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname4(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }

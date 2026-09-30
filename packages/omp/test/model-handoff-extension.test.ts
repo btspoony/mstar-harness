@@ -81,12 +81,15 @@ const SCRATCH: string[] = [];
 const HARNESS_ENV = process.env.MSTAR_HARNESS_DIR;
 /** The readiness step is only ever held open; the real checkpoint still runs. */
 const REAL_INSPECT_READINESS = handoffSeams.inspectReadiness;
+/** The fire path's decision preference read; a probe may hold this step open. */
+const REAL_DECISION_PREFERENCE_READ = handoffSeams.decisionPreferenceRead;
 
 beforeAll(() => {
   delete process.env.MSTAR_HARNESS_DIR;
 });
 afterAll(() => {
   handoffSeams.inspectReadiness = REAL_INSPECT_READINESS;
+  handoffSeams.decisionPreferenceRead = REAL_DECISION_PREFERENCE_READ;
   setArtifactStore(undefined);
   if (HARNESS_ENV !== undefined) process.env.MSTAR_HARNESS_DIR = HARNESS_ENV;
   for (const dir of SCRATCH) rmSync(dir, { recursive: true, force: true });
@@ -1126,7 +1129,116 @@ describe("new coordinator start only", () => {
   }, 60_000);
 });
 
+describe("preference off is a neutral no-op", () => {
+  test("disabled start and unbound fire leave the model and ledger unchanged", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: false, handoffTarget: "@smol" });
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: newSession(repo.main) });
+    const start = await harness.runTool(startParams("disabled-iteration"));
+    const fire = await harness.runTool({ operation: "phase1-complete", workflowId: "disabled-iteration" });
+    for (const result of [start, fire]) {
+      expect(codeOf(result)).toBe("preference-off");
+      expect(result.isError).toBe(false);
+      expect(result.details.ok).toBe(true);
+    }
+    expect(harness.liveSpec()).toBe("probe/default-model");
+    expect(harness.attempts).toEqual([]);
+    expect(harness.records()).toEqual([]);
+    expect(harness.notices()).toEqual([
+      "Model handoff preference off: modelHandoff is off in native settings; no model action was taken.",
+      "Model handoff preference off: modelHandoff is off in native settings; no model action was taken.",
+    ]);
+  }, 60_000);
+
+  test("an unbound snapshot does not answer preference-off for a binding that appeared while settings were read", async () => {
+    const repo = buildControlRepo();
+    writePluginOverrides(repo.main, { modelHandoff: false, handoffTarget: "@smol" });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+
+    // Hold the fire path's decision preference read open, then arm a binding
+    // inside that window: the snapshot the fire path decided on ("none") is
+    // stale by the time it would answer, so the no-op would be a lie. Entry is
+    // signalled by the seam itself — no timer stands in for the await.
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let held = false;
+    handoffSeams.decisionPreferenceRead = async (cwd) => {
+      if (!held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return REAL_DECISION_PREFERENCE_READ(cwd);
+    };
+    try {
+      const firing = harness.runTool({ operation: "phase1-complete", workflowId: "raced-iteration" });
+      await entered.promise;
+      const baselineModelChangeId = session.appendModelChange("probe/slow-model", "default");
+      session.appendCustomEntry(HANDOFF_CUSTOM_TYPE, {
+        version: 1,
+        binding: {
+          sessionId: session.getSessionId(),
+          workflowId: "raced-iteration",
+          controlRoot: repo.main,
+          harnessRoot: repo.harness,
+          snapshotPath: join(repo.harness, "workflows", "raced-iteration", "snapshot.json"),
+          compassPath: join(repo.harness, "iterations", "raced-iteration", "delivery-compass.md"),
+        },
+        state: "pending",
+        operationId: "arm-race-fixture",
+        action: "arm",
+        baselineModelChangeId,
+        observedModel: "probe/slow-model",
+        reason: null,
+      } satisfies HandoffRecord);
+      release.resolve();
+
+      const result = await firing;
+      expect(codeOf(result)).toBe("not-pending");
+      expect(result.isError).toBe(true);
+    } finally {
+      release.resolve();
+      handoffSeams.decisionPreferenceRead = REAL_DECISION_PREFERENCE_READ;
+    }
+    // The concurrent binding is untouched: a stale no-op would have claimed it.
+    expect(statesOf(harness)).toEqual(["pending"]);
+    expect(harness.attempts).toEqual([]);
+    expect(harness.liveSpec()).toBe("probe/default-model");
+  }, 60_000);
+});
+
 describe("fire reads current preference", () => {
+  test("phase1-complete checks preference before requiring a pending binding", async () => {
+    const offRepo = buildControlRepo();
+    writePluginOverrides(offRepo.main, { modelHandoff: false, handoffTarget: "@default" });
+    const off = await createHarness({
+      cwd: offRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(offRepo.main),
+    });
+
+    const skipped = await off.runTool({ operation: "phase1-complete", workflowId: "no-binding" });
+    expect(codeOf(skipped)).toBe("preference-off");
+    expect(skipped.isError).toBe(false);
+    expect(skipped.content[0]?.text).toContain("this session is not armed and its model is unchanged");
+    expect(off.records()).toEqual([]);
+    expect(off.switched).toEqual([]);
+
+    const onRepo = buildControlRepo();
+    writePluginOverrides(onRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const on = await createHarness({
+      cwd: onRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(onRepo.main),
+    });
+    const refused = await on.runTool({ operation: "phase1-complete", workflowId: "no-binding" });
+    expect(codeOf(refused)).toBe("not-pending");
+    expect(refused.isError).toBe(true);
+    expect(on.records()).toEqual([]);
+    expect(on.switched).toEqual([]);
+  });
+
   test("fire reads current preference: destination, enablement, readiness and a settings edit during the readiness checkpoint are honored", async () => {
     const repo = buildControlRepo();
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
@@ -1167,13 +1279,14 @@ describe("fire reads current preference", () => {
     const secondArtifacts = createWorkflowArtifacts(secondRepo, second.sessionManager.getSessionId(), "pref-off-iteration");
     writePluginOverrides(secondRepo.main, { modelHandoff: false, handoffTarget: "@smol" });
     const suppressed = await second.runTool(completionParams(secondArtifacts));
+    expect(suppressed.isError).toBe(false);
+    expect(suppressed.details.ok).toBe(true);
     expect(codeOf(suppressed)).toBe("preference-off");
     expect(stateOf(suppressed)).toBe("pending");
     expect(second.switched).toEqual(["probe/slow-model"]);
     expect(second.notices().some((line) => line.includes("modelHandoff is off"))).toBe(true);
-    // A bound site: the skipped fire's title carries the observed workflow id
-    // and status, with the skipped condition in the detail.
-    expect(second.notices().some((line) => line.startsWith("Workflow pref-off-iteration is running: "))).toBe(true);
+    expect(second.notices().some((line) => line.startsWith("Model handoff preference off: "))).toBe(true);
+    expect(second.notices().some((line) => line.startsWith("Workflow pref-off-iteration is running: "))).toBe(false);
     writePluginOverrides(secondRepo.main, { modelHandoff: true, handoffTarget: "@smol" });
     expect(codeOf(await second.runTool(completionParams(secondArtifacts)))).toBe("handed_off");
     expect(second.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
@@ -1270,9 +1383,8 @@ describe("fire reads current preference", () => {
     expect(stateOf(offResult)).toBe("pending");
     expect(offDuring.switched).toEqual(["probe/slow-model"]);
     expect(offDuring.liveSpec()).toBe("probe/slow-model");
-    // The second skip site (the re-read after the readiness checkpoint) is a
-    // bound site too: same status-bearing title shape, no bare condition.
-    expect(offDuring.notices().some((line) => line.startsWith("Workflow off-during-iteration is running: "))).toBe(true);
+    expect(offResult.isError).toBe(false);
+    expect(offDuring.notices().some((line) => line.startsWith("Model handoff preference off: "))).toBe(true);
   }, 60_000);
 });
 

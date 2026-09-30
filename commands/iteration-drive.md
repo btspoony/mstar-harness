@@ -23,6 +23,8 @@ Phase 2–5 共享内容（PM invariants、assignment preflight、session todos�
 
 ## Route（先于 Boot 判定）
 
+Scoped drive starts from the requested plan intent. Follow the current public verb and its receipt; do not require a separate snapshot repair, token-copy, or rebind hop when the authority can derive its own projection. On `partial`, retain applied components, name the precise unresolved target/identity/authorization conflict, and continue independent work. Never pass session credentials to leaf executors.
+
 | 调用形态 | 走向 |
 |---|---|
 | **无参数** | 下方 Boot → Phase 2 → 3 → 4 → 5 → 6（**语义不变**） |

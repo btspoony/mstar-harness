@@ -51,6 +51,7 @@ Scope authority → `mstar-harness-core` § 定向执行与验证边界. All QA 
 - Missing behavior-critical evidence: name the uncovered AC and its targeted unit-test check; run only that assigned check, or return the concrete gap to PM if it is not specified.
 - A fix or changed `Review range`: invalidate only evidence affected by the fix; preserve the rest. Resolved R# items need only their corresponding unit-test evidence or scoped documentation/policy evidence.
 - Missing screenshot or other real-environment evidence: record the unverified behavior and a pending independent E2E request for PM. Never launch a browser/device/E2E, change roles, or block/reopen routine iteration QA solely for that separate workflow. Unit acceptance cannot claim real-environment acceptance.
+- Before mapping an AC, reject a development-plan demand for live API/provider receipt, named/authenticated host/account, installed plugin/artifact, real browser/device, or deployed-environment proof; ask PM to correct that AC to isolated fixture, unit/component/integration, or locally built CLI/MCP evidence. Neither mandatory nor report-only QA reinstates the external receipt. Separately authorized operational/E2E workflow scenarios remain outside this development gate.
 - User-authorized local full-suite execution belongs to a separate implementer/ops action; QA may consume its result but has no `full` mode. Refer the authorization scope to PM instead of executing it here.
 
 ## Budget stop and coverage readback

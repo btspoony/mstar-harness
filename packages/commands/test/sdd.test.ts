@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "../../cli/src/sdd-evidence.js";
+import { resolveSddExecutionContext } from "@mstar-harness/engine";
 import { getSddCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
@@ -110,6 +111,45 @@ describe("SDD command family", () => {
       "sdd.evidence.capture", "sdd.evidence.verify",
     ]);
   });
+  test("evidence capture descriptor admits only literal argv arrays", () => {
+    const argv = command("sdd.evidence.capture").payloads?.argv?.schema;
+    expect(argv?.safeParse(["bun", "test", "packages/commands/test/sdd.test.ts"]).success).toBe(true);
+    expect(argv?.safeParse({ executable: "bun" }).success).toBe(false);
+  });
+
+  test("derived context copy ignores unrelated caller fields", async () => {
+    const root = tempDir("commands-sdd-derived-context-");
+    const previousCwd = process.cwd();
+    try {
+      const fixture = evidenceWorkspace(root);
+      const contextFile = join(root, "context.json");
+      const declared = {
+        planId: "plan",
+        controlHarnessRoot: fixture.harness,
+        featureCwd: fixture.feature,
+        workingBranch: "feature/plan",
+        planFile: fixture.planFile,
+        sddDir: fixture.sddDir,
+        untrustedCaller: { sessionId: "not-an-identity" },
+      };
+      writeFileSync(contextFile, JSON.stringify(declared));
+      process.chdir(fixture.feature);
+      const derived = resolveSddExecutionContext(declared as never);
+      expect(derived).not.toBe(declared);
+      expect(Object.keys(derived).sort()).toEqual([
+        "controlHarnessRoot", "featureCwd", "planFile", "planId", "sddDir", "workingBranch",
+      ]);
+      const result = await command("sdd.check-context").execute(
+        { context: contextFile, kind: "source" },
+        invocation(fixture.feature),
+      );
+      expect(result).toMatchObject({ status: "ok", data: { kind: "source", planId: "plan" } });
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 
   test("workspace creates the plan SDD directory", async () => {
     const root = tempDir("commands-sdd-workspace-");
