@@ -1,12 +1,120 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { openStore, initializeStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
-import { listPendingCatalogRegistrations } from "./catalog-registration.js";
+import { listPendingCatalogRegistrations, retireStaleCatalogExecutionsForMigration } from "./catalog-registration.js";
 import { previewExecutionMigration } from "./execution-migrate.js";
-import { stageStoreUpgrade } from "./store-upgrade.js";
+import { stageStoreUpgrade, activateStoreUpgrade } from "./store-upgrade.js";
+import type { ActivationAttestation } from "./store-activation.js";
+function validAttestation(): ActivationAttestation {
+  return {
+    version: 1,
+    attestedAt: "2026-09-21T00:00:00.000Z",
+    operator: { actor: "owner", authorizationRef: "D29 execution activation" },
+    consumers: [
+      {
+        entryId: "cli-global",
+        kind: "cli",
+        entrypoint: "/usr/local/lib/node_modules/@mstar-harness/cli/dist/index.js",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "3.11.0",
+        current: false,
+        disposition: "upgraded",
+      },
+      {
+        entryId: "coordinator-omp",
+        kind: "coordinator",
+        entrypoint: "/Users/op/.omp/plugins/mstar/packages/cli/dist/index.js",
+        runtime: "node",
+        runtimeVersion: "24.18.0",
+        version: "3.11.0",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [],
+  };
+}
+
+test("a fresh staged retry resumes persisted migration identity after failed activation and changed legacy bytes", async () => {
+  const { context } = await fixture("restart-resume");
+  const advance = await openStore(context, "write");
+  advance.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+  advance.close();
+  const first = await stageStoreUpgrade({
+    context,
+    operator: "owner",
+    operationId: "stage-restart",
+    catalogDeltaDisposition: "not applicable",
+  });
+  expect(first.resumed).toBe(false);
+  const store = await openStore(context, "read");
+  const persisted = store.db
+    .prepare("select manifest_id, manifest_hash, manifest_json, coverage_json, phase from execution_migrations")
+    .get() as { manifest_id: string; manifest_hash: string; manifest_json: string; coverage_json: string; phase: string };
+  store.close();
+  expect(persisted.phase).toBe("staged");
+  const manifest = JSON.parse(persisted.manifest_json);
+  const coverage = JSON.parse(persisted.coverage_json);
+
+  await expect(activateStoreUpgrade(first, {} as ActivationAttestation)).rejects.toMatchObject({
+    code: "store.attestation-invalid",
+  });
+
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-restart-resume", WORKFLOW_SNAPSHOT_FILE);
+  const changed = JSON.parse(readFileSync(snapshotPath, "utf8"));
+  changed.updated_at = "2026-10-01";
+  writeFileSync(snapshotPath, JSON.stringify(changed));
+
+  // This is a new invocation: authority and coverage are recovered from SQLite,
+  // not from `first` or any process-local cache.
+  const resumed = await stageStoreUpgrade({
+    context,
+    operator: "owner",
+    operationId: "stage-restart-retry",
+    catalogDeltaDisposition: "not applicable",
+  });
+  expect(resumed.resumed).toBe(true);
+  expect(resumed.manifest).toEqual(manifest);
+  expect(resumed.manifest.id).toBe(persisted.manifest_id);
+  expect(resumed.manifestHash).toBe(persisted.manifest_hash);
+  expect(resumed.coverageDigest).toBe(coverage.digest);
+
+  await expect(activateStoreUpgrade(resumed, validAttestation())).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining("no longer holds the reviewed bytes"),
+  });
+});
+test("migration retirement refuses a foreign snapshot identity without changing journal bytes", async () => {
+  const { context, operationId } = await fixture("identity-refusal");
+  const advance = await openStore(context, "write");
+  advance.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+  advance.close();
+
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-identity-refusal", WORKFLOW_SNAPSHOT_FILE);
+  const foreignSnapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  foreignSnapshot.id = "wf-another-registration";
+  writeFileSync(snapshotPath, JSON.stringify(foreignSnapshot));
+  const beforeHandle = await openStore(context, "read");
+  const beforeBytes = JSON.stringify(beforeHandle.db.prepare("select * from catalog_operations where operation_id = ?").get(operationId));
+  beforeHandle.close();
+
+  const refusal = await retireStaleCatalogExecutionsForMigration(context, [operationId], "authorized disposition").then(
+    () => null,
+    (error: { code?: string; message?: string }) => error,
+  );
+  expect(refusal).toMatchObject({ code: "catalog.reconcile-conflict" });
+  expect(refusal?.message).toContain("snapshot and matching root execution entry");
+  expect(refusal?.message).toContain("belong to a different workflow");
+
+  const afterHandle = await openStore(context, "read");
+  const afterBytes = JSON.stringify(afterHandle.db.prepare("select * from catalog_operations where operation_id = ?").get(operationId));
+  afterHandle.close();
+  expect(afterBytes).toBe(beforeBytes);
+});
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-retirement-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
