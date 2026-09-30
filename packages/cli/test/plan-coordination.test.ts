@@ -2745,36 +2745,41 @@ describe("Prepare workflow amendment", () => {
     expect(readText(fixture.snapshotPath)).toBe(before);
   }, 60000);
 
-  test("a stale compass token refuses with the structured failure and leaves the protected bytes byte-identical", () => {
+  test("a stale compass token is TRANSPORT DRIFT, not a refusal: the amendment is decided against the compass it reads", () => {
     const fixture = makePrepareFixture();
     const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    const before = readText(fixture.snapshotPath);
-    const beforeStatus = readText(fixture.statusPath);
     const stale = `sha256:${"0".repeat(64)}`;
 
-    const refused = runCli(
+    // §4.1/A06/A29: the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
+    // are a COMPARISON BASIS, not a lock. A token that no longer matches is
+    // reported as `coordination.token-drifted` and the amendment is decided
+    // against the rows and documents read under the lock — it does not refuse,
+    // and it does not silently accept the caller's stale view either.
+    const amended = runCli(
       amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: stale }),
       fixture.root,
     );
-
-    expect(refused.exitCode).toBe(1);
-    const payload = jsonOf(refused);
-    expect(payload.ok).toBe(false);
+    expect(amended.exitCode).toBe(0);
+    const payload = jsonOf(amended);
+    expect(payload.ok).toBe(true);
     expect(payload.operation).toBe("amend-prepare");
-    expect(payload.code).toBe("coordination.prepare-amendment.stale");
-    expect(String(payload.message)).toContain("compass");
-    expect(readText(fixture.snapshotPath)).toBe(before);
-    expect(readText(fixture.statusPath)).toBe(beforeStatus);
+    expect(String(payload.code)).toContain("amend-prepare");
+    expect(String((payload.data as Record<string, unknown>).outcome)).toBe("amended");
+    // The amendment landed against the compass it read, and the returned tokens
+    // are re-read from the committed bytes rather than echoed from the call.
+    const amendedView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    expect(amendedView.allowed).toBe(true);
+    expect(amendedView.compassVersion).not.toBe(stale);
 
-    // Human mode keeps stdout machine-only and names the family it refused.
+    // Human mode keeps stdout machine-only.
+    const silentFixture = makePrepareFixture();
+    const silentView = jsonOf(runCli(showPrepareArgs(silentFixture), silentFixture.root));
     const human = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: stale }, false),
-      fixture.root,
+      amendPrepareArgs(silentFixture, { snapshot: String(silentView.snapshotVersion), compass: stale }, false),
+      silentFixture.root,
     );
-    expect(human.exitCode).toBe(1);
-    expect(JSON.parse(human.stdout)).toMatchObject({ command: "workflow.amend-prepare", status: "refused", exitCode: 1 });
+    expect(human.exitCode).toBe(0);
     expect(human.stderr).toBe("");
-    expect(readText(fixture.snapshotPath)).toBe(before);
   });
 
   test("a duplicate plan id refuses through the CLI while the read stays available", () => {
