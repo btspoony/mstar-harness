@@ -1316,11 +1316,17 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
     const dir = mkdtempSync(join(tmpdir(), "drift-oversized-tests-"));
     try {
       const testDir = join(dir, "packages", "sample", "test");
+      const dshTestDir = join(dir, "packages", "dsh", "tests");
       mkdirSync(testDir, { recursive: true });
+      mkdirSync(dshTestDir, { recursive: true });
       writeFileSync(join(testDir, "over.test.ts"), `${"x\n".repeat(2000)}x`);
       writeFileSync(join(testDir, "under.test.ts"), `${"x\n".repeat(1998)}x`);
+      writeFileSync(join(dshTestDir, "over.spec.tsx"), `${"x\n".repeat(2000)}x`);
       const rows = findOversizedTestFiles(dir);
-      expect(rows).toEqual([{ file: "packages/sample/test/over.test.ts", lines: 2001 }]);
+      expect(rows).toEqual([
+        { file: "packages/sample/test/over.test.ts", lines: 2001 },
+        { file: "packages/dsh/tests/over.spec.tsx", lines: 2001 },
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
