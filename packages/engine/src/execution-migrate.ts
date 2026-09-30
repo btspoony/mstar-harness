@@ -458,10 +458,10 @@ export type ExecutionMigrationActivationInput = ExecutionMigrationInput & {
   coverageDigest?: string;
 };
 
-/** §4.2 `collectExecutionCoverage`: the frozen manifest plus its explicit inventory. */
+/** §4.2 `collectExecutionCoverage`: the frozen manifest and its declared scope. */
 export type ExecutionMigrationCoverageInput = ExecutionMigrationInput & {
   manifest: ExecutionManifest;
-  inventoryPath: string;
+  inventoryPath?: string;
 };
 
 /** §6 item 4: the retirement request — which recorded manifest's core sources move. */

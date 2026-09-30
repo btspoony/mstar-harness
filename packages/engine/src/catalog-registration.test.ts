@@ -30,6 +30,8 @@ import {
   registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
   type CatalogExecutionRequest,
+  retireStaleCatalogExecutionsForMigration,
+
 } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
@@ -1163,5 +1165,73 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     ).rejects.toMatchObject({ code: "plan-path.identity-mismatch" });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+  });
+  test("migration retires only stale unpublished execution-written rows and preserves their delta", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-stale-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: PLAN_ID, title: "Already registered", rootKind: "plans", relativePath: "elsewhere.md" },
+      { operationId: "seed-migration", actor: "project-manager" },
+    );
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-stale-migration", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const before = await openStore(context, "write");
+    const deltaBefore = (
+      before.db.prepare("select catalog_delta_json from catalog_operations where operation_id = ?").get("op-stale-migration") as {
+        catalog_delta_json: string;
+      }
+    ).catalog_delta_json;
+    before.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    before.close();
+
+    await retireStaleCatalogExecutionsForMigration(context, ["op-stale-migration"], "knowingly discarded (authorized by owner)");
+    const after = await openStore(context, "read");
+    const row = after.db
+      .prepare("select phase, catalog_delta_json, result_json from catalog_operations where operation_id = ?")
+      .get("op-stale-migration") as { phase: string; catalog_delta_json: string; result_json: string };
+    after.close();
+    expect(row.phase).toBe("aborted");
+    expect(row.catalog_delta_json).toBe(deltaBefore);
+    expect(JSON.parse(row.result_json)).toMatchObject({
+      aborted: true,
+      reason: expect.stringContaining("retired with the file route; unpublished catalog delta disposition: knowingly discarded (authorized by owner)"),
+    });
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
+  test("migration retirement refuses ordinary pending rows and empty dispositions without writing", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-refuse-");
+    setArtifactStore(failingStore(harnessDir, "snapshot"));
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-ordinary-pending", expectedCatalogRevision: 0 })),
+    ).rejects.toThrow(/injected snapshot write failure/);
+    setArtifactStore(createFsStore(harnessDir));
+    const before = await openStore(context, "write");
+    const rowBefore = before.db
+      .prepare("select phase, result_json, catalog_delta_json from catalog_operations where operation_id = ?")
+      .get("op-ordinary-pending");
+    before.close();
+
+    await expect(retireStaleCatalogExecutionsForMigration(context, ["op-ordinary-pending"], "owner approved discard")).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+    });
+    await expect(retireStaleCatalogExecutionsForMigration(context, ["op-ordinary-pending"], "  ")).rejects.toMatchObject({
+      code: "catalog.registration-invalid",
+    });
+    const after = await openStore(context, "read");
+    const rowAfter = after.db
+      .prepare("select phase, result_json, catalog_delta_json from catalog_operations where operation_id = ?")
+      .get("op-ordinary-pending");
+    after.close();
+    expect(rowAfter).toEqual(rowBefore);
+    expect((await listPendingCatalogRegistrations(context)).map((row) => row.operationId)).toEqual(["op-ordinary-pending"]);
+  });
+  test("migration retirement refuses a committed registration", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-committed-");
+    await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-committed-migration", expectedCatalogRevision: 0 }));
+    await expect(
+      retireStaleCatalogExecutionsForMigration(context, ["op-committed-migration"], "authorized disposition"),
+    ).rejects.toMatchObject({ code: "catalog.reconcile-conflict" });
   });
 });

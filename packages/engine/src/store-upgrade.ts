@@ -12,13 +12,18 @@ import {
   type ExecutionMigrationReceipt,
 } from "./execution-migrate.js";
 import { probeStoreUpgradeState } from "./store-upgrade-state.js";
+import { listPendingCatalogRegistrations, retireStaleCatalogExecutionsForMigration } from "./catalog-registration.js";
+
 
 export type StoreUpgradeInput = {
   context: StoreContext;
   operator: string;
   operationId: string;
+  /** Explicit operator disposition for any stale unpublished registration retired at staging. */
+  catalogDeltaDisposition: string;
   inventoryPath?: string;
 };
+
 
 /** Durable output before the only irreversible authority transition. */
 export type StagedStoreUpgrade = {
@@ -51,6 +56,18 @@ export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<Stage
   });
 
   const request = { ...input, operationId: `${input.operationId}-preview` };
+  // A stale, already-written registration cannot be reconciled against the
+  // current catalog revision. Retire only that case before the read-only
+  // preview; ordinary and reconcilable pending rows still refuse.
+  const pending = await listPendingCatalogRegistrations(input.context);
+  if (pending.length > 0) {
+    await retireStaleCatalogExecutionsForMigration(
+      input.context,
+      pending.map((row) => row.operationId),
+      input.catalogDeltaDisposition,
+    );
+  }
+
   const manifest = await previewExecutionMigration(request);
   const manifestHash = executionManifestHash(manifest);
   const coverage = await collectExecutionCoverage({ ...request, operationId: `${input.operationId}-coverage`, manifest });

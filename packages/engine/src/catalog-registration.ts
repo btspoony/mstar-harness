@@ -907,6 +907,13 @@ function recordAborted(db: StoreDb, operationId: string, reason: string): void {
     operationId,
   );
 }
+function recordMigrationRetirement(db: StoreDb, operationId: string, reason: string): void {
+  db.prepare("update catalog_operations set phase = 'aborted', result_json = ? where operation_id = ?").run(
+    JSON.stringify({ aborted: true, reason }),
+    operationId,
+  );
+}
+
 
 function journalDeltaOf(plan: CatalogExecutionPlan, request: CatalogExecutionRequest): JournalDelta {
   return {
@@ -1678,6 +1685,50 @@ export async function abortCatalogExecution(
   await withJournalWrite(context, (db) => recordAborted(db, id, reason ?? "abandoned by the operator"));
   return { operationId: id, workflowId: journal.workflow.workflowId, phase: "aborted" };
 }
+/**
+ * Retire stale, already-written registrations that block the staged
+ * store-upgrade route. Kept out of the package entry point: this is not a
+ * general catalog-abort verb.
+ */
+export async function retireStaleCatalogExecutionsForMigration(
+  context: StoreContext,
+  operationIds: readonly string[],
+  disposition: string,
+): Promise<void> {
+  if (!Array.isArray(operationIds) || operationIds.length === 0) invalid("operationIds must name at least one pending registration");
+  if (typeof disposition !== "string" || disposition.trim() === "") invalid("disposition must be a non-empty string");
+  const ids = operationIds.map((operationId) => requireText(operationId, "operationId"));
+  const recordedDisposition = disposition;
+  await withJournalWrite(context, (db) => {
+    const rows = ids.map((id) => {
+      const row = readRow(db, id);
+      if (row === undefined) throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
+      if (row.phase === "committed") failReconcile(`operation ${JSON.stringify(id)} is committed and cannot be retired with a file route`);
+      if (row.phase !== "execution-written") {
+        failReconcile(`operation ${JSON.stringify(id)} is ${row.phase}, not an execution-written migration leftover`);
+      }
+      return row;
+    });
+    const pending = pendingRows(db);
+    if (pending.length !== rows.length || pending.some((row) => !ids.includes(row.operation_id))) {
+      failReconcile("the pending catalog journal changed while migration was preparing its retirement; nothing was retired");
+    }
+    const catalogRevision = readJournalVersions(db).catalogRevision;
+    for (const row of rows) {
+      if (hasPublishedDelta(db, row.operation_id) || parseJournalDelta(row).expectedCatalogRevision === catalogRevision) {
+        failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
+      }
+    }
+    for (const row of rows) {
+      recordMigrationRetirement(
+        db,
+        row.operation_id,
+        `retired with the file route; unpublished catalog delta disposition: ${recordedDisposition}`,
+      );
+    }
+  });
+}
+
 
 /** The current store/catalog revisions: what a caller records as the expectation. */
 export async function readCatalogRevisions(context: StoreContext): Promise<CatalogRevisions> {
