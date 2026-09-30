@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyExecutionMigration, collectExecutionCoverage, executionManifestHash } from "../src/execution-migrate.js";
+import { applyExecutionMigration, executionManifestHash } from "../src/execution-migrate.js";
 import { activateStoreUpgrade, stageStoreUpgrade } from "../src/store-upgrade.js";
 import { ACTIVATION_PROTOCOL_VERSION } from "../src/store-activation.js";
 import { initializeStore, MIGRATIONS, storeDbPath, type StoreContext } from "../src/store-db.js";
@@ -83,8 +83,11 @@ describe("single-call store upgrade", () => {
     old.close();
 
     const staged = await stageStoreUpgrade(f);
-    expect(staged.schemaBackup.schemaVersion).toBe(6);
-    expect(staged.backup.schemaVersion).toBe(MIGRATIONS.length);
+
+    if (staged.resumed === false) {
+      expect(staged.schemaBackup.schemaVersion).toBe(6);
+      expect(staged.backup.schemaVersion).toBe(MIGRATIONS.length);
+    }
     expect(staged.manifest.schemaVersion).toBe(MIGRATIONS.length);
     expect(staged.manifest.inventoryPath).toBeNull();
     expect(staged.coverageDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -98,7 +101,7 @@ describe("single-call store upgrade", () => {
     expect(existsSync(join(f.context.harnessDir, "archived", "execution", staged.manifest.id, "status.json"))).toBe(true);
   });
 
-  test("refuses control-only collection for a manifest reviewed with additional inventory scope", async () => {
+  test("resumes the reviewed inventory scope when retry omits --inventory", async () => {
     const f = fixture();
     const store = await initializeStore(f.context);
     store.close();
@@ -119,10 +122,13 @@ describe("single-call store upgrade", () => {
       backup: null,
     }));
     const staged = await stageStoreUpgrade({ ...f, inventoryPath });
-    await expect(collectExecutionCoverage({ ...f, manifest: staged.manifest }))
-      .rejects.toMatchObject({
-        code: "execution.migration-conflict",
-        message: expect.stringContaining("frozen manifest's surface discovery no longer holds"),
-      });
+    expect(staged.resumed).toBe(false);
+    expect(staged.manifest.inventoryPath).toBe(inventoryPath);
+
+    const resumed = await stageStoreUpgrade({ ...f, operationId: "upgrade-fixture-retry" });
+    expect(resumed.resumed).toBe(true);
+    expect(resumed.inventoryPath).toBe(inventoryPath);
+    const retired = await activateStoreUpgrade(resumed, fixtureAttestation());
+    expect(retired).toMatchObject({ phase: "retired", manifestId: staged.manifest.id });
   });
 });

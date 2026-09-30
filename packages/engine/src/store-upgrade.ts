@@ -94,11 +94,17 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
           "inconsistent; refusing to re-preview or apply another manifest",
       );
     }
+    if (input.inventoryPath !== undefined && input.inventoryPath !== manifest.inventoryPath) {
+      throw new Error(
+        `store upgrade retry inventory ${JSON.stringify(input.inventoryPath)} does not match the staged manifest scope ` +
+          `${JSON.stringify(manifest.inventoryPath)}; resume with the reviewed inventory or omit --inventory to use it`,
+      );
+    }
     return {
       context: input.context,
       operator: input.operator,
       operationId: input.operationId,
-      ...(input.inventoryPath === undefined ? {} : { inventoryPath: input.inventoryPath }),
+      ...(manifest.inventoryPath === null ? {} : { inventoryPath: manifest.inventoryPath }),
       manifest,
       manifestHash: row.manifest_hash,
       coverageDigest: coverage.digest,
