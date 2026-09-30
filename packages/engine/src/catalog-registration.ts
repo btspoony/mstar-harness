@@ -1725,6 +1725,7 @@ export async function retireStaleCatalogExecutionsForMigration(
       if (
         snapshot === undefined ||
         snapshot.id !== journal.workflow.workflowId ||
+        onDiskIdentity(journal.workflow.kind, snapshot) !== journal.workflow.identity ||
         rootEntry === undefined ||
         expectedEntry === undefined ||
         stableJson(rootEntry) !== stableJson(expectedEntry)

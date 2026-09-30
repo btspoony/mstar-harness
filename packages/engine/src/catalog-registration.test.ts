@@ -1228,6 +1228,38 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     afterHandle.close();
     expect(after).toEqual(before);
   });
+  test("migration retirement refuses a same-id snapshot with different registration identity without changing the journal", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-foreign-identity-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: PLAN_ID, title: "Already registered", rootKind: "plans", relativePath: "elsewhere.md" },
+      { operationId: "seed-migration-foreign-identity", actor: "project-manager" },
+    );
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-stale-foreign-identity", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    const before = handle.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-foreign-identity");
+    handle.close();
+
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+    snapshot.branch.source = "feature/replacement-registration";
+    writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+
+    await expect(
+      retireStaleCatalogExecutionsForMigration(context, ["op-stale-foreign-identity"], "owner approved discard"),
+    ).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("registration bytes are missing or belong to a different workflow"),
+    });
+    const afterHandle = await openStore(context, "read");
+    const after = afterHandle.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-foreign-identity");
+    afterHandle.close();
+    expect(after).toEqual(before);
+  });
+
 
   test("migration retirement refuses ordinary pending rows and empty dispositions without writing", async () => {
     const { harnessDir, context } = await fixture("migration-retire-refuse-");
