@@ -9087,11 +9087,10 @@ function readPlanFileCorrection(
   // effect holds and this call writes nothing for it. The caller's
   // `expectedFile` is a semantic constraint on the read set (§4.2), never a
   // historical-byte gate: a patch re-presented after a lost response whose row
-  // already holds the target is the same intent, satisfied.
-  if (previous === planPath) return { held: true, id };
-  // The exact observed value, not a normalised one: a correction applies to the
-  // pointer this patch was reviewed against, so a row that moved underneath the
-  // caller refuses instead of being repointed from a stale observation.
+  // already holds the target is the same intent, satisfied. But a caller that
+  // explicitly names an `expectedFile` its row does NOT hold observed a
+  // DIFFERENT read set — that is not this intent's replay, so the constraint
+  // is checked before the already-held shortcut can answer success.
   if (previous !== expectedFile) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
@@ -9099,6 +9098,7 @@ function readPlanFileCorrection(
       { plan_id: id, expected: expectedFile, actual: previous },
     );
   }
+  if (previous === planPath) return { held: true, id };
   // The pointer being replaced must identify THIS plan: either a form the shared
   // resolver accepts, or the exact derived repository-relative spelling of the
   // same canonical target. A same-basename file, a copied document whose header

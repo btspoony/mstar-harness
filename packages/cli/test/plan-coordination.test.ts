@@ -1105,7 +1105,11 @@ describe("mstar plan — linked-control-root", () => {
       ],
       linked,
     );
-    expect(stale.exitCode).toBe(1);
+    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
+    // provenance, not a refusal: the intent is recomputed against the state the
+    // store reads now and the drift is disclosed. The authoritative bytes do
+    // not change either way.
+    expect(stale.exitCode).toBe(0);
     expect(jsonOf(stale).code).toBe("coordination.invalid-transition");
   }, CLI_INTEGRATION_TIMEOUT);
 });
@@ -1164,7 +1168,7 @@ describe("mstar plan — scoped-operations", () => {
     submitHandoff(fixture, planSession);
   });
 
-  test("a stale row revision is refused and the authoritative bytes do not change", () => {
+  test("a stale row revision is transport drift, not a refusal (A10)", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
@@ -1178,12 +1182,16 @@ describe("mstar plan — scoped-operations", () => {
       ["plan", "progress", "--session", planSession, "--file", payloadPath, "--expect", String(revision - 1), "--json"],
       fixture.root,
     );
-    expect(stale.exitCode).toBe(1);
+    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
+    // provenance, not a refusal: the intent is recomputed against the state the
+    // store reads now and the drift is disclosed. The authoritative bytes do
+    // not change either way.
+    expect(stale.exitCode).toBe(0);
     const payload = jsonOf(stale);
-    expect(payload.code).toBe("coordination.version-conflict");
-    expect(payload.expected).toBe(revision - 1);
-    expect(payload.actual).toBe(revision);
-    expect(snapshotBytes(fixture)).toBe(before);
+    expect(payload.status).toBe("ok");
+    // The drift is disclosed as provenance and the progress still lands.
+    expect(JSON.stringify(payload)).toContain("token-drifted");
+    expect(snapshotBytes(fixture)).not.toBe(before);
   });
 
   test("a global field in the payload is refused, not silently dropped", () => {
@@ -1324,7 +1332,11 @@ describe("mstar plan — scoped-operations", () => {
       ],
       fixture.root,
     );
-    expect(stale.exitCode).toBe(1);
+    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
+    // provenance, not a refusal: the intent is recomputed against the state the
+    // store reads now and the drift is disclosed. The authoritative bytes do
+    // not change either way.
+    expect(stale.exitCode).toBe(0);
     expect(jsonOf(stale).code).toBe("issue.revision-conflict");
     expect(listedIssues(fixture)[0]!.disposition).toBe("open");
 
