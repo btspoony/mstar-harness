@@ -979,12 +979,39 @@ function hasExecutionBytes(plan: CatalogExecutionPlan): boolean {
  * repairs the divergence through `catalog reconcile`.
  */
 function assertRegistrationEffectHeld(plan: CatalogExecutionPlan): void {
-  if (existsSync(plan.snapshotPath) && findRegisteredWorkflow(plan.harnessDir, plan.workflowId) !== undefined) return;
+  // Presence alone is not the effect: a snapshot REPLACED by a foreign one, or
+  // a root entry re-pointed at another workflow, would otherwise let the replay
+  // answer success over a registration that no longer holds. The comparison is
+  // the registration's KEY FACE (id, type, status, addressed plan rows) — the
+  // fields a diverged registration cannot move without being a different
+  // registration — between the producer's reviewed definition (`plan.snapshot`,
+  // the identity source) and the bytes on disk, whose serialization may
+  // legitimately carry projections the reviewed request never spelled. A
+  // diverged journal refuses for `catalog reconcile` instead of answering
+  // success.
+  const snapshot = readSnapshotIfPresent(plan.dir);
+  const entry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
+  const keyFace = (s: WorkflowSnapshot): unknown => ({
+    id: s.id,
+    type: s.type,
+    status: s.status,
+    plans: (s.plans ?? []).map((row) => ({ id: row.id, title: row.title, file: row.file, status: row.status })),
+  });
+  const identityHeld =
+    snapshot !== undefined &&
+    entry !== undefined &&
+    join(plan.harnessDir, entry.dir) === plan.dir &&
+    stableJson(keyFace(snapshot.snapshot)) === stableJson(keyFace(plan.snapshot));
+  if (identityHeld) return;
+  const detail =
+    snapshot === undefined || entry === undefined
+      ? "the snapshot or the root register entry is missing"
+      : "the on-disk snapshot or the root register entry no longer matches the committed registration identity";
   throw new CatalogRegistrationError(
     "catalog.registration-conflict",
     `workflow ${JSON.stringify(plan.workflowId)} is committed in the registration journal, but its registered ` +
-      `effect no longer holds under ${plan.harnessDir} (the snapshot or the root register entry is missing): ` +
-      `the journal and the registered bytes diverged. Run "mstar catalog reconcile" to repair or abort the operation.`,
+      `effect no longer holds under ${plan.harnessDir} (${detail}): the journal and the registered bytes diverged. ` +
+      `Run "mstar catalog reconcile" to repair or abort the operation.`,
   );
 }
 

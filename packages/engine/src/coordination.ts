@@ -186,7 +186,6 @@ import {
   validateWorkflowSnapshot,
   PREPARE_PHASE,
   WORKFLOW_TERMINAL_STATUSES,
-  WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA,
   writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
   type WorkflowDeliveryEvidence,
@@ -194,39 +193,33 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview-schema.js";
+import { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow-payload-schema.js";
 
 /**
  * Persist payload contracts are owned by their validating domains. `json` is
  * intentionally syntax-only: arbitrary JSON has no domain validator; use the
  * status, snapshot, or review kind for governed documents.
  *
- * READ as a function, never captured at module evaluation: the payload schema of
- * `snapshot` lives in `workflow.ts`, which imports `path.js` → `catalog.js` →
- * this module, so a top-level read of that binding executes while the cycle is
- * mid-evaluation. Import order decides whether the binding is initialized yet —
- * a spec file that enters the graph at `workflow.ts` (e.g. `test/workflow.test
- * .ts`) would evaluate this module first and die on the TDZ. Deferring the read
- * to the first call makes the contract order-independent, which every consumer
- * already is: `packages/commands` reads it inside command construction, long
- * after the graph is live.
+ * Published as BOTH a value (`PERSIST_PAYLOAD_CONTRACTS`) and a callable
+ * (`persistPayloadContracts`). The value's one previously-cyclic input
+ * (`WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA`) lives in the acyclic leaf
+ * `workflow-payload-schema.ts`, so the top-level binding is TDZ-safe in every
+ * import order; `packages/commands` reads it inside command construction.
  */
-export function persistPayloadContracts(): {
-  readonly status: { readonly schema: typeof STATUS_V2_PAYLOAD_SCHEMA; readonly validation: "status-v2" };
-  readonly snapshot: { readonly schema: typeof WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA; readonly validation: "workflow-snapshot" };
-  readonly review: { readonly schema: typeof MSTAR_REVIEW_V1_PAYLOAD_SCHEMA; readonly validation: "mstar.review/v1" };
-  readonly json: { readonly schema: null; readonly validation: "parse-only"; readonly reason: string; readonly alternative: string };
-} {
-  return {
-    status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
-    snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
-    review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
-    json: {
-      schema: null,
-      validation: "parse-only",
-      reason: "Arbitrary JSON has no declared domain shape.",
-      alternative: "Use status, snapshot, or review for governed artifacts.",
-    },
-  };
+export const PERSIST_PAYLOAD_CONTRACTS = {
+  status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
+  snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
+  review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
+  json: {
+    schema: null,
+    validation: "parse-only",
+    reason: "Arbitrary JSON has no declared domain shape.",
+    alternative: "Use status, snapshot, or review for governed artifacts.",
+  },
+} as const;
+
+export function persistPayloadContracts(): typeof PERSIST_PAYLOAD_CONTRACTS {
+  return PERSIST_PAYLOAD_CONTRACTS;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -2055,7 +2048,7 @@ export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentInt
  * witness, and a seal that records no projection (the DB transport's own
  * receipt) keeps the byte comparison rather than losing the check.
  */
-export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
+export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination, readBytes?: Buffer): void {
   if (!existsSync(assignmentPath)) {
     throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
       path: assignmentPath,
@@ -2073,7 +2066,7 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
     }
     return;
   }
-  const current = currentAssignmentIntent(assignmentPath, recorded);
+  const current = currentAssignmentIntent(assignmentPath, recorded, readBytes);
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;
   const facts = changed.map(
@@ -2127,13 +2120,16 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
  * change of meaning, not a malformed caller input (the caller supplied no
  * document here \u2014 the row's own seal names the path).
  */
-function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent): AssignmentIntent {
+function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent, readBytes?: Buffer): AssignmentIntent {
   try {
     // The read goes through the sealed-input door: the row's own seal names this
     // path, so a document that is GONE refuses in the sealed vocabulary rather
-    // than as a caller-input error the mutation never had.
+    // than as a caller-input error the mutation never had. A caller that ALREADY
+    // read the file inside this lock (the bind adoption) passes those bytes so
+    // hash, parse and semantic comparison measure ONE snapshot — a concurrent
+    // edit landing between two reads can never split the verdict.
     const abs = resolve(assignmentPath);
-    return assignmentIntentOf(parseAssignmentBytes(abs, readSealedInput(abs, "Assignment")));
+    return assignmentIntentOf(parseAssignmentBytes(abs, readBytes ?? readSealedInput(abs, "Assignment")));
   } catch (error) {
     if (error instanceof CoordinationError) {
       const problem: RecoveryProblem = {
@@ -2259,7 +2255,10 @@ function bindStaleAdoption(
   // meaning moved still stops at the terminal refusal, names the header that
   // moved and leaves a row nobody else holds alone. Without this the adoption
   // would silently re-pin a scope or gate change instead of refusing it.
-  assertPreparedFresh(scope.assignmentPath, prepared);
+  // The SAME read drives the semantic gate: the bytes the pin would be
+  // refreshed to are the bytes whose intent is compared against the seal, so a
+  // concurrent edit between the two reads can never split the verdict.
+  assertPreparedFresh(scope.assignmentPath, prepared, read.bytes);
   const holder = coordination?.session;
   const adoptable =
     coordination?.prepared !== undefined &&
@@ -7540,8 +7539,16 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
  */
 function isV2RootRegister(statusPath: string): boolean {
   try {
-    const doc = readJson(statusPath);
-    return Object.keys(doc).length === 0 || Array.isArray(doc.workflows);
+    const doc = readJson(statusPath) as unknown;
+    // An EMPTY register is the initialize template and is v2-writable. Any
+    // non-empty register must actually BE a v2 register: a `workflows` array
+    // alone (a v1 register, or a v2 register with the version field stripped)
+    // is exactly the shape `validateStatusV2` refuses, and a close that
+    // silently skipped its unregister over it would report success while
+    // leaving an invalid root in place (close contract §3).
+    if (!isPlainObject(doc) || Object.keys(doc).length === 0) return true;
+    if (!Array.isArray(doc.workflows)) return false;
+    return validateStatusV2(doc as never, { harnessDir: dirname(statusPath) }).ok;
   } catch {
     return false;
   }

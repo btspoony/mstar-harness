@@ -517,7 +517,7 @@ export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
 
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
-export { persistPayloadContracts } from "./coordination.js";
+export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
 
 export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 

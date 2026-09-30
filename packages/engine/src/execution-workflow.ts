@@ -1104,8 +1104,10 @@ export async function mutateExecutionWorkflow(
   // The shape gate runs BEFORE the sparse resolver: `operation` is the
   // caller's own intent and needs no store fact, while the resolver may open
   // the authority to derive the omitted session/token — a malformed payload
-  // must be an input-shape refusal, never a store-side diagnostic.
-  assertWorkflowOperationShape((request as { operation?: unknown }).operation);
+  // must be an input-shape refusal, never a store-side diagnostic. A null or
+  // non-object request takes the same typed path (assertWorkflowOperationShape
+  // reads through the optional chain), never a raw TypeError.
+  assertWorkflowOperationShape(request == null ? request : (request as { operation?: unknown }).operation);
   const strictRequest = await resolveWorkflowIntent(context, request);
   const resolved = resolveWorkflowOperationRequest(context.caller, strictRequest);
   const operation = resolved.call.operation;
