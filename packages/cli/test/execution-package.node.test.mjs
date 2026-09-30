@@ -372,7 +372,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   const worktreePath = join(fixture.root, "wt-r3");
   const evidencePath = join(sddDir, "evidence.md");
   const assignmentPath = join(sddDir, "assignment.md");
-  writeText(planPath, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planPath, `# R3 parity plan\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
   mkdirSync(worktreePath, { recursive: true });
   writeText(
@@ -610,7 +610,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
 
 test("the store the built CLI wrote is a real node:sqlite authority", async () => {
   const fixture = await makeActiveWorkspace("mstar-r3-sqlite");
-  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# R3 sqlite plan\n\n**plan_id:** ${PLAN_ID}\n`);
   const rootToken = (await readExecutionAuthority({ harnessDir: fixture.harness })).token;
   ok(
     runCli(
