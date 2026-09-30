@@ -30,6 +30,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 - **Native install and loading**: `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp`). The MCP server is launched via the CLI subcommand: `npx @mstar-harness/cli mcp`. Runtime: **Node >=24.18.0**; OMP itself remains Bun-hosted.
 - **Context boundary**: optional `host` selects context validated against existing host definitions, not a role or authority. `sessionId` is the main conversation session. MCP does not require or perform per-call child-agent attribution; shared workflow ownership, path, transition and CAS checks still decide admission.
+- Identity-consuming commands (e.g. `session.recover`) take the session id as an explicit per-call tool argument (`sessionId`), mirroring the CLI `--session-id` flag; no host-side injection is involved.
 - **Doctor and evidence**: `mstar-harness doctor --target omp` reports aligned / mismatch / unavailable from the MCP launch config, checks the Node floor, and never opens `store.db`. H2's native bridge and package server are removed; an aligned config is not an installed-host run.
 
 ## Skill loading
