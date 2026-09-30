@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute4, join as join4, relative as relative5, resolve as resolve3 } from "node:path";
+import { readFileSync as readFileSync2, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative5, resolve } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -26,17 +26,17 @@ import {
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
-import { dirname as dirname2, join as join2, resolve as resolvePath, sep } from "node:path";
-import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
+import { readFileSync as readFileSync3, statSync } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
@@ -712,6 +712,19 @@ var require_src = __commonJS(function(exports, module) {
     module.exports = require_node();
   }
 });
+var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+function readJson(filePath) {
+  if (!existsSync(filePath))
+    return {};
+  const content = readFileSync(filePath, "utf8").trim();
+  if (!content)
+    return {};
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
 class CoordinationError extends Error {
   code;
   details;
@@ -1214,7 +1227,7 @@ function catalogRootDir(context, rootKind) {
   const harness = resolveProcessHarnessDir(start) ?? start;
   switch (rootKind) {
     case "repository":
-      return dirname2(harness);
+      return dirname3(harness);
     case "harness":
       return harness;
     case "plans":
@@ -1293,17 +1306,17 @@ function isFile(file) {
   }
 }
 function findMstarc(startDir, boundary) {
-  let dir = resolve2(startDir);
-  const bound = resolve2(boundary);
+  let dir = resolve3(startDir);
+  const bound = resolve3(boundary);
   for (;; ) {
     if (!isAtOrBelow(dir, bound))
       return null;
-    const candidate = join3(dir, MSTARC_FILE);
+    const candidate = join4(dir, MSTARC_FILE);
     if (isFile(candidate))
       return candidate;
     if (dir === bound)
       return null;
-    const parent = dirname3(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -1313,7 +1326,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -4256,10 +4269,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve3 = constructs2[index].resolveAll;
-    if (resolve3 && !called.includes(resolve3)) {
-      events = resolve3(events, context);
-      called.push(resolve3);
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
     }
   }
   return events;
@@ -10131,19 +10144,6 @@ function gfm(options) {
     gfmTaskListItem()
   ]);
 }
-var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-function readJson(filePath) {
-  if (!existsSync3(filePath))
-    return {};
-  const content3 = readFileSync3(filePath, "utf8").trim();
-  if (!content3)
-    return {};
-  try {
-    return JSON.parse(content3);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
-}
 function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -13917,7 +13917,7 @@ async function readAuthorityRoute(harnessDir) {
 }
 function hasEntry2(dir, name) {
   try {
-    statSync2(join4(dir, name));
+    statSync2(join(dir, name));
     return true;
   } catch {
     return false;
@@ -13933,22 +13933,22 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname4(dir));
-  return parentResolved !== null && resolve3(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
   try {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve3(dirname4(resolved), readlinkSync2(resolved));
+      return resolve(dirname(resolved), readlinkSync2(resolved));
     } catch {
-      let dir = dirname4(resolved);
+      let dir = dirname(resolved);
       for (;; ) {
         try {
-          return join4(realpathSync(dir), relative5(dir, resolved));
+          return join(realpathSync(dir), relative5(dir, resolved));
         } catch {
-          const parent = dirname4(dir);
+          const parent = dirname(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -13958,27 +13958,27 @@ function landedPathOf(resolved) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_NAMES.includes(basename2(target).toLowerCase()))
+  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname4(target));
+  return isHarnessRootDir(dirname(target));
 }
 function caseFoldedRegisterRoot(candidate) {
-  const target = resolve3(candidate);
-  if (!REGISTER_BASENAME.test(basename2(target)))
+  const target = resolve(candidate);
+  if (!REGISTER_BASENAME.test(basename(target)))
     return null;
-  let dir = dirname4(target);
+  let dir = dirname(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
       try {
         projectDir = resolveProjectDir(dir, { harnessDir: dir });
       } catch {
-        projectDir = join4(dir, PROJECT_DIR_NAME);
+        projectDir = join(dir, PROJECT_DIR_NAME);
       }
       if (REGISTER_SHAPE.test(relative5(projectDir, target)))
         return dir;
     }
-    const parent = dirname4(dir);
+    const parent = dirname(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -14040,7 +14040,7 @@ function displayTarget(targetPath, harnessDir) {
 }
 function readStdinJson() {
   try {
-    const raw = readFileSync(0, "utf8");
+    const raw = readFileSync2(0, "utf8");
     if (!raw.trim())
       return {};
     const parsed = JSON.parse(raw);
@@ -14077,7 +14077,7 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (statSync2(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
-    const current = readFileSync(targetPath, "utf8");
+    const current = readFileSync2(targetPath, "utf8");
     const first = current.indexOf(oldString);
     if (first === -1)
       return;
@@ -14104,11 +14104,11 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve3(isAbsolute4(rawPath) ? rawPath : join4(cwd, rawPath));
+    const targetPath = resolve(isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath));
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname4(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }
