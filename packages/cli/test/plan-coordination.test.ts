@@ -1105,11 +1105,10 @@ describe("mstar plan — linked-control-root", () => {
       ],
       linked,
     );
-    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
-    // provenance, not a refusal: the intent is recomputed against the state the
-    // store reads now and the drift is disclosed. The authoritative bytes do
-    // not change either way.
-    expect(stale.exitCode).toBe(0);
+    // A handoff id that does not exist is refused by the pre-check's own
+    // verdict, read THROUGH the pinned store — not by an unpinned store
+    // mismatch, and not silently absorbed.
+    expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale).code).toBe("coordination.invalid-transition");
   }, CLI_INTEGRATION_TIMEOUT);
 });
@@ -1332,11 +1331,10 @@ describe("mstar plan — scoped-operations", () => {
       ],
       fixture.root,
     );
-    // §4.2/A10: the supplied revision is transport freshness. A drifted basis is
-    // provenance, not a refusal: the intent is recomputed against the state the
-    // store reads now and the drift is disclosed. The authoritative bytes do
-    // not change either way.
-    expect(stale.exitCode).toBe(0);
+    // A stale/forward issue revision is a CONFLICT on the addressed row's own
+    // CAS (the `--expect-issue` claim names a revision that does not hold),
+    // refused before anything is written.
+    expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale).code).toBe("issue.revision-conflict");
     expect(listedIssues(fixture)[0]!.disposition).toBe("open");
 
