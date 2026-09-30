@@ -3,7 +3,7 @@ category: Harness
 packages: root
 ---
 
-- **MCP session identity:** Identity-consuming commands such as `session.recover` now accept the main-conversation session id as an explicit per-call `sessionId` tool argument, matching the CLI `--session-id` flag. The `MSTAR_HOST_SESSION_ID` environment read has been removed from the MCP resolve path; the existing fail-safe refusal when the parameter is absent is unchanged.
+- **MCP session identity:** the `MSTAR_HOST_SESSION_ID` environment fallback has been removed from the MCP resolve path. Identity-consuming commands such as `session.recover` take the main-conversation session id solely via their explicit per-call `sessionId` input (the CLI `--session-id` flag / MCP schema field — parity that already existed); the existing fail-safe refusal when the parameter is absent is unchanged. MCP-invoked identity tests now pin the identity-gate-specific refusals, the wrong-session ownership refusal, and real CLI parse/routing.
 
 <!-- CN -->
-- **MCP 会话身份：** `session.recover` 等消费身份的命令现在接受作为显式单次调用 `sessionId` 工具参数传入的主对话会话 ID，与 CLI `--session-id` 标志保持一致。MCP 解析路径已移除对 `MSTAR_HOST_SESSION_ID` 环境变量的读取；缺少该参数时现有的安全拒绝行为保持不变。
+- **MCP 会话身份：** MCP 解析路径已移除 `MSTAR_HOST_SESSION_ID` 环境变量回退。`session.recover` 等消费身份的命令仅通过其显式单次调用 `sessionId` 输入（既有的 CLI `--session-id` 标志 / MCP schema 字段对等）获取主对话会话 ID；缺少该参数时现有的安全拒绝行为保持不变。MCP 侧身份测试现已固化身份门专属拒绝、错误会话所有权拒绝与真实 CLI 解析路由。
