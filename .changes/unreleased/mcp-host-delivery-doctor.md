@@ -10,7 +10,7 @@ packages: root
 - Recorded the OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin and removal of the global CLI fallback.
 
 <!-- CN -->
-- **MCP 健康检查改为校验宿主真实配置。** `mstar doctor` 的 MCP 检查现在验证各宿主实际的 MCP 配置文件及其 `npx @mstar-harness/cli mcp` 启动项（从 `command`/`args` 数组解析服务条目），取代已删除的 `build-info.json`/`stdio.js` bundle 探测，并拒绝低于各打包目标原生最低版本的运行时。`evidence.verify` 对不合格证据改为返回 `ok` 数据并附 `assessmentPassed` 标记，而非 `refused` envelope.
+- **MCP 健康检查改为校验宿主真实配置。** `mstar doctor` 的 MCP 检查现在验证各宿主实际的 MCP 配置文件及其 `npx @mstar-harness/cli mcp` 启动项（从 `command`/`args` 数组解析服务条目），取代已删除的 `build-info.json`/`stdio.js` bundle 探测，并拒绝低于各打包目标原生最低版本的运行时。`evidence.verify` 对不合格证据改为返回 `ok` 数据并附 `assessmentPassed` 标记，而非 `refused` envelope。
 - **注入 store 保持引擎控制目标防护。** `--store` / `MSTAR_STORE_MODULE` 指定的 store 模块现在统一经过引擎导出的 `guardInjectedStore` 包装：在执行权威处于活动状态时，控制文档仍无法通过注入适配器读写。`resolveStore` 恢复读取 `MSTAR_STORE_MODULE`；usage 错误统一以 envelope JSON 输出到 stdout，并抑制 commander 原生 stderr 噪声。
 - **DSH 获得 Cordis MCP client 行。** dsh bundle patch 在插件行旁插入 `mstar-mcp` 行（`@deepseek-ai/dsh-mcp-client`，stdio `npx @mstar-harness/cli mcp`，serverName `mstar`）；`mstar-harness doctor --target dsh` 结构化解析 profile 的 Cordis 源（不受注释干扰），仅在桥接插件已安装时报 aligned。`spawnProcess` 将 ENOENT 规范为确定性的 `executable not found in $PATH` 错误；dev 命令相对路径参数按 `MSTAR_CLI_PROJECT_ROOT` 解析。
 - 补充六个 JSON 宿主与 OpenCode 插件动态配置的 CLI MCP 启动路径，并记录 DSH Cordis YAML 后续接入；说明运行时前置条件、doctor 状态含义、host/session 边界及独立的已安装宿主验证边界。
