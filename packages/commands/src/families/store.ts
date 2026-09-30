@@ -1,20 +1,25 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   SddScriptError,
   StoreError,
   activateStore,
+  activateStoreUpgrade,
   activationReceiptFor,
   appliedReceiptFor,
   applyStoreMigration,
   backupStore,
   initializeStore,
   planStoreMigration,
+  probeStoreUpgradeState,
   resolveProcessHarnessDir,
   retireStoreSources,
+  stageStoreUpgrade,
   upgradeStore,
   type ActivationAttestation,
   type MigrationManifest,
+  type StagedStoreUpgrade,
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -27,6 +32,8 @@ const inputSchema = z.object({
   manifest: z.string().optional(),
   attestation: z.string().optional(),
   out: z.string().optional(),
+  operator: z.string().optional(),
+  inventory: z.string().optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "migrate", "upgrade", "backup", "activate", "retire"] as const;
@@ -102,6 +109,89 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
     );
   }
 }
+function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
+  if (error instanceof SddScriptError) return refused(id, error);
+  const code =
+    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+  const message =
+    code === "execution.migration-conflict"
+      ? "A saved workflow has a pending change that cannot be safely published. Review or resolve the workspace's pending changes, then run `store upgrade` again."
+      : code === "execution.coverage-incomplete"
+        ? "The workspace discovery is incomplete. Complete its inventory, then run `store upgrade` again."
+        : code === "store.attestation-invalid" || code === "store.activation-blocked"
+          ? "The installed consumers or active sessions are not ready for the authority change. Reload or update consumers and stop active sessions, then run `store upgrade` again."
+          : "The workspace's saved execution data could not be migrated safely. Resolve the incomplete or conflicting workflow state, then run `store upgrade` again.";
+  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message };
+}
+
+async function unifiedStoreUpgrade(
+  id: string,
+  input: StoreInput,
+  context: StoreContext,
+  invocation: InvocationContext,
+): Promise<CommandEnvelope> {
+  const state = await probeStoreUpgradeState(context);
+  if (state.verdict === "up-to-date") {
+    return ok(id, { verdict: state.verdict, schemaVersion: state.schemaVersion });
+  }
+  if (state.verdict === "blocked") {
+    return {
+      version: 1,
+      command: id,
+      status: "refused",
+      code: "store.upgrade-blocked",
+      exitCode: 1,
+      message: "No store exists in this workspace. Initialize it with `store init`, then run `store upgrade`.",
+    };
+  }
+
+  requireInputs(input, ["operator", "attestation"]);
+  const operator = required(input.operator, "--operator");
+  const attestationPath = path.resolve(invocation.cwd, required(input.attestation, "--attestation"));
+  const attestation = jsonFile<ActivationAttestation>(attestationPath, "--attestation");
+  const inventoryPath = input.inventory === undefined ? undefined : path.resolve(invocation.cwd, input.inventory);
+  invocation.effects.writeStderr?.(
+    "This will move execution authority from the legacy workflow files to SQLite and retire those files. Any unpublished catalog change will be preserved for later review, not applied or discarded. Type `preserve for later review` to confirm; anything else cancels. ",
+  );
+  const catalogDeltaDisposition = await invocation.effects.readInput();
+  if (catalogDeltaDisposition.trim() !== "preserve for later review") {
+    return {
+      version: 1,
+      command: id,
+      status: "refused",
+      code: "store.upgrade-not-confirmed",
+      exitCode: 1,
+      message: "The authority switch was not confirmed. The workflow files remain authoritative; rerun `store upgrade` and enter `preserve for later review` to continue.",
+    };
+  }
+
+  let staged: StagedStoreUpgrade;
+  try {
+    staged = await stageStoreUpgrade({
+      context,
+      operator,
+      operationId: randomUUID(),
+      catalogDeltaDisposition,
+      ...(inventoryPath === undefined ? {} : { inventoryPath }),
+    });
+  } catch (error) {
+    return storeUpgradeFailure(id, error);
+  }
+
+  try {
+    const receipt = await activateStoreUpgrade(staged, attestation);
+    return ok(id, {
+      verdict: "upgraded",
+      schemaVersion: staged.manifest.schemaVersion,
+      authorityState: "active",
+      sourcesRetired: receipt.phase === "retired",
+    });
+  } catch (error) {
+    return storeUpgradeFailure(id, error);
+  }
+}
 
 async function execute(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {
@@ -114,7 +204,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         try { return ok(id, { storeId: handle.storeId, epoch: handle.epoch, schemaVersion: handle.schemaVersion, authorityState: "active" }); }
         finally { handle.close(); }
       }
-      case "store.upgrade": return ok(id, await upgradeStore(context));
+      case "store.upgrade": return unifiedStoreUpgrade(id, input, context, invocation);
       case "store.backup": {
         const out = outputPath(input.out, invocation.cwd);
         const receipt = await backupStore(context, out === undefined ? {} : { out });
@@ -163,27 +253,38 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       default: throw new Error(`unsupported store command ${id}`);
     }
-  } catch (error) { return refused(id, error); }
+  } catch (error) {
+    return id === "store.upgrade" ? storeUpgradeFailure(id, error) : refused(id, error);
+  }
 }
 
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
-  const verb = id.slice("store.".length);
+  const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionFlags: Record<keyof StoreInput, string> = {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <path>", out: "--out <path>",
+    operator: "--operator <name>", inventory: "--inventory <path>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
     migrate: ["harness", "apply", "manifest", "out"],
-    upgrade: ["harness"],
+    upgrade: ["harness", "operator", "attestation", "inventory"],
     backup: ["harness", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
-  const options = Object.keys(inputSchema.shape).map((key) => ({ key, flags: optionFlags[key as keyof StoreInput]!, required: false }));
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
+  const options = optionKeys.map((key) => ({ key, flags: optionFlags[key], required: false }));
+  const definitionInput = inputSchema.pick(shape);
   return {
-    id, cli: { path: ["store", verb], aliases: [], arguments: [], options }, input: inputSchema,
-    output: commandEnvelopeSchema, effects: verb === "migrate" ? ["read", "write"] : writeVerbs[verb] === true ? ["read", "write"] : ["read"],
-    description: `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
+    id,
+    cli: { path: ["store", verb], aliases: [], arguments: [], options },
+    input: definitionInput,
+    output: commandEnvelopeSchema,
+    description:
+      verb === "upgrade"
+        ? "Report store readiness; ask once for authority-switch approval and the disposition of any unpublished catalog change, then stage, activate, and retire migrated workflow files."
+        : `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }
