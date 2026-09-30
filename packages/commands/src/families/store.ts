@@ -23,7 +23,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 
 const inputSchema = z.object({
@@ -37,7 +37,10 @@ const inputSchema = z.object({
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "migrate", "upgrade", "backup", "activate", "retire"] as const;
-const writeVerbs: Record<string, true> = { init: true, upgrade: true, backup: true, activate: true, retire: true };
+function hasLegacyExecutionFiles(harnessDir: string): boolean {
+  return existsSync(path.join(harnessDir, "status.json")) ||
+    (existsSync(path.join(harnessDir, "workflows")) && readdirSync(path.join(harnessDir, "workflows")).length > 0);
+}
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -111,19 +114,16 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
 }
 function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof SddScriptError) return refused(id, error);
-  const code =
-    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
-      ? error.code
-      : "";
-  const message =
-    code === "execution.migration-conflict"
-      ? "A saved workflow has a pending change that cannot be safely published. Review or resolve the workspace's pending changes, then run `store upgrade` again."
-      : code === "execution.coverage-incomplete"
-        ? "The workspace discovery is incomplete. Complete its inventory, then run `store upgrade` again."
-        : code === "store.attestation-invalid" || code === "store.activation-blocked"
-          ? "The installed consumers or active sessions are not ready for the authority change. Reload or update consumers and stop active sessions, then run `store upgrade` again."
-          : "The workspace's saved execution data could not be migrated safely. Resolve the incomplete or conflicting workflow state, then run `store upgrade` again.";
-  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message };
+  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  const blocker = (error instanceof Error ? error.message : "the execution migration failed")
+    .replace(/(?:[A-Za-z]:)?\/[^\s,;)]*/g, "a workspace file")
+    .replace(/\b(workflow|operation|manifest|session)[-_][A-Za-z0-9_-]+\b/gi, "$1 (identifier withheld)");
+  const recovery =
+    code === "execution.migration-conflict" ? "Review the affected workflow and resolve its pending change, then rerun `store upgrade`."
+      : code === "execution.coverage-incomplete" ? "Review the affected execution source and provide the required inventory with `--inventory`, then rerun `store upgrade`."
+        : code === "store.attestation-invalid" || code === "store.activation-blocked" ? "Update consumer evidence or stop active sessions, then rerun `store upgrade`."
+          : "Review the affected execution source and correct it before rerunning `store upgrade`.";
+  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${blocker}. ${recovery}` };
 }
 
 async function unifiedStoreUpgrade(
@@ -143,10 +143,16 @@ async function unifiedStoreUpgrade(
       status: "refused",
       code: "store.upgrade-blocked",
       exitCode: 1,
-      message: "No store exists in this workspace. Initialize it with `store init`, then run `store upgrade`.",
+      message: hasLegacyExecutionFiles(context.harnessDir)
+        ? "No store exists, but legacy execution files are present. Preserve those files and use the supported staged migration; `store init` is not appropriate."
+        : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
     };
   }
 
+  if (!hasLegacyExecutionFiles(context.harnessDir)) {
+    const upgraded = await upgradeStore(context);
+    return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
+  }
   requireInputs(input, ["operator", "attestation"]);
   const operator = required(input.operator, "--operator");
   const attestationPath = path.resolve(invocation.cwd, required(input.attestation, "--attestation"));
@@ -204,7 +210,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         try { return ok(id, { storeId: handle.storeId, epoch: handle.epoch, schemaVersion: handle.schemaVersion, authorityState: "active" }); }
         finally { handle.close(); }
       }
-      case "store.upgrade": return unifiedStoreUpgrade(id, input, context, invocation);
+      case "store.upgrade": return await unifiedStoreUpgrade(id, input, context, invocation);
       case "store.backup": {
         const out = outputPath(input.out, invocation.cwd);
         const receipt = await backupStore(context, out === undefined ? {} : { out });
@@ -281,10 +287,17 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: definitionInput,
     output: commandEnvelopeSchema,
-    description:
-      verb === "upgrade"
-        ? "Report store readiness; ask once for authority-switch approval and the disposition of any unpublished catalog change, then stage, activate, and retire migrated workflow files."
-        : `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
+    effects: ({
+      init: ["read", "write"],
+      migrate: ["read", "write"],
+      upgrade: ["read", "write", "stdin"],
+      backup: ["read", "write"],
+      activate: ["read", "write"],
+      retire: ["read", "write"],
+    } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
+    description: verb === "upgrade"
+      ? "Report readiness; upgrade the schema, and when legacy execution files exist confirm before migrating authority."
+      : `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }

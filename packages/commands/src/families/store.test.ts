@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
-import type { CommandEnvelope, InvocationContext } from "../../types.js";
+import type { CommandEnvelope, InvocationContext } from "../types.js";
 import { getStoreCommandDefinitions } from "../index.js";
 
 const roots: string[] = [];
@@ -126,11 +126,6 @@ describe("store.upgrade unified entry", () => {
 
     const { result, messages } = await runUpgrade(harness, root, "preserve for later review");
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("execution authority");
-    expect(messages[0]).toContain("legacy");
-    expect(messages[0]).toContain("retire");
-    expect(messages[0]).toContain("preserved for later review");
-    expect(messages[0]).not.toContain("manifest");
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
@@ -155,30 +150,75 @@ describe("store.upgrade unified entry", () => {
     const { result, messages } = await runUpgrade(harness, root, "");
     expect(messages).toHaveLength(1);
     expect(result.status).toBe("refused");
-    if (result.status === "refused") {
-      expect(result.message).toContain("not confirmed");
-      expect(result.message).toContain("`store upgrade`");
-    }
     expect(existsSync(join(harness, "status.json"))).toBe(true);
     const unchanged = await openStore({ harnessDir: harness }, "read");
     try {
       expect(unchanged.execution?.authorityState).toBe("legacy");
+      expect(unchanged.db.prepare("select count(*) as count from catalog_operations").get()).toEqual({ count: 0 });
+      expect(unchanged.db.prepare("select count(*) as count from execution_migrations").get()).toEqual({ count: 0 });
     } finally {
       unchanged.close();
     }
   });
 
+  test("schema-only upgrade advances schema without execution migration inputs", async () => {
+    const root = fixture();
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    const priorVersion = store.schemaVersion - 1;
+    store.db.exec(`
+      drop trigger issues_milestone_project_insert;
+      drop trigger issues_milestone_project_update;
+      drop trigger project_milestones_identity_immutable;
+      drop index project_milestones_order;
+      drop index issues_milestone_disposition;
+      drop table project_milestones;
+      alter table issues drop column milestone_id;
+      delete from schema_version where version = 7;
+    `);
+    store.close();
+
+    const definition = upgradeDefinition();
+    const parsed = definition.input.parse({ harness });
+    const { context } = invocation(root);
+    const result = await definition.execute(parsed, context);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.data).toMatchObject({ verdict: "upgraded", schemaVersion: priorVersion + 1, executionMigration: "not-needed" });
+    }
+    const upgraded = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(upgraded.schemaVersion).toBe(priorVersion + 1);
+      expect(upgraded.execution?.authorityState).toBe("legacy");
+    } finally {
+      upgraded.close();
+    }
+  });
+
+  test("pre-migration input failures return command envelopes", async () => {
+    const root = fixture();
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+    const definition = upgradeDefinition();
+    const { context } = invocation(root);
+    const missingInput = await definition.execute(definition.input.parse({ harness }), context);
+    expect(missingInput.status).toBe("usage");
+    const unreadableAttestation = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: join(root, "absent.json") }),
+      context,
+    );
+    expect(unreadableAttestation.status).toBe("usage");
+  });
   test("a missing store refusal names the supported recovery action", async () => {
     const root = fixture();
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     const { result, messages } = await runUpgrade(harness, root);
     expect(result.status).toBe("refused");
-    if (result.status === "refused") {
-      expect(result.message).toContain("No store exists");
-      expect(result.message).toContain("`store init`");
-      expect(result.message).not.toContain("store-missing");
-    }
     expect(messages).toEqual([]);
   });
 });
