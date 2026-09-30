@@ -195,10 +195,16 @@ async function unifiedStoreUpgrade(
         : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
     };
   }
-  if (state.reasons.includes("schema-upgrade-pending")) {
+  if (
+    state.reasons.includes("schema-upgrade-pending")
+    && (
+      !hasLegacyExecutionFiles(context.harnessDir)
+      || (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired")
+    )
+  ) {
     const upgraded = await upgradeStore(context);
     state = await probeStoreUpgradeState(context);
-    if (state.executionAuthorityState !== "active" || state.executionMigrationPhase !== "active") {
+    if (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired") {
       return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
     }
   }

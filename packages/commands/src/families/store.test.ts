@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
@@ -295,6 +295,47 @@ describe("store.upgrade unified entry", () => {
       expect(unchanged.db.prepare("select count(*) as count from execution_migrations").get()).toEqual({ count: 0 });
     } finally {
       unchanged.close();
+    }
+  });
+
+  test("pending schema with legacy sources stages, activates, retires, and backs up before schema upgrade", async () => {
+    const root = fixture();
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const store = await initializeStore({ harnessDir: harness });
+    const priorVersion = olderSchema(store);
+    store.close();
+
+    const result = await runUpgradeHandler(harness, root);
+    expect(result.status).toBe("ok");
+    expect(result.exitCode).toBe(0);
+    if (result.status === "ok") {
+      expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
+      expect(result.data).not.toMatchObject({ executionMigration: "not-needed" });
+    }
+    expect(existsSync(join(harness, "status.json"))).toBe(false);
+    expect(readdirSync(join(harness, "archived", "execution"))).toHaveLength(1);
+
+    const backupDir = join(harness, "archived", "store-migration", "backups");
+    const preSchemaBackup = readdirSync(backupDir).find((name) => name.endsWith("-pre-schema.db"));
+    expect(preSchemaBackup).toBeDefined();
+    const backupHarness = join(root, "pre-schema-check");
+    mkdirSync(backupHarness, { recursive: true });
+    copyFileSync(join(backupDir, preSchemaBackup!), join(backupHarness, "store.db"));
+    const recoveryPoint = await openStore({ harnessDir: backupHarness }, "read");
+    try {
+      expect(recoveryPoint.schemaVersion).toBe(priorVersion);
+    } finally {
+      recoveryPoint.close();
+    }
+    const active = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(active.schemaVersion).toBe(priorVersion + 1);
+      expect(active.execution?.authorityState).toBe("active");
+      expect(active.db.prepare("select phase from execution_migrations").get()).toEqual({ phase: "retired" });
+    } finally {
+      active.close();
     }
   });
 
