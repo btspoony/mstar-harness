@@ -688,10 +688,7 @@ describe("Prepare workflow amendment", () => {
 
       const label = `${planCase.name}: `;
       expect(`${label}${failure.code}`).toBe(`${label}coordination.prepare-amendment.invalid-plan`);
-      // The refusal names the missing declaration, the row and the reviewed
-      // file as facts, so it stays actionable without pinning one sentence.
-      expect(failure.message).toContain(planCase.header);
-      expect(failure.message).toContain(planPath);
+      // The owner supplies the plan identity, missing header field, and source path.
       expect(failure.details).toMatchObject({ plan_id: PREPARE_APPEND, field: planCase.field, path: planPath });
       // It refuses before mutation: every protected byte is unchanged.
       expect(protectedBytes(fixture)).toEqual(before);

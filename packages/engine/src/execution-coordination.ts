@@ -318,7 +318,7 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
   const status = witness.view.workflow.status;
   if (status !== "running") {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.workflow-not-running",
       `workflow ${witness.workflowId} is ${String(status)} \u2014 a plan operation requires a running lifecycle`,
       { workflow_id: witness.workflowId, plan_id: witness.planId, status },
     );
@@ -1234,7 +1234,7 @@ function decideMergeLease(
   }
   if (mergeLeaseOfAttempt(lease, witness.planId, handoff.source_branch) === undefined) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.merge-lease-foreign",
       `plan ${witness.planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
         `(${witness.planId} source ${handoff.source_branch}) \u2014 a foreign claim is never reused or released`,
       {
@@ -1264,7 +1264,7 @@ function assertMergeLeaseOwn(
   const decision = decideMergeLease(witness, tx, handoff, what);
   if (decision.kind === "stopped") {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.merge-lease-stopped-owner",
       `plan ${witness.planId} merge lease is held by ${decision.lease.holder}, whose session is no longer active \u2014 ${what} does ` +
         `not take over a stopped owner; reconcile records the prior holder and the decision`,
       { plan_id: witness.planId, holder: decision.lease.holder, operation: what },
@@ -1304,7 +1304,7 @@ async function assertFindingsClosed(
   }
   if (!gate.ok) {
     throw new CoordinationError(
-      "coordination.invalid-transition",
+      "coordination.findings-open",
       `plan ${planId} cannot ${what} while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
       { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
     );

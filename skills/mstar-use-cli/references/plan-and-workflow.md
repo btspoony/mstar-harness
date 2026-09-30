@@ -91,8 +91,23 @@ All plan and workflow refusals are mutation-free: the authoritative bytes are un
 | `coordination.identity-recovery.*` | the JSON Prepare coordinator recovery refused: `not-prepare`, `invalid-request`, `execution-started` (a row already owns execution), `foreign-owner`, `stale`, `unauthorized`, `operation-conflict` |
 | `execution.direct-write-refused` | an **active execution authority**: the JSON recovery and the file route never run against it — the existing DB recovery verb owns that repair |
 | `coordination.duplicate-holder` | a second fresh claim of an already-held row, or of an already-bound coordinator |
-| `coordination.handoff-mismatch` | the handoff flag names something other than the row's live handoff |
+| `coordination.handoff-pin` | the handoff flag names something other than the row's live handoff |
 | `coordination.invalid-transition` | the proposed document fails validation for the requested transition |
+| `coordination.handoff-state` | a plan session attempts a transition while a non-returned handoff owns the plan |
+| `coordination.handoff-missing` | a handoff transition is requested when no handoff exists |
+| `coordination.execution-lease-required` | an operation requires a valid active execution lease, but lease validation fails |
+| `coordination.prepare-already-prepared` | prepare is attempted on an already-prepared row |
+| `coordination.prepare-session-bound` | prepare is attempted after another session is bound (non-claimant) |
+| `coordination.prepare-handoff-active` | prepare is attempted after a handoff exists |
+| `coordination.prepare-status` | prepare is attempted when the row is not Todo or Blocked |
+| `coordination.progress-phase` | progress is attempted from a status with no progress transitions (including absent status) |
+| `coordination.progress-transition` | the requested progress status edge is not allowed from the current status |
+| `coordination.plan-status` | a transition requires a particular current row status, but the row differs |
+| `coordination.workflow-not-running` | a plan operation is attempted when the lifecycle is not running |
+| `coordination.merge-lease-foreign` | a merge lease claims another plan/source attempt and must not be reused or released |
+| `coordination.merge-lease-stopped-owner` | a merge lease belongs to an inactive/stopped session; only reconcile may act |
+| `coordination.findings-open` | completion or transition is blocked because findings remain open |
+| `coordination.completion-frozen` | completion delivery fulfilment is frozen after an owned plan reaches Done |
 | `coordination.git-unavailable` | a Git-derived fact the verb needs cannot be established |
 | `coordination.expected-version-required` / `coordination.version-conflict` | a coordinate write without a token, or with one that no longer matches the bytes |
 | shared lock failure | another writer holds the same-host lock |

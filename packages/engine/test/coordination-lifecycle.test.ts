@@ -868,7 +868,7 @@ describe("seam-regressions", () => {
         },
       }),
     );
-    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     expect(existsSync(fixture.registerPath)).toBe(false);
   });
@@ -881,7 +881,7 @@ describe("seam-regressions", () => {
 
     const before = readFileSync(fixture.snapshotPath);
     const code = await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }));
-    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
     // The state never advances: still InReview, handoff still merely submitted.
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     const row = planRowOf(fixture, PLAN_ID);
@@ -1046,7 +1046,7 @@ describe("seam-regressions", () => {
     // is live when its command finally reaches the lock.
     const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }, replaced))).toBe(
-      "coordination.invalid-transition",
+      "coordination.handoff-pin",
     );
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     const row = planRowOf(fixture, PLAN_ID);
