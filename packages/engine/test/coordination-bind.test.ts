@@ -8,42 +8,34 @@ import { tmpdir } from "node:os";
 import { dirname, basename, join, sep } from "node:path";
 import {
   EXECUTION_PIN_CONFLICT_CODE,
-  amendPrepareWorkflow,
   bindPlanSession,
   setBindPreInterleaveForTest,
-  executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
   recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
   resolvePlanScope,
-  setCompleteStandaloneMutateGapForTest,
-  setPrepareRecoveryEnvelopeGapForTest,
   showPrepareCoordinatorRecovery,
-  showPrepareWorkflow,
-  type CatalogExecutionPin,
   type CoordinationResult,
   type PlanCoordinationView,
   type PrepareCoordinatorRecoveryView,
-  type PrepareWorkflowPatch,
-  type PrepareWorkflowResult,
 } from "../src/coordination.js";
-import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
-import { initializeExecutionAuthority } from "../src/execution-store.js";
-import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
+import { updateCatalogEntity } from "../src/catalog.js";
+import { openStore } from "../src/store-db.js";
 import {
   CoordinationError,
-  artifactVersion,
   readArtifactBytes,
   validateSnapshotCoordination,
-  withProtectedWrite,
 } from "../src/coordination-write.js";
-import { claimLease, withStatusWriteLock } from "../src/lease.js";
-import { registerWorkflow } from "../src/status.js";
-import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
 import {
-  closeWorkflow,
+  createFsStore,
+  setArtifactStore,
+  type ArtifactDoc,
+  type ArtifactRef,
+  type ArtifactStore,
+} from "../src/store.js";
+import {
   recordWorkflowDelivery,
   stableJson,
   WORKFLOW_SNAPSHOT_FILE,
