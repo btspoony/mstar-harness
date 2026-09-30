@@ -651,13 +651,18 @@ function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot):
  * existing registration identity remains the single source of its stable
  * fields; normalizing its mutable status members preserves that field set.
  */
-function migrationIdentityMatches(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot, identity: string): boolean {
-  try {
-    JSON.parse(identity);
-  } catch {
-    // A legacy unresolved-plan-pointer journal has no comparable identity
-    // projection; its snapshot id/type and root entry remain the ownership proof.
-    return kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+function migrationIdentityMatches(
+  kind: CatalogExecutionKind,
+  snapshot: WorkflowSnapshot,
+  identity: string,
+  policy: "strict" | "legacy-retirement" = "strict",
+): boolean {
+  if (policy === "legacy-retirement") {
+    try {
+      JSON.parse(identity);
+    } catch {
+      return kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+    }
   }
   return migrationOwnershipIdentity(kind, snapshot) === identity;
 }
@@ -1750,7 +1755,7 @@ export async function retireStaleCatalogExecutionsForMigration(
       if (
         snapshot === undefined ||
         snapshot.id !== journal.workflow.workflowId ||
-        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity) ||
+        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") ||
         rootEntry === undefined ||
         expectedEntry === undefined ||
         stableJson(rootEntry) !== stableJson(expectedEntry)
