@@ -26,6 +26,7 @@ import {
   type MigrationManifest,
   type StagedStoreUpgrade,
   type StoreContext,
+  type StoreUpgradeState,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
@@ -299,19 +300,41 @@ async function unifiedStoreUpgrade(
     });
   } catch (error) {
     if (error !== null && typeof error === "object" && "code" in error && error.code === "execution.migration-conflict") {
-      invocation.effects.writeStderr?.(
-        "Changed evidence means this staged migration cannot be activated. Abandon this staged migration and its staged execution rows to return to legacy authority? Type `abandon staged migration` to confirm; anything else cancels. ",
-      );
-      const confirmation = await invocation.effects.readInput();
-      if (confirmation.trim() === "abandon staged migration") {
-        await abortExecutionMigration({
-          context,
-          operationId: randomUUID(),
-          operator,
-          manifestId: staged.manifest.id,
-          manifestHash: executionManifestHash(staged.manifest),
-          reason: "Changed evidence; operator confirmed abandonment through store upgrade",
-        });
+      let latestState: StoreUpgradeState | undefined;
+      try {
+        latestState = await probeStoreUpgradeState(context);
+      } catch {
+        // Preserve the activation/retirement failure if state cannot be reprobed.
+      }
+      if (latestState?.executionAuthorityState === "active" && latestState.executionMigrationPhase === "active") {
+        return {
+          version: 1,
+          command: id,
+          status: "refused",
+          code: "store.upgrade-blocked",
+          exitCode: 1,
+          message: "The execution authority is active, but source retirement did not complete because the reviewed evidence changed. Do not abandon the migration; rerun `store upgrade` to resume source retirement.",
+        };
+      }
+      if (latestState?.executionAuthorityState === "staged") {
+        invocation.effects.writeStderr?.(
+          "Changed evidence means this staged migration cannot be activated. Abandon this staged migration and its staged execution rows to return to legacy authority? Type `abandon staged migration` to confirm; anything else cancels. ",
+        );
+        const confirmation = await invocation.effects.readInput();
+        if (confirmation.trim() === "abandon staged migration") {
+          try {
+            await abortExecutionMigration({
+              context,
+              operationId: randomUUID(),
+              operator,
+              manifestId: staged.manifest.id,
+              manifestHash: executionManifestHash(staged.manifest),
+              reason: "Changed evidence; operator confirmed abandonment through store upgrade",
+            });
+          } catch {
+            // The activation failure remains the primary error.
+          }
+        }
       }
     }
     return storeUpgradeFailure(id, error);
