@@ -2148,8 +2148,9 @@ function coverageFromDiscovery(input: {
   const { discovered, manifest, manifestHash } = input;
   if (serializeExecutionValue(discovered.surfaces) !== serializeExecutionValue(manifest.surfaces)) {
     throw conflict(
-      "the frozen manifest's surface discovery no longer holds the reviewed bytes (a surface, its assigned source witnesses, its " +
-        "evidence or its proof changed). Re-preview the migration; nothing was staged.",
+      "the frozen manifest's surface discovery no longer holds the reviewed bytes: a surface, its assigned source witnesses, its " +
+        "evidence or proof changed. The staged migration must be abandoned before re-review: call abortExecutionMigration with a " +
+        "nonblank reason, then create and review a fresh migration. A staged migration cannot be re-previewed. Nothing was staged.",
     );
   }
   const pinned = pinnedWitnessesOf(manifest, discovered.pinnedExtras);

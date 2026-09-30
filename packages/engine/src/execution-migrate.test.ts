@@ -1879,7 +1879,10 @@ describe("execution-activation", () => {
 
     const refusal = await refusalOf(async () => activateExecutionMigration(await activationInput(fixture, manifest, "drift")));
     expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("no longer holds the reviewed bytes");
+    expect(refusal.message).toContain("surface discovery");
+    expect(refusal.message).toContain("assigned source witnesses");
+    expect(refusal.message).toContain("abortExecutionMigration with a nonblank reason");
+    expect(refusal.message).toContain("create and review a fresh migration");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
     expect(migrationPhaseOf(fixture.dbPath)).toBe("staged");
   });
