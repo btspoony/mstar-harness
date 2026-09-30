@@ -708,9 +708,13 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // derived-coverage test below. This fixture stays refusal-only so its
     // no-write invariant holds for every member.
 
-    // Missing --inventory: the manifest records an explicit scope, so the
-    // boundary's own discovery would not be the reviewed one.
-    expectUsageRefusal(runCli(withoutFlag(applyArgs, "--inventory"), fixture), "apply", "--inventory");
+    // An explicitly SUPPLIED inventory path that differs from the manifest's
+    // reviewed scope is the one inventory refusal: the derivation only fills
+    // an omission, it never overrides a mismatched claim.
+    const mismatchedInventory = join(fixture.root, "refusal-mismatched-inventory.json");
+    writeJson(mismatchedInventory, { scope: "not-the-reviewed-boundary" });
+    const mismatchedArgs = applyArgs.map((arg) => (arg === fixture.inventoryPath ? mismatchedInventory : arg));
+    expectUsageRefusal(runCli(mismatchedArgs, fixture), "apply", "--inventory");
     // A coverage set of ANOTHER manifest is never applied under this one.
     const foreignCoverage = join(fixture.root, "refusal-foreign-coverage.json");
     const coverageDocument = JSON.parse(readFileSync(reviewed.coveragePath, "utf8")) as Record<string, unknown>;
