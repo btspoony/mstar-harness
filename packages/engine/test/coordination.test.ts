@@ -924,7 +924,7 @@ describe("binding", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
     // A plan-pm envelope that is NOT this row's holder keeps `session-role`.
     const outsider = join(fixture.workflowDir, "sessions", "plan-pm-outsider.json");
     writeJson(outsider, {
@@ -1194,7 +1194,7 @@ describe("admission self-claim and orphan adoption", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
 
     // §D/§D4 the prepared-but-unleased window advertises NO lease-gated
     // operation: identity is not ownership, and the mutation guards require the
@@ -2024,7 +2024,7 @@ describe("admission self-claim and orphan adoption", () => {
           operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
         }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.prepare-already-prepared");
     expect(view.outcome).toBe("prepared");
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
@@ -2358,7 +2358,7 @@ describe("scope-and-revisions", () => {
       operation: { kind: "progress", progress: { status: "InReview", summary: "resume out of order", evidence_paths: [evidence] }},
     }),
       ),
-    ).toBe("coordination.invalid-transition");
+    ).toBe("coordination.progress-transition");
   });
 
   test("a plan session can only address its own plan", async () => {
@@ -3579,7 +3579,7 @@ describe("seam-regressions", () => {
         },
       }),
     );
-    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     expect(existsSync(fixture.registerPath)).toBe(false);
   });
@@ -3592,7 +3592,7 @@ describe("seam-regressions", () => {
 
     const before = readFileSync(fixture.snapshotPath);
     const code = await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }));
-    expect(["coordination.invalid-transition", "coordination.session-mismatch"]).toContain(code);
+    expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
     // The state never advances: still InReview, handoff still merely submitted.
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     const row = planRowOf(fixture, PLAN_ID);
@@ -3757,7 +3757,7 @@ describe("seam-regressions", () => {
     // is live when its command finally reaches the lock.
     const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }, replaced))).toBe(
-      "coordination.invalid-transition",
+      "coordination.handoff-pin",
     );
     expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     const row = planRowOf(fixture, PLAN_ID);
@@ -7750,7 +7750,7 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     // refused (the frozen input is immutable), so the move cannot be applied
     // retroactively.
     const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
-    expect(refused).toBe("coordination.invalid-transition");
+    expect(refused).toBe("coordination.prepare-already-prepared");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
