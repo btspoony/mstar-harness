@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   SddScriptError,
   StoreError,
+  abortExecutionMigration,
   activateStore,
   activateStoreUpgrade,
   activationReceiptFor,
@@ -16,10 +17,11 @@ import {
   probeStoreUpgradeState,
   resolveProcessHarnessDir,
   retireStoreSources,
+  retireExecutionSources,
   stageStoreUpgrade,
   upgradeStore,
   upgradeStoreWithRecoveryPoint,
-  retireExecutionSources,
+  executionManifestHash,
   type ActivationAttestation,
   type MigrationManifest,
   type StagedStoreUpgrade,
@@ -127,7 +129,7 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
     "execution.migration-conflict": {
       blocker: "The staged migration conflicts with current workspace state; its reviewed evidence may no longer match.",
-      recovery: "Do not rerun this staged attempt. Abandon it with `store execution abort`, then create and review a fresh migration.",
+      recovery: "Do not rerun this staged attempt. `store upgrade` will ask you to confirm abandoning it, then create and review a fresh migration.",
     },
     "execution.coverage-incomplete": {
       blocker: "The legacy execution source is missing required completeness evidence.",
@@ -296,6 +298,22 @@ async function unifiedStoreUpgrade(
       sourcesRetired: receipt.phase === "retired",
     });
   } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "execution.migration-conflict") {
+      invocation.effects.writeStderr?.(
+        "Changed evidence means this staged migration cannot be activated. Abandon this staged migration and its staged execution rows to return to legacy authority? Type `abandon staged migration` to confirm; anything else cancels. ",
+      );
+      const confirmation = await invocation.effects.readInput();
+      if (confirmation.trim() === "abandon staged migration") {
+        await abortExecutionMigration({
+          context,
+          operationId: randomUUID(),
+          operator,
+          manifestId: staged.manifest.id,
+          manifestHash: executionManifestHash(staged.manifest),
+          reason: "Changed evidence; operator confirmed abandonment through store upgrade",
+        });
+      }
+    }
     return storeUpgradeFailure(id, error);
   }
 }
