@@ -42,7 +42,7 @@ Plan artifacts must follow `{PLAN_DIR}` from `mstar-conventions`, not external d
 - Test every proposed component: layer, abstraction, interface, contract, queue/cache/config surface, extra option, or extra section. Ask: *If this were removed, which confirmed requirement would fail? Name it.* Confirmed requirements include the approved long-term target state and recorded non-functional constraints — not guesses about future needs.
 - Delete the component if no confirmed requirement fails. Do not retain it because we "might need later" or "in case we need to".
 - Keep one line of ablation evidence per non-obvious retained component in the plan/spec: `Ablation: <component> — removal would lose <X>; kept for <requirement>`.
-- In both Prepare & Plan (Architecture) and Architecture Spec Template, write any section that does not apply at this task's scale as `N/A — <one-line reason>` instead of inventing filler. A three-module change does not need a Scalability section.
+- In both Prepare & Plan (Architecture) and Architecture Spec Template, write any section that does not apply at this task's scale as `N/A — <one-line reason>` instead of inventing filler. Mark Scalability `N/A` only when no confirmed scalability requirement applies, regardless of the number of modules.
 - Remove speculative components, not durability: minimal is not a stopgap. Keep the smallest design aligned with the long-term target state; do not downgrade it into a temporary hack.
 
 Use `mstar-coding-behavior` §2 as the implementation-level playbook on demand.
