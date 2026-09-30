@@ -1200,6 +1200,30 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
+  test("migration retirement allows progress that preserves registration inputs", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-progress-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: PLAN_ID, title: "Already registered", rootKind: "plans", relativePath: "elsewhere.md" },
+      { operationId: "seed-migration-progress", actor: "project-manager" },
+    );
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-stale-progress", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    handle.close();
+
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+    snapshot.status = "paused";
+    snapshot.plans[0].status = "InProgress";
+    writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+
+    await retireStaleCatalogExecutionsForMigration(context, ["op-stale-progress"], "owner approved discard");
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
   test("migration retirement refuses stale execution-written rows with no execution bytes without changing the journal", async () => {
     const { harnessDir, context } = await fixture("migration-retire-no-bytes-");
     await registerCatalogEntity(

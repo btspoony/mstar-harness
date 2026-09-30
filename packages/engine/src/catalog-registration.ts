@@ -632,7 +632,7 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
     snapshotPath: join(dir, WORKFLOW_SNAPSHOT_FILE),
     statusPath: join(harnessDir, "status.json"),
     snapshot,
-    identity: onDiskIdentity(workflow.kind, snapshot),
+    identity: migrationOwnershipIdentity(workflow.kind, snapshot),
     request,
   };
 }
@@ -644,6 +644,20 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
  */
 function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
   return kind === "iteration" ? iterationWorkflowRegistrationIdentity(snapshot) : planWorkflowRegistrationIdentity(snapshot);
+}
+
+/**
+ * Project away execution progress before comparing migration ownership. The
+ * existing registration identity remains the single source of its stable
+ * fields; normalizing its mutable status members preserves that field set.
+ */
+function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
+  const registration = {
+    ...snapshot,
+    status: "running",
+    plans: snapshot.plans.map((plan) => ({ ...plan, status: "Todo" })),
+  } as WorkflowSnapshot;
+  return onDiskIdentity(kind, registration);
 }
 
 /**
@@ -1725,7 +1739,7 @@ export async function retireStaleCatalogExecutionsForMigration(
       if (
         snapshot === undefined ||
         snapshot.id !== journal.workflow.workflowId ||
-        onDiskIdentity(journal.workflow.kind, snapshot) !== journal.workflow.identity ||
+        migrationOwnershipIdentity(journal.workflow.kind, snapshot) !== journal.workflow.identity ||
         rootEntry === undefined ||
         expectedEntry === undefined ||
         stableJson(rootEntry) !== stableJson(expectedEntry)
