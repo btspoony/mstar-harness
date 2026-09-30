@@ -13,6 +13,7 @@ import {
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
+  readSessionEnvelope,
   recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
   resolvePlanScope,
@@ -22,6 +23,7 @@ import {
   type PrepareCoordinatorRecoveryView,
 } from "../src/coordination.js";
 import { updateCatalogEntity } from "../src/catalog.js";
+import type { RecoveryDetails } from "../src/recovery-intent.js";
 import { openStore } from "../src/store-db.js";
 import {
   CoordinationError,
@@ -44,7 +46,7 @@ import {
 } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID, FIXTURE_COORDINATOR_ID,
-  type Fixture, git, writeText, writeJson, readJson, makeFixture, errorCodeOf,
+  type Fixture, git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureOf,
   ensureCoordinator, preparePlan, bindPlan, resumePlan,
   gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, leaseHolder,
   handoffEvidenceOf, sha256OfFile, handoffCall, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
@@ -1618,7 +1620,7 @@ describe("scope-and-revisions", () => {
     expect(await errorCodeOf(() => resolvePlanScope({ assignmentPath: unscoped }, fixture.root))).toBe("coordination.assignment-invalid");
   });
 
-  test("prepare pins the Assignment hash; a mutated Assignment invalidates the row", async () => {
+  test("prepare pins the Assignment with its semantic projection, not a byte gate", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
@@ -1630,25 +1632,97 @@ describe("scope-and-revisions", () => {
     expect(view.prepared?.assignment_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(view.revision).toBe(2); // prepare bumped it to 1, the fresh bind to 2
     expect(view.scope?.planPath).toBe(fixture.planPath);
-
-    // The Assignment is the row's pin: editing it invalidates every later call.
-    writeText(
-      fixture.assignmentPath,
-      `${readFileSync(fixture.assignmentPath, "utf8")}\nRewritten after prepare.\n`,
-    );
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: view.revision,
-      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [] }},
-    }),
-      ),
-    ).toBe("coordination.assignment-stale");
+    // The seal records the reviewed Assignment's MEANING as well as its bytes:
+    // the projection is what every later re-authentication compares (A29 — the
+    // `sealed input` case below covers the formatting-vs-semantic boundary).
+    expect(view.prepared?.assignment_intent).toEqual({
+      execution_scope: "plan",
+      execute_as: "project-manager",
+      delegation: "allowed (plan-local subagents only)",
+      control_harness_root: fixture.harness,
+      workflow_id: WORKFLOW_ID,
+      plan_id: PLAN_ID,
+      plan_path: fixture.planPath,
+      worktree_path: fixture.worktreePath,
+      working_branch: "feature/plan-a",
+      sdd_dir: fixture.sddDir,
+      qa_gate: "mandatory",
+      findings_cleanup: "zero-residual",
+      prepare_gate: "go",
+    });
   });
 
-  test("progress is revision-guarded, evidence-scoped and transition-checked", async () => {
+  test("a sparse intent omitting the session envelope and the revision reaches the same result (A02)", async () => {
+    // § One resolver path (S2/E02): a caller that states neither `sessionPath`
+    // nor `expectedRevision` names only its acquired identity, the plan it
+    // addresses and the operation. The engine resolves the trusted root, the
+    // addressed target and that identity's OWN envelope, and derives the
+    // revision from the row — reaching exactly the result the fully specified
+    // form reaches, with no invented revision and therefore no drift warning.
+    const specified = makeFixture();
+    await preparePlan(specified, PLAN_ID);
+    await bindPlan(specified, PLAN_ID);
+    const specifiedEvidence = join(specified.sddDir, "evidence.txt");
+    writeText(specifiedEvidence, "proof\n");
+    const specifiedView = await readPlanCoordination(specified.planSession, PLAN_ID, specified.root);
+    const specifiedResult = await mutatePlanCoordination({
+      sessionPath: specified.planSession,
+      planId: PLAN_ID,
+      expectedRevision: specifiedView.revision,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [specifiedEvidence] } },
+    });
+
+    const sparse = makeFixture();
+    await preparePlan(sparse, PLAN_ID);
+    await bindPlan(sparse, PLAN_ID);
+    const sparseEvidence = join(sparse.sddDir, "evidence.txt");
+    writeText(sparseEvidence, "proof\n");
+    const envelope = readSessionEnvelope(sparse.planSession);
+    const sparseResult = await mutatePlanCoordination({
+      cwd: sparse.root,
+      identity: {
+        source: "local",
+        sessionId: envelope.session_id,
+        workflowId: envelope.workflow_id,
+        role: "plan-pm",
+        planId: PLAN_ID,
+      },
+      planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [sparseEvidence] } },
+    });
+
+    expect(sparseResult.session_file).toBe(sparse.planSession);
+    expect(sparseResult.outcome).toBe(specifiedResult.outcome);
+    expect(sparseResult.recovery?.outcome).toBe(specifiedResult.recovery?.outcome);
+    expect(sparseResult.recovery?.warnings).toEqual([]);
+    expect(sparseResult.view?.revision).toBe(specifiedResult.view?.revision);
+    expect(sparseResult.view?.row.status).toBe("InProgress");
+
+    // The association is what the engine resolves the session from: with no
+    // envelope AND no identity there is nothing to authenticate, so the call
+    // refuses with that problem instead of selecting a bound session.
+    const unassociated = makeFixture();
+    await preparePlan(unassociated, PLAN_ID);
+    await bindPlan(unassociated, PLAN_ID);
+    const before = readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root);
+    const unassociatedFailure = await failureOf(() =>
+      mutatePlanCoordination({
+        cwd: unassociated.root,
+        planId: PLAN_ID,
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [] } },
+      }),
+    );
+
+    // Narrow once, for the assertions below: `failureOf` hands back the thrown value.
+    const refusal = unassociatedFailure as CoordinationError;
+    expect(refusal).toBeInstanceOf(CoordinationError);
+    expect(refusal.code).toBe("coordination.invalid-input");
+    const recovery = refusal.details.recovery as RecoveryDetails;
+    expect(recovery.unresolved[0]?.needed).toBe("the session this call runs under");
+    expect(readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root).revision).toBe(before.revision);
+  });
+
+  test("progress is admission-checked: evidence-scoped and transition-guarded", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
     await bindPlan(fixture, PLAN_ID);
@@ -1658,18 +1732,6 @@ describe("scope-and-revisions", () => {
     const outside = join(fixture.root, "outside.txt");
     writeText(outside, "not mine\n");
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-
-    // Stale revision: the row moved to revision 1 during prepare.
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      planId: PLAN_ID,
-      expectedRevision: 0,
-      operation: { kind: "progress", progress: { status: "InProgress", summary: "start", evidence_paths: [evidence] }},
-    }),
-      ),
-    ).toBe("coordination.version-conflict");
 
     // Evidence outside the plan's own plan/SDD area is refused.
     expect(
@@ -1765,6 +1827,7 @@ describe("scope-and-revisions", () => {
     expect(await errorCodeOf(() => readPlanCoordination(stray, PLAN_ID, fixture.root))).toBe("coordination.forbidden-field");
   });
 });
+
 describe("issue-authority — scoped plan issue operations (G2a)", () => {
   test("issue authority: residual-add captures issues in the store and links the plan; no register is written", async () => {
     const fixture = await gitFixture();

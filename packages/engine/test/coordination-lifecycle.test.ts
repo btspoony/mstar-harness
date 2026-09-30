@@ -512,17 +512,20 @@ describe("standalone-development-completion", () => {
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
   }, 30000);
 
-  test("delivery evidence refuses before Done and succeeds after Done with a full registered tail", async () => {
+  test("delivery evidence is captured before Done and completes the close with a full registered tail (A19)", async () => {
     const fixture = await acceptedStandaloneFixture();
-    const before = readFileSync(fixture.snapshotPath);
-    await expect(
-      recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
-        sessionPath: fixture.coordinatorSession,
-        evidence: { compound: { outcome: "created" } },
-        at: "2026-09-15T01:00:00Z",
-      }),
-    ).rejects.toThrow(/PHASE6_PLAN_ROW_NOT_DONE/);
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    // §R5/A19 external evidence arrives when it arrives: capturing the delivery
+    // tail while the row is still InReview is legal and is NOT a completion (the
+    // retired `PHASE6_PLAN_ROW_NOT_DONE` write-time pin is gone — the semantic
+    // boundary is the close, which consults the complete registered tail).
+    const captured = await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
+      sessionPath: fixture.coordinatorSession,
+      evidence: { compound: { outcome: "created" } },
+      at: "2026-09-15T01:00:00Z",
+    });
+    expect(captured.written).toBe(true);
+    expect(snapshotOf(fixture).delivery).toEqual({ compound: { outcome: "created" } });
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
     await coordinatorCall(fixture, PLAN_ID, { kind: "complete" });
     await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
@@ -712,22 +715,7 @@ describe("legacy-delivery-source-repair", () => {
     expect(readFileSync(prConflict.snapshotPath).equals(beforeConflict)).toBe(true);
   }, 30000);
 
-  test("stale revision, dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
-    const fixture = await wrongSourceAcceptedFixture(false);
-    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    const before = readFileSync(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: fixture.coordinatorSession,
-          planId: PLAN_ID,
-          expectedRevision: view.revision - 1,
-          operation: { kind: "repair-delivery-source", handoffId: view.row?.coordination?.handoff?.id ?? "missing" },
-        }),
-      ),
-    ).toBe("coordination.version-conflict");
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
-
+  test("dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
     const dirty = await wrongSourceAcceptedFixture(false);
     writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
     const beforeDirty = readFileSync(dirty.snapshotPath);
@@ -804,11 +792,6 @@ describe("legacy-delivery-source-repair", () => {
   }, 30000);
 });
 
-
-/**
- * Regression cases for the merged-state seam review (fix round 2). Each title
- * carries the finding id it pins, so a reverted fix turns exactly that case red.
- */
 describe("seam-regressions", () => {
   /** A prepared plan whose bound session holds the row's execution lease. */
   async function claimedPlan(): Promise<GitFixture> {

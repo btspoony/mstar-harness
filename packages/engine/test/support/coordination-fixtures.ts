@@ -220,6 +220,19 @@ export async function errorCodeOf(run: () => Promise<unknown>): Promise<string> 
   throw new Error("expected the coordination call to fail");
 }
 
+/**
+ * The thrown error of a call that must fail, so a case can assert on the
+ * refusal's own fields (code AND details) without a second call site.
+ */
+export async function failureOf(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  throw new Error("expected the call to fail");
+}
+
 /** Bind the lifecycle coordinator once per fixture with an explicitly acquired id. */
 export async function ensureCoordinator(fixture: Fixture): Promise<string> {
   if (fixture.coordinatorSession === "") {
