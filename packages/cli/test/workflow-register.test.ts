@@ -23,7 +23,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { initializeStore, listPendingCatalogRegistrations, resolveCatalogRegistrationState, type StoreContext } from "@mstar-harness/engine";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
