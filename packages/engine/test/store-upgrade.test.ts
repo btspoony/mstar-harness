@@ -40,7 +40,14 @@ function fixture() {
     branch: { source: "feature/upgrade-fixture", target: "main" },
     plans: [{ id: `${workflowId}-plan`, title: "Upgrade fixture", file: "plan.md", status: "Todo", metadata: {} }],
   }));
-  return { context, workflowId, dbPath: storeDbPath(context), operator: "ops-engineer", operationId: "upgrade-fixture" };
+  return {
+    context,
+    workflowId,
+    dbPath: storeDbPath(context),
+    operator: "ops-engineer",
+    operationId: "upgrade-fixture",
+    catalogDeltaDisposition: "synthetic fixture disposition",
+  };
 }
 
 function fixtureAttestation() {

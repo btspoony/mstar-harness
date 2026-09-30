@@ -11,8 +11,9 @@ async function fixture(): Promise<{ dir: string; db: DatabaseSync }> {
   const store = await initializeStore({ harnessDir: dir });
   store.close();
   const db = new DatabaseSync(join(dir, "store.db"));
-  db.exec("update store_meta set authority_state = 'active' where id = 1");
   db.exec("update execution_meta set authority_state = 'active', manifest_id = 'manifest-1' where id = 1");
+  db.prepare("insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at) values (?, ?, ?, '{}', ?, ?)")
+    .run("manifest-1", "hash-1", "retired", "now", "now");
   return { dir, db };
 }
 
@@ -38,6 +39,34 @@ describe("probeStoreUpgradeState", () => {
       db.close();
       const result = await probeStoreUpgradeState({ harnessDir: dir });
       expect(result).toMatchObject({ storeExists: true, storeAuthorityState: "active", executionAuthorityState: "active", manifestId: "manifest-1", pendingCatalogOperations: { count: 0, ids: [] }, verdict: "up-to-date", reasons: [] });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("keeps ACTIVE authority upgrade-required until recorded retirement is complete", async () => {
+    const { dir, db } = await fixture();
+    try {
+      db.prepare("update execution_migrations set phase = 'active' where manifest_id = 'manifest-1'").run();
+      db.close();
+      const result = await probeStoreUpgradeState({ harnessDir: dir });
+      expect(result).toMatchObject({
+        executionAuthorityState: "active",
+        executionMigrationPhase: "active",
+        verdict: "upgrade-required",
+      });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("keeps schema work pending for ACTIVE authority with retained migration history", async () => {
+    const { dir, db } = await fixture();
+    try {
+      db.prepare("delete from schema_version where version = ?").run(MIGRATIONS.length);
+      db.close();
+      const result = await probeStoreUpgradeState({ harnessDir: dir });
+      expect(result).toMatchObject({
+        executionAuthorityState: "active",
+        executionMigrationPhase: "retired",
+        verdict: "upgrade-required",
+        reasons: ["schema-upgrade-pending"],
+      });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

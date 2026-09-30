@@ -47,9 +47,11 @@ export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<Stage
     throw new Error(`store upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
   }
 
-  // Keep a verified point before schema writes, then take a second point of
-  // the migrated schema for apply's exact reviewed-store identity guard.
-  const schemaBackup = await backupStore(input.context);
+  // Each attempt owns distinct recovery artifacts; a prior partial attempt can
+  // never make the next invocation fail solely because its backup exists.
+  const schemaBackup = await backupStore(input.context, {
+    out: join(input.context.harnessDir, "archived", "store-migration", "backups", `${input.operationId}-pre-schema.db`),
+  });
   if (state.schemaVersion !== null) await upgradeStore(input.context);
   const migrationBackup = await backupStore(input.context, {
     out: join(input.context.harnessDir, "archived", "store-migration", "backups", `${input.operationId}-reviewed.db`),

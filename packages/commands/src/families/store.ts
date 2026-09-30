@@ -17,6 +17,7 @@ import {
   retireStoreSources,
   stageStoreUpgrade,
   upgradeStore,
+  retireExecutionSources,
   type ActivationAttestation,
   type MigrationManifest,
   type StagedStoreUpgrade,
@@ -181,10 +182,7 @@ async function unifiedStoreUpgrade(
   context: StoreContext,
   invocation: InvocationContext,
 ): Promise<CommandEnvelope> {
-  const state = await probeStoreUpgradeState(context);
-  if (state.verdict === "up-to-date") {
-    return ok(id, { verdict: state.verdict, schemaVersion: state.schemaVersion });
-  }
+  let state = await probeStoreUpgradeState(context);
   if (state.verdict === "blocked") {
     return {
       version: 1,
@@ -196,6 +194,30 @@ async function unifiedStoreUpgrade(
         ? "No store exists, but legacy execution files are present. Preserve those files and use the supported staged migration; `store init` is not appropriate."
         : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
     };
+  }
+  if (state.reasons.includes("schema-upgrade-pending")) {
+    const upgraded = await upgradeStore(context);
+    state = await probeStoreUpgradeState(context);
+    if (state.executionAuthorityState !== "active" || state.executionMigrationPhase !== "active") {
+      return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
+    }
+  }
+  if (state.verdict === "up-to-date") {
+    return ok(id, { verdict: state.verdict, schemaVersion: state.schemaVersion });
+  }
+  if (state.executionAuthorityState === "active" && state.executionMigrationPhase === "active") {
+    requireInputs(input, ["operator"]);
+    const receipt = await retireExecutionSources({
+      context,
+      operator: required(input.operator, "--operator"),
+      operationId: randomUUID(),
+      manifestId: state.manifestId!,
+      manifestHash: state.executionManifestHash!,
+    });
+    return ok(id, { verdict: "upgraded", schemaVersion: state.schemaVersion, authorityState: "active", sourcesRetired: receipt.phase === "retired" });
+  }
+  if (state.verdict === "blocked") {
+    throw new Error("unreachable store upgrade state");
   }
 
   if (!hasLegacyExecutionFiles(context.harnessDir)) {
