@@ -9084,39 +9084,40 @@ function readPlanFileCorrection(
   const planPath = resolved.planPath;
   // §5/A09/A12 the exact already-applied correction is a CURRENT SUCCESS: the
   // addressed row already records this plan's canonical file, so the requested
-  // effect holds and this call writes nothing for it. The caller's
-  // `expectedFile` is a semantic constraint on the read set (§4.2), never a
-  // historical-byte gate: a patch re-presented after a lost response whose row
-  // already holds the target is the same intent, satisfied. But a caller that
-  // explicitly names an `expectedFile` its row does NOT hold observed a
-  // DIFFERENT read set — that is not this intent's replay, so the constraint
-  // is checked before the already-held shortcut can answer success.
+  // effect holds and this call writes nothing for it. But the caller's
+  // `expectedFile` must still NAME THIS PLAN's document — a pointer to a
+  // foreign file observed a read set this row never had, so answering success
+  // over it would launder an incoherent constraint through the replay rule. A
+  // previous spelling of THIS plan's own pointer (the pre-correction form a
+  // replayed patch still carries) is the same intent, satisfied.
+  const expectedIdentifiesPlan =
+    expectedFile === previous ||
+    expectedFile === planPath ||
+    (() => {
+      try {
+        return resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: expectedFile }).planPath === planPath;
+      } catch (error) {
+        if (!(error instanceof PlanPathError)) throw error;
+        return false;
+      }
+    })() ||
+    expectedFile === repositoryRelativePlanPointer(context.harnessRoot, planPath);
+  if (!expectedIdentifiesPlan) {
+    throw prepareAmendmentRefusal(
+      "invalid-plan",
+      `plan ${id} expectedFile ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row, and a replay must still name this plan's document`,
+      { plan_id: id, actual: expectedFile, expected: planPath },
+    );
+  }
+  if (previous === planPath) return { held: true, id };
+  // The exact observed value, not a normalised one: a correction applies to the
+  // pointer this patch was reviewed against, so a row that moved underneath the
+  // caller refuses instead of being repointed from a stale observation.
   if (previous !== expectedFile) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
       `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
       { plan_id: id, expected: expectedFile, actual: previous },
-    );
-  }
-  if (previous === planPath) return { held: true, id };
-  // The pointer being replaced must identify THIS plan: either a form the shared
-  // resolver accepts, or the exact derived repository-relative spelling of the
-  // same canonical target. A same-basename file, a copied document whose header
-  // happens to match, and a foreign or unrelated directory all fail both tests.
-  let previousIdentifiesPlan = false;
-  try {
-    previousIdentifiesPlan = resolveRegisteredPlanFile({ harnessRoot: context.harnessRoot, planId: id, file: expectedFile }).planPath === planPath;
-  } catch (error) {
-    if (!(error instanceof PlanPathError)) throw error;
-  }
-  if (!previousIdentifiesPlan) {
-    previousIdentifiesPlan = expectedFile === repositoryRelativePlanPointer(context.harnessRoot, planPath);
-  }
-  if (!previousIdentifiesPlan) {
-    throw prepareAmendmentRefusal(
-      "invalid-plan",
-      `plan ${id} held pointer ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row`,
-      { plan_id: id, actual: expectedFile, expected: planPath },
     );
   }
   return { held: false, delta: { id, file: planPath } };
