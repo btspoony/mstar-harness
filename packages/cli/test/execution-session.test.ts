@@ -187,7 +187,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
   mkdirSync(worktreePath, { recursive: true });
   const assignmentPath = join(sddDir, "assignment.md");
