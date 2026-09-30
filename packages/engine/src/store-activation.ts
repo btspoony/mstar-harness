@@ -204,8 +204,8 @@ export type BackupReceipt = {
     issues: number;
     occurrences: number;
     transitions: number;
-    catalogEntities: number;
-    catalogLinks: number;
+    catalogEntities?: number;
+    catalogLinks?: number;
     migrationReceipts: number;
   };
   /** The source still held committed, not-yet-checkpointed WAL frames when copied. */
@@ -368,14 +368,18 @@ function schemaVersionOf(db: StoreDb): number {
 }
 
 function countsOf(db: StoreDb): BackupReceipt["counts"] {
-  return {
+  const tables = new Set(
+    (db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name: string }>).map((row) => row.name),
+  );
+  const counts: BackupReceipt["counts"] = {
     issues: scalar(db, "select count(*) as n from issues"),
     occurrences: scalar(db, "select count(*) as n from occurrences"),
     transitions: scalar(db, "select count(*) as n from issue_transitions"),
-    catalogEntities: scalar(db, "select count(*) as n from catalog_entities"),
-    catalogLinks: scalar(db, "select count(*) as n from catalog_links"),
     migrationReceipts: scalar(db, "select count(*) as n from migration_receipts"),
   };
+  if (tables.has("catalog_entities")) counts.catalogEntities = scalar(db, "select count(*) as n from catalog_entities");
+  if (tables.has("catalog_links")) counts.catalogLinks = scalar(db, "select count(*) as n from catalog_links");
+  return counts;
 }
 
 /** The migration that introduced the execution authority (never a magic number). */
@@ -1050,13 +1054,10 @@ export async function inspectBackupCopy(backupPath: string): Promise<BackupInspe
 }
 
 function sameCounts(a: BackupReceipt["counts"], b: BackupReceipt["counts"]): boolean {
+  const keys = Object.keys(a) as Array<keyof BackupReceipt["counts"]>;
   return (
-    a.issues === b.issues &&
-    a.occurrences === b.occurrences &&
-    a.transitions === b.transitions &&
-    a.catalogEntities === b.catalogEntities &&
-    a.catalogLinks === b.catalogLinks &&
-    a.migrationReceipts === b.migrationReceipts
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
   );
 }
 
