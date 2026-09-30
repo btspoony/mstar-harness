@@ -991,10 +991,18 @@ function assertRegistrationEffectHeld(plan: CatalogExecutionPlan): void {
   // success.
   const snapshot = readSnapshotIfPresent(plan.dir);
   const entry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
+  // The key face covers every registration-identity field the E07 fold
+  // freezes (branch anchors, project, delivery kind, completion policy and the
+  // row pointers), not just the id/status core: a replacement that moved any
+  // ONE of them is a different registration.
   const keyFace = (s: WorkflowSnapshot): unknown => ({
     id: s.id,
     type: s.type,
     status: s.status,
+    branch: s.branch ?? null,
+    project: s.project ?? null,
+    delivery_kind: s.delivery_kind ?? null,
+    completion_policy: s.completion_policy ?? null,
     plans: (s.plans ?? []).map((row) => ({ id: row.id, title: row.title, file: row.file, status: row.status })),
   });
   const identityHeld =

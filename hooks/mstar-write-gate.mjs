@@ -10273,14 +10273,14 @@ function validateStandaloneCompletedCoherence(snapshot, row) {
     }
     return violations;
   }
-  const handoff2 = coordination.handoff;
-  const completed = handoff2.state === "completed";
+  const handoff = coordination.handoff;
+  const completed = handoff.state === "completed";
   if (row.status !== "Done" && !completed)
     return violations;
   if (!completed) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff2.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
+    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
   }
-  if (handoff2.integration !== undefined) {
+  if (handoff.integration !== undefined) {
     violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
   }
   if (isStandaloneReportOnlyWorkflow(snapshot)) {
@@ -10305,8 +10305,8 @@ function validateStandaloneCompletedCoherence(snapshot, row) {
     const target = snapshot.branch?.target;
     if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
       violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
-    } else if (handoff2.source_branch !== source) {
-      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff2.source_branch)} must equal branch.source ${source}`));
+    } else if (handoff.source_branch !== source) {
+      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
     }
   }
   return violations;
