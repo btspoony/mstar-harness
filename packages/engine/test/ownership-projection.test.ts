@@ -90,9 +90,15 @@ describe("catalog migration ownership projection", () => {
     handle.db.prepare("update catalog_operations set phase = 'execution-written', result_json = null, catalog_delta_json = ? where operation_id = ?")
       .run(JSON.stringify(journal), "op-legacy");
     handle.close();
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([{ operationId: "op-legacy", phase: "execution-written", rootVisible: true }]);
-    await expect(reconcileCatalogExecution(context, "op-legacy")).rejects.toMatchObject({ code: "catalog.reconcile-conflict" });
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([{ operationId: "op-legacy", phase: "execution-written", rootVisible: true }]);
+    const beforeReconcile = await listPendingCatalogRegistrations(context);
+    expect(beforeReconcile).toMatchObject([{ operationId: "op-legacy", phase: "execution-written", rootVisible: true }]);
+    await reconcileCatalogExecution(context, "op-legacy");
+    const afterReconcile = await listPendingCatalogRegistrations(context);
+    expect(afterReconcile).toEqual([]);
+    const committed = await openStore(context, "read");
+    expect((committed.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-legacy") as { phase: string }).phase)
+      .toBe("committed");
+    committed.close();
   });
 
   test("refuses a changed registration input", async () => {

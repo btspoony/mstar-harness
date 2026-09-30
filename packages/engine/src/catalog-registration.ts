@@ -1618,12 +1618,10 @@ export async function reconcileCatalogExecution(
         "reconcile refuses to re-drive it",
     );
   }
-  if (plan.workflowId !== journal.workflow.workflowId || plan.identity !== journal.workflow.identity) {
-    failReconcile(
-      `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
-        `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,
-    );
-  }
+  if (plan.workflowId !== journal.workflow.workflowId || !migrationIdentityMatches(plan.kind, plan.snapshot, journal.workflow.identity)) { failReconcile(
+    `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
+      `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,
+  ); }
 
   const state = await withJournalWrite(context, (db) => ({
     published: hasPublishedDelta(db, id),
