@@ -47,7 +47,7 @@ import { basename as basename11, dirname as dirname13, join as join21, relative 
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash16 } from "node:crypto";
 import { appendFileSync, readFileSync as readFileSync20 } from "node:fs";
-import { join as join32 } from "node:path";
+import { join as join33 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -12853,7 +12853,7 @@ async function captureProjectionSources(context) {
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join32(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join33(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -12877,7 +12877,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join32(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join33(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -12891,7 +12891,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join32(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join33(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -12917,7 +12917,7 @@ async function captureProjectionSources(context) {
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join32(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
