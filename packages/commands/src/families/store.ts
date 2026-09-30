@@ -112,18 +112,32 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
     );
   }
 }
-function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
+export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof SddScriptError) return refused(id, error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
-  const blocker = (error instanceof Error ? error.message : "the execution migration failed")
-    .replace(/(?:[A-Za-z]:)?\/[^\s,;)]*/g, "a workspace file")
-    .replace(/\b(workflow|operation|manifest|session)[-_][A-Za-z0-9_-]+\b/gi, "$1 (identifier withheld)");
-  const recovery =
-    code === "execution.migration-conflict" ? "Review the affected workflow and resolve its pending change, then rerun `store upgrade`."
-      : code === "execution.coverage-incomplete" ? "Review the affected execution source and provide the required inventory with `--inventory`, then rerun `store upgrade`."
-        : code === "store.attestation-invalid" || code === "store.activation-blocked" ? "Update consumer evidence or stop active sessions, then rerun `store upgrade`."
-          : "Review the affected execution source and correct it before rerunning `store upgrade`.";
-  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${blocker}. ${recovery}` };
+  const diagnostics: Record<string, { blocker: string; recovery: string }> = {
+    "execution.migration-conflict": {
+      blocker: "A legacy workflow has conflicting or pending migration state.",
+      recovery: "Review that workflow's pending change, resolve it through the supported workflow action, then rerun `store upgrade`.",
+    },
+    "execution.coverage-incomplete": {
+      blocker: "The legacy execution source is missing required completeness evidence.",
+      recovery: "Complete the missing source or stop-session evidence; provide an inventory only if discovery inventory is the missing item, then rerun `store upgrade`.",
+    },
+    "store.attestation-invalid": {
+      blocker: "The activation attestation is invalid or contradictory.",
+      recovery: "Correct the operator-supplied attestation and rerun `store upgrade`.",
+    },
+    "store.activation-blocked": {
+      blocker: "A required installed-consumer or stopped-session readiness condition is unmet.",
+      recovery: "Reload or update the affected consumer and confirm active sessions are stopped in the attestation, then rerun `store upgrade`.",
+    },
+  };
+  const diagnostic = diagnostics[code] ?? {
+    blocker: "The execution migration could not establish a safe upgrade.",
+    recovery: "Resolve the underlying execution-source or readiness gap, then rerun `store upgrade`.",
+  };
+  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
 }
 
 async function unifiedStoreUpgrade(

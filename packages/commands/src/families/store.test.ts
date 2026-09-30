@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { initializeStore, openStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
 import { getStoreCommandDefinitions } from "../index.js";
+import { storeUpgradeFailure } from "./store.js";
 
 const roots: string[] = [];
 const controlRoot = join(tmpdir(), "mstar-store-upgrade-test-control");
@@ -212,6 +213,30 @@ describe("store.upgrade unified entry", () => {
       context,
     );
     expect(unreadableAttestation.status).toBe("usage");
+  });
+  test("refusal mapping selects gap-specific recovery and excludes engine identifiers", () => {
+    const conflict = Object.assign(new Error("workflow-private wf-abcdef op-private 123e4567-e89b-12d3-a456-426614174000 session-secret attestation.consumers[0]"), {
+      code: "execution.migration-conflict",
+    });
+    const coverage = Object.assign(new Error("missing stopped-session evidence for session-secret 123e4567-e89b-12d3-a456-426614174000"), {
+      code: "execution.coverage-incomplete",
+    });
+    const conflictResult = storeUpgradeFailure("store.upgrade", conflict);
+    const coverageResult = storeUpgradeFailure("store.upgrade", coverage);
+    expect(conflictResult.status).toBe("refused");
+    expect(coverageResult.status).toBe("refused");
+    if (conflictResult.status !== "refused" || coverageResult.status !== "refused") throw new Error("expected refusal envelopes");
+    expect(conflictResult.message).toContain("legacy workflow");
+    expect(conflictResult.message).toContain("pending change");
+    expect(conflictResult.message).not.toContain("--inventory");
+    expect(coverageResult.message).toContain("stop-session evidence");
+    expect(coverageResult.message).toContain("only if discovery inventory is the missing item");
+    expect(coverageResult.message).not.toContain("provide the required inventory");
+    expect(coverageResult.message).not.toContain("--inventory,");
+    for (const result of [conflictResult, coverageResult]) {
+      expect(result.message).not.toMatch(/session-secret|wf-abcdef|op-private|123e4567-e89b-12d3-a456-426614174000|attestation\.consumers/);
+    }
+    expect(conflictResult.message).not.toBe(coverageResult.message);
   });
   test("a missing store refusal names the supported recovery action", async () => {
     const root = fixture();
