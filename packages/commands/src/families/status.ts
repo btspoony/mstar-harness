@@ -141,7 +141,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "operation", flags: "--operation <id>", required: false },
         { key: "reason", flags: "--reason <text>", required: false },
         { key: "json", flags: "--json", required: false },
-        { key: "sessionId", flags: "--session-id <id>", required: false, context: "sessionId" },
+        { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: z.object({
         workflow: z.string().min(1), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),

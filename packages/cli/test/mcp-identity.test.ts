@@ -16,8 +16,9 @@ import {
   type ExecutionToken,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
-import { registerMcpCommands, mcpToolInputSchema } from "../src/mcp/register";
+import { registerMcpCommands, mcpToolInputSchema, type ResolveContext } from "../src/mcp/register";
 import { registerCliCommands } from "../src/command-adapter";
+import { resolveContext } from "../src/mcp/stdio";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -63,6 +64,7 @@ async function registeredMcpCall(
   commandId: string,
   payload: Record<string, unknown>,
   baseContext: InvocationContext,
+  resolver: ResolveContext = () => baseContext,
 ): Promise<{ structuredContent: { status: string; code: string; message: string } }> {
   let registered: ((input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>) | undefined;
   const server = {
@@ -70,7 +72,7 @@ async function registeredMcpCall(
       if (name === `mstar_${commandId.replace(/[.-]/g, "_")}`) registered = handler;
     },
   };
-  registerMcpCommands(server as never, getCommandDefinitions(), () => baseContext);
+  registerMcpCommands(server as never, getCommandDefinitions(), resolver);
   if (registered === undefined) throw new Error(`MCP handler not registered: ${commandId}`);
   return await registered(payload, { mcpReq: { signal: baseContext.signal } }) as { structuredContent: { status: string; code: string; message: string } };
 }
@@ -81,7 +83,6 @@ async function runCli(args: string[], baseContext: InvocationContext): Promise<R
   registerCliCommands(program, getCommandDefinitions(), baseContext);
   const lines: string[] = [];
   const log = console.log;
-  const priorExitCode = process.exitCode;
   console.log = (...values: unknown[]) => { lines.push(values.map(String).join(" ")); };
   process.exitCode = 0;
   try {
@@ -92,6 +93,7 @@ async function runCli(args: string[], baseContext: InvocationContext): Promise<R
   }
   return JSON.parse(lines.join("")) as Record<string, unknown>;
 }
+
 
 async function initializedHarness() {
   const root = fixtureRoot();
@@ -131,6 +133,44 @@ describe("MCP session identity", () => {
       message: "active recovery requires the main conversation session identity",
     });
   });
+  test("stdio resolver ignores the legacy environment identity when no parameter is supplied", async () => {
+    const previous = process.env.MSTAR_HOST_SESSION_ID;
+    process.env.MSTAR_HOST_SESSION_ID = "ambient-session";
+    try {
+      const root = fixtureRoot();
+      const result = await registeredMcpCall(
+        "session.recover",
+        recoveryInput(writeAttestation(root)),
+        context(root),
+        resolveContext,
+      );
+      expect(result.structuredContent).toMatchObject({
+        status: "usage", message: "active recovery requires the main conversation session identity",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
+      else process.env.MSTAR_HOST_SESSION_ID = previous;
+    }
+  });
+
+  test("a per-call parameter overrides any environment identity", async () => {
+    const previous = process.env.MSTAR_HOST_SESSION_ID;
+    process.env.MSTAR_HOST_SESSION_ID = "../ambient-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        resolveContext,
+      );
+      expect(result.structuredContent).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
+      else process.env.MSTAR_HOST_SESSION_ID = previous;
+    }
+  });
+
 
   test("invalid identity formats fail specifically at the shared safe-id guard", async () => {
     const fixture = await initializedHarness();
