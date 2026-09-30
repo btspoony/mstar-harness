@@ -171,10 +171,9 @@ describe("iteration registration inputs and registered plan paths", () => {
       expect(registered?.plans[0]?.plan).toMatchObject({
         id: PLAN_ID,
         title: "Plan alpha",
-        // The registered-plan path contract validates the pointer before any
-        // write; the row keeps the caller's declared spelling (the same rule
-        // the plan-type snapshot follows).
-        file: `plans/${PLAN_ID}.md`,
+        // The registered-plan path contract persists the resolver's canonical
+        // absolute pointer; the caller's relative spelling is accepted input.
+        file: fixture.planPath,
         status: "Todo",
       });
     } finally {

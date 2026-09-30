@@ -155,7 +155,7 @@ describe("mstar workflow register", () => {
       // stays unset.
       expect(doc.branch).toEqual({ source: "feature/20260916-plan-cli-example", target: "main" });
       expect(doc.plans).toEqual([
-        { id: "20260916-plan-cli-example", title: "CLI example plan", file: "plans/20260916-plan-cli-example.md", status: "Todo" },
+        { id: "20260916-plan-cli-example", title: "CLI example plan", file: join(harness, "plans/20260916-plan-cli-example.md"), status: "Todo" },
       ]);
 
       const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
