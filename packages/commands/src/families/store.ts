@@ -92,9 +92,16 @@ function outputPath(value: string | undefined, cwd: string): string | undefined 
 function jsonFile<T>(value: string, flag: string): T {
   let text: string;
   try { text = readFileSync(absoluteFile(value, flag), "utf8"); }
-  catch (error) { throw new SddScriptError(`${flag} could not be read: ${error instanceof Error ? error.message : String(error)}`, 2); }
+  catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+    const kind = flag === "--attestation" ? "attestation" : "operator-file";
+    const diagnosticCode = code === "ENOENT" ? `store.${kind}-missing` : `store.${kind}-unreadable`;
+    throw Object.assign(new SddScriptError(`${flag} could not be read`, 2), { code: diagnosticCode });
+  }
   try { return JSON.parse(text) as T; }
-  catch { throw new SddScriptError(`${flag} is not valid JSON`, 2); }
+  catch { throw Object.assign(new SddScriptError(`${flag} is not valid JSON`, 2), { code: flag === "--attestation" ? "store.attestation-malformed" : "store.operator-file-malformed" }); }
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
@@ -113,7 +120,6 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
   }
 }
 export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
-  if (error instanceof SddScriptError) return refused(id, error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
     "execution.migration-conflict": {
@@ -132,12 +138,41 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
       blocker: "A required installed-consumer or stopped-session readiness condition is unmet.",
       recovery: "Reload or update the affected consumer and confirm active sessions are stopped in the attestation, then rerun `store upgrade`.",
     },
+    "store.attestation-missing": {
+      blocker: "The activation attestation file was not found.",
+      recovery: "Provide an existing readable attestation file and rerun `store upgrade`.",
+    },
+    "store.attestation-unreadable": {
+      blocker: "The activation attestation file could not be read.",
+      recovery: "Provide a readable attestation file and rerun `store upgrade`.",
+    },
+    "store.attestation-malformed": {
+      blocker: "The activation attestation file is malformed.",
+      recovery: "Provide a readable, valid JSON attestation file and rerun `store upgrade`.",
+    },
+    "store.operator-file-missing": {
+      blocker: "The operator-supplied file was not found.",
+      recovery: "Provide an existing readable file and rerun the command.",
+    },
+    "store.operator-file-unreadable": {
+      blocker: "The operator-supplied file could not be read.",
+      recovery: "Provide a readable file and rerun the command.",
+    },
+    "store.operator-file-malformed": {
+      blocker: "The operator-supplied file is malformed.",
+      recovery: "Provide a readable, valid JSON file and rerun the command.",
+    },
   };
-  const diagnostic = diagnostics[code] ?? {
+  const diagnostic = diagnostics[code];
+  if (error instanceof SddScriptError && diagnostic !== undefined) {
+    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
+  }
+  if (error instanceof SddScriptError) return refused(id, error);
+  const refusal = diagnostic ?? {
     blocker: "The execution migration could not establish a safe upgrade.",
     recovery: "Resolve the underlying execution-source or readiness gap, then rerun `store upgrade`.",
   };
-  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
+  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${refusal.blocker} ${refusal.recovery}` };
 }
 
 async function unifiedStoreUpgrade(

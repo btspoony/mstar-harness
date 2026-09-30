@@ -197,7 +197,7 @@ describe("store.upgrade unified entry", () => {
     }
   });
 
-  test("pre-migration input failures return command envelopes", async () => {
+  test("attestation file failures use safe diagnostics and distinguish absence from unreadable or malformed input", async () => {
     const root = fixture();
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
@@ -206,13 +206,43 @@ describe("store.upgrade unified entry", () => {
     store.close();
     const definition = upgradeDefinition();
     const { context } = invocation(root);
-    const missingInput = await definition.execute(definition.input.parse({ harness }), context);
-    expect(missingInput.status).toBe("usage");
-    const unreadableAttestation = await definition.execute(
-      definition.input.parse({ harness, operator: "fixture-operator", attestation: join(root, "absent.json") }),
+    const absentPath = join(root, "absent-session-secret.json");
+    const missing = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: absentPath }),
       context,
     );
-    expect(unreadableAttestation.status).toBe("usage");
+    const directoryPath = join(root, "unreadable-wf-private");
+    mkdirSync(directoryPath);
+    const unreadable = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: directoryPath }),
+      context,
+    );
+    const malformedPath = join(root, "malformed-op-private.json");
+    writeFileSync(malformedPath, "{ invalid json");
+    const malformed = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: malformedPath }),
+      context,
+    );
+
+    for (const result of [missing, unreadable, malformed]) {
+      expect(result.status).toBe("usage");
+      if (result.status !== "usage") throw new Error("expected usage envelope");
+      expect(result.message).not.toContain(root);
+    }
+    if (missing.status !== "usage" || unreadable.status !== "usage" || malformed.status !== "usage") {
+      throw new Error("expected usage envelopes");
+    }
+    expect(missing.message).not.toBe(unreadable.message);
+    expect(unreadable.message).not.toBe(malformed.message);
+    expect(unreadable.message).toContain("attestation file");
+    expect(unreadable.message).toContain("could not be read");
+    expect(unreadable.message).toContain("Provide a readable attestation file");
+    expect(malformed.message).toContain("attestation file");
+    expect(malformed.message).toContain("malformed");
+    expect(malformed.message).toContain("Provide a readable, valid JSON attestation file");
+    expect(missing.message).toContain("attestation file");
+    expect(missing.message).toContain("not found");
+    expect(missing.message).toContain("Provide an existing readable attestation file");
   });
   test("refusal mapping selects gap-specific recovery and excludes engine identifiers", () => {
     const conflict = Object.assign(new Error("workflow-private wf-abcdef op-private 123e4567-e89b-12d3-a456-426614174000 session-secret attestation.consumers[0]"), {
