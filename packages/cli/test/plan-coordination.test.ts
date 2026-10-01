@@ -3359,8 +3359,12 @@ describe("mstar plan \u2014 execution transport", () => {
       fixture.root,
       activeIdentityEnv(),
     );
+    // Under the sparse contract the runtime caller identity is the first
+    // caller-owned requirement, so this identity-less numeric invocation
+    // refuses on the identity check — the numeric revision is the file
+    // route's transport and never reaches the engine's token check.
     expect(numeric.exitCode).toBe(2);
-    expect(String(jsonOf(numeric).message)).toContain("full execution token");
+    expect(String(jsonOf(numeric).message)).toContain("runtime session identity");
 
     const noOperation = runCli(
       ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],

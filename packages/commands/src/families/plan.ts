@@ -293,8 +293,11 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       // this caller does not hold is never adopted as its identity. The
       // operation id is the other caller-owned required field (the engine's
       // own assertOperationId runs only after resolution).
-      if (context.sessionId === undefined) return usage(id, "active operation requires runtime session identity");
       if (input.operation === undefined) return usage(id, "active operation requires an operation id");
+      if (context.sessionId === undefined) return usage(id, "active operation requires runtime session identity");
+      // A numeric revision is the file route's CAS transport; the active route
+      // takes only a full execution token, so the transports never mix.
+      if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
       const operationId = input.operation;
       const ref = decodeExecutionSessionRef(input.sessionRef);
       const planId = ref.planId ?? input.plan;
