@@ -487,10 +487,9 @@ describe("store.upgrade unified entry", () => {
     expect(conflictResult.status).toBe("refused");
     expect(coverageResult.status).toBe("refused");
     if (conflictResult.status !== "refused" || coverageResult.status !== "refused") throw new Error("expected refusal envelopes");
-    expect(conflictResult.message).toContain("reviewed evidence may no longer match");
-    expect(conflictResult.message).toContain("Do not rerun this staged attempt");
-    expect(conflictResult.message).toContain("store upgrade");
-    expect(conflictResult.message).toContain("confirm abandoning it");
+    expect(conflictResult.message).toContain("Do not abort this catalog operation");
+    expect(conflictResult.message).toContain("protected by the execution guard");
+    expect(conflictResult.message).toContain("supported catalog reconciliation flow");
     expect(getCommandDefinitions().some(({ id }) => id === "store.execution.abort")).toBe(true);
     expect(conflictResult.message).not.toContain("--inventory");
     expect(coverageResult.message).toContain("stop-session evidence");
