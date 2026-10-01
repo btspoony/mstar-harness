@@ -463,6 +463,8 @@ function invocationOutcomeOf(json: Record<string, unknown>, item: Record<string,
 const OPAQUE_TOOL_ITEM_TYPES = new Set(["tool_call", "function_call", "mcp_tool_call"]);
 /** Shells whose `-c <string>` payload can be decomposed by separator. */
 const SHELL_EXECUTABLES = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash"]);
+/** Interpreters whose invocation carries a nested program this adapter cannot analyze. */
+const SCRIPT_INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "tsx"]);
 
 /** Decomposes one unquoted shell command string into its constituent commands. */
 function shellConstituents(script: string): { bundled: number; unknown: boolean } {
@@ -472,11 +474,11 @@ function shellConstituents(script: string): { bundled: number; unknown: boolean 
 }
 
 /**
- * Recognizes argv forms that invoke a shell/interpreter carrying nested
- * commands. A shell wrapper with an analyzable `-c` payload is decomposed; a
- * wrapper whose nested program cannot be decomposed (quoted payload, a
- * non-shell interpreter, a shell without `-c`) stays unknown — the internal
- * causal depth is not established, so it must not count as one lookup.
+ * Recognizes argv forms that invoke a shell or interpreter carrying nested
+ * commands. Detection is EXECUTABLE-aware: an ordinary option like
+ * `grep -c x file` is a single known lookup, while a shell/script
+ * invocation whose internal causal depth cannot be established (a quoted
+ * payload, a shell without `-c`, a script interpreter) stays unknown.
  * Returns null when the argv is an ordinary single command.
  */
 function argvShellLookup(argv: string[]): { bundled: number; unknown: boolean } | null {
@@ -486,15 +488,14 @@ function argvShellLookup(argv: string[]): { bundled: number; unknown: boolean } 
   }
   if (args.length === 0) return null;
   const head = basename(args[0]!);
-  const cIndex = args.indexOf("-c");
-  const hasCommandFlag = cIndex >= 0 && cIndex + 1 < args.length;
+  const rest = args.slice(1);
   if (SHELL_EXECUTABLES.has(head)) {
-    if (!hasCommandFlag) return null;
-    return shellConstituents(args[cIndex + 1]!);
+    const cIndex = rest.indexOf("-c");
+    if (cIndex >= 0 && cIndex + 1 < rest.length) return shellConstituents(rest[cIndex + 1]!);
+    // A shell running a script file (or stdin) has an opaque nested program.
+    return { bundled: 0, unknown: true };
   }
-  // A non-shell interpreter (python/node/ruby/...) with `-c`/`-e` carries a
-  // nested program this adapter cannot analyze.
-  if (hasCommandFlag) return { bundled: 0, unknown: true };
+  if (SCRIPT_INTERPRETERS.has(head)) return { bundled: 0, unknown: true };
   return null;
 }
 

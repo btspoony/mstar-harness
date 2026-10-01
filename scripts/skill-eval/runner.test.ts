@@ -2215,10 +2215,24 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     const quotedShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-c", "cat 'a;b' ; ls"] }) }\n`);
     expect(quotedShell.bundleUnknownCalls).toBe(1);
 
-    const interpreter = scanEventStream(`${invocationLine("item_1", { command: ["python3", "-c", "print(1); print(2)"] }) }\n`);
+    const interpreter = scanEventStream(`${invocationLine("item_1", { command: ["python3", "-c", "print(1); print(2)"] })}\n`);
     expect(interpreter.bundleUnknownCalls).toBe(1);
 
-    const plainArgv = scanEventStream(`${invocationLine("item_1", { command: ["cat", "AGENTS.md"] }) }\n`);
+    // Executable-aware: an ordinary option that happens to be `-c` is NOT an
+    // interpreter flag — `grep -c x file` stays one known lookup.
+    const plainOption = scanEventStream(`${invocationLine("item_1", { command: ["grep", "-c", "x", "file"] })}\n`);
+    expect(plainOption.bundledLookups).toBe(0);
+    expect(plainOption.bundleUnknownCalls).toBe(0);
+
+    // A shell running a script file (no `-c`) has an opaque nested program.
+    const shellScript = scanEventStream(`${invocationLine("item_1", { command: ["sh", "script.sh"] })}\n`);
+    expect(shellScript.bundleUnknownCalls).toBe(1);
+    const shellFlaggedScript = scanEventStream(`${invocationLine("item_1", { command: ["bash", "-l", "script.sh"] })}\n`);
+    expect(shellFlaggedScript.bundleUnknownCalls).toBe(1);
+    const nodeScript = scanEventStream(`${invocationLine("item_1", { command: ["node", "script.js"] })}\n`);
+    expect(nodeScript.bundleUnknownCalls).toBe(1);
+
+    const plainArgv = scanEventStream(`${invocationLine("item_1", { command: ["cat", "AGENTS.md"] })}\n`);
     expect(plainArgv.bundledLookups).toBe(0);
     expect(plainArgv.bundleUnknownCalls).toBe(0);
 
