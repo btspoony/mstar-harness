@@ -46,3 +46,4 @@ An earlier stale disposable copy contained a staged manifest pinned to the live 
 
 - Barrier fix and mixed excluded-workflow stage→activate regression: `965386c3`.
 - CLI result fields and command contract assertions: `c4010783`.
+- Command test output-type narrowing: `7c2117f7`.
