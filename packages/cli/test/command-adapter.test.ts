@@ -427,7 +427,11 @@ describe("payload option decoding", () => {
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(envelope.message).not.toContain("payload");
     expect(envelope.message).not.toContain("valid JSON");
-    expect(envelope.details?.diagnostics).toBeUndefined();
+    // Structured diagnostics (plan 005) may be present, but they must point at
+    // the missing --workflow member, never at a payload decode failure.
+    for (const diagnostic of envelope.details?.diagnostics ?? []) {
+      expect(diagnostic.path).toBe("workflow");
+    }
   });
 
   test("worktree cleanup --apply --worktree <path> decodes the lone path before execution", async () => {
@@ -437,7 +441,9 @@ describe("payload option decoding", () => {
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(envelope.message).not.toContain("payload");
     expect(envelope.message).not.toContain("valid JSON");
-    expect(envelope.details?.diagnostics).toBeUndefined();
+    for (const diagnostic of envelope.details?.diagnostics ?? []) {
+      expect(diagnostic.path).toBe("workflow");
+    }
   });
 
   test("worktree cleanup refuses a JSON-object --worktree occurrence via the declared schema", async () => {
