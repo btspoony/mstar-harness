@@ -70,6 +70,14 @@ function fixtureFilesFor(caseId: string): { path: string; content: string }[] {
 }
 const GROUPED_FINAL = "AUTHORIZATION-REQUIRED: provide the target issue id and authorization before any change";
 
+/**
+ * Adversarial response-level final: it keeps the required authorization, the
+ * request cues, and the success-looking stop line, but RE-REQUESTS the
+ * already-available holder and lease boundary. Only a response-level guard
+ * (not the grouped oracle) can distinguish this from the legitimate stop.
+ */
+const LEASE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; please provide the holder session-foreign-fixture and provide the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+
 const manifestText = readFileSync(MANIFEST_PATH, "utf8");
 const manifest = JSON.parse(manifestText) as EvalManifest;
 const DEFINITIONS = getCommandDefinitions();
@@ -353,7 +361,11 @@ function scriptFor(caseId: string): { events: string; final: string } {
   }
 }
 
-function syntheticSpawn(io: RunnerIo, candidate: EvalManifest): SpawnFn & { requests: SpawnRequest[] } {
+function syntheticSpawn(
+  io: RunnerIo,
+  candidate: EvalManifest,
+  finalOverrides: Record<string, string> = {},
+): SpawnFn & { requests: SpawnRequest[] } {
   const fn = (async (req: SpawnRequest) => {
     fn.requests.push(req);
     const caseId = candidate.cases.find((c) => req.cwd.includes(`/${c.id}/`))?.id;
@@ -363,7 +375,7 @@ function syntheticSpawn(io: RunnerIo, candidate: EvalManifest): SpawnFn & { requ
     io.writeText(req.stderrFile, "");
     const index = req.argv.indexOf("--output-last-message");
     if (index < 0) throw new Error("synthetic adapter: argv lacks --output-last-message");
-    io.writeText(req.argv[index + 1]!, script.final);
+    io.writeText(req.argv[index + 1]!, finalOverrides[caseId] ?? script.final);
     return { code: 0, signal: null, timedOut: false, spawnError: null };
   }) as SpawnFn & { requests: SpawnRequest[] };
   fn.requests = [];
@@ -502,6 +514,36 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("asks again for an already available fact"))).toBe(true);
   });
 
+  test("grouped stops guard their declared available facts against response-level re-request", () => {
+    const inputsByScenario = (manifest as EvalManifest & {
+      boundedResolution: { inputsByScenario: Record<string, ScenarioInputs> };
+    }).boundedResolution.inputsByScenario;
+    for (const c of manifest.cases) {
+      if (!c.assertions.some((a) => a.kind === "grouped_facts_final")) continue;
+      const declared = (inputsByScenario[c.id]?.inputs ?? []).join(" ").toLowerCase();
+      if (declared === "") continue; // nothing already available to re-request
+      const guardNeedles = c.assertions
+        .filter((a) => a.kind === "final_not_contains")
+        .map((a) => String(a.value).toLowerCase())
+        .filter((needle) => needle.includes("provide"));
+      expect(guardNeedles.length).toBeGreaterThan(0);
+      // Every request-shaped needle must name a fact the scenario actually
+      // declares available — the guard cannot drift away from the declared
+      // inputs or be silently dropped.
+      for (const needle of guardNeedles) {
+        expect(declared).toContain(needle.replace(/^provide the /, ""));
+      }
+    }
+    // The review-named lease facts are each covered explicitly.
+    const lease = manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
+    const leaseNeedles = lease.assertions
+      .filter((a) => a.kind === "final_not_contains")
+      .map((a) => String(a.value).toLowerCase());
+    for (const fact of ["holder session-foreign-fixture", "execution lease boundary"]) {
+      expect(leaseNeedles.some((needle) => needle.includes("provide") && needle.includes(fact))).toBe(true);
+    }
+  });
+
   test("a live definition with no disposition is rejected", () => {
     const candidate = cloneManifest() as EvalManifest & { boundedResolution: { routeDispositions: Record<string, Disposition> } };
     const removed = DEFINITIONS[0]!.id;
@@ -574,6 +616,15 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
     expect(lease.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    // The legitimate stop NAMES the available holder/boundary: the response
+    // guards against re-REQUESTING them must stay green there.
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-request")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-request")!.grade).toBe("pass");
+    // The issue-close refusal names the supplied identity: its re-request
+    // guard must stay green there too.
+    const issueClose = units.find((u) => u.caseId === "bounded-res-issue-close-ungrouped")!;
+    expect(issueClose.grade).toBe("pass");
+    expect(issueClose.grading!.assertions.find((a) => a.assertionId === "a-not-identity-request")!.grade).toBe("pass");
     const replay = units.find((u) => u.caseId === "bounded-res-replay-partial")!;
     expect(replay.grade).toBe("pass");
     expect(replay.grading!.assertions.find((a) => a.kind === "final_not_contains")!.grade).toBe("pass");
@@ -587,6 +638,36 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     const wrongAction = adversarial.grading!.assertions.find((a) => a.kind === "final_not_contains")!;
     expect(wrongAction.grade).toBe("fail");
     expect(wrongAction.evidence.detail).toContain("applied");
+  });
+
+  test("an adversarial final that re-requests the available holder/boundary fails on the response-level guard with a valid budget", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-lease-boundary": LEASE_RE_REQUEST_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
+    expect(lease.grade).toBe("fail");
+    // The budget and no-write evidence stay valid, and the grouped oracle
+    // cannot see the difference (authorization + cues + stop line present) —
+    // only the response-level guard catches the re-request.
+    expect(lease.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    const holderGuard = lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-request")!;
+    expect(holderGuard.grade).toBe("fail");
+    expect(holderGuard.evidence.detail).toContain("provide the holder session-foreign-fixture");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-request")!.grade).toBe("fail");
   });
 
   test("the report retains noncompliant and unverified dispositions in the denominator", async () => {

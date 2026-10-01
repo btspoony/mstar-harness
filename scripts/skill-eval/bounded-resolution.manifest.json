@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "1b7b049b48b0a4cac6969c37e784494bf7818e3d3c77cf080d14c13248e8fe9c",
+  "casesHash": "3784d5d65534c72af84dd4f1b4d6d8a01c6e754005db54d82ce1d1837ffdfee7",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -277,6 +277,12 @@
           "kind": "final_contains",
           "value": "outcome: refused close for issue I-000001",
           "note": "the refusal names the supplied identity"
+        },
+        {
+          "id": "a-not-identity-request",
+          "kind": "final_not_contains",
+          "value": "provide the issue identity I-000001",
+          "note": "the identity is already supplied: naming it in the refusal is expected, requesting it again is not"
         }
       ],
       "provenance": {
@@ -291,7 +297,7 @@
         "context": "warm",
         "evidence": "issue identity supplied by the instruction"
       },
-      "integrityHash": "2181e6e5e5a27aad8effb4f5bd81864e2a8b20b7e3228bf0b5e9b9462054f3ae"
+      "integrityHash": "e326ecfac20fb11acf759bce1b4dbe0ea6a161b6bed3c2b089d6a76654d62103"
     },
     {
       "id": "bounded-res-negative-four-lookups",
@@ -665,6 +671,18 @@
           "kind": "final_contains",
           "value": "outcome: stopped at foreign lease holder session-foreign-fixture",
           "note": "the stop names the foreign holder"
+        },
+        {
+          "id": "a-not-holder-request",
+          "kind": "final_not_contains",
+          "value": "provide the holder session-foreign-fixture",
+          "note": "the holder is already available: naming it in the stop is expected, requesting it again is not"
+        },
+        {
+          "id": "a-not-boundary-request",
+          "kind": "final_not_contains",
+          "value": "provide the execution lease boundary",
+          "note": "the lease boundary is already available: referencing it is fine, requesting it again is not"
         }
       ],
       "provenance": {
@@ -679,7 +697,7 @@
         "context": "warm",
         "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "a17b7d83ac4e2b75fba613c902b539c088d5bc0183e4ed0c406604a6b52d1c1f"
+      "integrityHash": "a95dc9cef497da50d31f9ff6e49438440205cdad961bc101eb8c639a7bdc49f9"
     },
     {
       "id": "bounded-res-slash-iteration-cold",
