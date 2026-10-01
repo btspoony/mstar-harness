@@ -121,34 +121,23 @@ export type ExecutionCoverageManifest = Readonly<{
   manifestHash: string;
   storeId: string;
   epoch: number;
-  /**
-   * The discovered surface identities. Each row carries the sources C3's
-   * canonical discovery assigned to it, so a source witness is bound to exactly
-   * one `(surface, workflowId)` — or, where the hashed manifest assigns the same
-   * byte to two rows, to those two and no others.
-   */
   surfaces: readonly Readonly<{
     surface: ExecutionSurface;
     workflowId: string | null;
     sources: readonly CoverageWitness[];
-    /**
-     * C3's own discovery proof for a consumer surface (§4.1): derived from real
-     * bytes/kinds/link targets by the R1 verification implementation before the
-     * full manifest is hashed. C2 never derives it, never copies it out of a
-     * consumer declaration and only compares the declaration with it.
-     */
     consumerProof?: ConsumerDiscoveryProof;
-    /**
-     * C3's trusted host-session discovery for `omp-hidden-entries`: the session
-     * envelopes it discovered and the attestation it pinned. It is built from
-     * the explicit inventory and belongs to the full manifest hash.
-     */
     hostProof?: Readonly<{
       sessions: readonly Readonly<{ host: "omp"; sessionId: string; source: CoverageWitness }>[];
       attestation: CoverageWitness;
     }>;
   }>[];
   sources: readonly CoverageWitness[];
+  exclusions: readonly Readonly<{
+    workflowId: string;
+    codes: readonly string[];
+    snapshotPath: string;
+    sha256: string;
+  }>[];
 }>;
 
 /** Evidence bytes keyed by `${root}:${path}` — the only proof a validator accepts. */
@@ -580,6 +569,7 @@ type RowContext = Readonly<{
   workflowId: string | null;
   sources: readonly CoverageWitness[];
   evidence: readonly CoverageWitness[];
+  exclusions?: readonly Readonly<{ workflowId: string; codes: readonly string[]; snapshotPath: string; sha256: string }>[];
   bytesOf: (witness: CoverageWitness) => Uint8Array;
   label: string;
 }>;
@@ -592,16 +582,22 @@ function sourceRefs(context: RowContext): unknown[] {
 
 /** `core-v1`: the v2 root register plus one workflow snapshot per discovered workflow. */
 function coreCodec(context: RowContext): unknown {
+  const exclusions = context.exclusions ?? [];
   const registers: Array<Readonly<{ path: string; sha256: string; workflows: readonly string[] }>> = [];
   const snapshots: Array<Readonly<{ path: string; sha256: string; workflowId: string }>> = [];
   for (const witness of context.sources) {
+    const excluded = exclusions.find((entry) => entry.snapshotPath === witness.path);
+    if (excluded !== undefined) {
+      // Preview is read-only: the archive is written at apply time, so an
+      // exclusion is accounted for by the digest-bound declaration alone. The
+      // archive bytes are verified when the apply copies them.
+      if (witness.sha256 !== excluded.sha256) refuse(`excluded workflow ${excluded.workflowId} snapshot witness does not match its original digest.`);
+      snapshots.push({ path: witness.path, sha256: witness.sha256, workflowId: excluded.workflowId });
+      continue;
+    }
     const document = retainedObject(context.bytesOf(witness), `${context.label} source ${witness.path}`);
     if (document.schema_version === 1) {
-      snapshots.push({
-        path: witness.path,
-        sha256: witness.sha256,
-        workflowId: expectString(document.id, `${context.label} snapshot ${witness.path}.id`),
-      });
+      snapshots.push({ path: witness.path, sha256: witness.sha256, workflowId: expectString(document.id, `${context.label} snapshot ${witness.path}.id`) });
       continue;
     }
     if (document.version === 2 && Array.isArray(document.workflows)) {
@@ -610,36 +606,24 @@ function coreCodec(context: RowContext): unknown {
       );
       const seen = new Set<string>();
       for (const workflowId of declared) {
-        if (seen.has(workflowId)) {
-          refuse(
-            `${context.label}: the root register names workflow ${workflowId} twice; a duplicated authority row is refused, never folded into one ` +
-              `discovered workflow.`,
-          );
-        }
+        if (seen.has(workflowId)) refuse(`${context.label}: the root register names workflow ${workflowId} twice.`);
         seen.add(workflowId);
       }
       registers.push({ path: witness.path, sha256: witness.sha256, workflows: [...declared].sort(compareText) });
       continue;
     }
-    refuse(
-      `${context.label}: the core source ${witness.path} is neither a v2 root register nor a workflow snapshot; an unknown core document is not ` +
-        `coverage of the core authority.`,
-    );
+    refuse(`${context.label}: the core source ${witness.path} is neither a v2 root register nor a workflow snapshot.`);
   }
-  if (registers.length !== 1) refuse(`${context.label} carries ${registers.length} root registers; the core authority is one v2 register plus its snapshots.`);
-  if (snapshots.length === 0) refuse(`${context.label} carries no workflow snapshot; the discovered workflow set is not provable from these bytes.`);
+  if (registers.length !== 1) refuse(`${context.label} carries ${registers.length} root registers; expected one.`);
+  if (snapshots.length === 0) refuse(`${context.label} carries no workflow snapshot.`);
   const workflows = snapshots.map((snapshot) => snapshot.workflowId).sort(compareText);
   for (let index = 1; index < workflows.length; index++) {
-    if (workflows[index] === workflows[index - 1]) refuse(`${context.label} carries two snapshots for workflow ${workflows[index]}; a duplicated discovery is not coverage.`);
+    if (workflows[index] === workflows[index - 1]) refuse(`${context.label} carries two snapshots for workflow ${workflows[index]}.`);
   }
-  const missing = registers[0].workflows.filter((workflowId) => !workflows.includes(workflowId));
-  if (missing.length > 0) {
-    refuse(
-      `${context.label}: the root register names workflow(s) ${missing.join(", ")} with no snapshot witness; the register and the snapshots must ` +
-        `describe the same discovered authority.`,
-    );
-  }
-  return { sources: sourceRefs(context), format: "core-v2", workflows };
+  const accounted = new Set([...workflows, ...exclusions.map((entry) => entry.workflowId)]);
+  const missing = registers[0]!.workflows.filter((workflowId) => !accounted.has(workflowId));
+  if (missing.length > 0) refuse(`${context.label}: root-register workflow(s) ${missing.join(", ")} have no snapshot or declared exclusion.`);
+  return { sources: sourceRefs(context), format: "core-v2", workflows: [...accounted].sort(compareText) };
 }
 
 /** `session-v1`: the released session envelope, bound to its workflow and role. */
@@ -1595,6 +1579,7 @@ function computeRow(
   input: unknown,
   evidence: ExecutionCoverageEvidence,
   what: string,
+  exclusions: ExecutionCoverageManifest["exclusions"] = [],
 ): { receipt: ExecutionCoverageReceipt; facts: unknown } {
   const record = expectObject(input, what);
   const surface = expectSurface(record.surface, `${what}.surface`);
@@ -1644,7 +1629,7 @@ function computeRow(
     // not supplied, were replaced or do not hash to the receipt is refused even
     // when the codec would never have read it.
     for (const witness of [...sources, ...witnesses]) bytesOf(witness);
-    facts = CODECS[surface]({ surface, workflowId, sources, evidence: witnesses, bytesOf, label });
+    facts = CODECS[surface]({ surface, workflowId, sources, evidence: witnesses, exclusions, bytesOf, label });
     resultHash = digestOf({ surface, workflowId, disposition, facts });
   }
   return {
@@ -1707,7 +1692,7 @@ export function executionCoverageDigest(receipts: readonly ExecutionCoverageRece
 // Manifest and coverage set
 // ---------------------------------------------------------------------------
 
-const MANIFEST_KEYS = ["manifestId", "manifestHash", "storeId", "epoch", "surfaces", "sources"] as const;
+const MANIFEST_KEYS = ["manifestId", "manifestHash", "storeId", "epoch", "surfaces", "sources", "exclusions"] as const;
 
 type HostProof = Readonly<{
   sessions: readonly Readonly<{ host: "omp"; sessionId: string; source: CoverageWitness }>[];
@@ -1828,6 +1813,30 @@ function expectManifest(value: unknown): ExecutionCoverageManifest {
   );
   assertReceiptOrder(surfaces, "the coverage manifest.surfaces");
   const sources = expectWitnessList(record.sources, "the coverage manifest.sources");
+  const exclusions = expectArray(record.exclusions, "the coverage manifest.exclusions").map((entry, index) => {
+    const where = `the coverage manifest.exclusions[${index}]`;
+    const exclusion = expectObject(entry, where);
+    // Discovery is read-only, so an exclusion declares WHERE the snapshot lives
+    // and its digest; the archive copy is written and verified at apply time.
+    expectExactKeys(exclusion, ["workflowId", "codes", "snapshotPath", "sha256"], where);
+    const workflowId = expectString(exclusion.workflowId, `${where}.workflowId`);
+    const codes = expectArray(exclusion.codes, `${where}.codes`).map((code, codeIndex) =>
+      expectString(code, `${where}.codes[${codeIndex}]`),
+    );
+    if (codes.length === 0 || new Set(codes).size !== codes.length || [...codes].sort(compareText).some((code, codeIndex) => code !== codes[codeIndex])) {
+      refuse(`${where}.codes must be a nonempty unique canonical list.`);
+    }
+    const snapshotPath = expectWitnessPath(exclusion.snapshotPath, `${where}.snapshotPath`);
+    const sha256 = expectHex64(exclusion.sha256, `${where}.sha256`);
+    const snapshotWitness = sources.find((witness) => witness.root === "control" && witness.path === snapshotPath);
+    if (snapshotWitness?.sha256 !== sha256) {
+      refuse(`${where} does not bind the original snapshot witness at its recorded digest.`);
+    }
+    return { workflowId, codes, snapshotPath, sha256 };
+  });
+  if (new Set(exclusions.map((entry) => entry.workflowId)).size !== exclusions.length) {
+    refuse("the coverage manifest repeats an excluded workflow.");
+  }
 
   const known = new Set(surfaces.map((row) => identityKey(row.surface, row.workflowId)));
   for (const surface of EXECUTION_COVERAGE_SURFACES) {
@@ -1849,7 +1858,10 @@ function expectManifest(value: unknown): ExecutionCoverageManifest {
       }
     }
   }
-  return { manifestId, manifestHash, storeId, epoch, surfaces, sources };
+  for (const exclusion of exclusions) {
+    if (!workflows.includes(exclusion.workflowId)) refuse(`excluded workflow ${exclusion.workflowId} has no workflow-scoped coverage rows.`);
+  }
+  return { manifestId, manifestHash, storeId, epoch, surfaces, sources, exclusions };
 }
 
 const SET_KEYS = ["version", "manifestId", "manifestHash", "receipts", "digest"] as const;
@@ -1978,7 +1990,8 @@ export function validateExecutionCoverage(
         evidence: receipt.evidence,
       },
       evidence,
-      label,
+      "a coverage receipt recheck",
+      frozen.exclusions,
     );
     if (recomputed.receipt.resultHash !== receipt.resultHash) {
       refuse(

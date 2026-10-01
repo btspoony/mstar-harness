@@ -715,7 +715,7 @@ describe("execution-preview", () => {
 
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-preview-1"));
 
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.id.startsWith("exec-")).toBe(true);
     expect(manifest.root).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.storeId).toBe((footprint.storeMeta as { store_id: string }).store_id);
@@ -982,26 +982,31 @@ describe("execution-preview", () => {
     ).toEqual({ n: 1, input_hash: createHash("sha256").update(bindingIdentity, "utf8").digest("hex") });
   });
 
-  test("execution-preview-refuses-an-unclassified-workflow-entry", async () => {
+  test("execution-preview-skips-and-records-an-unclassified-workflow-entry", async () => {
     const fixture = await legacyWorkspace("preview-unclassified");
     writeText(join(fixture.workflowDir, "stray-artifact.txt"), "not a source this inventory classifies");
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unclassified")));
-    expect(refusal.code).toBe("execution.coverage-incomplete");
-    expect(refusal.message).toContain("stray-artifact.txt");
+    // An entry no surface claims is left in place and recorded, not a dead end:
+    // skipping it loses nothing, and the manifest's normalizations carry the note.
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unclassified"));
+    const primary = manifest.surfaces.find((surface) => surface.workflowId === PRIMARY);
+    expect(primary).toBeDefined();
   });
 
-  test("execution-preview-refuses-an-unrecognized-execution-field", async () => {
-    // §2.2: an unrecognized field in a checked execution shape refuses rather
-    // than being silently dropped on the way into the DB columns.
+  test("execution-preview-archives-a-snapshot-with-an-unrecognized-field", async () => {
+    // §2.2: an unrecognized field is never silently dropped into the DB
+    // columns — and it is not a dead end either: the workflow is excluded, its
+    // exact snapshot bytes are archived, and the exclusion is named.
     const fixture = await legacyWorkspace("preview-unrecognized-field");
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ coordination: Record<string, unknown> }>;
     };
     snapshot.plans[1]!.coordination.audit = [{ at: TS, actor: "someone" }];
     writeJson(fixture.snapshotPath, snapshot);
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("unexpected key(s): audit");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes.length).toBeGreaterThan(0);
+    // Preview never writes: the snapshot on disk is exactly what was read.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toContain("audit");
   });
 
   test("execution-preview-refuses-a-pending-catalog-journal", async () => {
@@ -1519,11 +1524,10 @@ describe("execution-stage", () => {
   });
 
   test("execution-stage-refuses-a-handoff-without-its-plan-session", async () => {
-    // §2.2/§D a handoff requires a bound plan session, on both transports: the
-    // source snapshot refuses the block itself, and the import validates the
-    // stored block with `sessionBound: plan.session !== null` — the DB reader's
-    // own rule (`sessionRow !== undefined`) — so a plan whose handoff has no
-    // session row to own it never stages.
+    // §2.2/§D a handoff requires a bound plan session. A plan whose handoff has
+    // no session row to own it is never imported: the whole workflow is
+    // excluded, its exact snapshot bytes are archived, and the exclusion is
+    // named in the manifest. Nothing is staged and the database stays legacy.
     const fixture = await legacyWorkspace("stage-handoff-no-session");
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ id: string; coordination: Record<string, unknown> }>;
@@ -1532,9 +1536,14 @@ describe("execution-stage", () => {
     writeJson(fixture.snapshotPath, snapshot);
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-handoff-preview")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("handoff requires a bound plan session");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-handoff-preview"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes.length).toBeGreaterThan(0);
+    // Preview never writes: the deleted session key is still absent on disk.
+    const onDisk = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+      plans: Array<{ coordination: Record<string, unknown> }>;
+    };
+    expect(onDisk.plans[1]!.coordination.session).toBeUndefined();
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
     expect(
       rawGet<{ authority_state: string }>(fixture.dbPath, "select authority_state from execution_meta where id = 1")!.authority_state,
@@ -1844,10 +1853,34 @@ describe("execution-snapshot-resolutions", () => {
     (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
     writeJson(fixture.snapshotPaths[0]!, snapshot);
     const before = readFileSync(fixture.snapshotPaths[0]!);
-    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-snapshot-live-incomplete")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("lease.execution-lease.missing-holder");
+    // A non-terminal workflow's incomplete lease is not repaired and not
+    // silently dropped: the workflow is excluded, its exact bytes are archived,
+    // and the exclusion is named in the manifest.
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-snapshot-live-incomplete"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes).toContain("lease.execution-lease.missing-holder");
     expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+  });
+
+  test("execution-snapshot-resolutions-excluded-snapshot-is-archived-at-apply", async () => {
+    const fixture = await coreWorkspace("snapshot-excluded-archived-at-apply");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    await stageAndAssertUnchanged(fixture, "snapshot-excluded-archived-at-apply");
+    // Staging copies the excluded bytes into the migration archive, byte for
+    // byte, and leaves the original exactly where it was.
+    const digest = createHash("sha256").update(new Uint8Array(before)).digest("hex");
+    const archived = join(
+      fixture.harness,
+      "archived",
+      "execution-snapshot-exclusions",
+      `${CORE_A}-${digest}.snapshot.json`,
+    );
+    expect(existsSync(archived)).toBe(true);
+    expect(readFileSync(archived)).toEqual(before);
   });
 
   test("execution-snapshot-resolutions-valid-snapshot-migrates-with-identical-bytes", async () => {
@@ -2851,7 +2884,7 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-c3-preview"));
 
     // ── the version-2 manifest covers DISCOVERY: roots, rows, proofs
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.roots.control).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.surfaces.length).toBeGreaterThan(0);
     expect(manifest.surfaces.find((row) => row.surface === "artifact-store-injectors")?.consumerProof).toBeUndefined();

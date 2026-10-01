@@ -164,7 +164,7 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       const operationId = required(input.operation, "--operation");
       const operator = required(input.operator, "--operator");
       const reviewed = document<ExecutionManifestDocument>(input.manifest, "--manifest");
-      if (reviewed.version !== 2) throw new SddScriptError("apply requires the version 2 execution manifest", 2);
+      if (reviewed.version !== 3) throw new SddScriptError("apply requires the version 3 execution manifest", 2);
       const manifest = reviewed as ExecutionManifest;
       const inventoryPath = reviewedInventory(manifest, input, verb);
       const coverage = await coverageSet(input, manifest, context, operationId, operator, verb);

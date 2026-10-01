@@ -584,7 +584,7 @@ describe("populated graph", () => {
 
     // §4.2: discovery is scoped by the explicit inventory, and the manifest
     // records that scope, every configured root and the surface identities.
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.inventoryPath).not.toBeNull();
     expect(manifest.roots.sdd).toBeDefined();
     expect(manifest.roots.host).toBeDefined();

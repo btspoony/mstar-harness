@@ -517,6 +517,7 @@ function materialize(rows: Row[], options: { digest?: string; coverageManifestHa
     manifestHash: MANIFEST_HASH,
     storeId: STORE_ID,
     epoch: EPOCH,
+    exclusions: [],
     surfaces,
     sources: [...pinned.values()].sort(byRootPath),
   };
