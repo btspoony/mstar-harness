@@ -280,7 +280,6 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       const result = await readExecutionPlan(executionContextFor({ harnessDir: root }, identity), ref, input.plan);
       return ok(id, result);
     }
-    const operation = fileOperation(id, input);
     if (input.sessionRef !== undefined) {
       // The ACTIVE route states no transport prerequisites for the derivable
       // half: the engine's own authority boundary resolves the sparse intent —
@@ -292,12 +291,15 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       // be supplied independently by the host adapter — a ref for a session
       // this caller does not hold is never adopted as its identity. The
       // operation id is the other caller-owned required field (the engine's
-      // own assertOperationId runs only after resolution).
+      // own assertOperationId runs only after resolution). This admission
+      // precedes payload materialization: a refused transport never reads
+      // --file.
       if (input.operation === undefined) return usage(id, "active operation requires an operation id");
       if (context.sessionId === undefined) return usage(id, "active operation requires runtime session identity");
       // A numeric revision is the file route's CAS transport; the active route
       // takes only a full execution token, so the transports never mix.
       if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
+      const operation = fileOperation(id, input);
       const operationId = input.operation;
       const ref = decodeExecutionSessionRef(input.sessionRef);
       const planId = ref.planId ?? input.plan;
@@ -322,6 +324,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       });
       return ok(id, receipt);
     }
+    const operation = fileOperation(id, input);
     if (input.session === undefined) return usage(id, "operation requires session or active sessionRef");
     const sessionPath = absolutePath(input.session, "session");
     pinSessionStore(sessionPath);
