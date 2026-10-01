@@ -151,16 +151,18 @@ const CLAUSE_END_RE = /[.;!\n]/;
  * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
  * a configured cue whose clause object IS the fact — `cue` + optional
  * determiner + fact — never a full-sentence template, so the article is
- * irrelevant. Coordinated objects (`... and ...`) stay inside the request
- * span. Every fact occurrence that is neither a detected request object nor
- * inside a declared reference form is an UNSUPPORTED shape: the oracle
- * returns `unverified` rather than passing it.
+ * irrelevant. Cues match as WHOLE WORDS (`needed`/`needing` are not `need`);
+ * coordinated objects (`... and ...`) stay inside the request span. Every fact
+ * occurrence that is neither a detected request object nor inside a declared
+ * reference form is an UNSUPPORTED shape: the oracle returns `unverified`
+ * rather than passing it.
  */
 export function scanRequestVerdict(
   final: string,
   spec: { requestCues: string[] } & RequestGuardSpec,
 ): RequestVerdict {
   const lower = final.toLowerCase();
+  const wordChar = (at: number): boolean => at >= 0 && at < lower.length && /[a-z0-9]/.test(lower[at]!);
   const cues = spec.requestCues.map((cue) => cue.toLowerCase());
   const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
   const violations = new Set<string>();
@@ -168,12 +170,14 @@ export function scanRequestVerdict(
     let at = lower.indexOf(cue);
     while (at >= 0) {
       const cueEnd = at + cue.length;
-      const stop = lower.slice(cueEnd).search(CLAUSE_END_RE);
-      const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
-      for (const segment of lower.slice(cueEnd, clauseEnd).split(/ and /)) {
-        const object = segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
-        for (const fact of facts) {
-          if (object.startsWith(fact)) violations.add(fact);
+      if (!wordChar(at - 1) && !wordChar(cueEnd)) {
+        const stop = lower.slice(cueEnd).search(CLAUSE_END_RE);
+        const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
+        for (const segment of lower.slice(cueEnd, clauseEnd).split(/ and /)) {
+          const object = segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
+          for (const fact of facts) {
+            if (object.startsWith(fact)) violations.add(fact);
+          }
         }
       }
       at = lower.indexOf(cue, cueEnd);
@@ -831,9 +835,13 @@ describe("bounded-resolution scenario set: authored artifact", () => {
       violations: [],
       ambiguous: ["holder session-foreign-fixture", "execution lease boundary"],
     });
-    // A bare mention without any request or declared reference context is
+    // A bare mention without any request or reference context is
     // unverified rather than silently accepted.
     expect(scanRequestVerdict("AUTHORIZATION-REQUIRED: need authorization\nthe holder session-foreign-fixture is foreign\n", leaseSpec).status).toBe("unverified");
+    // Inflected cue words are not the configured cue: `needed` opens no
+    // request span, so the fact mention stays unsupported → unverified
+    // (never misclassified as a known request, never a pass).
+    expect(scanRequestVerdict("AUTHORIZATION-REQUIRED: need authorization\nthe lease needed holder session-foreign-fixture confirmed\n", leaseSpec).status).toBe("unverified");
     // The legitimate stop only NAMES the facts through the declared reference
     // forms — it keeps passing.
     const legalLeaseFinal = `${GROUPED_FINALS["bounded-res-lease-boundary"]}\n${EXPECTED_OUTCOME["bounded-res-lease-boundary"]}\n`;
