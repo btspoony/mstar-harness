@@ -24,244 +24,25 @@ import {
   scaffoldAuditPlan,
   validateAuditStatusBlocks,
 } from "@mstar-harness/engine";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-/** Spawn env with ambient harness env vars pinned out (same as the other
- * CLI suites — engine dir resolution must not leak into fixtures).
- * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
- * (audit-002) reads them ahead of PWD, so an ambient value would redirect
- * every relative-path fixture spuriously. TZ stays pinned so a date any
- * fixture records is read in the same frame the child wrote it (an explicit
- * ambient TZ is propagated; the default is UTC). */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (
-      key === "MSTAR_HARNESS_DIR" ||
-      key === "MSTAR_CONTROL_ROOT" ||
-      key === "SDD_DIR" ||
-      key === "MSTAR_WORKING_BRANCH" ||
-      key === "MSTAR_CLI_PROJECT_ROOT" ||
-      key === "INIT_CWD"
-    ) {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  env.TZ = process.env.TZ ?? "UTC";
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
-interface CliEnvelope {
-  version: number;
-  command: string;
-  status: string;
-  code: string;
-  exitCode: number;
-  message?: string;
-  data?: Record<string, unknown>;
-  details?: { violations?: { code: string }[]; results?: LintResult[]; findings?: Finding[]; unreadableFiles?: number };
-}
-type Finding = { file?: string; line?: number; type?: string; kind?: string; code?: string };
-
-function cliEnvelope(result: RunResult, status?: string, code?: string): CliEnvelope {
-  const envelope = JSON.parse(result.stdout) as CliEnvelope;
-  expect(envelope.version).toBe(1);
-  expect(envelope.exitCode).toBe(result.exitCode);
-  if (status !== undefined) expect(envelope.status).toBe(status);
-  if (code !== undefined) expect(envelope.code).toBe(code);
-  return envelope;
-}
-
-function violationCodes(result: RunResult): string[] {
-  const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");
-  const violations = envelope.details?.violations ?? (envelope.data?.violations as { code: string }[] | undefined);
-  return violations?.map(({ code }) => code) ?? [envelope.code];
-}
-
-interface LintResult {
-  file: string;
-  violations: { code: string; message: string }[];
-  markers: string[];
-}
-
-function lintResults(result: RunResult): LintResult[] {
-  const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");
-  const results = envelope.details?.results ?? envelope.data?.results;
-  if (!Array.isArray(results)) throw new Error(`lint returned no per-file results: ${result.stdout}`);
-  return results as LintResult[];
-}
-
-function lintViolationCodes(result: RunResult): string[] {
-  return lintResults(result).flatMap(({ violations }) => violations.map(({ code }) => code));
-}
-
-/** Temp dir per test, cleaned up after. */
-function withTempDir(fn: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "mstar-slice4-cli-"));
-  try {
-    fn(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+import { CLI_ROOT, runCli, withTempDir } from "./harness";
+import {
+  cliEnvelope,
+  lintResults,
+  lintViolationCodes,
+  violationCodes,
+  type RunResult,
+} from "./support/cli-assertions";
+import {
+  DESIGN_LEVEL1,
+  KNOWLEDGE_GOOD,
+  SKILL_EPHEMERAL,
+  SKILL_GOOD,
+  SKILL_PLACEHOLDERS,
+} from "./support/cli-content-fixtures";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-/** Full Level 1 design frontmatter (same shape as the engine's FM_LEVEL1
- * fixture — audits as MVP; tokens pass). */
-const DESIGN_LEVEL1 = `---
-version: 0.1.0
-name: "Acme Design"
-description: "Acme Design is a minimal, high-contrast design system. This is the Light theme."
-colors:
-  background-100: "#ffffff"
-  gray-1000: "#171717"
-  gray-900: "#666666"
-  blue-700: "#0066ff"
-  red-700: "#e60000"
-  amber-700: "#ffaa00"
-typography:
-  copy-16:
-    fontFamily: Geist Sans
-    fontSize: 16px
-    fontWeight: 400
-    lineHeight: 1.6
-    letterSpacing: 0
-  heading-32:
-    fontFamily: Geist Sans
-    fontSize: 32px
-    fontWeight: 600
-    lineHeight: 1.2
-    letterSpacing: -0.02em
-spacing:
-  base: 4px
-  1: 4px
-  2: 8px
-  3: 12px
-  4: 16px
-  6: 24px
-rounded:
-  sm: 6px
----
-`;
-
-/** Valid skill fixture: lowercase-hyphen name, third-person trigger
- * description, all five body questions answered. */
-const SKILL_GOOD = `---
-name: sample-skill
-description: Validates harness fixtures during CLI smoke tests.
----
-
-## Load Order
-
-Read this skill when running smoke fixtures.
-
-## Workflow
-
-Create fixtures, run the CLI, assert exit codes.
-
-## Decision Rules
-
-Never mutate the control worktree.
-
-## Evidence
-
-A green CLI run is the success criterion.
-
-## References
-
-Open the engine tests when a fixture drifts.
-`;
-
-/** Skill body fixture: concrete ephemeral citations (task artifact +
- * sdd deeplink) inside an otherwise five-question-complete skill. */
-const SKILL_EPHEMERAL = `---
-name: sample-skill
-description: Validates harness fixtures during CLI smoke tests.
----
-
-## Load Order
-
-Read this skill when running smoke fixtures.
-
-## Workflow
-
-Create fixtures, run the CLI, assert exit codes. See task-3-report for the
-prior run.
-
-## Decision Rules
-
-Never mutate the control worktree. Check .mstar/sdd/20260815-x/ before edits.
-
-## Evidence
-
-A green CLI run is the success criterion.
-
-## References
-
-Open the engine tests when a fixture drifts.
-`;
-
-/** Skill body fixture: placeholder citation forms only — the
- * discrimination contract (zero false positives) requires these to pass. */
-const SKILL_PLACEHOLDERS = `---
-name: sample-skill
-description: Validates harness fixtures during CLI smoke tests.
----
-
-## Load Order
-
-Read this skill when running smoke fixtures.
-
-## Workflow
-
-Create fixtures, run the CLI, assert exit codes. task-N-report and
-{SDD_DIR}/task-N-report.md are templates; .mstar/sdd/<plan-id>/ is a
-deeplink template too.
-
-## Decision Rules
-
-Never mutate the control worktree.
-
-## Evidence
-
-A green CLI run is the success criterion.
-
-## References
-
-Open the engine tests when a fixture drifts.
-`;
-
-/** Knowledge-track doc that passes validateSchemaYaml. */
-const KNOWLEDGE_GOOD = `---
-module: engine
-date: 2026-08-01
-problem_type: best_practice
-category: best-practices
-severity: medium
----
-`;
 
 // ---------------------------------------------------------------------------
 // mstar lint
@@ -269,7 +50,7 @@ severity: medium
 
 describe("mstar lint — content-type lints", () => {
   test("plan file with placeholder → lint.plan-quality.placeholder, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "20260808-bad-plan.md");
       writeFileSync(file, "# Plan\n\n## Goal\nShip TBD module.\n");
       const result = runCli(["lint", file]);
@@ -279,7 +60,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("clean plan file → OK, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "20260808-good-plan.md");
       writeFileSync(file, "# Plan\n\n## Goal\nShip the module.\n");
       const result = runCli(["lint", file]);
@@ -289,7 +70,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("STRATEGY.md missing sections → lint.strategy.missing-section, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "STRATEGY.md");
       writeFileSync(file, "# Strategy\n\nNo sections here.\n");
       const result = runCli(["lint", file]);
@@ -300,7 +81,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("STRATEGY.md with all required sections → exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "STRATEGY.md");
       writeFileSync(
         file,
@@ -323,7 +104,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("SKILL.md bad frontmatter → lint.frontmatter.*, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "SKILL.md");
       writeFileSync(file, "---\nname: My-Skill\n---\n\n# Body\n");
       const result = runCli(["lint", file]);
@@ -333,7 +114,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("SKILL.md clean frontmatter → exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "SKILL.md");
       writeFileSync(
         file,
@@ -346,7 +127,7 @@ describe("mstar lint — content-type lints", () => {
   });
 
   test("task report without TDD triple → lint.sdd-tdd.missing-*, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "task-1-report.md");
       writeFileSync(file, "Did the work. Output looked fine.\n");
       const result = runCli(["lint", file]);
@@ -357,7 +138,7 @@ describe("mstar lint — content-type lints", () => {
 
   for (const reason of ["Policy scope and trigger changed; exact changed lines checked.", "TBD"]) {
     test(`task report scoped-check ${reason === "TBD" ? "invalid reason → exit 1" : "valid → exit 0"}`, () => {
-      withTempDir((dir) => {
+      withTempDir("mstar-slice4-cli-", (dir) => {
         const file = join(dir, "task-1-report.md");
         writeFileSync(file, `Verification mode: scoped-check
 Changed files: skills/example/SKILL.md
@@ -375,7 +156,7 @@ Check result: exit 0; changed scope line found.
   }
 
   test("task report with full TDD triple → exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "task-1-report.md");
       writeFileSync(
         file,
@@ -388,7 +169,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("code file with temporary marker lacking removal path → lint.temporary.no-removal-path, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "hack.ts");
       writeFileSync(file, "// temporary: hack\nconst x = 1;\n");
       const result = runCli(["lint", file]);
@@ -399,7 +180,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("code file with temporary marker + removal path → exit 0, marker printed", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "hack.ts");
       writeFileSync(file, "// temporary: shim — removal tracked in status.json\nconst x = 1;\n");
       const result = runCli(["lint", file]);
@@ -411,7 +192,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("code file with simplify marker → advisory only, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");
       writeFileSync(file, "// simplify: naive scan; upgrade: index the map\nconst y = 2;\n");
       const result = runCli(["lint", file]);
@@ -421,7 +202,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("dir walk aggregates violations → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "20260808-bad-plan.md"), "# Plan\n\n## Goal\nShip TBD.\n");
       writeFileSync(join(dir, "20260808-good-plan.md"), "# Plan\n\n## Goal\nShip it.\n");
       const result = runCli(["lint", dir]);
@@ -433,7 +214,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("dir walk with only clean files → exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "20260808-good-plan.md"), "# Plan\n\n## Goal\nShip it.\n");
       writeFileSync(join(dir, "STRATEGY.md"), "# S\n\n## Vision\n## What we build\n## What we don't build\n## Guiding Principles\n## Technology Direction\n## Decision Log\n");
       const result = runCli(["lint", dir]);
@@ -443,7 +224,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("dir with no lintable files → note, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "notes.txt"), "plain prose\n");
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(0);
@@ -458,7 +239,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("existing unclassifiable file → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "README.txt");
       writeFileSync(file, "prose\n");
       const result = runCli(["lint", file]);
@@ -468,7 +249,7 @@ Check result: exit 0; changed scope line found.
   });
 
   test("nonexistent target → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["lint", join(dir, "nope.ts")]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused").message).toContain("lint target not found");
@@ -482,7 +263,7 @@ Check result: exit 0; changed scope line found.
 
 describe("mstar lint --type provenance", () => {
   test("forced provenance scan flags dated plan id + harness path with lines, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "task-1-report.md");
       writeFileSync(
         file,
@@ -505,7 +286,7 @@ describe("mstar lint --type provenance", () => {
   });
 
   test("forced provenance scan passes synthetic example and placeholder forms, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "notes.md");
       writeFileSync(
         file,
@@ -523,7 +304,7 @@ describe("mstar lint --type provenance", () => {
   });
 
   test("forced provenance dir walk applies to every collected file, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "20991231-real-plan.md"), "# Plan\n\n## Goal\nTracked in 20991231-sample-plan.\n");
       writeFileSync(join(dir, "20991231-clean-plan.md"), "# Plan\n\n## Goal\nPlaceholder <plan-id> only.\n");
       const result = runCli(["lint", "--type", "provenance", dir]);
@@ -535,7 +316,7 @@ describe("mstar lint --type provenance", () => {
   });
 
   test("forced provenance dir walk collects ordinary-named .md files (not the classifier face only)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       // README.md / notes.md are unclassifiable to the ordinary classifier
       // (previously dropped from dir walks entirely); .txt stays off the
       // calibrated .md/.ts face even with a real-shaped token.
@@ -552,7 +333,7 @@ describe("mstar lint --type provenance", () => {
   });
 
   test("unknown --type value → usage listing includes provenance, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "notes.md");
       writeFileSync(file, "prose\n");
       const result = runCli(["lint", "--type", "nope", file]);
@@ -574,7 +355,7 @@ describe("mstar lint --type provenance", () => {
 
 describe("mstar design-md validate — tokens / parity / completeness", () => {
   test("valid Level 1 DESIGN.md → tokens OK, completeness MVP, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "DESIGN.md"), DESIGN_LEVEL1);
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(0);
@@ -585,7 +366,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
   });
 
   test("invalid token value → design-md.tokens.color-format, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "DESIGN.md"), DESIGN_LEVEL1.replace('"#ffffff"', '"not-a-color"'));
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(1);
@@ -594,7 +375,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
   });
 
   test("light/dark key mismatch → design-md.parity.missing-dark, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "DESIGN.md"), DESIGN_LEVEL1);
       // Dark theme missing gray-900 (and background-100 value differs).
       writeFileSync(
@@ -608,7 +389,7 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
   });
 
   test("no DESIGN.md in dir → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["design-md", "validate", dir]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused").message).toContain("design file not found");
@@ -633,7 +414,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   ];
 
   test("valid findings → plan files + README created, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
@@ -660,7 +441,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("scaffolded plans round-trip through the engine's validateAuditStatusBlocks", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
@@ -674,7 +455,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("Planned at carries the repo short SHA resolved at scaffold time", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
@@ -689,7 +470,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("--sha override wins over git resolution; outside a repo the fallback is 'unknown'", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
@@ -697,7 +478,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       expect(result.exitCode).toBe(0);
       expect(readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8")).toContain("- **Planned at**: commit `deadbee`,");
     });
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       // cwd = a temp dir outside any git repo → documented "unknown" fallback
@@ -713,7 +494,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("--date derives the audit-<date> directory name when --dir is omitted", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], { cwd: dir });
@@ -724,7 +505,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("supplied confidence + evidence + fixSketch + verification reach the plan and index (fidelity regression)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -772,7 +553,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   });
 
   test("absent confidence/evidence defaults to MED/[] — legacy plan/index byte-identical with pinned date/SHA", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "Add index", priority: "P2", effort: "XS", risk: "LOW", category: "tech-debt", description: "Index the audit table." }]));
       const outDir = join(dir, "audit-2026-08-08");
@@ -833,7 +614,7 @@ Index the audit table.
       { fixSketch: "" },
       { verification: "   " },
     ]) {
-      withTempDir((dir) => {
+      withTempDir("mstar-slice4-cli-", (dir) => {
         const findingsFile = join(dir, "findings.json");
         writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", ...bad }]));
         const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -846,7 +627,7 @@ Index the audit table.
   });
 
   test("invalid dependsOn → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", dependsOn: "plan-002.md", description: "d" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -856,7 +637,7 @@ Index the audit table.
   });
 
   test("malformed JSON → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "not json");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -866,7 +647,7 @@ Index the audit table.
   });
 
   test("JSON null root → usage, exit 2 (typeof null === 'object' must not reach the object branch)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "null");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -876,7 +657,7 @@ Index the audit table.
   });
 
   test("empty JSON object without findings → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "{}");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -886,7 +667,7 @@ Index the audit table.
   });
 
   test("object with findings: null → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify({ findings: null }));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -896,7 +677,7 @@ Index the audit table.
   });
 
   test("object form with needsVerification + hardeningChecked renders the security sections", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -922,7 +703,7 @@ Index the audit table.
   });
 
   test("invalid hardeningChecked kind → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -938,7 +719,7 @@ Index the audit table.
   });
 
   test("invalid enum value → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P9", effort: "M", risk: "LOW", category: "perf", description: "d" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -948,7 +729,7 @@ Index the audit table.
   });
 
   test("missing required fields → usage, exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf" }]));
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -964,7 +745,7 @@ Index the audit table.
   });
 
   test("nonexistent findings file → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["audit", "scaffold", join(dir, "nope.json"), "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused", "audit.scaffold.refused").message).toContain("findings file not found");
@@ -972,7 +753,7 @@ Index the audit table.
   });
 
   test("enriched finding (fingerprint/trace/severity/object evidence) renders metadata; legacy row shows — cells", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -1034,7 +815,7 @@ Index the audit table.
       { evidence: [{ file: "src/a.ts", line: 0, description: "d" }] },
       { evidence: [{ file: "src/a.ts", description: "   " }] },
     ]) {
-      withTempDir((dir) => {
+      withTempDir("mstar-slice4-cli-", (dir) => {
         const findingsFile = join(dir, "findings.json");
         writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", description: "d", ...bad }]));
         const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
@@ -1047,7 +828,7 @@ Index the audit table.
   });
 
   test("gate rejections surface as usage exit 2 with field path only: ordering, unsafe path, secret fingerprint", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -1063,7 +844,7 @@ Index the audit table.
       expect(envelope.message).toContain("findings[1].fingerprint");
       expect(existsSync(join(dir, "out"))).toBe(false); // zero new files on rejection
     });
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -1075,7 +856,7 @@ Index the audit table.
       expect(envelope.message).toContain("audit.finding.path.unsafe");
       expect(envelope.message).not.toContain("../escape.ts");
     });
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
         findingsFile,
@@ -1092,7 +873,7 @@ Index the audit table.
   });
 
   test("rejected batch leaves an existing README untouched", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const outDir = join(dir, "audit-2026-08-08");
       mkdirSync(outDir, { recursive: true });
       const readme = join(outDir, "README.md");
@@ -1119,7 +900,7 @@ Index the audit table.
 
 describe("mstar audit secret-scan — tracked-file credential scan", () => {
   test("seeded secret in a tracked file → finding JSON + exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       mkdirSync(join(dir, "sub"), { recursive: true });
       // Inert filler matching the AWS whole-match shape (AKIA + 16 alnum).
@@ -1148,7 +929,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
   });
 
   test("clean repo → exit 0, no finding lines", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       writeFileSync(join(dir, "main.ts"), `const key = process.env.API_KEY;\n`);
       execFileSync("git", ["add", "-A"], { cwd: dir });
@@ -1159,7 +940,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
   });
 
   test("untracked files are not scanned; path argument must be a directory → exit 2", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       const token = randomBytes(24).toString("hex");
       writeFileSync(join(dir, "leak.ts"), `token = "${token}"\n`);
@@ -1179,7 +960,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
   });
 
   test("nested path argument resolves tracked files under it", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       // Leak lives in a NESTED package dir; scan target is that dir.
       const pkg = join(dir, "packages", "engine");
@@ -1198,7 +979,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
   });
 
   test("non-git directory → exit 2, not a clean exit 0 ", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "main.ts"), `const ok = 1;\n`);
       const result = runCli(["audit", "secret-scan", dir]);
       expect(result.exitCode).toBe(2);
@@ -1207,7 +988,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
   });
 
   test("unreadable tracked file forces non-zero even with no findings", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       const locked = join(dir, "locked.txt");
       writeFileSync(locked, "benign content\n");
@@ -1228,7 +1009,7 @@ describe("mstar audit secret-scan — tracked-file credential scan", () => {
 
 describe("mstar audit supply-chain — lockfile + workflow checks", () => {
   test("lockfile missing at root → lockfile-missing finding + exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["audit", "supply-chain", dir]);
       expect(result.exitCode).toBe(1);
       const findings = cliEnvelope(result, "refused", "audit.supply-chain.findings").details?.findings ?? [];
@@ -1237,7 +1018,7 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
   });
 
   test("two root lockfiles → lockfile-duplicate finding + exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       for (const name of ["package-lock.json", "yarn.lock"]) writeFileSync(join(dir, name), "{}\n");
       const result = runCli(["audit", "supply-chain", dir]);
       expect(result.exitCode).toBe(1);
@@ -1246,7 +1027,7 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
   });
 
   test("single lockfile + SHA-pinned workflow → clean, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "bun.lock"), "{}\n");
       mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
       const sha = "a".repeat(40);
@@ -1306,7 +1087,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   }
 
   test("selected plan → snapshot with one Todo row + status.json type plan, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
       const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
         "--delivery-kind",
@@ -1358,7 +1139,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
     expect(noDir.exitCode).toBe(2);
     expect(cliEnvelope(noDir, "usage", "command.invalid-input").message).toContain("audit-dir");
 
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const { outDir } = scaffoldFixture(dir);
       const noPlans = runCli([
         "audit",
@@ -1377,7 +1158,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   });
 
   test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const { outDir } = scaffoldFixture(dir);
       const result = runCli(["audit", "promote", outDir, "--plans", "001",
         "--delivery-kind",
@@ -1393,7 +1174,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   });
 
   test("--workflow override sets the workflow id", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
       const result = runCli([
         "audit",
@@ -1421,7 +1202,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   });
 
   test("re-promote of the same workflow id → exit 1, names the snapshot path, first rows intact", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
       const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
         "--delivery-kind",
@@ -1469,7 +1250,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
 
 describe("mstar compound validate — knowledge-doc schema / index / scope", () => {
   test("valid knowledge doc → schema OK, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const result = runCli(["compound", "validate", doc]);
@@ -1479,7 +1260,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
   });
 
   test("doc missing required field → compound.schema.missing-field, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, "---\ndate: 2026-08-08\n---\n");
       const result = runCli(["compound", "validate", doc]);
@@ -1489,7 +1270,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
   });
 
   test("--knowledge-dir without README index → compound.index.retired, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
@@ -1504,7 +1285,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
   });
 
   test("doc outside --knowledge-dir → compound.scope.outside, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
@@ -1517,7 +1298,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
   });
 
   test("doc inside --knowledge-dir with index row → README register retired (exit 1, scope still guarded)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
       const doc = join(knowledgeDir, "doc.md");
@@ -1539,7 +1320,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
   });
 
   test("nonexistent doc → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["compound", "validate", join(dir, "nope.md")]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused").message).toContain("not found");
@@ -1594,7 +1375,7 @@ describe("mstar host detect — tool-shape host matrix", () => {
 
 describe("mstar skill lint — frontmatter + five-question body + ephemeral citations", () => {
   test("well-formed skill → all checks OK, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_GOOD);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
@@ -1604,7 +1385,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("body missing five-question sections → skill-authoring.five-question.*, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(
         join(dir, "skill", "SKILL.md"),
@@ -1617,7 +1398,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("bad frontmatter → lint.frontmatter.name.format, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), "---\nname: Bad-Name\n---\n\n## Load Order\n## Workflow\n## Decision Rules\n## Evidence\n## References\n");
       const result = runCli(["skill", "lint", join(dir, "skill")]);
@@ -1627,7 +1408,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("missing SKILL.md → exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
@@ -1642,7 +1423,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("concrete task-artifact citation → skill.ephemeral.task-artifact, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
@@ -1654,7 +1435,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("concrete sdd deeplink → skill.ephemeral.sdd-deeplink, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
@@ -1666,7 +1447,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   });
 
   test("placeholder citation forms → ephemeral checklist OK, exit 0 (discrimination contract)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_PLACEHOLDERS);
       const result = runCli(["skill", "lint", join(dir, "skill")]);
@@ -1682,7 +1463,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
 
 describe("project-root path resolution — relative dev-command args (audit-002)", () => {
   test("relative skill dir + MSTAR_CLI_PROJECT_ROOT → found from a nested cwd (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
       writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
       // cwd is nested below the fixture root: the relative arg must resolve
@@ -1699,7 +1480,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
   });
 
   test("scrubbed env + nested member cwd → workspaces walk-up reaches the monorepo root (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mono", workspaces: ["packages/*"] }));
       const member = join(dir, "packages", "cli");
       mkdirSync(member, { recursive: true });
@@ -1716,7 +1497,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
   });
 
   test("single-package consumer: nested cwd resolves to the nearest package.json root (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer-app" }));
       mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
       writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
@@ -1729,7 +1510,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
   });
 
   test("outside any package.json tree → cwd-relative terminal fallback (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       // no package.json anywhere above the fixture — relative args stay
       // cwd-relative by terminal fallback, so the arg must NOT find the
       // fixture under the bare cwd.
@@ -1742,7 +1523,7 @@ describe("project-root path resolution — relative dev-command args (audit-002)
   });
 
   test("absolute skill dir is unchanged even with MSTAR_CLI_PROJECT_ROOT set", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "elsewhere"), { recursive: true });
       writeFileSync(join(dir, "elsewhere", "SKILL.md"), SKILL_GOOD);
       const result = runCli(["skill", "lint", join(dir, "elsewhere")], {
@@ -1884,7 +1665,7 @@ describe("project-root path resolution — all six dev commands with relative ar
 
   for (const c of cases) {
     test(`relative path args resolve against the project root — ${c.name} (exit ${c.exit ?? 0})`, () => {
-      withTempDir((dir) => {
+      withTempDir("mstar-slice4-cli-", (dir) => {
         c.setup(dir);
         const nested = join(dir, "nested", "deep");
         mkdirSync(nested, { recursive: true });
@@ -1922,7 +1703,7 @@ A topic skill body without a Load Order heading.
   });
 
   test("--roles-dir / --skills-dir overrides; load-order violation exits 1 with one row each", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const skillsRoot = join(dir, "skills");
       mkdirSync(join(skillsRoot, "mstar-foo"), { recursive: true });
       writeFileSync(join(skillsRoot, "mstar-foo", "SKILL.md"), SIBLING_NO_LOAD_ORDER);
@@ -1936,7 +1717,7 @@ A topic skill body without a Load Order heading.
   });
 
   test("empty roles dir — mapping violations, one row each (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["roles", "validate", "--roles-dir", dir, "--skills-dir", dir]);
       expect(result.exitCode).toBe(1);
       const violations = cliEnvelope(result, "refused").details?.violations ?? [];
@@ -1946,7 +1727,7 @@ A topic skill body without a Load Order heading.
   });
 
   test("unreadable sibling SKILL.md is skipped best-effort (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const skillsRoot = join(dir, "skills");
       // A directory named SKILL.md makes readFileSync throw (EISDIR)
       // deterministically — exercises the best-effort skip without
@@ -1959,7 +1740,7 @@ A topic skill body without a Load Order heading.
   });
 
   test("relative --roles-dir resolves against MSTAR_CLI_PROJECT_ROOT", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       // Copy the real roles dir into the fixture project root so the mapping
       // passes; the sibling scan then covers the copied mstar-roles SKILL.md.
       cpSync(REPO_ROLES_DIR, join(dir, "skills", "mstar-roles"), { recursive: true });
@@ -2021,7 +1802,7 @@ function snapshotDoc(planRows: unknown[]): string {
 
 describe("mstar status validate — v2 root + workflow snapshot (hard cutover)", () => {
   test("valid v2 root → OK, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_OK);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(0);
@@ -2031,7 +1812,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
   });
 
   test("v2 root listing a workflow whose snapshot is missing → snapshot-missing, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_MISSING_SNAPSHOT);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
@@ -2040,7 +1821,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
   });
 
   test("v1 root fails closed with the migrate hint, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "status.json"), STATUS_V1_ROOT);
       const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
@@ -2049,7 +1830,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
   });
 
   test("workflow snapshot path validates with the snapshot validator, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const workflowDir = join(dir, "workflows", "wf-1");
       mkdirSync(workflowDir, { recursive: true });
       writeFileSync(join(workflowDir, "snapshot.json"), snapshotDoc([]));
@@ -2060,7 +1841,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
   });
 
   test("invalid snapshot (bad lifecycle type) → workflow.snapshot.invalid-type, exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const workflowDir = join(dir, "workflows", "wf-1");
       mkdirSync(workflowDir, { recursive: true });
       const doc = JSON.parse(snapshotDoc([])) as Record<string, unknown>;
@@ -2073,7 +1854,7 @@ describe("mstar status validate — v2 root + workflow snapshot (hard cutover)",
   });
 
   test("missing status file fails with exit 1", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["status", "validate", join(dir, "nope.json")]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused", "status.file-not-found").message).toContain("status file not found");
@@ -2129,7 +1910,7 @@ function seedIssueStore(dir: string, severity = "high"): string {
 
 describe("mstar status tech-debt — open-issue rollup over the issue store", () => {
   test("rolls up the store's OPEN issues by severity and project, exit 0", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       seedIssueStore(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(0);
@@ -2142,7 +1923,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
   });
 
   test("a missing store refuses instead of printing an empty rollup (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
@@ -2173,7 +1954,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
 
 describe("mstar status findings-cleanup — issue-linkage gate over the issue store", () => {
   test("an OPEN issue that is not linked to the plan does not block it (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       seedIssueStore(dir, "critical");
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
       expect(result.exitCode).toBe(0);
@@ -2181,14 +1962,14 @@ describe("mstar status findings-cleanup — issue-linkage gate over the issue st
     });
   });
   test("a missing store fails closed instead of passing as no findings (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
     });
   });
   test("invalid --mode is a usage error before store access (exit 2)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "bogus"]);
       expect(result.exitCode).toBe(2);
       expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("zero-residual");
@@ -2206,7 +1987,7 @@ describe("mstar status backlog-register / backlog-close — retired verbs name t
     ["backlog-close", "plan issue-close"],
   ] as const) {
     test(`${verb}: refuses with the migration path and writes no register (exit 1)`, () => {
-      withTempDir((dir) => {
+      withTempDir("mstar-slice4-cli-", (dir) => {
         const result = runCli(["status", verb], { cwd: dir });
         expect(cliEnvelope(result, "refused", "status.verb-retired").message).toContain(`mstar ${replacement}`);
         expect(existsSync(join(dir, "projects"))).toBe(false);
@@ -2260,7 +2041,7 @@ function leaseSnapshot(lease: unknown): string {
 }
 
 function withMergeLeaseSnapshot(lease: unknown, fn: (dir: string) => void): void {
-  withTempDir((dir) => {
+  withTempDir("mstar-slice4-cli-", (dir) => {
     const workflowDir = join(dir, "workflows", "wf-1");
     mkdirSync(workflowDir, { recursive: true });
     writeFileSync(join(workflowDir, "snapshot.json"), leaseSnapshot(lease));
@@ -2337,7 +2118,7 @@ function qcAssignmentSeparateFixture(planId: string, range: string): string {
 
 describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
   test("real-shape tri pack: 3 assignments, canonical combined label, byte-identical (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
         writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       }
@@ -2348,7 +2129,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
   });
 
   test("separate-label form still parses as aligned (exit 0)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
@@ -2358,7 +2139,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
   });
 
   test("a differing Diff basis fails with qc.alignment.mismatch (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "qc1.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
@@ -2367,7 +2148,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
     });
   });
   test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
-    withTempDir((dir) => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
       // Separate-label variant with the Diff basis line removed (the combined
       // form cannot drop a single range field).
       const incomplete = qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
