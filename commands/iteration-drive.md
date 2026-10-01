@@ -35,7 +35,7 @@ Scoped drive starts from the requested plan intent. Follow the current public ve
 
 ## Boot
 
-按 **`mstar-iteration`** 的 **Load order** 与 **Phase route map** 引导加载：按当前 Phase 只加载 route map 对应一行 detail（无参启动 Phase 2 → `references/phase-2-worktree-lease.md`）；`mstar-compound` / `mstar-sdd` / `mstar-review-qc` / `mstar-branch-worktree` 等 topic skill 按 Load order 的命名触发时点到达时加载，**不在 Boot 预载全矩阵**。加载选择权威（bootstrap / PM role / 完整 load list）→ **`mstar-roles`** § Load Order。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（按当前 Phase 查 route map，只加载一行 detail）+ `command-shared-invariants.md` → `mstar-compound` → `mstar-dispatch-gates` + host reference → **`mstar-sdd`**（first implement dispatch 前）→ `mstar-review-qc`（first QC 前）→ `mstar-artifacts` / `mstar-conventions` / `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
 
 **Scoped route 例外**：先按 **`references/plan-scoped-pm.md`** §2 建立 primary PM identity → 一次 `mstar plan bind` → `show` 并把会话约束到返回的 scope，再按本条加载；**不**加载 `mstar-compound`，也**不**加载 Phase 3–6 detail（scoped boot ≠ 整迭代 boot）。
 

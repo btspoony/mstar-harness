@@ -49,7 +49,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 ## 0. Boot
 
-按 **`mstar-iteration`** 的 **Load order** 与 **Phase route map** 引导加载：本命令 route = **start** → 只加载当前 route 一行 detail（`references/phase-1-prepare.md`）；topic skill 按 Load order 的命名触发时点到达时加载，**不在 Boot 预载全矩阵**。加载选择权威（bootstrap / PM role / 完整 load list）→ **`mstar-roles`** § Load Order。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（route map：start → **`references/phase-1-prepare.md`**）+ `mstar-phase-gates` + `mstar-dispatch-gates` + `mstar-conventions/artifacts` + `mstar-host` → active host reference）。Plan 会话另读 **active host reference 的 plan-mode bridge**（`mstar-iteration` Phase 1 in Plan mode）。完整 load list → **`mstar-roles`**。
 
 **若宿主 Plan mode 活跃 → 进入 §P；否则继续 §1。**
 
