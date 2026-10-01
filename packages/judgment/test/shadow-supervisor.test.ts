@@ -57,7 +57,30 @@ function inputs(root: string, workerSource?: string) {
   return { root, pack, pilot, child, mountPlan, baseline: { inventory: [{ id: "unit-1" }], seatOutputs: [{ unitId: "unit-1", outputId: "output-1" }], originalConsumption: { consumedOutputs: [{ unitId: "unit-1", outputId: "output-1", consumed: true, consumedAt: 1 }] }, finalReport: { status: "complete" } } };
 }
 const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.execPath, [child.executable, ...child.argv, runId], { env: { PATH: process.env.PATH ?? "", HOME: process.cwd() }, stdio: ["ignore", "pipe", "pipe"] });
-const containerOnlySkip = process.platform !== "linux";
+// The container-only cases bypass Docker via testLauncher, so the probe fixture runs
+// directly on the host: it lists /proc and appends its denial log to /mnt/output.
+// Detect that declared capability instead of trusting the platform alone, and name
+// it visibly whenever the cases are skipped.
+let containerOnlySkipReason: string | null = null;
+if (process.platform !== "linux") containerOnlySkipReason = "Linux platform";
+if (containerOnlySkipReason === null) {
+  try {
+    readdirSync("/proc");
+  } catch {
+    containerOnlySkipReason = "listable /proc";
+  }
+}
+if (containerOnlySkipReason === null) {
+  try {
+    const capabilityProbe = join("/mnt/output", `jev-supervisor-capability-${process.pid}`);
+    writeFileSync(capabilityProbe, "");
+    rmSync(capabilityProbe, { force: true });
+  } catch {
+    containerOnlySkipReason = "writable /mnt/output (container-style /mnt mounts)";
+  }
+}
+const containerOnlySkip = containerOnlySkipReason !== null;
+if (containerOnlySkip) console.warn(`[shadow-supervisor] skipping container-only cases: missing capability: ${containerOnlySkipReason}`);
 afterEach(() => { for (const root of roots.splice(0)) { makeWritable(root); rmSync(root, { recursive: true, force: true }); } });
 
 describe("trusted shadow supervisor", () => {
