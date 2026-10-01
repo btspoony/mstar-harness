@@ -1376,7 +1376,7 @@ describe("execution-stage", () => {
       }),
     );
     expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("source witness mismatch");
+    expect(refusal.message).toContain("surface discovery no longer holds the reviewed bytes");
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
 
@@ -2512,7 +2512,7 @@ describe("execution-retirement", () => {
 
     const refusal = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "drift")));
     expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("source witness mismatch");
+    expect(refusal.message).toContain("surface discovery no longer holds the reviewed bytes");
     // The pre-pass verifies every source BEFORE the first rename, so a changed
     // source refuses with the live tree completely untouched.
     expect(existsSync(fixture.statusPath)).toBe(true);
