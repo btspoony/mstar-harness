@@ -389,6 +389,107 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     expect(readFileSync(envelope, "utf8")).toBe(envelopeBytes);
   });
 
+  test("reports grouped recovery facts on the unbound and foreign authority refusals", async () => {
+    const fixture = await seededWorkflow("boundary-grouped-session-refusal");
+    const { context, planTokens, planPm, planPmCaller } = fixture;
+    // A REAL, live, bound second plan-pm seat (the prepared-unbound peer plan),
+    // so the foreign case below presents a genuine other holder's reference —
+    // the scenario the sparse suite exercises.
+    const peerPmCaller = trustedCaller("host-peer-pm", "plan-pm", PEER_PLAN);
+    const peerPm = await bindExecutionSession(domainContext(context, peerPmCaller), {
+      workflowId: WORKFLOW_ID,
+      planId: PEER_PLAN,
+      role: "plan-pm",
+      expected: planTokens[PEER_PLAN],
+      operationId: "bind-peer-plan-grouped-refusal",
+    });
+    const before = footprint(context);
+    let ran = 0;
+    const attempt = (caller: ExecutionCaller, session: ExecutionSessionRef): Promise<unknown> =>
+      withExecutionPlanAuthority(
+        domainContext(context, caller),
+        { session, expected: planTokens[OWN_PLAN], planId: OWN_PLAN, operation: { kind: "residual-add", entries: [] } },
+        () => {
+          ran += 1;
+          return "leaked";
+        },
+      );
+    type GroupedRefusalDetails = {
+      current_facts?: string[];
+      sources_tried?: string[];
+      available_work?: string[];
+      caller_session?: string;
+      reference_session?: string;
+      row_state?: string;
+      recovery?: {
+        outcome?: string;
+        commitState?: string;
+        unresolved?: Array<{ code?: string; currentFacts?: string[]; availableWork?: string[] }>;
+      };
+    };
+    const refusalOf = async (
+      caller: ExecutionCaller,
+      session: ExecutionSessionRef,
+    ): Promise<{ code?: string; details?: GroupedRefusalDetails }> =>
+      attempt(caller, session).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: GroupedRefusalDetails }) => error,
+      );
+
+    // (a) A SELF-CONSISTENT reference for a session the store never bound: the
+    // caller and the reference name the same unknown identity, so the address
+    // check passes and the binding lookup itself refuses.
+    const ghostCaller = { ...planPmCaller, sessionId: "host-never-bound" };
+    const unbound = await refusalOf(ghostCaller, { ...planPm, sessionId: "host-never-bound" });
+    expect(unbound.code).toBe("execution.session-unavailable");
+    expect(unbound.details?.current_facts?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(unbound.details?.current_facts)).toContain("host-never-bound");
+    expect(unbound.details?.sources_tried?.length).toBeGreaterThan(0);
+    expect(unbound.details?.available_work?.length).toBeGreaterThan(0);
+    expect(unbound.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    const unboundProblem = unbound.details?.recovery?.unresolved?.[0];
+    expect(unboundProblem?.code).toBe("execution.session-unavailable");
+    expect(unboundProblem?.currentFacts?.length).toBeGreaterThan(0);
+    expect(unboundProblem?.availableWork?.length).toBeGreaterThan(0);
+    // The refused call wrote nothing.
+    expect(footprint(context)).toEqual(before);
+
+    // The raw revoke is an INTENTIONAL fixture change and moves the same
+    // liveSession refusal into its row-state branch; it edits row state only,
+    // so the revision/row-count snapshot does not move. Scoped to the OWN row:
+    // the peer seat below must stay a LIVE foreign holder.
+    withRaw(context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where role = 'plan-pm' and session_id = ?").run(PLAN_PM_ID);
+    });
+    const revoked = await refusalOf(planPmCaller, planPm);
+    expect(revoked.code).toBe("execution.session-unavailable");
+    expect(revoked.details?.row_state).toBe("revoked");
+    expect(JSON.stringify(revoked.details?.current_facts)).toContain("revoked");
+
+    // (b) The live peer plan-pm's own reference presented by the p-1 seat:
+    // resolvePlanRead refuses the caller/reference identity mismatch BEFORE
+    // any binding lookup, so the revoke above never touches this path. The
+    // grouped contract lands beside the flat caller/reference identity facts.
+    const foreign = await refusalOf(planPmCaller, peerPm.data);
+    expect(foreign.code).toBe("coordination.session-mismatch");
+    expect(foreign.details?.caller_session).toBe(PLAN_PM_ID);
+    expect(foreign.details?.reference_session).toBe("host-peer-pm");
+    expect(foreign.details?.current_facts?.length).toBeGreaterThan(0);
+    const foreignFacts = JSON.stringify(foreign.details?.current_facts);
+    expect(foreignFacts).toContain(PLAN_PM_ID);
+    expect(foreignFacts).toContain("host-peer-pm");
+    expect(foreign.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    const foreignProblem = foreign.details?.recovery?.unresolved?.[0];
+    expect(foreignProblem?.code).toBe("coordination.session-mismatch");
+    expect(foreignProblem?.currentFacts?.length).toBeGreaterThan(0);
+    expect(foreignProblem?.availableWork?.length).toBeGreaterThan(0);
+
+    expect(ran).toBe(0);
+    expect(footprint(context)).toEqual(before);
+  });
+
   test("refuses a nested plan operation on the same store and commits only the outer one", async () => {
     const fixture = await seededWorkflow("boundary-reentrant");
     const { context, planTokens, coordinator, planPm, coordinatorCaller, planPmCaller } = fixture;

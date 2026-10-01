@@ -2230,6 +2230,30 @@ function readOwnership(
 }
 
 /**
+ * §2.3 the grouped problem details of one session-authority refusal, in the
+ * SAME snake_case details convention as `authorityEpochRefusal`: the
+ * `RecoveryProblem` facts plus the engine-built `recovery` sidecar, so a
+ * consumer reads what was withheld and which decision is open without parsing
+ * prose. Shared by the unbound-binding and foreign-holder refusals so both
+ * authority paths report the same contract.
+ */
+function sessionRefusalDetails(input: {
+  problem: RecoveryProblem;
+  target?: RecoveryDetails["target"];
+  facts?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    component: input.problem.component,
+    path: input.problem.path,
+    ...input.facts,
+    sources_tried: input.problem.sourcesTried,
+    current_facts: input.problem.currentFacts,
+    available_work: input.problem.availableWork,
+    recovery: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] }),
+  };
+}
+
+/**
  * §2.3/§2.2 the binding this store ACTUALLY holds for the addressed scope at
  * the CURRENT epoch, or the refusal. A reference is a typed lookup identity,
  * not a bearer credential: an unknown, suspended, revoked, foreign or
@@ -2241,12 +2265,55 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
   const rows = readSessionRows(tx.db, store, address.workflowId, address.role);
   const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
   if (mine === undefined || mine.state !== "active" || mine.ref.epoch !== tx.epoch) {
+    const problem: RecoveryProblem = {
+      component: "session",
+      path: "session",
+      code: "execution.session-unavailable",
+      sourcesTried: [`the execution session rows of workflow ${JSON.stringify(address.workflowId)} (${address.role}), read in this transaction`],
+      currentFacts: [
+        `the reference names ${address.role} session ${JSON.stringify(address.sessionId)} of workflow ` +
+          `${JSON.stringify(address.workflowId)} plan ${JSON.stringify(address.planId)}`,
+        mine === undefined
+          ? `the store holds no ${address.role} session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}`
+          : `session ${JSON.stringify(address.sessionId)}'s row is ${mine.state} in epoch ${mine.ref.epoch}, while the store's ` +
+              `current authority epoch is ${tx.epoch}`,
+      ],
+      needed: `a session reference the store holds ACTIVE for ${address.role} of workflow ${JSON.stringify(address.workflowId)} ` +
+        `at the current epoch ${tx.epoch}`,
+      withheldEffect:
+        "only the addressed effect: authority was withheld, so nothing was written, no revision advanced and no receipt " +
+        "was committed under this operation",
+      availableWork: [
+        `present the session reference of a binding the store holds ACTIVE for ${address.role} of workflow ` +
+          `${JSON.stringify(address.workflowId)} at epoch ${tx.epoch}`,
+        ...(mine === undefined
+          ? [
+              "bind a session for this role first \u2014 the active bind verb takes the workflow, the role, the plan " +
+                "(a coordinator binds none), the full execution token and an operation id",
+            ]
+          : mine.ref.epoch !== tx.epoch
+            ? [`resume or rebind your own execution session at the current epoch ${tx.epoch}`]
+            : []),
+        "retry the operation with the reference and token of the current epoch",
+      ],
+    };
     throw new ExecutionError(
       "execution.session-unavailable",
       `workflow ${address.workflowId} holds no ACTIVE ${address.role} session ${address.sessionId} in epoch ${tx.epoch}` +
         `${mine === undefined ? "" : ` (its row is ${mine.state} in epoch ${mine.ref.epoch})`}. An execution session ` +
         `reference authorizes only the binding the store records at the current epoch; a legacy session envelope is ` +
         `never consulted.`,
+      sessionRefusalDetails({
+        problem,
+        target: { workflowId: address.workflowId, ...(address.planId === null ? {} : { planId: address.planId }) },
+        facts: {
+          session_id: address.sessionId,
+          workflow_id: address.workflowId,
+          role: address.role,
+          current_epoch: tx.epoch,
+          ...(mine === undefined ? {} : { row_state: mine.state, row_epoch: mine.ref.epoch }),
+        },
+      }),
     );
   }
   if (mine.ref.planId !== address.planId) {
@@ -2957,12 +3024,38 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
     );
   }
   if (caller.sessionId !== sessionId || caller.workflowId !== workflowId || caller.planId !== planScope) {
+    const problem: RecoveryProblem = {
+      component: "session",
+      path: "session",
+      code: "coordination.session-mismatch",
+      sourcesTried: ["the trusted caller identity (the host adapter)", "the supplied session reference"],
+      currentFacts: [
+        `the trusted caller holds ${caller.role} session ${JSON.stringify(caller.sessionId)} of workflow ` +
+          `${JSON.stringify(caller.workflowId)} plan ${JSON.stringify(caller.planId)}`,
+        `the supplied reference names session ${JSON.stringify(sessionId)} of workflow ${JSON.stringify(workflowId)} ` +
+          `plan ${JSON.stringify(planScope)}`,
+      ],
+      needed:
+        "the reference of the session this caller itself holds \u2014 a reference is a lookup identity and is never " +
+        "adopted as the caller's authority",
+      withheldEffect:
+        "only the addressed effect: the named holder's binding was not adopted, so nothing was read or written for " +
+        "the addressed plan",
+      availableWork: [
+        `present the reference of your own ${caller.role} session ${JSON.stringify(caller.sessionId)}`,
+        ...(caller.planId === null ? [] : [`address the plan this caller is bound to (${JSON.stringify(caller.planId)})`]),
+      ],
+    };
     throw new CoordinationError(
       "coordination.session-mismatch",
       `the trusted caller is session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)} ` +
         `plan ${JSON.stringify(caller.planId)}; the supplied reference names session ${JSON.stringify(sessionId)} of ` +
         `workflow ${JSON.stringify(workflowId)} plan ${JSON.stringify(planScope)}`,
-      { caller_session: caller.sessionId, reference_session: sessionId },
+      sessionRefusalDetails({
+        problem,
+        target: { workflowId },
+        facts: { caller_session: caller.sessionId, reference_session: sessionId },
+      }),
     );
   }
   if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the plan id it selects");

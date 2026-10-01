@@ -205,7 +205,15 @@ type PlanReceiptData = {
   };
   replayed?: boolean;
 };
-type GroupedFacts = { current_facts?: unknown[]; sources_tried?: unknown[] };
+type GroupedFacts = {
+  current_facts?: unknown[];
+  sources_tried?: unknown[];
+  available_work?: unknown[];
+  caller_session?: unknown;
+  reference_session?: unknown;
+  row_state?: unknown;
+  recovery?: { outcome?: unknown; commitState?: unknown; unresolved?: Array<{ code?: unknown }> };
+};
 
 /** Raw row counts proving a refused call changed nothing (no receipt, no binding, no plan write). */
 function executionFootprint(context: StoreContext): { operations: number; sessions: number; plans: number; leases: number } {
@@ -351,6 +359,19 @@ describe("sparse plan intent admission", () => {
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN2_ID)).toEqual(plan2RowsBefore);
     expect(operationReceiptJson(context, "op-sparse-foreign")).toBeNull();
+    // QC1-001: the foreign refusal keeps its flat identity facts AND now
+    // carries the engine's grouped recovery contract beside them.
+    const details = envelope.details as GroupedFacts;
+    expect(details.caller_session).toBe(PLAN_PM_ID);
+    expect(details.reference_session).toBe(PLAN2_PM_ID);
+    expect(details.current_facts?.length).toBeGreaterThan(0);
+    const foreignFacts = JSON.stringify(details.current_facts);
+    expect(foreignFacts).toContain(PLAN_PM_ID);
+    expect(foreignFacts).toContain(PLAN2_PM_ID);
+    expect(details.sources_tried?.length).toBeGreaterThan(0);
+    expect(details.available_work?.length).toBeGreaterThan(0);
+    expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "coordination.session-mismatch" });
   });
 
   test("a self-consistent but unbound session reference is refused at the authority boundary", async () => {
@@ -365,6 +386,15 @@ describe("sparse plan intent admission", () => {
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN_ID)).toEqual(planRowsBefore);
     expect(operationReceiptJson(context, "op-sparse-ghost")).toBeNull();
+    // QC1-001: the refusal keeps its stable authority verdict and now carries
+    // the engine's grouped recovery facts — what the store actually read.
+    const details = envelope.details as GroupedFacts;
+    expect(details.current_facts?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(details.current_facts)).toContain(GHOST_PM_ID);
+    expect(details.sources_tried?.length).toBeGreaterThan(0);
+    expect(details.available_work?.length).toBeGreaterThan(0);
+    expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "execution.session-unavailable" });
   });
 
   test("a target no authority can name returns one grouped genuine-facts refusal", async () => {
