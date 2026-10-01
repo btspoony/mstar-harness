@@ -37,11 +37,15 @@ const CAPTURE_INPUT_REQUIRED = [
   "sourceKind", "location", "observedBehavior", "evidence", "discoveredAt",
 ];
 
+const RECORDED_TOKEN = `sha256:${"a".repeat(64)}`;
+const SUPPLIED_STALE_TOKEN = `sha256:${"0".repeat(64)}`;
+const VERSIONED_DOCUMENT = JSON.stringify({ version: RECORDED_TOKEN, payload: { issueId: "I-000001", revision: 1 } });
+
 function fixtureFilesFor(caseId: string): { path: string; content: string }[] {
   const store: Record<string, string> = {
     "bounded-res-schema-read": '{"issueId":"I-000001","revision":1}',
-    "bounded-res-write-stale-constraint": '{"issueId":"I-000001","revision":1}',
-    "bounded-res-adversarial-wrong-action": '{"issueId":"I-000001","revision":1}',
+    "bounded-res-write-stale-constraint": VERSIONED_DOCUMENT,
+    "bounded-res-adversarial-wrong-action": VERSIONED_DOCUMENT,
     "bounded-res-issue-close-ungrouped": '{"issueId":"I-000001","revision":1,"disposition":"open"}',
     "bounded-res-negative-four-lookups": '{"issueId":"I-000001","revision":1}',
     "bounded-res-incomplete-evidence": '{"issueId":"I-000001","revision":1}',
@@ -383,6 +387,15 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     expect(CAPTURE_INPUT_REQUIRED).toHaveLength(15);
     expect(EXPECTED_OUTCOME["bounded-res-schema-read"]).toContain("15 required fields");
     expect(fixtureFilesFor("bounded-res-schema-read").some((f) => f.path === "contract/capture-input.json")).toBe(true);
+    // The stale-write scenario's relation is checkable: the prompt carries the
+    // supplied token, the fixture carries the recorded current token, and the
+    // two differ (that is what makes the supplied token stale).
+    const stale = manifest.cases.find((c) => c.id === "bounded-res-write-stale-constraint")!;
+    expect(stale.prompt).toContain(SUPPLIED_STALE_TOKEN);
+    const document = fixtureFilesFor(stale.id).find((f) => f.path === "store/fixture.json")!.content;
+    expect(document).toContain(RECORDED_TOKEN);
+    expect(SUPPLIED_STALE_TOKEN).not.toBe(RECORDED_TOKEN);
+    expect((manifest as EvalManifest & { boundedResolution: { suppliedStaleToken: string } }).boundedResolution.suppliedStaleToken).toBe(SUPPLIED_STALE_TOKEN);
   });
 
   test("every canonical definition and slash document has an explicit disposition", () => {
