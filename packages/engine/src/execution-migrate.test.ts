@@ -1769,6 +1769,95 @@ describe("execution-stage", () => {
 // Activation (§6 item 3)
 // ---------------------------------------------------------------------------
 
+describe("execution-snapshot-resolutions", () => {
+  const completeExecutionLease = {
+    holder: "operator",
+    claimed_at: TS,
+    worktree_path: "/tmp/snapshot-worktree",
+    working_branch: "feature/snapshot",
+  };
+
+  async function terminalFixture(name: string, configure: (snapshot: Record<string, unknown>) => void) {
+    const fixture = await coreWorkspace(name);
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    snapshot.status = "completed";
+    snapshot.ended_at = "2026-09-03";
+    configure(snapshot);
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    writeJson(fixture.statusPath, { version: 2, updated_at: ROOT_UPDATED_AT, workflows: [] });
+    return fixture;
+  }
+
+  async function stageAndAssertUnchanged(fixture: CoreWorkspace, name: string) {
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    await stageCore(fixture, name);
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_leases")!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_integration_leases")!.count).toBe(0);
+  }
+
+  test("execution-snapshot-resolutions-terminal-execution-lease-alone", async () => {
+    const fixture = await terminalFixture("snapshot-terminal-exec", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-terminal-exec");
+  });
+
+  test("execution-snapshot-resolutions-done-row-and-terminal-execution-lease", async () => {
+    const fixture = await terminalFixture("snapshot-done-terminal", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-done-terminal");
+  });
+
+  test("execution-snapshot-resolutions-done-and-incomplete-execution-and-merge-leases", async () => {
+    const fixture = await terminalFixture("snapshot-all-missing", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+      snapshot.integration_merge_lease = {};
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-all-missing");
+  });
+
+  test("execution-snapshot-resolutions-incomplete-merge-lease", async () => {
+    const fixture = await terminalFixture("snapshot-merge-missing", (snapshot) => {
+      snapshot.integration_merge_lease = {};
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-merge-missing");
+  });
+
+  test("execution-snapshot-resolutions-running-done-row-releases-its-own-lease", async () => {
+    const fixture = await coreWorkspace("snapshot-running-done");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    await stageAndAssertUnchanged(fixture, "snapshot-running-done");
+  });
+
+  test("execution-snapshot-resolutions-live-incomplete-non-done-lease-is-not-repaired", async () => {
+    const fixture = await coreWorkspace("snapshot-live-incomplete");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    const refusal = await refusalOf(() => previewExecutionMigration(migrationInput(fixture, "op-snapshot-live-incomplete")));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("lease.execution-lease.missing-holder");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+  });
+
+  test("execution-snapshot-resolutions-valid-snapshot-migrates-with-identical-bytes", async () => {
+    const fixture = await coreWorkspace("snapshot-valid-unchanged");
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    await stageCore(fixture, "snapshot-valid-unchanged");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+  });
+});
+
 describe("execution-activation", () => {
   test("execution-activation-core-fixture-activates-only-behind-the-barrier", async () => {
     const fixture = await coreWorkspace("activate-core", { workflows: 2 });

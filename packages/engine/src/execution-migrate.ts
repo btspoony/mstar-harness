@@ -999,22 +999,22 @@ function readSnapshotSource(
     normalized = { ...rest, integration_worktree_path: doc.control_worktree_path };
     diagnostics.push(`${LEGACY_WORKTREE_PATH_CODE}: renamed control_worktree_path to integration_worktree_path in memory.`);
   }
-  if (terminal && Array.isArray(normalized.plans)) {
+  if (Array.isArray(normalized.plans)) {
     normalized.plans = normalized.plans.map((row, index) => {
       if (!isPlainObject(row)) return row;
       const rowViolations = validateWorkflowSnapshot({ ...normalized, plans: [row] }).violations;
       const doneLease = row.status === "Done" && row.execution_lease !== undefined;
-      const dangling = row.execution_lease !== undefined &&
+      const dangling = terminal && row.execution_lease !== undefined &&
         (initial.violations.some((v) => v.code === "workflow.snapshot.terminal-dangling-execution-lease") ||
           rowViolations.some((v) => v.code.startsWith("lease.execution-lease.missing-")));
       if (!doneLease && !dangling) return row;
       const { execution_lease: _lease, ...rest } = row;
       const codes = rowViolations.map((v) => v.code);
       const code = doneLease ? "status.plan-row.done-with-lease" : "workflow.snapshot.terminal-dangling-execution-lease";
-      const additionalCode = doneLease ? " + workflow.snapshot.terminal-dangling-execution-lease" : "";
+      const additionalCode = doneLease && terminal ? " + workflow.snapshot.terminal-dangling-execution-lease" : "";
       const missing = codes.filter((entry) => entry.startsWith("lease.execution-lease.missing-"));
       diagnostics.push(
-        `${code}${additionalCode}: dropped plans[${index}].execution_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because a terminal lifecycle must release every lease.`,
+        `${code}${additionalCode}: dropped plans[${index}].execution_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because ${doneLease ? "a Done row releases its lease in the same update" : "a terminal lifecycle must release every lease"}.`,
       );
       return rest;
     });
