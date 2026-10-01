@@ -1,24 +1,35 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   SddScriptError,
   StoreError,
+  abortExecutionMigration,
   activateStore,
+  activateStoreUpgrade,
   activationReceiptFor,
   appliedReceiptFor,
   applyStoreMigration,
   backupStore,
+  initializeExecutionAuthority,
   initializeStore,
   planStoreMigration,
+  probeStoreUpgradeState,
   resolveProcessHarnessDir,
   retireStoreSources,
+  retireExecutionSources,
+  stageStoreUpgrade,
   upgradeStore,
+  upgradeStoreWithRecoveryPoint,
+  executionManifestHash,
   type ActivationAttestation,
   type MigrationManifest,
+  type StagedStoreUpgrade,
   type StoreContext,
+  type StoreUpgradeState,
 } from "@mstar-harness/engine";
 import { z } from "zod";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 
 const inputSchema = z.object({
@@ -27,10 +38,15 @@ const inputSchema = z.object({
   manifest: z.string().optional(),
   attestation: z.string().optional(),
   out: z.string().optional(),
+  operator: z.string().optional(),
+  inventory: z.string().optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "migrate", "upgrade", "backup", "activate", "retire"] as const;
-const writeVerbs: Record<string, true> = { init: true, upgrade: true, backup: true, activate: true, retire: true };
+function hasLegacyExecutionFiles(harnessDir: string): boolean {
+  return existsSync(path.join(harnessDir, "status.json")) ||
+    (existsSync(path.join(harnessDir, "workflows")) && readdirSync(path.join(harnessDir, "workflows")).length > 0);
+}
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -82,9 +98,16 @@ function outputPath(value: string | undefined, cwd: string): string | undefined 
 function jsonFile<T>(value: string, flag: string): T {
   let text: string;
   try { text = readFileSync(absoluteFile(value, flag), "utf8"); }
-  catch (error) { throw new SddScriptError(`${flag} could not be read: ${error instanceof Error ? error.message : String(error)}`, 2); }
+  catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "";
+    const kind = flag === "--attestation" ? "attestation" : "operator-file";
+    const diagnosticCode = code === "ENOENT" ? `store.${kind}-missing` : `store.${kind}-unreadable`;
+    throw Object.assign(new SddScriptError(`${flag} could not be read`, 2), { code: diagnosticCode });
+  }
   try { return JSON.parse(text) as T; }
-  catch { throw new SddScriptError(`${flag} is not valid JSON`, 2); }
+  catch { throw Object.assign(new SddScriptError(`${flag} is not valid JSON`, 2), { code: flag === "--attestation" ? "store.attestation-malformed" : "store.operator-file-malformed" }); }
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
@@ -102,6 +125,221 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
     );
   }
 }
+export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
+  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  const diagnostics: Record<string, { blocker: string; recovery: string }> = {
+    "execution.migration-conflict": {
+      blocker: "The staged migration conflicts with current workspace state; its reviewed evidence may no longer match.",
+      recovery: "Do not rerun this staged attempt. `store upgrade` will ask you to confirm abandoning it, then create and review a fresh migration.",
+    },
+    "execution.coverage-incomplete": {
+      blocker: "The legacy execution source is missing required completeness evidence.",
+      recovery: "Complete the missing source or stop-session evidence; provide an inventory only if discovery inventory is the missing item, then rerun `store upgrade`.",
+    },
+    "store.attestation-invalid": {
+      blocker: "The activation attestation is invalid or contradictory.",
+      recovery: "Correct the operator-supplied attestation and rerun `store upgrade`.",
+    },
+    "store.activation-blocked": {
+      blocker: "A required installed-consumer or stopped-session readiness condition is unmet.",
+      recovery: "Reload or update the affected consumer and confirm active sessions are stopped in the attestation, then rerun `store upgrade`.",
+    },
+    "store.attestation-missing": {
+      blocker: "The activation attestation file was not found.",
+      recovery: "Provide an existing readable attestation file and rerun `store upgrade`.",
+    },
+    "store.attestation-unreadable": {
+      blocker: "The activation attestation file could not be read.",
+      recovery: "Provide a readable attestation file and rerun `store upgrade`.",
+    },
+    "store.attestation-malformed": {
+      blocker: "The activation attestation file is malformed.",
+      recovery: "Provide a readable, valid JSON attestation file and rerun `store upgrade`.",
+    },
+    "store.operator-file-missing": {
+      blocker: "The operator-supplied file was not found.",
+      recovery: "Provide an existing readable file and rerun the command.",
+    },
+    "store.operator-file-unreadable": {
+      blocker: "The operator-supplied file could not be read.",
+      recovery: "Provide a readable file and rerun the command.",
+    },
+    "store.operator-file-malformed": {
+      blocker: "The operator-supplied file is malformed.",
+      recovery: "Provide a readable, valid JSON file and rerun the command.",
+    },
+  };
+  const diagnostic = diagnostics[code];
+  if (error instanceof SddScriptError && diagnostic !== undefined) {
+    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
+  }
+  if (error instanceof SddScriptError) return refused(id, error);
+  const refusal = diagnostic ?? {
+    blocker: "The execution migration could not establish a safe upgrade.",
+    recovery: "Resolve the underlying execution-source or readiness gap, then rerun `store upgrade`.",
+  };
+  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${refusal.blocker} ${refusal.recovery}` };
+}
+
+async function unifiedStoreUpgrade(
+  id: string,
+  input: StoreInput,
+  context: StoreContext,
+  invocation: InvocationContext,
+): Promise<CommandEnvelope> {
+  let state = await probeStoreUpgradeState(context);
+  if (state.verdict === "blocked") {
+    return {
+      version: 1,
+      command: id,
+      status: "refused",
+      code: "store.upgrade-blocked",
+      exitCode: 1,
+      message: hasLegacyExecutionFiles(context.harnessDir)
+        ? "No store exists, but legacy execution files are present. Preserve those files and use the supported staged migration; `store init` is not appropriate."
+        : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
+    };
+  }
+  const noLegacyExecutionFiles = !hasLegacyExecutionFiles(context.harnessDir);
+  if (
+    state.reasons.includes("schema-upgrade-pending")
+    && (
+      noLegacyExecutionFiles
+      || (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired")
+    )
+  ) {
+    const upgraded = await upgradeStoreWithRecoveryPoint(context, randomUUID());
+    state = await probeStoreUpgradeState(context);
+    const authority = noLegacyExecutionFiles && state.executionAuthorityState === "legacy"
+      ? await initializeExecutionAuthority(context)
+      : undefined;
+    state = await probeStoreUpgradeState(context);
+    if (state.executionAuthorityState === "active" && state.executionMigrationPhase === "retired") {
+      return ok(id, { verdict: "upgraded", schemaVersion: upgraded.schemaVersion, executionMigration: "not-needed" });
+    }
+    if (noLegacyExecutionFiles) {
+      return ok(id, {
+        verdict: "upgraded",
+        schemaVersion: upgraded.schemaVersion,
+        executionMigration: "not-needed",
+        ...(authority === undefined ? {} : { authorityState: "active" }),
+      });
+    }
+  }
+  if (state.verdict === "up-to-date") {
+    return ok(id, { verdict: state.verdict, schemaVersion: state.schemaVersion });
+  }
+  if (state.executionAuthorityState === "active" && state.executionMigrationPhase === "active") {
+    requireInputs(input, ["operator"]);
+    const receipt = await retireExecutionSources({
+      context,
+      operator: required(input.operator, "--operator"),
+      operationId: randomUUID(),
+      manifestId: state.manifestId!,
+      manifestHash: state.executionManifestHash!,
+    });
+    return ok(id, { verdict: "upgraded", schemaVersion: state.schemaVersion, authorityState: "active", sourcesRetired: receipt.phase === "retired" });
+  }
+  if (state.verdict === "blocked") {
+    throw new Error("unreachable store upgrade state");
+  }
+
+  if (!hasLegacyExecutionFiles(context.harnessDir)) {
+    const upgraded = await upgradeStoreWithRecoveryPoint(context, randomUUID());
+    state = await probeStoreUpgradeState(context);
+    const authority = state.executionAuthorityState === "legacy"
+      ? await initializeExecutionAuthority(context)
+      : undefined;
+    return ok(id, {
+      verdict: "upgraded",
+      schemaVersion: upgraded.schemaVersion,
+      executionMigration: "not-needed",
+      ...(authority === undefined ? {} : { authorityState: "active" }),
+    });
+  }
+  requireInputs(input, ["operator", "attestation"]);
+  const operator = required(input.operator, "--operator");
+  const attestationPath = path.resolve(invocation.cwd, required(input.attestation, "--attestation"));
+  const attestation = jsonFile<ActivationAttestation>(attestationPath, "--attestation");
+  const inventoryPath = input.inventory === undefined ? undefined : path.resolve(invocation.cwd, input.inventory);
+  invocation.effects.writeStderr?.(
+    "This will move execution authority from the legacy workflow files to SQLite and retire those files. Any unpublished catalog change will be preserved for later review, not applied or discarded. Type `preserve for later review` to confirm; anything else cancels. ",
+  );
+  const catalogDeltaDisposition = await invocation.effects.readInput();
+  if (catalogDeltaDisposition.trim() !== "preserve for later review") {
+    return {
+      version: 1,
+      command: id,
+      status: "refused",
+      code: "store.upgrade-not-confirmed",
+      exitCode: 1,
+      message: "The authority switch was not confirmed. The workflow files remain authoritative; rerun `store upgrade` and enter `preserve for later review` to continue.",
+    };
+  }
+
+  let staged: StagedStoreUpgrade;
+  try {
+    staged = await stageStoreUpgrade({
+      context,
+      operator,
+      operationId: randomUUID(),
+      catalogDeltaDisposition,
+      ...(inventoryPath === undefined ? {} : { inventoryPath }),
+    });
+  } catch (error) {
+    return storeUpgradeFailure(id, error);
+  }
+
+  try {
+    const receipt = await activateStoreUpgrade(staged, attestation);
+    return ok(id, {
+      verdict: "upgraded",
+      schemaVersion: staged.manifest.schemaVersion,
+      authorityState: "active",
+      sourcesRetired: receipt.phase === "retired",
+    });
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "execution.migration-conflict") {
+      let latestState: StoreUpgradeState | undefined;
+      try {
+        latestState = await probeStoreUpgradeState(context);
+      } catch {
+        // Preserve the activation/retirement failure if state cannot be reprobed.
+      }
+      if (latestState?.executionAuthorityState === "active" && latestState.executionMigrationPhase === "active") {
+        return {
+          version: 1,
+          command: id,
+          status: "refused",
+          code: "store.upgrade-blocked",
+          exitCode: 1,
+          message: "The execution authority is active, but source retirement did not complete because the reviewed evidence changed. Do not abandon the migration; rerun `store upgrade` to resume source retirement.",
+        };
+      }
+      if (latestState?.executionAuthorityState === "staged") {
+        invocation.effects.writeStderr?.(
+          "Changed evidence means this staged migration cannot be activated. Abandon this staged migration and its staged execution rows to return to legacy authority? Type `abandon staged migration` to confirm; anything else cancels. ",
+        );
+        const confirmation = await invocation.effects.readInput();
+        if (confirmation.trim() === "abandon staged migration") {
+          try {
+            await abortExecutionMigration({
+              context,
+              operationId: randomUUID(),
+              operator,
+              manifestId: staged.manifest.id,
+              manifestHash: executionManifestHash(staged.manifest),
+              reason: "Changed evidence; operator confirmed abandonment through store upgrade",
+            });
+          } catch {
+            // The activation failure remains the primary error.
+          }
+        }
+      }
+    }
+    return storeUpgradeFailure(id, error);
+  }
+}
 
 async function execute(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {
@@ -114,7 +352,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         try { return ok(id, { storeId: handle.storeId, epoch: handle.epoch, schemaVersion: handle.schemaVersion, authorityState: "active" }); }
         finally { handle.close(); }
       }
-      case "store.upgrade": return ok(id, await upgradeStore(context));
+      case "store.upgrade": return await unifiedStoreUpgrade(id, input, context, invocation);
       case "store.backup": {
         const out = outputPath(input.out, invocation.cwd);
         const receipt = await backupStore(context, out === undefined ? {} : { out });
@@ -163,27 +401,45 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       default: throw new Error(`unsupported store command ${id}`);
     }
-  } catch (error) { return refused(id, error); }
+  } catch (error) {
+    return id === "store.upgrade" ? storeUpgradeFailure(id, error) : refused(id, error);
+  }
 }
 
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
-  const verb = id.slice("store.".length);
+  const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionFlags: Record<keyof StoreInput, string> = {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <path>", out: "--out <path>",
+    operator: "--operator <name>", inventory: "--inventory <path>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
     migrate: ["harness", "apply", "manifest", "out"],
-    upgrade: ["harness"],
+    upgrade: ["harness", "operator", "attestation", "inventory"],
     backup: ["harness", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
-  const options = Object.keys(inputSchema.shape).map((key) => ({ key, flags: optionFlags[key as keyof StoreInput]!, required: false }));
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
+  const options = optionKeys.map((key) => ({ key, flags: optionFlags[key], required: false }));
+  const definitionInput = inputSchema.pick(shape);
   return {
-    id, cli: { path: ["store", verb], aliases: [], arguments: [], options }, input: inputSchema,
-    output: commandEnvelopeSchema, effects: verb === "migrate" ? ["read", "write"] : writeVerbs[verb] === true ? ["read", "write"] : ["read"],
-    description: `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
+    id,
+    cli: { path: ["store", verb], aliases: [], arguments: [], options },
+    input: definitionInput,
+    output: commandEnvelopeSchema,
+    effects: ({
+      init: ["read", "write"],
+      migrate: ["read", "write"],
+      upgrade: ["read", "write", "stdin"],
+      backup: ["read", "write"],
+      activate: ["read", "write"],
+      retire: ["read", "write"],
+    } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
+    description: verb === "upgrade"
+      ? "Report readiness; upgrade the schema, and when legacy execution files exist confirm before migrating authority."
+      : `Store ${verb} operation; engine enforces migration, activation, recovery and mutation barriers.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }

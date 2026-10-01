@@ -632,7 +632,7 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
     snapshotPath: join(dir, WORKFLOW_SNAPSHOT_FILE),
     statusPath: join(harnessDir, "status.json"),
     snapshot,
-    identity: onDiskIdentity(workflow.kind, snapshot),
+    identity: migrationOwnershipIdentity(workflow.kind, snapshot),
     request,
   };
 }
@@ -644,6 +644,40 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
  */
 function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
   return kind === "iteration" ? iterationWorkflowRegistrationIdentity(snapshot) : planWorkflowRegistrationIdentity(snapshot);
+}
+
+/**
+ * Project away execution progress before comparing migration ownership. The
+ * existing registration identity remains the single source of its stable
+ * fields; normalizing its mutable status members preserves that field set.
+ */
+function migrationIdentityMatches(
+  kind: CatalogExecutionKind,
+  snapshot: WorkflowSnapshot,
+  identity: string,
+  policy: "strict" | "legacy-retirement" = "strict",
+): boolean {
+  let recorded: Record<string, unknown>;
+  try {
+    recorded = JSON.parse(identity) as Record<string, unknown>;
+  } catch {
+    return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+  }
+  const coordinator = recorded.coordinator;
+  const recordedSnapshot = {
+    ...recorded,
+    coordination: coordinator === null || coordinator === undefined ? undefined : { coordinator },
+  } as unknown as WorkflowSnapshot;
+  return migrationOwnershipIdentity(kind, snapshot) === migrationOwnershipIdentity(kind, recordedSnapshot);
+}
+function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
+  const registration = {
+    ...snapshot,
+    status: "running",
+    plans: snapshot.plans.map((plan) => ({ ...plan, status: "Todo" })),
+    coordination: snapshot.coordination === undefined ? undefined : { coordinator: snapshot.coordination.coordinator },
+  } as WorkflowSnapshot;
+  return onDiskIdentity(kind, registration);
 }
 
 /**
@@ -907,6 +941,13 @@ function recordAborted(db: StoreDb, operationId: string, reason: string): void {
     operationId,
   );
 }
+function recordMigrationRetirement(db: StoreDb, operationId: string, reason: string): void {
+  db.prepare("update catalog_operations set phase = 'aborted', result_json = ? where operation_id = ?").run(
+    JSON.stringify({ aborted: true, reason }),
+    operationId,
+  );
+}
+
 
 function journalDeltaOf(plan: CatalogExecutionPlan, request: CatalogExecutionRequest): JournalDelta {
   return {
@@ -1043,7 +1084,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
   const existing = readSnapshotIfPresent(plan.dir);
 
   if (existing !== undefined) {
-    if (existing.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, existing.snapshot) !== plan.identity) {
+    if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
       throw conflictError(
         `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
           "whose identity is NOT this reviewed request",
@@ -1077,7 +1118,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
       `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}`,
     );
   }
-  if (written.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, written.snapshot) !== plan.identity) {
+  if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
     throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
   }
   if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
@@ -1145,7 +1186,7 @@ async function publishUnderRootLock(
           "the catalog delta is not published for an execution registration that does not hold",
       );
     }
-    if (onDisk.snapshot.id !== plan.workflowId || onDiskIdentity(plan.kind, onDisk.snapshot) !== plan.identity) {
+    if (onDisk.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, onDisk.snapshot, plan.identity)) {
       throw conflictError(
         `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
           "the catalog delta describes the reviewed request, not those bytes",
@@ -1577,12 +1618,10 @@ export async function reconcileCatalogExecution(
         "reconcile refuses to re-drive it",
     );
   }
-  if (plan.workflowId !== journal.workflow.workflowId || plan.identity !== journal.workflow.identity) {
-    failReconcile(
-      `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
-        `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,
-    );
-  }
+  if (plan.workflowId !== journal.workflow.workflowId || !migrationIdentityMatches(plan.kind, plan.snapshot, journal.workflow.identity)) { failReconcile(
+    `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
+      `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,
+  ); }
 
   const state = await withJournalWrite(context, (db) => ({
     published: hasPublishedDelta(db, id),
@@ -1678,6 +1717,70 @@ export async function abortCatalogExecution(
   await withJournalWrite(context, (db) => recordAborted(db, id, reason ?? "abandoned by the operator"));
   return { operationId: id, workflowId: journal.workflow.workflowId, phase: "aborted" };
 }
+/**
+ * Retire stale, already-written registrations that block the staged
+ * store-upgrade route. Kept out of the package entry point: this is not a
+ * general catalog-abort verb.
+ */
+export async function retireStaleCatalogExecutionsForMigration(
+  context: StoreContext,
+  operationIds: readonly string[],
+  disposition: string,
+): Promise<void> {
+  if (!Array.isArray(operationIds) || operationIds.length === 0) invalid("operationIds must name at least one pending registration");
+  if (typeof disposition !== "string" || disposition.trim() === "") invalid("disposition must be a non-empty string");
+  const ids = operationIds.map((operationId) => requireText(operationId, "operationId"));
+  const recordedDisposition = disposition;
+  await withJournalWrite(context, (db) => {
+    const rows = ids.map((id) => {
+      const row = readRow(db, id);
+      if (row === undefined) throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
+      if (row.phase === "committed") failReconcile(`operation ${JSON.stringify(id)} is committed and cannot be retired with a file route`);
+      if (row.phase !== "execution-written") {
+        failReconcile(`operation ${JSON.stringify(id)} is ${row.phase}, not an execution-written migration leftover`);
+      }
+      return row;
+    });
+    const pending = pendingRows(db);
+    if (pending.length !== rows.length || pending.some((row) => !ids.includes(row.operation_id))) {
+      failReconcile("the pending catalog journal changed while migration was preparing its retirement; nothing was retired");
+    }
+    const catalogRevision = readJournalVersions(db).catalogRevision;
+    for (const row of rows) {
+      const journal = parseJournalDelta(row);
+      const snapshot = readSnapshotIfPresent(resolve(journal.workflow.snapshotPath, ".."))?.snapshot;
+      const rootEntry = findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId);
+      const expectedEntry =
+        snapshot === undefined
+          ? undefined
+          : workflowEntryOf({ workflowId: journal.workflow.workflowId } as CatalogExecutionPlan, snapshot);
+      if (
+        snapshot === undefined ||
+        snapshot.id !== journal.workflow.workflowId ||
+        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") ||
+        rootEntry === undefined ||
+        expectedEntry === undefined ||
+        stableJson(rootEntry) !== stableJson(expectedEntry)
+      ) {
+        failReconcile(
+          `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
+            "the registration bytes are missing or belong to a different workflow and cannot be retired",
+        );
+      }
+      if (hasPublishedDelta(db, row.operation_id) || journal.expectedCatalogRevision === catalogRevision) {
+        failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
+      }
+    }
+    for (const row of rows) {
+      recordMigrationRetirement(
+        db,
+        row.operation_id,
+        `retired with the file route; unpublished catalog delta disposition: ${recordedDisposition}`,
+      );
+    }
+  });
+}
+
 
 /** The current store/catalog revisions: what a caller records as the expectation. */
 export async function readCatalogRevisions(context: StoreContext): Promise<CatalogRevisions> {
