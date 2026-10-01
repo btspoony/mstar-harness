@@ -2145,6 +2145,37 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     expect(recurring.scopeUnknownIdentities).toEqual(["item_1"]);
   });
 
+  test("an intra-turn contradiction grades the budget unverified", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("contradictory phase outcomes");
+
+    const single = accountUnitInvocations([{
+      turn: 1,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    }]);
+    expect(single.envelopes).toBe(1);
+    expect(single.conflictingOutcomeCalls).toBe(1);
+    expect(single.failed).toBe(0);
+  });
+
   test("the report labels invocation totals as raw per-turn observations", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
     const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);

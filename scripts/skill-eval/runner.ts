@@ -726,6 +726,10 @@ export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocatio
     if (identity === null) accounting.unknownIdentity += 1;
     if (entry.outcome === "failed") accounting.failed += 1;
     if (entry.outcome === "unknown") accounting.unknownOutcome += 1;
+    // A conflict detected within a single turn's scan must still reach the
+    // unit-scope counter; otherwise an intra-turn contradiction would grade
+    // as a coherent outcome.
+    if (entry.outcomeConflicted) accounting.conflictingOutcomeCalls += 1;
     if (READ_ITEM_TYPES.has(entry.itemType)) accounting.readShaped += 1;
     accounting.bundledLookups += entry.bundled;
     if (entry.bundleUnknown) accounting.bundleUnknownCalls += 1;
