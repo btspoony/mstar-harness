@@ -491,19 +491,16 @@ describe("binding", () => {
       ).toBe("coordination.session-role");
     }
     expect(view.allowed_operations).not.toContain("prepare");
-    // The row's own holder reaches the row admission, which refuses the seal
-    // it already has — never a second prepare, and never a seat refusal now
+    // The row's own holder reaches the row admission and answers from the seal
+    // it already holds — never a second write, and never a seat refusal now
     // that the seat is lawful (spec §D3).
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: fixture.planSession,
-          planId: PLAN_ID,
-          expectedRevision: view.revision,
-          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
-        }),
-      ),
-    ).toBe("coordination.prepare-already-prepared");
+    const holder = await mutatePlanCoordination({
+      sessionPath: fixture.planSession,
+      planId: PLAN_ID,
+      expectedRevision: view.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    expect(holder.outcome).toBe("already-satisfied");
     // A plan-pm envelope that is NOT this row's holder keeps `session-role`.
     const outsider = join(fixture.workflowDir, "sessions", "plan-pm-outsider.json");
     writeJson(outsider, {
@@ -755,17 +752,18 @@ describe("admission self-claim and orphan adoption", () => {
     expect(prepared.outcome).toBe("prepared");
     expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).prepared_by).toBe("claimant");
 
-    // §D3: the same claimant cannot seal the row a second time.
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: claim.session_file,
-          planId: PLAN_ID,
-          expectedRevision: prepared.view?.revision ?? claimView.revision,
-          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
-        }),
-      ),
-    ).toBe("coordination.prepare-already-prepared");
+    // §D3: the same claimant cannot seal the row a second time. Re-issuing the
+    // identical Assignment answers from the seal it already holds —
+    // already-satisfied, no second write — while changed bytes would refuse.
+    const again = await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: prepared.view?.revision ?? claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    expect(again.outcome).toBe("already-satisfied");
+    expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+    expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).prepared_by).toBe("claimant");
 
     // §D/§D4 the prepared-but-unleased window advertises NO lease-gated
     // operation: identity is not ownership, and the mutation guards require the
@@ -1576,24 +1574,25 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
-  test("a hash-fresh prepared row refuses a second prepare (the coordinator keeps it)", async () => {
+  test("a hash-fresh prepared row answers an identical reissue already-satisfied (the seal stands)", async () => {
     const fixture = makeFixture();
     const coordinator = await ensureCoordinator(fixture);
     const view = await preparePlan(fixture, PLAN_ID);
     const fresh = await readPlanCoordination(coordinator, PLAN_ID, fixture.root);
 
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: coordinator,
-          planId: PLAN_ID,
-          expectedRevision: fresh.revision,
-          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
-        }),
-      ),
-    ).toBe("coordination.prepare-already-prepared");
+    const again = await mutatePlanCoordination({
+      sessionPath: coordinator,
+      planId: PLAN_ID,
+      expectedRevision: fresh.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    // The reissue is answered from the seal: no second write, no revision
+    // movement, and no reseal receipt (that is the changed-Assignment route).
+    expect(again.outcome).toBe("already-satisfied");
+    expect(again.recovery?.details).toBeUndefined();
     expect(view.outcome).toBe("prepared");
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+    expect((await readPlanCoordination(coordinator, PLAN_ID, fixture.root)).revision).toBe(fresh.revision);
   });
 });
 describe("scope-and-revisions", () => {

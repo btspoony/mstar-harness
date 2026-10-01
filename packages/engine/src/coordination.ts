@@ -340,6 +340,17 @@ export type CoordinationIssueReceipt = {
   created: boolean;
 };
 
+/**
+ * The replaced seal's identity a coordinator reseal discloses under
+ * `recovery.details` (the reviewed-amendment boundary): who sealed before, when,
+ * and against which Assignment bytes.
+ */
+export type ResealReceiptDetails = Readonly<{
+  previous_prepared_at: string;
+  previous_prepared_by: string;
+  previous_assignment_sha256: string;
+}>;
+
 /** Success shape of a coordination call. */
 export type CoordinationResult = {
   ok: true;
@@ -355,7 +366,16 @@ export type CoordinationResult = {
    * caller can rely on. The same object shape a refusal carries under
    * `error.details.recovery`, so one contract covers both paths.
    */
-  recovery?: RecoveryDetails;
+  recovery?: RecoveryDetails & {
+    /**
+     * The seal THIS call replaced (a coordinator reseal's receipt, the
+     * reviewed-amendment boundary): `previous_*` names the seal that stood
+     * before the reseal, so a reviewed recovery is distinguishable from a
+     * first prepare (no `details`) and from an unchanged reissue
+     * (`already-satisfied`, which writes nothing).
+     */
+    readonly details?: ResealReceiptDetails;
+  };
   /**
    * The issues a scoped issue operation captured or closed, in call order
    * (G2a). The IDs are DB-allocated, so the caller learns them here instead of
@@ -3871,6 +3891,10 @@ async function mutatePrepare(
   // for the row it is bound to: this prepare created that file, so it drops it
   // again if the prepare itself refuses.
   let prepareRestoredEnvelope = "";
+  // The replaced seal's identity when this call reseals a changed Assignment:
+  // the receipt the result discloses so a reviewed recovery is never silent.
+  // A container, because the precheck closure assigns it under the row lock.
+  const reseal: { previous: ResealReceiptDetails | null } = { previous: null };
   const result = await withRowCommit(scope, {
     kind: "prepare",
     expectedRevision: request.expectedRevision,
@@ -3923,6 +3947,40 @@ async function mutatePrepare(
           );
         }
       }
+      // §4.2 an unchanged ordinary reissue answers from the row it just read:
+      // a byte-identical Assignment means the seal already holds the requested
+      // effect, so the call is already-satisfied without a second write — no
+      // new seal, timestamp or revision. The check runs AFTER the identity half
+      // (a non-claimant session keeps its seat refusal — satisfaction never
+      // bypasses identity) and BEFORE the admission whose already-prepared
+      // refusal is for input that is NOT the held effect. A byte-changed
+      // Assignment keeps its distinct routes: the claimant's refusal, and the
+      // coordinator's disclosed reseal below. The digest is measured inside
+      // this lock, so hash and verdict measure one snapshot.
+      const prepared = context.coordination?.prepared;
+      if (prepared !== undefined && existsSync(scope.assignmentPath)) {
+        if (sha256Bytes(readFileSync(scope.assignmentPath)) === prepared.assignment_sha256) {
+          return { field: "coordination.prepared", source: "the row's prepared seal" };
+        }
+      }
+      // The reviewed-amendment seat: an eligible coordinator may replace a
+      // changed seal through the ordinary mutate path — full intent validation
+      // still runs — and the result discloses the seal it replaced. Every
+      // protected row (bound, leased, handed off, non-Todo) leaves this false
+      // and keeps the already-prepared refusal it has always answered.
+      const coordinatorReseal =
+        session.role === "coordinator" &&
+        bound === undefined &&
+        context.row.execution_lease === undefined &&
+        context.coordination?.handoff === undefined &&
+        rowStatusOf(context.row) === "Todo";
+      if (coordinatorReseal && prepared !== undefined) {
+        reseal.previous = {
+          previous_prepared_at: prepared.prepared_at,
+          previous_prepared_by: prepared.prepared_by,
+          previous_assignment_sha256: prepared.assignment_sha256,
+        };
+      }
       assertPrepareAdmission({
         planId: scope.planId,
         row: context.row,
@@ -3930,6 +3988,7 @@ async function mutatePrepare(
         sessionBound: bound !== undefined,
         leaseHeld: context.row.execution_lease !== undefined,
         rowClaimant: claimant,
+        coordinatorReseal,
       });
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace to prepare against (contract §3 step 3).
@@ -3974,13 +4033,15 @@ async function mutatePrepare(
     if (prepareRestoredEnvelope !== "") dropSessionEnvelope(prepareRestoredEnvelope);
     throw error;
   });
+  const recovery: RecoveryDetails & { readonly details?: ResealReceiptDetails } =
+    reseal.previous === null ? result.recovery : { ...result.recovery, details: reseal.previous };
   return {
     ok: true,
     operation: "prepare",
     session,
     session_file: sessionPath,
     outcome: result.satisfied === null ? "prepared" : "already-satisfied",
-    recovery: result.recovery,
+    recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,

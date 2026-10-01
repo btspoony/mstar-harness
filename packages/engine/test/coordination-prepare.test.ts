@@ -9,6 +9,8 @@ import { basename, dirname, join, sep } from "node:path";
 import {
   amendPrepareWorkflow,
   bindPlanSession,
+  mutatePlanCoordination,
+  readPlanCoordination,
   recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
   resolveProcessHarnessDir,
@@ -28,16 +30,28 @@ import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, ty
 import { stableJson, writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 import {
   FIXTURE_COORDINATOR_ID,
+  PLAN_ID,
   PROJECT_ID,
+  WORKFLOW_ID,
   afterEachCleanup,
+  assignmentText,
+  claimExecutionLease,
   errorCodeOf,
+  ensureCoordinator,
+  failureOf,
   git,
+  makeFixture,
   planRow,
+  planRowOf,
+  preparePlan,
+  bindPlan,
   readJson,
   sha256OfFile,
+  updatePlanRow,
   writeJson,
   writeText,
   roots,
+  type Fixture,
 } from "./support/coordination-fixtures.js";
 
 afterEach(() => afterEachCleanup());
@@ -3527,4 +3541,252 @@ describe("prepare coordinator recovery", () => {
     expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
     expect(protectedBytes(fixture)).toEqual(before);
   }, 60000);
+});
+
+/* ------------------------------------------------------------------ *
+ * Unchanged reissue and eligible coordinator reseal: an identical
+ * ordinary prepare answers `already-satisfied` from the seal it already
+ * holds, while a changed Assignment stays on its distinct route — the
+ * row's claimant keeps the already-prepared refusal, and the workflow
+ * coordinator's reseal discloses the seal it replaced.
+ * ------------------------------------------------------------------ */
+
+function sealedOf(fixture: Fixture): { revision: number; prepared: Record<string, unknown> } {
+  const coordination: unknown = planRowOf(fixture, PLAN_ID).coordination;
+  if (coordination === null || typeof coordination !== "object" || !("revision" in coordination) || !("prepared" in coordination)) {
+    throw new Error("row has no prepared seal");
+  }
+  const { revision, prepared } = coordination;
+  if (typeof revision !== "number" || prepared === null || typeof prepared !== "object") {
+    throw new Error("row has no prepared seal");
+  }
+  return { revision, prepared: Object.fromEntries(Object.entries(prepared)) };
+}
+
+/** Rewrites the Assignment with a changed note line (same shape, new meaning). */
+function rewriteAssignment(fixture: Fixture, note: string): void {
+  writeText(
+    fixture.assignmentPath,
+    assignmentText({
+      harness: fixture.harness,
+      planId: PLAN_ID,
+      planPath: fixture.planPath,
+      worktreePath: fixture.worktreePath,
+      sddDir: fixture.sddDir,
+      branch: "feature/plan-a",
+      note,
+    }),
+  );
+}
+
+function reissuePrepare(sessionPath: string, fixture: Fixture, expectedRevision: number): Promise<unknown> {
+  return mutatePlanCoordination({
+    sessionPath,
+    planId: PLAN_ID,
+    expectedRevision,
+    operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+  });
+}
+
+describe("Prepare unchanged reissue and eligible coordinator reseal", () => {
+  test("a byte-identical ordinary reissue answers already-satisfied without touching the seal", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    const first = await preparePlan(fixture, PLAN_ID);
+    expect(first.outcome).toBe("prepared");
+    const sealed = sealedOf(fixture);
+    const beforeSnapshot = readJson(fixture.snapshotPath);
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const again = await reissuePrepare(fixture.coordinatorSession, fixture, view.revision);
+    expect(again.ok).toBe(true);
+    expect(again.outcome).toBe("already-satisfied");
+    expect(again.recovery?.outcome).toBe("already-satisfied");
+    expect(again.recovery?.applied).toEqual([]);
+
+    const after = sealedOf(fixture);
+    expect(after.revision).toBe(sealed.revision);
+    expect(after.prepared).toEqual(sealed.prepared);
+    expect(readJson(fixture.snapshotPath)).toEqual(beforeSnapshot);
+  });
+
+  test("the row's own claimant reissuing identical bytes is already-satisfied too", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const sealed = sealedOf(fixture);
+
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const again = await reissuePrepare(fixture.planSession, fixture, view.revision);
+    expect(again.ok).toBe(true);
+    expect(again.outcome).toBe("already-satisfied");
+
+    const after = sealedOf(fixture);
+    expect(after.revision).toBe(sealed.revision);
+    expect(after.prepared).toEqual(sealed.prepared);
+  });
+
+  test("a changed Assignment still refuses the row's claimant with prepare-already-prepared", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    rewriteAssignment(fixture, "Slice A with a changed scope line.");
+
+    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    const code = await errorCodeOf(() => reissuePrepare(fixture.planSession, fixture, view.revision));
+    expect(code).toBe("coordination.prepare-already-prepared");
+  });
+
+  test("an eligible coordinator reseals a changed Assignment and discloses the replaced seal", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const sealed = sealedOf(fixture);
+    rewriteAssignment(fixture, "Slice A with the reviewed scope change.");
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const reseal = await reissuePrepare(fixture.coordinatorSession, fixture, view.revision);
+    expect(reseal.ok).toBe(true);
+    expect(reseal.outcome).toBe("prepared");
+
+    const after = sealedOf(fixture);
+    expect(after.revision).toBe(sealed.revision + 1);
+    expect(after.prepared.assignment_sha256).not.toBe(sealed.prepared.assignment_sha256);
+    expect(after.prepared.prepared_by).toBe(FIXTURE_COORDINATOR_ID);
+    const details = reseal.recovery?.details;
+    expect(details?.previous_prepared_at).toBe(sealed.prepared.prepared_at);
+    expect(details?.previous_prepared_by).toBe(sealed.prepared.prepared_by);
+    expect(details?.previous_assignment_sha256).toBe(sealed.prepared.assignment_sha256);
+  });
+
+  test("reformatted bytes are not already-satisfied — the coordinator route is a disclosed reseal", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const sealed = sealedOf(fixture);
+    // Bytes change while the sealed semantic projection does not: the header
+    // block is untouched, only trailing prose is added.
+    const bytes = readFileSync(fixture.assignmentPath, "utf8");
+    writeText(fixture.assignmentPath, `${bytes}\nFormatting-only trailing prose.\n`);
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const reseal = await reissuePrepare(fixture.coordinatorSession, fixture, view.revision);
+    expect(reseal.ok).toBe(true);
+    expect(reseal.outcome).toBe("prepared");
+    expect(reseal.recovery?.details?.previous_assignment_sha256).toBe(sealed.prepared.assignment_sha256);
+  });
+
+  test("protected rows keep their existing already-prepared refusals for a changed Assignment", async () => {
+    // A non-Todo sealed row: the reseal seat never applies.
+    const done = makeFixture();
+    await ensureCoordinator(done);
+    await preparePlan(done, PLAN_ID);
+    rewriteAssignment(done, "Slice A changed on a Done row.");
+    updatePlanRow(done, PLAN_ID, (row) => ({ ...row, status: "Done" }));
+    const doneView = await readPlanCoordination(done.coordinatorSession, PLAN_ID, done.root);
+    const doneBytes = readFileSync(done.snapshotPath, "utf8");
+    expect(await errorCodeOf(() => reissuePrepare(done.coordinatorSession, done, doneView.revision))).toBe(
+      "coordination.prepare-already-prepared",
+    );
+    expect(readFileSync(done.snapshotPath, "utf8")).toBe(doneBytes);
+
+    // A leased sealed row: the reseal seat never applies.
+    const leased = makeFixture();
+    await ensureCoordinator(leased);
+    await preparePlan(leased, PLAN_ID);
+    await bindPlan(leased, PLAN_ID);
+    claimExecutionLease(leased, PLAN_ID, leased.planSession);
+    rewriteAssignment(leased, "Slice A changed on a leased row.");
+    const leasedView = await readPlanCoordination(leased.coordinatorSession, PLAN_ID, leased.root);
+    const leasedBytes = readFileSync(leased.snapshotPath, "utf8");
+    expect(await errorCodeOf(() => reissuePrepare(leased.coordinatorSession, leased, leasedView.revision))).toBe(
+      "coordination.prepare-already-prepared",
+    );
+    expect(readFileSync(leased.snapshotPath, "utf8")).toBe(leasedBytes);
+
+    // A handed-off sealed row: the reseal seat never applies. A stored handoff
+    // requires the row's own binding, so the bind happens first and the
+    // handoff is added beside it.
+    const handed = makeFixture();
+    await ensureCoordinator(handed);
+    await preparePlan(handed, PLAN_ID);
+    await bindPlan(handed, PLAN_ID);
+    updatePlanRow(handed, PLAN_ID, (row) => {
+      const base: unknown = row.coordination;
+      const coordination = base !== null && typeof base === "object" ? Object.fromEntries(Object.entries(base)) : {};
+      return {
+        ...row,
+        coordination: {
+          ...coordination,
+          handoff: {
+            id: "fixture-handoff",
+            attempt: 1,
+            state: "submitted",
+            submitted_by: "fixture-submitter",
+            submitted_at: "2026-09-15T00:00:00Z",
+            source_branch: "feature/plan-a",
+            source_sha: "a".repeat(40),
+            worktree_path: handed.worktreePath,
+            review_base: "b".repeat(40),
+            review_head: "c".repeat(40),
+          },
+        },
+      };
+    });
+    rewriteAssignment(handed, "Slice A changed on a handed-off row.");
+    const handedView = await readPlanCoordination(handed.coordinatorSession, PLAN_ID, handed.root);
+    const handedBytes = readFileSync(handed.snapshotPath, "utf8");
+    expect(await errorCodeOf(() => reissuePrepare(handed.coordinatorSession, handed, handedView.revision))).toBe(
+      "coordination.prepare-already-prepared",
+    );
+    expect(readFileSync(handed.snapshotPath, "utf8")).toBe(handedBytes);
+
+    // A row bound to a plan session: even the coordinator cannot reseal it.
+    const bound = makeFixture();
+    await ensureCoordinator(bound);
+    await preparePlan(bound, PLAN_ID);
+    await bindPlan(bound, PLAN_ID);
+    rewriteAssignment(bound, "Slice A changed on a bound row.");
+    const boundView = await readPlanCoordination(bound.coordinatorSession, PLAN_ID, bound.root);
+    const boundBytes = readFileSync(bound.snapshotPath, "utf8");
+    expect(await errorCodeOf(() => reissuePrepare(bound.coordinatorSession, bound, boundView.revision))).toBe(
+      "coordination.prepare-already-prepared",
+    );
+    expect(readFileSync(bound.snapshotPath, "utf8")).toBe(boundBytes);
+  });
+
+  test("a coordinator reissuing identical bytes on a bound row is already-satisfied", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    await bindPlan(fixture, PLAN_ID);
+    const sealed = sealedOf(fixture);
+
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const again = await reissuePrepare(fixture.coordinatorSession, fixture, view.revision);
+    expect(again.ok).toBe(true);
+    expect(again.outcome).toBe("already-satisfied");
+    const after = sealedOf(fixture);
+    expect(after.revision).toBe(sealed.revision);
+  });
+
+  test("a non-claimant plan session keeps the session-role refusal on an identical reissue", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await preparePlan(fixture, PLAN_ID);
+    const outsider = join(fixture.workflowDir, "sessions", "prepare-reissue-outsider.json");
+    writeJson(outsider, {
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: "prepare-reissue-outsider",
+      workflow_id: WORKFLOW_ID,
+      plan_id: PLAN_ID,
+      harness_root: fixture.harness,
+    });
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const code = await errorCodeOf(() => reissuePrepare(outsider, fixture, view.revision));
+    expect(code).toBe("coordination.session-role");
+  });
 });
