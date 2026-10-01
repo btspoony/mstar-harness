@@ -120,6 +120,20 @@ describe("CLI parser diagnostics", () => {
     expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
   });
 
+  test("a flag present without its value reports the option's input field", async () => {
+    const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key"]);
+    expect(exitCode).toBe(2);
+    const envelope = JSON.parse(stdout) as {
+      status: string;
+      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
+    };
+    expect(envelope.status).toBe("usage");
+    const diagnostic = envelope.details?.diagnostics?.[0];
+    expect(diagnostic?.path).toBe("key");
+    expect(diagnostic?.code).toBe("commander.optionMissingArgument");
+    expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+  });
+
   test("a malformed flag keeps the honest parser diagnostic without guessing a field", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
     expect(exitCode).toBe(2);

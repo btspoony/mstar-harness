@@ -62,6 +62,7 @@ function parserField(error: CommanderError): string | undefined {
   if (quoted === undefined) return undefined;
   if (error.code === "commander.missingArgument") return quoted;
   if (error.code === "commander.missingMandatoryOptionValue") return optionKey(quoted);
+  if (error.code === "commander.optionMissingArgument") return optionKey(quoted);
   return undefined;
 }
 
