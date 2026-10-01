@@ -77,23 +77,328 @@
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
+import { executeCommand, getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
 import {
   AUDIT_CATEGORIES,
   classifySkillLint,
+  commitExecutionRegistration,
+  encodeExecutionSessionRef,
+  executionContextFor,
   findEphemeralCitations,
   findProvenanceCitations,
+  initializeExecutionAuthority,
+  initializeStore,
   lintFiveQuestion,
   lintLoadOrder,
+  readCatalogRevisions,
+  readExecutionAuthority,
   stripFrontmatter,
   validateRoleMapping,
 } from "../packages/engine/src/index.ts";
 export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
 export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
+
+export type ReachabilityLedgerEntry = {
+  journey: "J0" | "J1" | "J2";
+  fixture: string;
+  measuredCalls: number;
+  bar: 3;
+  status: "met" | "blocked";
+  dependency: string | null;
+};
+
+type ReachabilityResult = { failures: string[]; ledger: ReachabilityLedgerEntry[] };
+
+export function checkReachabilityState(
+  data: Record<string, unknown>,
+  expected: "active" | "legacy",
+  cliCommands: ReadonlySet<string>,
+  journey: string,
+): string[] {
+  const failures: string[] = [];
+  if (data.state !== expected) failures.push(`Guard 8: ${journey} step 1 status validate — input "state" expected ${expected}`);
+  if (expected === "active") {
+    if (typeof data.token !== "string") failures.push(`Guard 8: ${journey} step 1 status validate — input ".token" missing for the root`);
+    const workflows = Array.isArray(data.workflows) ? data.workflows : [];
+    if (workflows.length === 0 || workflows.some((row) => {
+      if (row === null || typeof row !== "object" || !("token" in row)) return true;
+      return typeof row.token !== "string";
+    })) {
+      failures.push(`Guard 8: ${journey} step 1 status validate — input ".workflows[]" missing workflow tokens`);
+    }
+  } else {
+    const upgrade = data.upgrade as { entry?: unknown } | undefined;
+    const entry = typeof upgrade?.entry === "string" ? upgrade.entry : "";
+    const tokens = entry.split(/\s+/).filter(Boolean);
+    if (tokens.length < 2 || validateCliCommandTokens(cliCommands, tokens.slice(1)) !== null) {
+      failures.push(`Guard 8: ${journey} step 1 status validate — input "upgrade.entry" ${entry || "missing"} does not resolve in the canonical command inventory`);
+    }
+  }
+  return failures;
+}
+
+/** Run the first three named journeys against temporary engine-initialized stores. */
+export async function checkInstructionReachability(cliCommands: ReadonlySet<string>): Promise<ReachabilityResult> {
+  const failures: string[] = [];
+  const ledger: ReachabilityLedgerEntry[] = [];
+  const createFixture = async (label: string, active: boolean) => {
+    const repo = mkdtempSync(join(tmpdir(), `mstar-reachability-${label}-`));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repo });
+    const harnessDir = join(repo, ".mstar");
+    mkdirSync(join(harnessDir, "plans"), { recursive: true });
+    const planId = `reachability-${label}`;
+    writeFileSync(join(harnessDir, "plans", `${planId}.md`), `# ${planId}\n\n**plan_id:** ${planId}\n`, "utf8");
+    if (active) {
+      const store = await initializeStore({ harnessDir });
+      store.close();
+      await initializeExecutionAuthority({ harnessDir });
+    } else {
+      const workflowId = `${label}-workflow`;
+      const workflowDir = join(harnessDir, "workflows", workflowId);
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(join(harnessDir, "status.json"), JSON.stringify({
+        version: 2,
+        updated_at: "2026-10-01",
+        workflows: [{ id: workflowId, type: "plan", started_at: "2026-10-01", dir: `workflows/${workflowId}` }],
+      }), "utf8");
+      writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({
+        schema_version: 1,
+        id: workflowId,
+        type: "plan",
+        status: "running",
+        started_at: "2026-10-01",
+        updated_at: "2026-10-01",
+        delivery_kind: "development",
+        project: "_default",
+        branch: { source: "feature/reachability", target: "main" },
+        plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "Todo", metadata: {} }],
+      }), "utf8");
+      const store = await initializeStore({ harnessDir });
+      store.close();
+    }
+    return { repo, harnessDir, planId };
+  };
+  const contextFor = (repo: string, sessionId?: string, inputAnswer = "") => ({
+    cwd: repo,
+    controlRoot: repo,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+    signal: new AbortController().signal,
+    effects: {
+      readInput: async () => inputAnswer,
+      spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+      startDashboard: async () => ({ url: "", close: async () => {} }),
+      openBrowser: async () => {},
+    },
+  });
+  const setupWorkflow = async (repo: string, harnessDir: string, planId: string, workflowId: string) => {
+    const rootRead = await readExecutionAuthority({ harnessDir });
+    const registered = await executeCommand("workflow.register", {
+      workflow: workflowId,
+      planId,
+      planTitle: planId,
+      planFile: `plans/${planId}.md`,
+      deliveryKind: "development",
+      branchSource: "feature/reachability",
+      branchTarget: "main",
+      expect: rootRead.token,
+      operation: `register-${workflowId}`,
+      harness: harnessDir,
+    }, contextFor(repo, `coordinator-${workflowId}`));
+    if (registered.status !== "ok") failures.push(`Guard 8: fixture setup ${workflowId} failed: ${registered.status} ${registered.code} ${"message" in registered ? registered.message : ""}`);
+  };
+  try {
+    const legacy = await createFixture("legacy", false);
+    const legacyRead = await executeCommand("status.validate", {}, contextFor(legacy.repo));
+    const legacyData = legacyRead.status === "ok" ? legacyRead.data as Record<string, unknown> : {};
+    const upgrade = legacyData.upgrade as { entry?: unknown } | undefined;
+    const entry = typeof upgrade?.entry === "string" ? upgrade.entry : "";
+    failures.push(...checkReachabilityState(legacyData, "legacy", cliCommands, "J0"));
+    const j0AttestationPath = join(legacy.repo, "attestation.json");
+    writeFileSync(j0AttestationPath, JSON.stringify({
+      version: 1,
+      attestedAt: "2026-10-01T00:00:00.000Z",
+      operator: { actor: "fixture-operator", authorizationRef: "fixture-only-upgrade" },
+      consumers: [{
+        entryId: "fixture-coordinator",
+        kind: "coordinator",
+        entrypoint: "/fixture/commands",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "fixture",
+        current: true,
+        disposition: "reloaded",
+      }],
+      stoppedSessions: [],
+    }), "utf8");
+    const upgradeResult = await executeCommand("store.safe-upgrade", {
+      harness: legacy.harnessDir,
+      operator: "fixture-operator",
+      attestation: j0AttestationPath,
+    }, contextFor(legacy.repo, undefined, "preserve for later review"));
+    const upgradedRead = await executeCommand("status.validate", {}, contextFor(legacy.repo));
+    const upgradedData = upgradedRead.status === "ok" ? upgradedRead.data as Record<string, unknown> : {};
+    if (upgradeResult.status !== "ok" || upgradedData.state !== "active") {
+      const refusal = upgradeResult.status === "refused" ? `${upgradeResult.code}: ${upgradeResult.message}` : "upgrade did not produce an active state";
+      failures.push(`Guard 8: J0 step 2 store safe-upgrade → step 3 status validate — ${refusal}`);
+    }
+    ledger.push({
+      journey: "J0",
+      fixture: "engine-initialized legacy; status → single safe-upgrade → active status",
+      measuredCalls: 3,
+      bar: 3,
+      status: upgradeResult.status === "ok" && upgradedData.state === "active" ? "met" : "blocked",
+      dependency: upgradeResult.status === "ok" && upgradedData.state === "active" ? null : upgradeResult.status === "refused" ? `${upgradeResult.code}: ${upgradeResult.message}` : "upgrade did not produce active authority",
+    });
+
+    const activeState = await createFixture("active-state", true);
+    await setupWorkflow(activeState.repo, activeState.harnessDir, activeState.planId, "reachability-state");
+    const activeRead = await executeCommand("status.validate", {}, contextFor(activeState.repo));
+    const activeData = activeRead.status === "ok" ? activeRead.data as Record<string, unknown> : {};
+    failures.push(...checkReachabilityState(activeData, "active", cliCommands, "P-state"));
+    rmSync(activeState.repo, { recursive: true, force: true });
+
+    const active = await createFixture("j1", true);
+    const j1Read = await executeCommand("status.validate", {}, contextFor(active.repo));
+    const j1Data = j1Read.status === "ok" ? j1Read.data as Record<string, unknown> : {};
+    const j1Registration = typeof j1Data.token === "string" ? await executeCommand("workflow.register", {
+      workflow: "reachability-j1",
+      planId: active.planId,
+      planTitle: active.planId,
+      planFile: `plans/${active.planId}.md`,
+      deliveryKind: "development",
+      branchSource: "feature/reachability",
+      branchTarget: "main",
+      expect: j1Data.token,
+      operation: "register-j1",
+      harness: active.harnessDir,
+    }, contextFor(active.repo, "coordinator-j1")) : null;
+    if (j1Registration?.status !== "ok") {
+      const details = j1Registration === null ? "status validate did not provide a root token" : `${j1Registration.status} ${j1Registration.code} ${"message" in j1Registration ? j1Registration.message : ""}`;
+      failures.push(`Guard 8: J1 step 2 workflow register — ${details}`);
+    }
+    ledger.push({ journey: "J1", fixture: "engine-initialized active", measuredCalls: 2, bar: 3, status: j1Registration?.status === "ok" ? "met" : "blocked", dependency: j1Registration?.status === "ok" ? null : "root token or registration refused" });
+
+    const legacyGateFixture = await createFixture("legacy-gate", false);
+    const legacyDb = join(legacyGateFixture.harnessDir, "store.db");
+    const legacyBefore = readFileSync(legacyDb);
+    let legacyMessage = "";
+    let legacyCode = "";
+    try {
+      const revisions = await readCatalogRevisions({ harnessDir: legacyGateFixture.harnessDir });
+      await commitExecutionRegistration(
+        executionContextFor({ harnessDir: legacyGateFixture.harnessDir }, {
+          source: "local", sessionId: "legacy-gate-session", workflowId: "reachability-legacy-gate", role: "coordinator", planId: null,
+        }),
+        {
+          operationId: "legacy-gate",
+          actor: "reachability-guard",
+          expectedCatalogRevision: revisions.catalogRevision,
+          workflow: {
+            kind: "plan",
+            workflowId: "reachability-legacy-gate",
+            options: {
+              harnessDir: legacyGateFixture.harnessDir,
+              plan: { id: legacyGateFixture.planId, title: legacyGateFixture.planId, file: `plans/${legacyGateFixture.planId}.md` },
+              deliveryKind: "development",
+              project: "engine",
+              branchSource: "feature/reachability",
+              branchTarget: "main",
+            },
+          },
+          delta: {
+            entities: [{ kind: "plan", id: legacyGateFixture.planId, title: legacyGateFixture.planId, rootKind: "plans", relativePath: `plans/${legacyGateFixture.planId}.md` }],
+            binding: { catalogKind: "plan", catalogId: legacyGateFixture.planId },
+          },
+          expected: typeof j1Data.token === "string" ? j1Data.token as never : "unavailable" as never,
+        },
+      );
+    } catch (error) {
+      const refusal = error as { code?: unknown; message?: unknown };
+      legacyCode = typeof refusal.code === "string" ? refusal.code : "";
+      legacyMessage = typeof refusal.message === "string" ? refusal.message : String(error);
+    }
+    if (legacyCode !== "execution.not-active" || !legacyMessage.includes("state: legacy") || !legacyMessage.includes("mstar store safe-upgrade")) {
+      failures.push(`Guard 8: P-disclose execution-registration.ts — refusal must preserve code and name state plus upgrade entry; observed ${legacyCode} "${legacyMessage}"`);
+    }
+    if (!readFileSync(legacyDb).equals(legacyBefore)) failures.push("Guard 8: P-disclose execution-registration.ts — legacy refusal changed the store bytes");
+
+    const activeDb = join(active.harnessDir, "store.db");
+    const activeBefore = readFileSync(activeDb);
+    const activeGate = await executeCommand("workflow.register", {
+      workflow: "reachability-active-gate",
+      planId: active.planId,
+      planTitle: active.planId,
+      planFile: `plans/${active.planId}.md`,
+      deliveryKind: "development",
+      branchSource: "feature/reachability",
+      branchTarget: "main",
+      harness: active.harnessDir,
+    }, contextFor(active.repo));
+    const activeMessage = activeGate.status === "refused" ? activeGate.message : "";
+    if (activeGate.status !== "refused" || activeGate.code !== "execution.consumer-not-ready" || !activeMessage.includes("state: active") || !activeMessage.includes("Upgrade outcome: not required") || !activeMessage.includes("active DB form")) {
+      failures.push(`Guard 8: P-disclose workflow.ts assertLegacyRoute — refusal must preserve code and name active state plus upgrade outcome; observed "${activeMessage}"`);
+    }
+    if (!readFileSync(activeDb).equals(activeBefore)) failures.push("Guard 8: P-disclose workflow.ts assertLegacyRoute — active refusal changed the store bytes");
+
+    const j2 = await createFixture("j2", true);
+    await setupWorkflow(j2.repo, j2.harnessDir, j2.planId, "reachability-j2");
+    const j2Start = await executeCommand("status.validate", {}, contextFor(j2.repo));
+    const j2Data = j2Start.status === "ok" ? j2Start.data as Record<string, unknown> : {};
+    const j2Workflow = Array.isArray(j2Data.workflows) ? j2Data.workflows[0] as { token?: string } | undefined : undefined;
+    const attestationPath = join(j2.repo, "attestation.json");
+    writeFileSync(attestationPath, JSON.stringify({
+      version: 1,
+      attestedAt: "2026-10-01T00:00:00.000Z",
+      operator: { actor: "reachability-fixture", authorizationRef: "fixture" },
+      consumers: [{ entryId: "fixture", kind: "coordinator", entrypoint: "fixture", runtime: "bun", runtimeVersion: "1.4.0", version: "test", current: true, disposition: "reloaded" }],
+      stoppedSessions: [],
+    }), "utf8");
+    const recovery = j2Workflow?.token === undefined ? null : await executeCommand("session.recover", {
+      workflow: "reachability-j2",
+      unowned: true,
+      reason: "fixture workflow has no coordinator",
+      attestation: attestationPath,
+      expect: j2Workflow.token,
+      operation: "recover-j2",
+      harness: j2.harnessDir,
+    }, contextFor(j2.repo, "coordinator-j2"));
+    const recoveryData = recovery?.status === "ok" ? recovery.data as Record<string, unknown> : {};
+    const reference = recoveryData.data as Record<string, unknown> | undefined;
+    const workflowToken = j2Workflow?.token;
+    const lifecycle = reference !== undefined && workflowToken !== undefined
+      ? await executeCommand("workflow.lifecycle", {
+          workflow: "reachability-j2",
+          sessionRef: encodeExecutionSessionRef(reference as never),
+          expect: workflowToken,
+          operation: "stop-j2",
+          status: "stopped",
+          reason: "reachability fixture complete",
+          harness: j2.harnessDir,
+        }, contextFor(j2.repo, "coordinator-j2"))
+      : null;
+    if (lifecycle?.status !== "ok") {
+      const details = lifecycle === null ? "recovery produced no session reference/token" : `${lifecycle.status} ${lifecycle.code} ${"message" in lifecycle ? lifecycle.message : ""}`;
+      failures.push(`Guard 8: J2 step 3 workflow lifecycle — ${details}`);
+    }
+    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: lifecycle?.status === "ok" ? "met" : "blocked", dependency: lifecycle?.status === "ok" ? null : "recovery/lifecycle input unavailable" });
+    rmSync(active.repo, { recursive: true, force: true });
+    rmSync(j2.repo, { recursive: true, force: true });
+  } catch (error) {
+    failures.push(`Guard 8: fixture execution failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const row of ledger) {
+    if (row.status === "blocked" && row.measuredCalls <= row.bar) failures.push(`Guard 8: ${row.journey} stale dependency — measured ${row.measuredCalls}/${row.bar} calls but dependency is ${row.dependency ?? "none"}`);
+    if (row.measuredCalls > row.bar) failures.push(`Guard 8: ${row.journey} exceeds ${row.bar}-call bar at ${row.measuredCalls}`);
+  }
+  return { failures, ledger };
+}
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
@@ -1292,7 +1597,6 @@ if (import.meta.main) {
     skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
   );
   for (const row of fiveQuestion.failures) fail(row);
-
  /* ------------------------------------------------------------------ */
  /* Guard 7: repo text face — provenance citations (engine lint) */
  /* ------------------------------------------------------------------ */
@@ -1310,7 +1614,15 @@ if (import.meta.main) {
   for (const row of provenance.failures) fail(row);
 
  /* ------------------------------------------------------------------ */
- /* Guard 8: tracked Markdown links and anchors */
+ /* Guard 8: CLI state reachability and upgrade outcome */
+ /* ------------------------------------------------------------------ */
+
+  const reachability = await checkInstructionReachability(cliCommands);
+  for (const row of reachability.failures) fail(row);
+  const reachabilitySummary = `Guard 8 reachability ${reachability.ledger.map((row) => `${row.journey} ${row.status} @${row.measuredCalls}/${row.bar}${row.dependency === null ? "" : ` (${row.dependency})`}`).join(", ")}`;
+
+ /* ------------------------------------------------------------------ */
+ /* Guard 9: tracked Markdown links and anchors */
  /* ------------------------------------------------------------------ */
 
   const markdownLinks =
@@ -1335,19 +1647,19 @@ if (import.meta.main) {
     roles.mappingViolations === 0 ? "OK" : `FAIL (${roles.mappingViolations} violation${roles.mappingViolations === 1 ? "" : "s"})`
   }`;
 
-  const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
+  const markdownLinksSummary = `Guard 9 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
 
   reportOversizedTests();
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${reachabilitySummary}; ${markdownLinksSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${reachabilitySummary}; ${markdownLinksSummary}`,
   );
 }

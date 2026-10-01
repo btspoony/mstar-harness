@@ -51,10 +51,10 @@ async function assertLegacyRoute(harnessDir: string, operation: string): Promise
   if (await resolveExecutionReadRoute({ harnessDir }) === "execution") {
     throw new StoreError(
       "execution.consumer-not-ready",
-      `${operation}: the execution authority of ${harnessDir} is ACTIVE, so this pre-activation form is retired. ` +
-        "Nothing was written; read the current token and use the active DB form under an independently acquired identity.",
+      `state: active. Upgrade outcome: not required; ${operation}: the pre-activation form is retired. ` +
+        `Nothing was written; use the active DB form with the current execution token under an independently acquired identity.`,
     );
-  }
+}
 }
 function schema() {
   return z.object({

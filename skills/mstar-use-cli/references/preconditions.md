@@ -51,27 +51,24 @@ Git-derived checks derive the main worktree, the branch and clean-state facts fr
 
 ## 4. Identity and the execution authority
 
-A harness has one execution authority, and its state selects the transport every coordinated write takes. **Active** is the canonical route: the caller identity is **independently acquired** for the invocation (never a flag, never read from a session file, never carried by the reference), and the write carries a `--session-ref` (a stored session row — a lookup, not a bearer credential), the scope's **full execution token** as `--expect`, and the caller's own `--operation` id as the replay key. A copied or stale reference under another identity refuses in the engine's own caller comparison.
+A harness has two separate authority records: `store_meta.authority_state` governs issue/catalog operations, while `execution_meta.authority_state` selects the coordination route. Use `mstar status validate` to discriminate. Its `state` is `active`, `legacy`, or `unreadable`. Only `active` supports normal coordinated operations; `legacy` provides the single upgrade entry `mstar store safe-upgrade`; `unreadable` reports what could not be read and how to make it readable.
 
-- **Pre-activation (file route, only while that authority is not active):** the session envelope is engine-generated, obtained from the bind verb, addressed by absolute path, and re-checked against its document inside the write lock — the caller's word about who it is counts for nothing. A coordinator identity is **explicitly acquired**, never generated: a plain local operator states `--session-id`, and a managed host bootstraps through its own host-owned entry (→ the active host reference under `mstar-host`) instead of a shell call. The inherited session-id environment variable is a declared input form for a **plan/assignment** bind only — it never authorizes a coordinator bootstrap. A missing or mismatched one refuses (`coordination.identity-missing` / `coordination.identity-mismatch`); no bind mints an id as a fallback. On an ACTIVE harness these forms refuse with `execution.consumer-not-ready` rather than being reinterpreted.
-- **Resume is read-only on both transports** (`mstar plan bind --execution --resume-ref <wire>`, or the pre-activation `mstar plan bind --resume <absolute-json>`): it reports context and never reacquires ownership, never re-identifies the caller and never restarts execution. **Resume is never recovery.**
-- An abandoned or unreachable owner is repaired by the verb that owns its authority: while the execution authority is active, `mstar session recover` (named prior holder or explicit `--unowned`, stop attestation, the workflow's exact token, an operation id); on the pre-activation side, the guarded Prepare recovery (`references/plan-and-workflow.md` § Prepare coordinator recovery) with the prior envelope's address, both byte versions, the operator's reason and authorization reference, and a stop assertion naming the recorded holder. Hand-editing a session file or a coordination document is never a path.
-- There is no force flag, no takeover, no holder or role input, and no lease-release verb.
-- One coordinator per workflow; a second bootstrap of the same workflow refuses.
-- **Nothing here is a credential you may pass on.** A session envelope, a session reference and any token stay with the coordinator or PM session that holds them: handing one to a leaf executor — or restating a token in a leaf's assignment — breaks the scoped boundary even when the resulting command would have succeeded.
-- A relative session path is a usage error at every entry point; absolute is required because the engine compares canonical targets.
+- On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
+- The root registration token is read from `mstar status validate`'s `.token`; a workflow token is read from its `.workflows[]` entry there (or an authoritative workflow read); a plan token is read from `mstar plan show` for that plan. These are distinct token kinds (`root`, `workflow`, `plan`) and cannot be substituted for one another (`execution.token-kind`).
+- A session reference is produced by the active bind or recovery verb, encoded as `exec-session-v1:` plus base64url canonical JSON containing `storeId`, `epoch`, `workflowId`, `role`, `sessionId`, and `planId`.
+- The caller identity is independently acquired for each invocation; it is never read from a session file or carried by the reference. No force flag, takeover, holder input, or lease-release verb exists.
+- Nothing here is a credential to pass on. Session references and tokens stay with the coordinator or PM that holds them.
 
-## 5. Tokens
+## 5. Token kinds and lifetime
 
 | Token | Read from | Lifetime |
 |---|---|---|
-| execution token (active CAS) | a read of the addressed scope — `mstar status validate` prints the root and per-workflow tokens, a plan/workflow read returns that scope's token | consumed by the write that uses it; a revision integer is a pre-activation input and never becomes an execution token |
-| operation id (active replay key) | the caller's own choice | an exact retry replays the recorded receipt; a changed request against the same id refuses |
-| row revision (pre-activation) | the plan read verb's machine output | consumed by the transition that uses it; read again for the next one |
-| register version | the same read: `absent`, or the digest of the register's bytes | consumed by the residual write that uses it |
-| document byte version | the versioned store read, or the amendment's read verb | consumed by the replacement that uses it |
+| Root execution token | `mstar status validate` → `.token` | Registration CAS; consumed by that write |
+| Workflow execution token | `mstar status validate` → matching `.workflows[]` entry, or an authoritative workflow read | Workflow-scoped writes; consumed by that write |
+| Plan execution token | `mstar plan show` → addressed plan's token | Plan-scoped writes; consumed by that write |
+| Operation id | The caller's choice | Replay key for exactly one intended operation |
 
-They are not interchangeable. A row revision is not a document version, a register version is not a snapshot version, an execution token is neither, and a schema version or a timestamp is none of the three. Supplying the wrong kind fails validation or refuses; supplying a consumed one refuses as stale. The recovery is identical in both cases: read again.
+Tokens are not interchangeable. Read again after every successful mutation; never treat a row revision, document byte version, schema version, or timestamp as an execution token.
 
 ## 6. Diagnose an actual conflict
 

@@ -24,7 +24,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -189,6 +189,31 @@ async function activeFixture(label: string): Promise<Fixture> {
   const evidencePath = join(sddDir, "evidence.md");
   writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
+  mkdirSync(worktreePath, { recursive: true });
+  const assignmentPath = join(sddDir, "assignment.md");
+  writeText(assignmentPath, assignmentText({ harnessDir, planMarkdown, worktreePath, sddDir }));
+  return { root, harnessDir, context, planMarkdown, assignmentPath, worktreePath, sddDir, evidencePath };
+}
+
+/** A temp Git workspace with an initialized store and the file route still active. */
+async function legacyFixture(label: string): Promise<Fixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+
+  const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
+  const sddDir = join(harnessDir, "sdd", PLAN_ID);
+  const worktreePath = join(root, "wt-exec-session");
+  const evidencePath = join(sddDir, "evidence.md");
+  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(evidencePath, "# evidence\n");
+  writeJson(join(harnessDir, "status.json"), { version: 2, updated_at: "2026-09-21", workflows: [] });
   mkdirSync(worktreePath, { recursive: true });
   const assignmentPath = join(sddDir, "assignment.md");
   writeText(assignmentPath, assignmentText({ harnessDir, planMarkdown, worktreePath, sddDir }));
@@ -719,8 +744,90 @@ describe("mstar status validate \u2014 tokens of the active register", () => {
     expect(validated.exitCode).toBe(0);
     const tokens = await tokensOf(fixture);
     const data = dataOf(validated);
-    expect(data.token).toBe(tokens.root);
+    expect(data.state).toBe("active");
     const rows = data.workflows as Array<{ token: string }>;
     expect(rows[0]?.token).toBe(tokens.workflow);
+  });
+});
+  
+describe("mstar status validate — disclosed authority state", () => {
+  test("reports active additively and legacy with the single upgrade entry", async () => {
+    const legacy = await legacyFixture("mstar-session-legacy-state");
+    const legacyResult = runCli(["status", "validate"], legacy);
+    expect(legacyResult.exitCode, legacyResult.stderr).toBe(0);
+    expect(dataOf(legacyResult)).toMatchObject({
+      path: join(legacy.harnessDir, "status.json"),
+      violations: [],
+      state: "legacy",
+      upgrade: { entry: "mstar store safe-upgrade" },
+    });
+
+    const active = await activeFixture("mstar-session-active-state");
+    const initial = await readExecutionAuthority(active.context);
+    registerThroughAuthority(active, coordinatorIdentity(), initial.token);
+    const activeResult = runCli(["status", "validate"], active);
+    expect(activeResult.exitCode).toBe(0);
+    const activeData = dataOf(activeResult);
+    expect(activeData.state).toBe("active");
+    expect(activeData.token).toBe((await tokensOf(active)).root);
+    expect((activeData.workflows as Array<{ token: string }>)[0]?.token).toBe((await tokensOf(active)).workflow);
+  });
+  test("reports an actionable self-check when the authority store is unreadable", async () => {
+    const fixture = await legacyFixture("mstar-session-unreadable-state");
+    rmSync(join(fixture.harnessDir, "store.db"));
+    mkdirSync(join(fixture.harnessDir, "store.db"));
+    const result = runCli(["status", "validate"], fixture);
+    expect(result.exitCode).toBe(0);
+    expect(dataOf(result)).toMatchObject({
+      state: "unreadable",
+      selfCheck: {
+        couldNotRead: expect.any(String),
+        recovery: expect.any(String),
+      },
+    });
+    expect((dataOf(result).selfCheck as { recovery: string }).recovery).toContain("retry status validate");
+  });
+});
+
+describe("workflow.register — state-aware transport refusals", () => {
+  test("legacy DB-route attempt gives the sole upgrade entry; active legacy-form attempt says upgrade is unnecessary", async () => {
+    const legacy = await legacyFixture("mstar-session-legacy-refusal");
+    const active = await activeFixture("mstar-session-active-refusal");
+    const activeAuthority = await readExecutionAuthority(active.context);
+
+    const legacyDb = join(legacy.harnessDir, "store.db");
+    const legacyBefore = readFileSync(legacyDb);
+    const legacyResult = runCli([
+      "workflow", "register", "--workflow", "legacy-refusal",
+      "--plan-id", PLAN_ID, "--plan-title", "Execution session transport plan",
+      "--plan-file", `plans/${PLAN_ID}.md`, "--delivery-kind", "development",
+      "--branch-source", "feature/refusal", "--branch-target", "main",
+      "--expect", activeAuthority.token, "--operation", "legacy-refusal",
+      "--harness", legacy.harnessDir,
+    ], legacy, coordinatorIdentity());
+    expect(legacyResult.exitCode).toBe(1);
+    const legacyResponse = jsonOf(legacyResult);
+    expect(legacyResponse.code).toBe("execution.not-active");
+    expect(legacyResponse.message).toContain("state: legacy");
+    expect(legacyResponse.message).toContain("mstar store safe-upgrade");
+    expect(legacyResponse.message).not.toContain(activeAuthority.token);
+    expect(readFileSync(legacyDb).equals(legacyBefore)).toBe(true);
+
+    const activeDb = join(active.harnessDir, "store.db");
+    const activeBefore = readFileSync(activeDb);
+    const activeResult = runCli([
+      "workflow", "register", "--workflow", "active-refusal",
+      "--plan-id", PLAN_ID, "--plan-title", "Execution session transport plan",
+      "--plan-file", `plans/${PLAN_ID}.md`, "--delivery-kind", "development",
+      "--branch-source", "feature/refusal", "--branch-target", "main",
+      "--harness", active.harnessDir,
+    ], active, coordinatorIdentity());
+    expect(activeResult.exitCode).toBe(1);
+    const activeResponse = jsonOf(activeResult);
+    expect(activeResponse.code).toBe("execution.consumer-not-ready");
+    expect(activeResponse.message).toContain("state: active");
+    expect(activeResponse.message).toContain("Upgrade outcome: not required");
+    expect(activeResponse.message).toContain("active DB form");
+    expect(readFileSync(activeDb).equals(activeBefore)).toBe(true);
   });
 });

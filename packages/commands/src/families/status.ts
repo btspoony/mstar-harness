@@ -11,6 +11,7 @@ import {
   readExecutionAuthority,
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
+  resolveCurrentAuthority,
   resolveIntentRoot,
   resolveIntentTarget,
   resolveProcessHarnessDir,
@@ -95,17 +96,29 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
         try {
+          const defaultTarget = parsed.data.path === undefined;
           let target = parsed.data.path;
-          if (target === undefined) {
+          if (defaultTarget) {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
-            if ((await resolveExecutionReadRoute({ harnessDir })) === "execution") {
-              const read = await readExecutionAuthority({ harnessDir });
-              return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [] });
+            try {
+              const authority = await resolveCurrentAuthority({ harnessDir });
+              if (authority.route === "execution") {
+                const read = await readExecutionAuthority({ harnessDir });
+                return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [], state: "active" });
+              }
+            } catch (error) {
+              return ok("status.validate", {
+                state: "unreadable",
+                selfCheck: {
+                  couldNotRead: messageOf(error),
+                  recovery: "Make the reported store readable (restore its file, schema, or runtime capability as applicable), then retry status validate.",
+                },
+              });
             }
             target = path.join(harnessDir, "status.json");
           } else {
-            target = path.resolve(context.cwd, target);
+            target = path.resolve(context.cwd, target!);
             if (path.basename(target) === "status.json" && (await resolveExecutionReadRoute({ harnessDir: path.dirname(target) })) === "execution") {
               return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader");
             }
@@ -116,9 +129,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             return ok("status.validate", { path: target, diagnostics: read.diagnostics });
           }
           const gate = validateStatusV2(target);
+          const data = defaultTarget
+            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: { entry: "mstar store safe-upgrade" } }
+            : { path: target, violations: gate.ok ? [] : gate.violations };
           return gate.ok
-            ? ok("status.validate", { path: target, violations: [] })
-            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { violations: gate.violations });
+            ? ok("status.validate", data)
+            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data });
         } catch (error) {
           return refused("status.validate", engineCode(error, "status.validation-failed"), messageOf(error));
         }
