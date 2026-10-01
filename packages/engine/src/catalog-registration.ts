@@ -1754,19 +1754,10 @@ export async function retireStaleCatalogExecutionsForMigration(
         snapshot === undefined
           ? undefined
           : workflowEntryOf({ workflowId: journal.workflow.workflowId } as CatalogExecutionPlan, snapshot);
-      if (
-        snapshot === undefined ||
-        snapshot.id !== journal.workflow.workflowId ||
-        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") ||
-        rootEntry === undefined ||
-        expectedEntry === undefined ||
-        stableJson(rootEntry) !== stableJson(expectedEntry)
-      ) {
-        failReconcile(
-          `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
-            "the registration bytes are missing or belong to a different workflow and cannot be retired",
-        );
-      }
+      if (snapshot === undefined || snapshot.id !== journal.workflow.workflowId || !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") || (rootEntry !== undefined && (expectedEntry === undefined || stableJson(rootEntry) !== stableJson(expectedEntry)))) { failReconcile(
+        `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
+          "the registration bytes are missing or belong to a different workflow and cannot be retired",
+      ); }
       if (hasPublishedDelta(db, row.operation_id) || journal.expectedCatalogRevision === catalogRevision) {
         failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
       }
