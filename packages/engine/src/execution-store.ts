@@ -2276,12 +2276,14 @@ function coordinatorRecoveryWork(input: {
   const live = input.rows.find((row) => row.state === "active" && row.ref.epoch === input.epoch);
   if (live !== undefined) {
     return [
-      `no recovery reaches this row while workflow ${JSON.stringify(input.workflowId)} holds the ACTIVE coordinator ` +
-        `session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: recoverExecutionCoordinator replaces ` +
-        `only the holder it names, so naming this ${input.rowState} row (epoch ${input.rowEpoch}) as the prior holder ` +
-        `is refused while that holder is live, and a normal bind never revives this row \u2014 run the addressed effect ` +
-        `through ${JSON.stringify(live.ref.sessionId)}'s own live reference, or, when that holder is actually gone, ` +
-        `recover by naming ${JSON.stringify(live.ref.sessionId)} as the prior holder with valid stop evidence for it`,
+      `recovering over this row by naming it is refused while workflow ${JSON.stringify(input.workflowId)} holds the ` +
+        `ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: ` +
+        `recoverExecutionCoordinator replaces only the holder it names, and a normal bind never revives this ` +
+        `${input.rowState} row (epoch ${input.rowEpoch}) \u2014 run the addressed effect through ` +
+        `${JSON.stringify(live.ref.sessionId)}'s own live reference, or recover over that holder: the recovery names ` +
+        `${JSON.stringify(live.ref.sessionId)} as the prior holder and carries a valid operator attestation with its ` +
+        `stopped/reloaded entry \u2014 the attestation is the stop evidence, and no change to the holder's row is ` +
+        `needed first`,
     ];
   }
   return [
@@ -3216,11 +3218,12 @@ export async function bindExecutionSession(
           `epoch-invalidated binding is never revived by a normal bind` +
           (liveHolder === undefined
             ? ` \u2014 the named recovery transition, with stop evidence and the prior holder, is the only way back`
-            : `, and no recovery reaches this row while workflow ${JSON.stringify(bind.workflowId)} holds the ACTIVE ` +
-                `coordinator session ${JSON.stringify(liveHolder.ref.sessionId)} at epoch ${tx.epoch} \u2014 the ` +
-                `recovery replaces only the holder it names, so run the addressed effect through ` +
-                `${JSON.stringify(liveHolder.ref.sessionId)}'s own live reference, or, when that holder is actually ` +
-                `gone, recover by naming it as the prior holder with stop evidence for it`) +
+            : `, and no recovery replaces this binding by naming it while workflow ${JSON.stringify(bind.workflowId)} ` +
+                `holds the ACTIVE coordinator session ${JSON.stringify(liveHolder.ref.sessionId)} at epoch ${tx.epoch} ` +
+                `\u2014 recoverExecutionCoordinator replaces only the holder it names; work runs through ` +
+                `${JSON.stringify(liveHolder.ref.sessionId)}'s own live reference, and a recovery naming that holder ` +
+                `proceeds with a valid operator attestation carrying its stopped/reloaded entry \u2014 the attestation ` +
+                `is the stop evidence, with no change to the holder's row needed first`) +
           `. Nothing was bound.`,
       );
     }

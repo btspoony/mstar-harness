@@ -653,8 +653,9 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
 
     // The replaced row reads: the refusal must not offer the recovery that
     // names THIS row — a live holder exists, so recoverExecutionCoordinator
-    // refuses that naming (coordination.duplicate-holder) and the guidance
-    // would point at a dead end.
+    // refuses that naming (coordination.duplicate-holder) — and must state the
+    // attestation-bound route over the live holder WITHOUT implying any
+    // database-state change has to happen first.
     const replaced = await refusalOf(coordinatorCaller);
     expect(replaced.code).toBe("execution.session-unavailable");
     expect(replaced.details?.row_state).toBe("revoked");
@@ -664,6 +665,8 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     expect(facts).toContain(RECOVERY_ID);
     expect(facts).toContain("replaces only the holder it names");
     expect(facts).toContain("own live reference");
+    expect(facts).toContain("attestation");
+    expect(facts).not.toContain("actually gone");
     // The named duplicate-holder route is REAL: walking exactly the route the
     // old guidance offered refuses while the live holder exists. The first
     // recovery advanced the workflow revision, so the caller re-reads the
@@ -704,22 +707,39 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
       }),
     ).rejects.not.toThrow(/only way back/);
 
-    // The route the new guidance names is REAL too: when the live holder is
-    // actually gone, a recovery naming THAT holder succeeds and revives the
-    // replaced row through its own identity.
-    withRaw(context, (db) => {
-      db.prepare("update execution_sessions set state = 'suspended' where role = 'coordinator' and session_id = ?").run(
-        RECOVERY_ID,
-      );
-    });
-    const back = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+    // The route the new guidance names is REAL without any fixture surgery:
+    // the LIVE holder's row stays ACTIVE, and the recovery that names THAT
+    // holder still refuses while its attestation carries no stop evidence for
+    // it — the attestation is the trust boundary, so the advertised
+    // prerequisite is enforced, not the database state.
+    await expect(
+      recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+        expected: currentToken,
+        operationId: "recover-over-live-holder-unattested",
+        priorSessionId: RECOVERY_ID,
+        reason: "fixture: naming the live holder without its stop evidence",
+        attestation: attestation(COORDINATOR_ID),
+      }),
+    ).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+    expect(footprint(context)).toEqual(before);
+
+    // With the named holder's stop evidence, the same call proceeds — no
+    // preceding state change to the live holder's row: the recovery revokes
+    // that row, reactivates the replaced identity, and its own reference works
+    // again.
+    const over = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
       expected: currentToken,
-      operationId: "recover-live-holder-out",
+      operationId: "recover-over-live-holder",
       priorSessionId: RECOVERY_ID,
-      reason: "fixture: the live holder stopped, the named recovery reaches back",
+      reason: "fixture: the attested stop of the live holder",
       attestation: attestation(RECOVERY_ID),
     });
-    expect(back.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    expect(over.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    const revokedHolder = rows(
+      context,
+      `select state from execution_sessions where session_id = '${RECOVERY_ID}'`,
+    ) as Array<{ state?: unknown }>;
+    expect(revokedHolder[0]?.state).toBe("revoked");
     const revived = await readOwnExecutionSession(domainContext(context, coordinatorCaller));
     expect(revived.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
   });
