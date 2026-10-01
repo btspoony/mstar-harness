@@ -768,6 +768,7 @@ describe("issue family witnesses", () => {
     // Controlled setup: create the issue the listing instruction reads.
     const added = await setupCall(interaction, "issue.add", { payload: capturePayload(), operationId: "op-list-seed", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
     const seed = added.data as { issueId: string }; // capture receipt shape (captureIssue)
 
     const listed = await countedCall(interaction, "execute", "issue.list", {}, context);
