@@ -84,6 +84,18 @@ describe("Guard 8 — CLI state reachability", () => {
       'Guard 8: J0 step 1 status validate — input "state" expected legacy',
     ]);
   });
+  test("legacy upgrade entry accepts only the canonical supported command", () => {
+    for (const entry of ["mstar arbitrary command", "other-bin store safe-upgrade", "mstar store safe-upgrade extra"]) {
+      expect(checkReachabilityState(
+        { state: "legacy", upgrade: { entry } },
+        "legacy",
+        new Set(["store", "store safe-upgrade", "arbitrary", "arbitrary command"]),
+        "J0",
+      )).toEqual([
+        `Guard 8: J0 step 1 status validate — input "upgrade.entry" ${entry} must resolve exactly to mstar store safe-upgrade in the canonical command inventory`,
+      ]);
+    }
+  });
 
   test("engine fixtures measure J1 within three calls and report attestation-dependent journeys as blocked", async () => {
     const { cliCommands, failures: inventoryFailures } = buildCanonicalCommandInventory(process.cwd());

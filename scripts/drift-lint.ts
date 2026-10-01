@@ -135,8 +135,8 @@ export function checkReachabilityState(
     const upgrade = data.upgrade as { entry?: unknown } | undefined;
     const entry = typeof upgrade?.entry === "string" ? upgrade.entry : "";
     const tokens = entry.split(/\s+/).filter(Boolean);
-    if (tokens.length < 2 || validateCliCommandTokens(cliCommands, tokens.slice(1)) !== null) {
-      failures.push(`Guard 8: ${journey} step 1 status validate — input "upgrade.entry" ${entry || "missing"} does not resolve in the canonical command inventory`);
+    if (entry !== "mstar store safe-upgrade" || validateCliCommandTokens(cliCommands, tokens.slice(1)) !== null || !cliCommands.has("store safe-upgrade")) {
+      failures.push(`Guard 8: ${journey} step 1 status validate — input "upgrade.entry" ${entry || "missing"} must resolve exactly to mstar store safe-upgrade in the canonical command inventory`);
     }
   }
   return failures;
@@ -215,11 +215,16 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
   };
   try {
     const legacy = await createFixture("legacy", false);
+    let j0Calls = 0;
+    j0Calls++;
     const legacyRead = await executeCommand("status.validate", {}, contextFor(legacy.repo));
     const legacyData = legacyRead.status === "ok" ? legacyRead.data as Record<string, unknown> : {};
     const upgrade = legacyData.upgrade as { entry?: unknown } | undefined;
     const entry = typeof upgrade?.entry === "string" ? upgrade.entry : "";
     failures.push(...checkReachabilityState(legacyData, "legacy", cliCommands, "J0"));
+    const upgradeTokens = entry.split(/\s+/).filter(Boolean);
+    const upgradeDefinition = getCommandDefinitions().find((definition) => definition.cli.path.join(" ") === upgradeTokens.slice(1).join(" "));
+    if (entry !== "mstar store safe-upgrade" || upgradeDefinition === undefined) failures.push(`Guard 8: J0 step 2 — upgrade entry did not resolve to supported command: ${entry || "missing"}`);
     const j0AttestationPath = join(legacy.repo, "attestation.json");
     writeFileSync(j0AttestationPath, JSON.stringify({
       version: 1,
@@ -237,21 +242,23 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       }],
       stoppedSessions: [],
     }), "utf8");
-    const upgradeResult = await executeCommand("store.safe-upgrade", {
+    if (upgradeDefinition !== undefined) j0Calls++;
+    const upgradeResult = upgradeDefinition === undefined ? null : await executeCommand(upgradeDefinition.id, {
       harness: legacy.harnessDir,
       operator: "fixture-operator",
       attestation: j0AttestationPath,
     }, contextFor(legacy.repo, undefined, "preserve for later review"));
+    j0Calls++;
     const upgradedRead = await executeCommand("status.validate", {}, contextFor(legacy.repo));
     const upgradedData = upgradedRead.status === "ok" ? upgradedRead.data as Record<string, unknown> : {};
-    if (upgradeResult.status !== "ok" || upgradedData.state !== "active") {
-      const refusal = upgradeResult.status === "refused" ? `${upgradeResult.code}: ${upgradeResult.message}` : "upgrade did not produce an active state";
+    if (upgradeResult?.status !== "ok" || upgradedData.state !== "active") {
+      const refusal = upgradeResult?.status === "refused" ? `${upgradeResult.code}: ${upgradeResult.message}` : "upgrade did not produce an active state";
       failures.push(`Guard 8: J0 step 2 store safe-upgrade → step 3 status validate — ${refusal}`);
     }
     ledger.push({
       journey: "J0",
       fixture: "engine-initialized legacy; status → single safe-upgrade → active status",
-      measuredCalls: 3,
+      measuredCalls: j0Calls,
       bar: 3,
       status: "blocked",
       dependency: "attestation provisioning path undecided (design §6 Q2)",
@@ -265,8 +272,11 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
     rmSync(activeState.repo, { recursive: true, force: true });
 
     const active = await createFixture("j1", true);
+    let j1Calls = 0;
+    j1Calls++;
     const j1Read = await executeCommand("status.validate", {}, contextFor(active.repo));
     const j1Data = j1Read.status === "ok" ? j1Read.data as Record<string, unknown> : {};
+    if (typeof j1Data.token === "string") j1Calls++;
     const j1Registration = typeof j1Data.token === "string" ? await executeCommand("workflow.register", {
       workflow: "reachability-j1",
       planId: active.planId,
@@ -283,7 +293,7 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       const details = j1Registration === null ? "status validate did not provide a root token" : `${j1Registration.status} ${j1Registration.code} ${"message" in j1Registration ? j1Registration.message : ""}`;
       failures.push(`Guard 8: J1 step 2 workflow register — ${details}`);
     }
-    ledger.push({ journey: "J1", fixture: "engine-initialized active", measuredCalls: 2, bar: 3, status: j1Registration?.status === "ok" ? "met" : "blocked", dependency: j1Registration?.status === "ok" ? null : "root token or registration refused" });
+    ledger.push({ journey: "J1", fixture: "engine-initialized active", measuredCalls: j1Calls, bar: 3, status: j1Registration?.status === "ok" ? "met" : "blocked", dependency: j1Registration?.status === "ok" ? null : "root token or registration refused" });
 
     const legacyGateFixture = await createFixture("legacy-gate", false);
     const legacyDb = join(legacyGateFixture.harnessDir, "store.db");
@@ -349,9 +359,12 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
 
     const j2 = await createFixture("j2", true);
     await setupWorkflow(j2.repo, j2.harnessDir, j2.planId, "reachability-j2");
+    let j2Calls = 0;
+    j2Calls++;
     const j2Start = await executeCommand("status.validate", {}, contextFor(j2.repo));
     const j2Data = j2Start.status === "ok" ? j2Start.data as Record<string, unknown> : {};
     const j2Workflow = Array.isArray(j2Data.workflows) ? j2Data.workflows[0] as { token?: string } | undefined : undefined;
+    if (j2Workflow?.token !== undefined) j2Calls++;
     const attestationPath = join(j2.repo, "attestation.json");
     writeFileSync(attestationPath, JSON.stringify({
       version: 1,
@@ -372,6 +385,7 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
     const recoveryData = recovery?.status === "ok" ? recovery.data as Record<string, unknown> : {};
     const reference = recoveryData.data as Record<string, unknown> | undefined;
     const workflowToken = j2Workflow?.token;
+    if (reference !== undefined && workflowToken !== undefined) j2Calls++;
     const lifecycle = reference !== undefined && workflowToken !== undefined
       ? await executeCommand("workflow.lifecycle", {
           workflow: "reachability-j2",
@@ -387,7 +401,7 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       const details = lifecycle === null ? "recovery produced no session reference/token" : `${lifecycle.status} ${lifecycle.code} ${"message" in lifecycle ? lifecycle.message : ""}`;
       failures.push(`Guard 8: J2 step 3 workflow lifecycle — ${details}`);
     }
-    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" });
+    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: j2Calls, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" });
     rmSync(active.repo, { recursive: true, force: true });
     rmSync(j2.repo, { recursive: true, force: true });
   } catch (error) {

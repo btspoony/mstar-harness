@@ -37,7 +37,7 @@ The active DB route is the sole supported route for normal coordinated operation
 - A plan session is bound to one plan; a coordinator session serves one workflow and is the only session allowed to amend, register, record evidence or close it. Coordinator identity is independently acquired and limited to one coordinator per workflow.
 - Two address forms reach the same prepared row: the pinned Assignment path, or workflow + plan, which reads the row's registered Assignment path. A second fresh claim refuses with `coordination.duplicate-holder`.
 - Active resume is read-only: `mstar plan bind --execution --resume-ref <wire>` reports current context; it never reacquires a released lease, restarts execution, or re-identifies the caller. Resume is never recovery.
-- A fresh active bind is the only operation without a token: it reads, checks and claims atomically against current ownership.
+- A fresh active bind requires `--expect <full execution token>`, `--operation <id>`, and independently acquired runtime session identity: coordinator binds use the workflow token; plan-PM binds use the plan token. It checks and claims atomically against current ownership. Active resume is read-only and token-free.
 
 ## Recovery (active coordinator replacement)
 

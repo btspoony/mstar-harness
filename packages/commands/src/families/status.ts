@@ -123,7 +123,17 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
               return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader");
             }
           }
-          if (!existsSync(target)) return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
+          if (!existsSync(target)) {
+            if (defaultTarget) {
+              return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, {
+                path: target,
+                state: "legacy",
+                upgrade: { entry: "mstar store safe-upgrade" },
+                selfCheck: { couldNotRead: "legacy status register is missing", recovery: "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs." },
+              });
+            }
+            return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
+          }
           if (path.basename(target) === WORKFLOW_SNAPSHOT_FILE) {
             const read = readWorkflowSnapshot(path.dirname(target));
             return ok("status.validate", { path: target, diagnostics: read.diagnostics });

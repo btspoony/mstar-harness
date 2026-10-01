@@ -744,6 +744,7 @@ describe("mstar status validate \u2014 tokens of the active register", () => {
     expect(validated.exitCode).toBe(0);
     const tokens = await tokensOf(fixture);
     const data = dataOf(validated);
+    expect(data.token).toBe(tokens.root);
     expect(data.state).toBe("active");
     const rows = data.workflows as Array<{ token: string }>;
     expect(rows[0]?.token).toBe(tokens.workflow);
@@ -760,6 +761,20 @@ describe("mstar status validate — disclosed authority state", () => {
       violations: [],
       state: "legacy",
       upgrade: { entry: "mstar store safe-upgrade" },
+    });
+    const missing = await legacyFixture("mstar-session-missing-status");
+    rmSync(join(missing.harnessDir, "status.json"));
+    const missingResult = runCli(["status", "validate"], missing);
+    expect(missingResult.exitCode).toBe(1);
+    expect(jsonOf(missingResult)).toMatchObject({
+      details: {
+        state: "legacy",
+        upgrade: { entry: "mstar store safe-upgrade" },
+        selfCheck: {
+          couldNotRead: "legacy status register is missing",
+          recovery: expect.stringContaining("legacy upgrade path exists"),
+        },
+      },
     });
 
     const active = await activeFixture("mstar-session-active-state");
