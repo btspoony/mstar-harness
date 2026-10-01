@@ -1313,6 +1313,51 @@ describe("execution-stage", () => {
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
 
+  test("execution-stage-compares-source-witnesses-as-a-canonical-set", async () => {
+    const fixture = await legacyWorkspace("stage-order-set");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-order-set-preview"));
+    manifest.sources = manifest.sources.reverse().map((source) =>
+      source.kind === "session-envelope"
+        ? { ...source, path: relative(manifest.roots.control, source.path).replaceAll("\\\\", "/") }
+        : source,
+    );
+    const staged = await applyExecutionMigration({
+      ...migrationInput(fixture, "op-order-set-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      coverage: await coverageOf(fixture, manifest),
+      backup,
+    });
+    expect(staged.phase).toBe("staged");
+    const attestation = migrationAttestation([
+      { sessionId: "host-coordinator-0001", host: "omp", state: "stopped" },
+      { sessionId: "host-plan-a-0001", host: "omp", state: "stopped" },
+      { sessionId: "host-plan-b-0001", host: "omp", state: "stopped" },
+    ]);
+    const active = await activateExecutionMigration(await activationInput(fixture, manifest, "op-order-set", attestation));
+    expect(active.phase).toBe("active");
+
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
+  });
+  test("execution-preview-witness-order-does-not-depend-on-session-directory-creation-order", async () => {
+    const fixture = await legacyWorkspace("preview-witness-order");
+    const paths = [
+      fixture.coordinatorEnvelope,
+      fixture.planEnvelopes[PLAN_A],
+      fixture.planEnvelopes[PLAN_B],
+    ];
+    const bytes = paths.map((path) => readFileSync(path));
+    const first = await previewExecutionMigration(migrationInput(fixture, "op-witness-order-first"));
+    for (const path of paths) rmSync(path);
+    for (const index of [...paths.keys()].reverse()) writeFileSync(paths[index]!, bytes[index]!);
+    const second = await previewExecutionMigration(migrationInput(fixture, "op-witness-order-second"));
+
+    expect(second.sources).toEqual(first.sources);
+    expect(second.id).toBe(first.id);
+    expect(executionManifestHash(second)).toBe(executionManifestHash(first));
+  });
+
   test("execution-stage-refuses-source-drift-since-the-preview", async () => {
     const fixture = await legacyWorkspace("stage-drift");
     const backup = await recoveryPoint(fixture);

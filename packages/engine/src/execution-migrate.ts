@@ -810,6 +810,44 @@ function canonicalWitnessList(witnesses: readonly CoverageWitness[], what: strin
   return sorted;
 }
 
+function executionSourceLocationKey(source: ExecutionSourceWitness, roots: ExecutionMigrationRoots): string {
+  const path = source.path.replaceAll("\\", "/");
+  if (!isAbsolute(source.path) && source.kind === "session-envelope") {
+    const segments = path.split("/");
+    if (path.length > 0 && !segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+      return JSON.stringify(["control", path, source.kind]);
+    }
+    return JSON.stringify(["invalid-relative", path, source.kind]);
+  }
+  if (isAbsolute(source.path)) {
+    const absolute = canonicalPath(source.path);
+    const matchingRoots = Object.entries(roots)
+      .filter(([, root]) => isPathWithin(canonicalPath(root), absolute))
+      .sort((a, b) => b[1].length - a[1].length);
+    if (matchingRoots.length > 0) {
+      const [name, root] = matchingRoots[0]!;
+      return JSON.stringify([name, relative(canonicalPath(root), absolute).replaceAll("\\", "/"), source.kind]);
+    }
+    return JSON.stringify(["absolute", absolute, source.kind]);
+  }
+  return JSON.stringify(["relative", path, source.kind]);
+}
+
+function executionSourceOrderKey(source: ExecutionSourceWitness, roots: ExecutionMigrationRoots): string {
+  return `${executionSourceLocationKey(source, roots)}\u0000${source.sha256.toLowerCase()}`;
+}
+
+function orderedExecutionSources(
+  sources: readonly ExecutionSourceWitness[],
+  roots: ExecutionMigrationRoots,
+): ExecutionSourceWitness[] {
+  return [...sources].sort((a, b) => {
+    const aKey = executionSourceOrderKey(a, roots);
+    const bKey = executionSourceOrderKey(b, roots);
+    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+  });
+}
+
 /** The configured root one explicit inventory path belongs to. */
 function configuredRootOf(roots: ExecutionMigrationRoots, path: string, what: string): { root: CoverageWitness["root"]; dir: string } {
   let best: { root: CoverageWitness["root"]; dir: string } | null = null;
@@ -2364,7 +2402,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     inventoryPath,
     inventory,
     workflows,
-    witnesses: ledger.witnesses,
+    witnesses: orderedExecutionSources(ledger.witnesses, roots),
     deferred,
     owners,
     coreHash: digestOf({
@@ -2639,7 +2677,7 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
       root: discovered.root,
       roots: discovered.roots,
       inventoryPath: discovered.inventoryPath,
-      sources: discovered.witnesses,
+      sources: orderedExecutionSources(discovered.witnesses, discovered.roots),
       coreHash: discovered.coreHash,
       deferred: discovered.deferred,
       catalogRevision,
@@ -2730,18 +2768,24 @@ function assertReviewedManifestHolds(input: {
   pendingCatalogOperations: string[];
 }): void {
   const { manifest, discovered, selfHeldLockDirs, pendingCatalogOperations } = input;
-  if (discovered.witnesses.length !== manifest.sources.length) {
+  const reviewedSources = orderedExecutionSources(manifest.sources, manifest.roots);
+  const foundSources = orderedExecutionSources(discovered.witnesses, manifest.roots);
+  if (foundSources.length !== reviewedSources.length) {
     throw conflict(
-      `the source set changed since the preview (${manifest.sources.length} reviewed witness(es), ` +
-        `${discovered.witnesses.length} found). Re-preview the migration; nothing was written.`,
+      `the source set changed since the preview (${reviewedSources.length} reviewed witness(es), ` +
+        `${foundSources.length} found). Re-preview the migration; nothing was written.`,
     );
   }
-  for (const [index, reviewed] of manifest.sources.entries()) {
-    const found = discovered.witnesses[index]!;
-    if (reviewed.path !== found.path || reviewed.kind !== found.kind || !sameBytesDigest(reviewed.sha256, found.sha256)) {
+  for (const [index, reviewed] of reviewedSources.entries()) {
+    const found = foundSources[index]!;
+    if (
+      executionSourceLocationKey(reviewed, manifest.roots) !== executionSourceLocationKey(found, manifest.roots) ||
+      !sameBytesDigest(reviewed.sha256, found.sha256)
+    ) {
       throw conflict(
-        `source ${reviewed.path} no longer holds the reviewed bytes (${reviewed.kind}). Re-preview the migration; ` +
-          `nothing was written.`,
+        `source witness mismatch at index ${index} ` +
+          `(reviewed count ${reviewedSources.length}, found count ${foundSources.length}); ` +
+          `reviewed=${JSON.stringify(reviewed)}; found=${JSON.stringify(found)}. Re-preview the migration; nothing was written.`,
       );
     }
   }
