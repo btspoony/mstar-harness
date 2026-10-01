@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, commands
+packages: root, commands, judgment
 ---
 
 - Added **CI test routes for the `commands` and `judgment` packages**: both package manifests now declare `test: "bun test"`, and CI runs each surface as an independent `test-commands` / `test-judgment` job alongside the existing per-package jobs.
