@@ -91,7 +91,7 @@ Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — i
 
 ### 2. Conflict diagnostics (not a preflight chain)
 
-Use `references/preconditions.md` when the intended verb refuses for a required fact. The refusal's grouped facts identify the one genuinely missing or conflicting input — ambiguous root/target, foreign live holder, unavailable authorization; supply a real competing choice or the owner's authorization evidence only for those. The derived session binding and token need no separate read, while the caller's independently acquired identity and the caller-owned operation id stay required on every active write. A stale explicit token or raw-replacement byte version requires a fresh read. Do not make `persist` or rebind a routine prerequisite for an ordinary lifecycle action. A refusal's commit state is action-local: read the receipt to learn what committed — a transactionally refused operation leaves the addressed bytes, receipts and counters unchanged, and an action-local partial receipt records its applied components — then replay only the documented remaining action.
+Use `references/preconditions.md` when the intended verb refuses for a required fact. The refusal's grouped facts identify the one genuinely missing or conflicting input — ambiguous root/target, foreign live holder, unavailable authorization; supply a real competing choice or the owner's authorization evidence only for those. The derived session binding and token need no separate read, while the caller's independently acquired identity and the caller-owned operation id stay required on every active write. A stale explicit token or raw-replacement byte version requires a fresh read. Do not make `persist` or rebind a routine prerequisite for an ordinary lifecycle action. A refusal's commit state is action-local: read the receipt to learn what committed — the engine's coordinated plan-route refusals are transactional (no row, receipt or counter change), and an action-local partial receipt records its applied components — then replay only the documented remaining action.
 
 ### 3. Lifecycle shape
 
@@ -119,8 +119,8 @@ A CLI claim is proven when:
 
 - the command was actually run, or the result is a machine object a command produced this round — not a recollection of documentation;
 - the exit code matches the family contract, and a `1` is reported with its stable code and message;
-- preconditions were explicit: absolute paths, an explicit root wherever discovery is ambiguous, the transport's authority stated (an independently acquired identity with a session reference and full execution token on the active route, or a session envelope obtained from the bind verb on the pre-activation route), and tokens read from the command that will consume them;
-- no refusal was retried with a stale token — after a refusal the document was re-read;
+- preconditions were explicit: absolute paths, an explicit root wherever discovery is ambiguous, the transport's authority stated (an independently acquired identity with a session reference on the active route — the engine derives the caller-owned binding and the current token —, or a session envelope obtained from the bind verb on the pre-activation route), and any explicitly supplied token held only as a fresh constraint;
+- no refusal was retried with a stale token — a stale explicit token was refreshed by re-reading the addressed scope;
 - commands quoted in a plan, report or handoff are re-runnable as written, with real absolute paths or visibly-marked placeholders;
 - for a validator, the cited check is the one that covers the claim being made.
 
