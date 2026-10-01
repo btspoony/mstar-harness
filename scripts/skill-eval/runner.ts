@@ -466,10 +466,21 @@ const SHELL_EXECUTABLES = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash"]);
 /** Interpreters whose invocation carries a nested program this adapter cannot analyze. */
 const SCRIPT_INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "tsx"]);
 
-/** Decomposes one unquoted shell command string into its constituent commands. */
+/**
+ * Decomposes one unquoted shell command string into its constituent
+ * commands. Executable-aware like the argv path: a constituent that itself
+ * invokes a shell or script interpreter (e.g. `sh lookups.sh`) carries an
+ * opaque nested program whose causal depth is unavailable, so the whole
+ * command stays unknown instead of being counted as known lookups.
+ */
 function shellConstituents(script: string): { bundled: number; unknown: boolean } {
   if (/["'`]/.test(script)) return { bundled: 0, unknown: true };
   const parts = script.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
+  if (parts.length === 0) return { bundled: 0, unknown: true };
+  for (const part of parts) {
+    const wrapper = argvShellLookup(part.split(/\s+/).filter((token) => token !== ""));
+    if (wrapper !== null && wrapper.unknown) return { bundled: 0, unknown: true };
+  }
   return { bundled: Math.max(0, parts.length - 1), unknown: false };
 }
 
@@ -576,15 +587,26 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
   };
   /** Merges one observation into its already-counted identity (never a second call). */
   const mergeInto = (existing: InvocationCallObservation, observation: InvocationCallObservation): void => {
-    const merge = mergeOutcomeState(existing, observation.outcome);
-    if (merge === "conflict") {
-      // Contradictory phases (one failed, one succeeded): the call has no
-      // coherent observed outcome — surfaced as unknown, never resolved.
-      existing.outcomeConflicted = true;
-      setOutcome(existing, "unknown");
-      scan.conflictingOutcomeCalls += 1;
-    } else if (merge === "set") {
-      setOutcome(existing, observation.outcome);
+    if (observation.outcomeConflicted) {
+      // The incoming phases were already contradictory: the conflict is
+      // sticky and the outcome stays unknown — an earlier coherent outcome
+      // must not survive it, whichever turn observed the identity first.
+      if (!existing.outcomeConflicted) {
+        existing.outcomeConflicted = true;
+        scan.conflictingOutcomeCalls += 1;
+      }
+      if (existing.outcome !== "unknown") setOutcome(existing, "unknown");
+    } else {
+      const merge = mergeOutcomeState(existing, observation.outcome);
+      if (merge === "conflict") {
+        // Contradictory phases (one failed, one succeeded): the call has no
+        // coherent observed outcome — surfaced as unknown, never resolved.
+        existing.outcomeConflicted = true;
+        setOutcome(existing, "unknown");
+        scan.conflictingOutcomeCalls += 1;
+      } else if (merge === "set") {
+        setOutcome(existing, observation.outcome);
+      }
     }
     if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
       existing.itemType = observation.itemType;
@@ -822,13 +844,24 @@ export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocatio
       // Same scoped invocation identity across the unit's turns: one call;
       // failure and read-shape merge onto the already-counted entry, and
       // contradictory phase outcomes are surfaced as a conflict, not resolved.
-      const merge = mergeOutcomeState(existing, observation.outcome);
-      if (merge === "conflict") {
-        existing.outcomeConflicted = true;
-        setOutcome(existing, "unknown");
-        accounting.conflictingOutcomeCalls += 1;
-      } else if (merge === "set") {
-        setOutcome(existing, observation.outcome);
+      // An incoming observation that already carries a per-turn conflict
+      // keeps that conflict sticky: unknown stays unknown even though the
+      // identity was counted by an earlier coherent turn.
+      if (observation.outcomeConflicted) {
+        if (!existing.outcomeConflicted) {
+          existing.outcomeConflicted = true;
+          accounting.conflictingOutcomeCalls += 1;
+        }
+        if (existing.outcome !== "unknown") setOutcome(existing, "unknown");
+      } else {
+        const merge = mergeOutcomeState(existing, observation.outcome);
+        if (merge === "conflict") {
+          existing.outcomeConflicted = true;
+          setOutcome(existing, "unknown");
+          accounting.conflictingOutcomeCalls += 1;
+        } else if (merge === "set") {
+          setOutcome(existing, observation.outcome);
+        }
       }
       if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
         existing.itemType = observation.itemType;
