@@ -185,6 +185,50 @@ test("store upgrade archives a damaged store and still migrates valid legacy sou
   expect(state.executionAuthorityState).toBe("active");
 });
 
+test("store upgrade restores the original when staging refuses after confirmation", async () => {
+  const harnessDir = join(root, "staging-refusal", ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const damaged = Buffer.from("a damaged store that fails staging", "utf8");
+  writeFileSync(join(harnessDir, "store.db"), damaged);
+  const workflowId = "staging-refusal-workflow";
+  const workflowDir = join(harnessDir, "workflows", workflowId);
+  mkdirSync(workflowDir, { recursive: true });
+  writeFileSync(
+    join(harnessDir, "status.json"),
+    JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-30",
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-30", dir: `workflows/${workflowId}` }],
+    }),
+  );
+  writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: workflowId }));
+  // An inventory declaring roots that do not exist cannot close, so staging refuses.
+  const inventoryPath = join(harnessDir, "unclosable-inventory.json");
+  writeFileSync(
+    inventoryPath,
+    JSON.stringify({
+      version: 2,
+      roots: {
+        sdd: join(harnessDir, "workflows"),
+        host: join(harnessDir, "absent-host"),
+        package: join(harnessDir, "absent-package"),
+      },
+      hostSessions: [],
+      sddEvidence: [],
+      consumers: [],
+      injectors: [],
+      injectorInventory: null,
+      backup: null,
+    }),
+  );
+
+  const result = await runUpgrade(harnessDir, root, "preserve for later review", inventoryPath);
+
+  expect(result.status).not.toBe("ok");
+  // Nothing was retired yet, so the original must be back at its own path.
+  expect(readFileSync(join(harnessDir, "store.db"))).toEqual(damaged);
+});
+
 test("store upgrade refuses to archive a damaged store under another operator's attestation", async () => {
   const harnessDir = join(root, "mismatch", ".mstar");
   mkdirSync(harnessDir, { recursive: true });

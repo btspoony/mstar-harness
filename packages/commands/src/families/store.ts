@@ -24,6 +24,7 @@ import {
   storeDbPath,
   upgradeStore,
   upgradeStoreWithRecoveryPoint,
+  validateActivationAttestation,
   executionManifestHash,
   type ActivationAttestation,
   type MigrationManifest,
@@ -263,19 +264,22 @@ async function recoverUnreadableStore(
   })();
   if (header === undefined || header.toString("latin1", 0, 16) === SQLITE_FORMAT_MAGIC) return false;
   const attestation = jsonFile<ActivationAttestation>(path.resolve(invocation.cwd, attestationInput), "--attestation");
+  // Validate the shape before reading anything out of it, so a malformed file is
+  // an invalid-attestation refusal rather than an unclassified TypeError.
+  const validated = validateActivationAttestation(attestation);
   // The accountable operator and the attesting operator are one identity at the
   // barrier; activation refuses a mismatch, so archiving and replacing a store
   // must not accept one either.
-  if (attestation.operator.actor !== input.operator) {
+  if (validated.operator.actor !== input.operator) {
     throw new StoreActivationError(
       "store.attestation-invalid",
-      `the attestation is signed by ${JSON.stringify(attestation.operator.actor)} while the upgrade is recorded under ` +
+      `the attestation is signed by ${JSON.stringify(validated.operator.actor)} while the upgrade is recorded under ` +
         `${JSON.stringify(input.operator)}; the accountable operator and the attesting operator are one identity. ` +
         "Nothing was archived or replaced.",
     );
   }
   const operationId = randomUUID();
-  const archive = await archiveStoreUpgradeFiles(context, operationId, attestation);
+  const archive = await archiveStoreUpgradeFiles(context, operationId, validated);
   const displaced: Array<{ moved: string; original: string }> = [];
   const displacedDir = path.join(archive.archivePath, "displaced");
   let initialized = false;
@@ -430,13 +434,6 @@ async function runStoreUpgrade(
     };
   }
 
-  // Past this point the authority switch is under way: retirement may already
-  // have moved legacy files into its own archive, so restoring the unreadable
-  // original and deleting the replacement would leave the workspace with
-  // neither a usable database nor the file authority. The published archive,
-  // not a rollback, is the recovery basis from here on.
-  recovery.rollback = undefined;
-
   let staged: StagedStoreUpgrade;
   try {
     staged = await stageStoreUpgrade({
@@ -449,6 +446,13 @@ async function runStoreUpgrade(
   } catch (error) {
     return storeUpgradeFailure(id, error);
   }
+
+  // Staging succeeded, so the authority switch is under way: retirement can now
+  // move legacy files into its own archive, and restoring the unreadable
+  // original while deleting the replacement would leave the workspace with
+  // neither a usable database nor the file authority. The published archive,
+  // not a rollback, is the recovery basis from here on.
+  recovery.rollback = undefined;
 
   try {
     const receipt = await activateStoreUpgrade(staged, attestation);
