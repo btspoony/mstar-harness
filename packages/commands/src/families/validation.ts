@@ -38,7 +38,6 @@ import {
   validateSchemaYaml,
   type GateResult,
   type QcAlignmentAssignment,
-  type WorktreeTrack,
   WorkflowSnapshotValidationError,
   readWorkflowSnapshot,
   resolveProcessHarnessDir,
@@ -46,11 +45,14 @@ import {
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext, PayloadDescriptor } from "../types.js";
+
+/** One contract for `worktree.check --tracks`: the payload descriptor drives CLI JSON decoding, MCP's composed object-array field, and the family's pre-gate validation. The input field itself stays an opaque transport placeholder. */
+const tracksSchema = z.array(z.object({ worktreePath: z.string(), workingBranch: z.string() }));
 
 type Input = {
   assignmentFile?: string; branch?: string; planId?: string; plan?: string; workflow?: string; harness?: string; integration?: string;
-  mainBranch?: string; control?: string; l2?: boolean; tracks?: string; files?: string[]; mode?: string; reviewers?: string[];
+  mainBranch?: string; control?: string; l2?: boolean; tracks?: unknown; files?: string[]; mode?: string; reviewers?: string[];
   target?: string; type?: string; prVariant?: boolean; dir?: string; docPath?: string; knowledgeDir?: string;
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
@@ -65,7 +67,7 @@ function assignmentExecutionMode(text: string): string {
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
-  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), l2: z.boolean().optional(), tracks: z.string().optional() }),
+  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), l2: z.boolean().optional(), tracks: z.unknown().optional() }),
   "worktree.qc-alignment": z.object({ files: z.array(z.string()).optional() }),
   "review.seats": z.object({ assignmentFile: z.string().optional(), mode: z.string().optional(), reviewers: z.array(z.string()).optional() }),
   lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional() }),
@@ -180,18 +182,22 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.check": {
         if (input.l2) {
-          const raw = required(input.tracks, "usage: worktree check --l2 --tracks <json>");
-          let parsed: unknown;
-          try { parsed = JSON.parse(raw); } catch { throw new SddScriptError("usage: worktree check --l2 --tracks <json> — invalid JSON", 2); }
-          if (!Array.isArray(parsed)) throw new SddScriptError("usage: worktree check --l2 --tracks <json> — expected a JSON array of {worktreePath, workingBranch}", 2);
-          const tracks: WorktreeTrack[] = [];
-          for (const item of parsed) {
-            if (item === null || typeof item !== "object" || !("worktreePath" in item) || typeof item.worktreePath !== "string" || !("workingBranch" in item) || typeof item.workingBranch !== "string") {
-              throw new SddScriptError("usage: worktree check --l2 --tracks <json> — every track needs string worktreePath + workingBranch", 2);
-            }
-            tracks.push({ worktreePath: item.worktreePath, workingBranch: item.workingBranch });
+          // Tracks travel as an opaque value in `input` (the placeholder lets
+          // the CLI keep the raw JSON string and MCP publish the composed
+          // object-array contract); the shared payload descriptor is the single
+          // validator before the gate, mapped to usage/2 with indexed paths.
+          if (input.tracks === undefined) throw new SddScriptError("usage: worktree check --l2 --tracks <json>", 2);
+          const parsed = tracksSchema.safeParse(input.tracks);
+          if (!parsed.success) {
+            const detail = parsed.error.issues
+              .map((issue) => {
+                const parts = issue.path.map(String);
+                return parts.length === 0 ? "tracks" : `tracks[${parts[0]}].${parts.slice(1).join(".")}`;
+              })
+              .join(", ");
+            throw new SddScriptError(`usage: worktree check --l2 --tracks <json> — every track needs string worktreePath + workingBranch (${detail})`, 2);
           }
-          const gate = l2PreDispatchCheck({ tracks });
+          const gate = l2PreDispatchCheck({ tracks: parsed.data });
           return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "worktree.l2.invalid");
         }
         const plan = input.plan ?? input.planId;
@@ -392,6 +398,9 @@ const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: st
 function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unknown> {
   const id = verb;
   const item = contract[verb];
-  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, execute: (input, context) => execute(id, input, context) };
+  const payloads: Record<string, PayloadDescriptor> | undefined = verb === "worktree.check"
+    ? { tracks: { schema: tracksSchema, help: "JSON array of {worktreePath, workingBranch}; the CLI passes the JSON string, MCP passes the object array" } }
+    : undefined;
+  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, ...(payloads === undefined ? {} : { payloads }), execute: (input, context) => execute(id, input, context) };
 }
 export function getValidationCommandDefinitions(): readonly CommandDefinition[] { return verbs.map(definition); }
