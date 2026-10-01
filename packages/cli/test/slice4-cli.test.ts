@@ -12,16 +12,25 @@
  * subprocess against /tmp fixtures and asserts exit code + reported codes.
  */
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import {
+  initializeStore,
+  openStore,
+  readJson,
+  scaffoldAuditPlan,
+  validateAuditStatusBlocks,
+} from "@mstar-harness/engine";
 import { CLI_ROOT, runCli, withTempDir } from "./harness";
 import {
   cliEnvelope,
   lintResults,
   lintViolationCodes,
   violationCodes,
+  type RunResult,
 } from "./support/cli-assertions";
 import {
   DESIGN_LEVEL1,
