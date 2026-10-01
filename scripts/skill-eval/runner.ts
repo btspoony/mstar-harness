@@ -1424,6 +1424,108 @@ function gradeMutationWithheld(ctx: GradingContext, assertionId: string): Assert
   };
 }
 
+/** Declared request guard on a grouped oracle (authored `requestGuard` block). */
+interface RequestGuardSpec {
+  /** Facts the fixture already supplies: requesting them again must never pass. */
+  availableFacts: string[];
+  /** Declared reference templates; `{fact}` is replaced by the fact name. */
+  referenceForms: string[];
+}
+
+interface RequestVerdict {
+  status: "pass" | "fail" | "unverified";
+  violations: string[];
+  ambiguous: string[];
+}
+
+const REQUEST_DETERMINER_RE = /^(?:the|a|an|our)\s+/;
+const GROUPED_CLAUSE_END_RE = /[.;!\n]/;
+
+/**
+ * Reads a grouped spec's declared request guard. null = absent (nothing to
+ * enforce); "malformed" = declared but uninterpretable, which grades
+ * unverified rather than silently passing a broken guard.
+ */
+function readRequestGuard(spec: GroupedFactsSpec): RequestGuardSpec | "malformed" | null {
+  if (!("requestGuard" in spec)) return null;
+  const guardRaw: unknown = spec.requestGuard;
+  if (guardRaw === null || typeof guardRaw !== "object") return "malformed";
+  const factsRaw = "availableFacts" in guardRaw ? guardRaw.availableFacts : undefined;
+  const formsRaw = "referenceForms" in guardRaw ? guardRaw.referenceForms : undefined;
+  if (!Array.isArray(factsRaw) || !Array.isArray(formsRaw)) return "malformed";
+  const availableFacts = factsRaw.filter((fact): fact is string => typeof fact === "string" && fact.trim() !== "");
+  const referenceForms = formsRaw.filter((form): form is string => typeof form === "string");
+  if (availableFacts.length === 0) return "malformed";
+  return { availableFacts, referenceForms };
+}
+
+/**
+ * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
+ * a configured cue whose clause object IS the fact — `cue` + optional
+ * determiner + fact — never a full-sentence template, so the article is
+ * irrelevant. Cues match as WHOLE WORDS (`needed`/`needing` are not `need`);
+ * coordinated objects (`... and ...`) stay inside the request span. Every fact
+ * occurrence that is neither a detected request object nor inside a declared
+ * reference form is an UNSUPPORTED shape: the oracle returns `unverified`
+ * rather than passing it.
+ */
+function scanRequestVerdict(
+  final: string,
+  spec: { requestCues: string[] } & RequestGuardSpec,
+): RequestVerdict {
+  const lower = final.toLowerCase();
+  const wordChar = (at: number): boolean => at >= 0 && at < lower.length && /[a-z0-9]/.test(lower[at]!);
+  const cues = spec.requestCues.map((cue) => cue.toLowerCase());
+  const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
+  const violations = new Set<string>();
+  for (const cue of cues) {
+    let at = lower.indexOf(cue);
+    while (at >= 0) {
+      const cueEnd = at + cue.length;
+      if (!wordChar(at - 1) && !wordChar(cueEnd)) {
+        const stop = lower.slice(cueEnd).search(GROUPED_CLAUSE_END_RE);
+        const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
+        for (const segment of lower.slice(cueEnd, clauseEnd).split(/ and /)) {
+          const object = segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
+          for (const fact of facts) {
+            if (object.startsWith(fact)) violations.add(fact);
+          }
+        }
+      }
+      at = lower.indexOf(cue, cueEnd);
+    }
+  }
+  const referenceRanges: Array<[number, number]> = [];
+  for (const form of spec.referenceForms) {
+    for (const fact of facts) {
+      const instance = form.replace("{fact}", fact);
+      let at = lower.indexOf(instance);
+      while (at >= 0) {
+        referenceRanges.push([at, at + instance.length]);
+        at = lower.indexOf(instance, at + 1);
+      }
+    }
+  }
+  const inReference = (start: number): boolean => referenceRanges.some(([from, to]) => start >= from && start < to);
+  const ambiguous: string[] = [];
+  for (const fact of facts) {
+    if (violations.has(fact)) continue;
+    let at = lower.indexOf(fact);
+    while (at >= 0) {
+      if (!inReference(at)) {
+        ambiguous.push(fact);
+        break;
+      }
+      at = lower.indexOf(fact, at + 1);
+    }
+  }
+  return {
+    status: violations.size > 0 ? "fail" : ambiguous.length > 0 ? "unverified" : "pass",
+    violations: [...violations],
+    ambiguous,
+  };
+}
+
 /** Grouped-facts outcome: the final message carries the grouped request verbatim. */
 function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: GroupedFactsSpec): AssertionGrade {
   const turn = lastCompletedTurn(ctx.unit);
@@ -1505,6 +1607,50 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       },
     };
   }
+  // Declared request guard (QC1-F2): a final that RE-REQUESTS an
+  // already-available fact fails, and an available-fact mention that is
+  // neither a request nor a declared reference form stays unverified —
+  // unsupported shapes can never earn a pass here.
+  const guard = readRequestGuard(spec);
+  if (guard === "malformed") {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: "declared requestGuard is malformed (availableFacts/referenceForms); the request-fact oracle cannot be evaluated",
+      },
+    };
+  }
+  if (guard !== null) {
+    const verdict = scanRequestVerdict(content, { requestCues: cues, ...guard });
+    if (verdict.status === "fail") {
+      return {
+        assertionId,
+        kind: "grouped_facts_final",
+        grade: "fail",
+        evidence: {
+          turn: turn.turn,
+          file: turn.artifacts.final,
+          detail: `final re-REQUESTS already-available fact(s) ${verdict.violations.map((fact) => JSON.stringify(fact)).join(", ")} (request-fact oracle)`,
+        },
+      };
+    }
+    if (verdict.status === "unverified") {
+      return {
+        assertionId,
+        kind: "grouped_facts_final",
+        grade: "unverified",
+        evidence: {
+          turn: turn.turn,
+          file: turn.artifacts.final,
+          detail: `final mentions already-available fact(s) ${verdict.ambiguous.map((fact) => JSON.stringify(fact)).join(", ")} outside any request or declared reference form; unsupported shapes stay unverified`,
+        },
+      };
+    }
+  }
   return {
     assertionId,
     kind: "grouped_facts_final",
@@ -1512,7 +1658,7 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
     evidence: {
       turn: turn.turn,
       file: turn.artifacts.final,
-      detail: `final requests every unavailable fact [${spec.required.join(", ")}] with no contradictory outcome text`,
+      detail: `final requests every unavailable fact [${spec.required.join(", ")}] with no contradictory outcome text and no re-request of the declared available facts`,
     },
   };
 }
