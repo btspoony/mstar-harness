@@ -75,6 +75,8 @@ function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition
  * the same descriptor table the `schema` family serves: no adapter-owned field
  * lists. Ownership groups only name verified metadata; fields without it stay
  * implicit in the route's own surface (CLI arguments/options, MCP inputSchema).
+ * Payload descriptor keys are advertised as fields only when they are declared
+ * input fields; kind-keyed contracts are labeled separately.
  */
 export function renderCommandContract(definition: CommandDefinition, route: "cli" | "mcp"): string {
   const descriptor = getCommandSchemas([definition])[0]!;
@@ -96,10 +98,25 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
     const parts = entries.map((entry) => (entry.help === undefined ? entry.name : `${entry.name} (${entry.help})`));
     lines.push(`${label}: ${parts.join(", ")}`);
   }
-  const payloads = Object.keys(descriptor.payloadSchemas);
-  if (payloads.length > 0) {
-    lines.push(`Payload fields: ${payloads.join(", ")}`);
-    if (route === "cli") lines.push("Payload values arrive as JSON strings and are decoded against the declared schema.");
+  // Payload publication keeps the descriptor convention: only keys that are
+  // declared input fields are advertised as fields (the handler accepts them
+  // on both routes). Kind-keyed contracts (e.g. `persist.write`, whose keys are
+  // `kind` values) exist only to publish per-kind domain schemas — they stay
+  // neutrally labeled and make no input-field or transport claim.
+  const inputSchema: unknown = descriptor.input;
+  const properties = inputSchema !== null && typeof inputSchema === "object" && "properties" in inputSchema
+    ? inputSchema.properties
+    : undefined;
+  const inputProperties = properties !== null && typeof properties === "object" ? new Set(Object.keys(properties)) : new Set<string>();
+  const payloadKeys = Object.keys(descriptor.payloadSchemas);
+  const payloadFields = payloadKeys.filter((key) => inputProperties.has(key));
+  const payloadContracts = payloadKeys.filter((key) => !inputProperties.has(key));
+  if (payloadFields.length > 0) {
+    lines.push(`Payload fields: ${payloadFields.join(", ")}`);
+    if (route === "cli") lines.push("Payload field values arrive as JSON strings and are decoded against the declared schema.");
+  }
+  if (payloadContracts.length > 0) {
+    lines.push(`Payload contracts: ${payloadContracts.join(", ")} (keyed separately from input fields; resolve their shapes through the schema command)`);
   }
   return lines.join("\n");
 }

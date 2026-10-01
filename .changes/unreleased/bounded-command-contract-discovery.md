@@ -1,6 +1,6 @@
 ---
 category: Changed
-packages: commands
+packages: commands, cli
 ---
 
 - **Bounded command contract discovery.** `mstar schema` now resolves one bounded selector: an exact command id returns the full leaf contract (description, effects, CLI syntax, caller/derived requirement ownership, input and payload JSON schemas), `--family <name>` returns a compact id+description list, and the issue-payload query keeps its published shape. Unknown or colliding selectors are refused with the grouped valid selectors instead of dumping nested schemas; CLI leaf help and MCP tool descriptions render the same descriptor table.

@@ -9,7 +9,7 @@ import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mcpToolInputSchema } from "../src/mcp/register";
-import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
+import { mapParserError, registerCliCommands, renderCommandContract, usageEnvelope } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 const census = [
@@ -289,6 +289,28 @@ describe("generated CLI adapter", () => {
     expect(envelope).toMatchObject({ version: 1, command: "schema", status: "ok", exitCode: 0 });
     expect(envelope.data.type).toBe("CaptureInput");
     expect(envelope.data.fields.some((field: { name: string }) => field.name === "title")).toBe(true);
+  });
+
+  test("published descriptions label only declared input fields as payloads", () => {
+    const persist = getCommandDefinitions().find((definition) => definition.id === "persist.write");
+    const worktree = getCommandDefinitions().find((definition) => definition.id === "worktree.check");
+    if (persist === undefined || worktree === undefined) throw new Error("canonical definitions missing");
+
+    const persistCli = renderCommandContract(persist, "cli");
+    expect(persistCli).toContain("Payload contracts: status, snapshot, review, json");
+    expect(persistCli).not.toContain("Payload fields:");
+    expect(persistCli).not.toContain("decoded against the declared schema");
+
+    const persistMcp = renderCommandContract(persist, "mcp");
+    expect(persistMcp).toContain("Payload contracts:");
+    expect(persistMcp).not.toContain("Payload fields:");
+
+    const worktreeCli = renderCommandContract(worktree, "cli");
+    expect(worktreeCli).toContain("Payload fields: tracks");
+    expect(worktreeCli).toContain("Payload field values arrive as JSON strings and are decoded against the declared schema.");
+    const worktreeMcp = renderCommandContract(worktree, "mcp");
+    expect(worktreeMcp).toContain("Payload fields: tracks");
+    expect(worktreeMcp).not.toContain("arrive as JSON strings");
   });
 
   test("host detect is a real read", async () => {
