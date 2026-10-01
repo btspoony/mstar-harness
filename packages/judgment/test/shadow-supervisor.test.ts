@@ -120,6 +120,9 @@ describe("trusted shadow supervisor", () => {
   });
 
   test("one controlled mailbox request yields one valid lifecycle; duplicate worker events remain invalid", async () => {
+    // The worker polls for 6s (1200 x 5ms) and the child budget is the pilot's 10s ceiling:
+    // a loaded CI runner needs >1s from status write to worker read (observed 1115ms), so the
+    // original 1s poll budget and 2s child cap raced the supervisor instead of the mailbox.
     const worker = `
       import { randomUUID } from "node:crypto";
       import { writeFileSync, readFileSync } from "node:fs";
@@ -130,13 +133,13 @@ describe("trusted shadow supervisor", () => {
       writeFileSync(join(process.env.JEV_REQUESTS_DIR,id+".json"),JSON.stringify({schema:"mstar.judgment-request/v1",requestId:id,runId,packBytes:process.env.JEV_PACK_BYTES,pilotDigest:process.env.JEV_PILOT_DIGEST}));
       emit("request");
       // Integration worker polls the real file mailbox; fake timers cannot advance the supervisor process.
-      for(let i=0;i<200;i++){const {promise,resolve}=Promise.withResolvers();setTimeout(resolve,5);await promise;const s=JSON.parse(readFileSync(join(process.env.JEV_REQUESTS_DIR,"..","status.json"),"utf8"));if(s.requestId===id&&s.status==="recorded"){emit("complete");process.exit(0)}}
+      for(let i=0;i<1200;i++){const {promise,resolve}=Promise.withResolvers();setTimeout(resolve,5);await promise;const s=JSON.parse(readFileSync(join(process.env.JEV_REQUESTS_DIR,"..","status.json"),"utf8"));if(s.requestId===id&&s.status==="recorded"){emit("complete");process.exit(0)}}
       process.exit(3);
     `;
     const fixture = inputs(workspace(), worker);
     writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({
       schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "synthetic-offline",
-      pack: fixture.pack, pilot: fixture.pilot, child: fixture.child, mountPlan: fixture.mountPlan,
+      pack: fixture.pack, pilot: fixture.pilot, child: { ...fixture.child, maxElapsedMs: 10_000 }, mountPlan: fixture.mountPlan,
       baseline: fixture.baseline, controlledExercise: { schema: "mstar.shadow-controlled-exercise/v1", outcome: "same_cause" },
     }));
     expect(await runShadowCommand(["exercise", "--root", fixture.root])).toBe(0);
@@ -156,7 +159,7 @@ describe("trusted shadow supervisor", () => {
       requiredUnitIds: ["unit-1"], originalConsumption: fixture.baseline.originalConsumption,
       originalSeatOutputs: fixture.baseline.seatOutputs,
     }).failures).toContain("probe-lifecycle-invalid");
-  });
+  }, 15_000);
 
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());
