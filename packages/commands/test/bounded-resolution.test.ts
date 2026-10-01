@@ -11,12 +11,14 @@
  *
  * Accounting rule (one instruction = one budget): every causally attributable
  * model-visible call counts — reads, help, schema queries, failed attempts.
- * Batch envelope count alone is never the metric. Safety refusals are valid
- * results and must not be bypassed; a bypassed safety refusal fails the
+ * Batch envelope count alone is never the metric. Controlled precondition
+ * calls (fixture setup) are itemized per interaction in `setup`, outside the
+ * instruction budget — visible accounting, not hidden calls. Safety refusals
+ * are valid results and must not be bypassed; a bypassed safety refusal fails
  * interaction. A partial-application failure is a different shape: its
  * envelope is a refusal, the partially changed state must be accounted
- * truthfully (receipt matches disk), and it must never be reported as
- * completion until a replay finishes the instruction.
+ * truthfully from observable persisted state, and it must never be reported
+ * as completion until a replay finishes the instruction.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -45,6 +47,8 @@ type Interaction = {
   /** Extra dependency named when the interaction exceeds the call bound. */
   extraDependency: string;
   calls: CountedCall[];
+  /** Controlled precondition calls (fixture setup) — itemized, not instruction progress. */
+  setup?: CountedCall[];
 };
 
 type Verdict = {
@@ -106,11 +110,27 @@ async function countedCall(
   return envelope;
 }
 
+/**
+ * Executes one controlled precondition call (fixture state, not instruction
+ * progress). Itemized in `interaction.setup` — visible, but outside the
+ * audited instruction budget per the controlled-setup rule.
+ */
+async function setupCall(
+  interaction: Interaction,
+  command: string,
+  input: unknown,
+  context: InvocationContext,
+): Promise<CommandEnvelope> {
+  const envelope = await executeCommand(command, input, context);
+  (interaction.setup ??= []).push({ command, kind: "execute", status: envelope.status });
+  return envelope;
+}
+
 // ---------------------------------------------------------------------------
 // Scenario ledger (instruction x route dispositions)
 // ---------------------------------------------------------------------------
 
-type WitnessVerdict = "resolved" | "grouped-missing-facts" | "safety-refusal" | "partial-receipt-then-resolved";
+type WitnessVerdict = "resolved" | "grouped-missing-facts" | "safety-refusal" | "partial-application-then-resolved";
 
 type LedgerEntry =
   | { route: string; disposition: "witnessed"; witness: string; context: "cold" | "warm"; countedCalls: number; verdict: WitnessVerdict }
@@ -184,12 +204,12 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "workflow.execution-policy": unverified("set workflow execution policy", "requires coordinator session authority; no in-package fixture"),
   "workflow.integration-worktree": unverified("configure the integration worktree", "requires coordinator session authority; no in-package fixture"),
   // issue family
-  "issue.add": witnessed("malformed payload is refused with the exact missing contract fields; a valid capture receipts the created issue", "issue-capture", "warm", 2, "grouped-missing-facts"),
-  "issue.list": witnessed("store page read reflects captured issues", "issue-list", "warm", 1, "resolved"),
-  "issue.show": witnessed("bound identity reads back; unknown identity refuses truthfully", "issue-identity", "warm", 2, "grouped-missing-facts"),
+  "issue.add": witnessed("malformed capture is refused with the exact missing contract fields; the listing leg verifies nothing was created", "issue-capture (malformed refusal + no-mutation listing leg, 2 calls)", "warm", 2, "grouped-missing-facts"),
+  "issue.list": witnessed("a single store page read reflects the controlled setup capture", "issue-list (1 call after a controlled setup capture)", "warm", 1, "resolved"),
+  "issue.show": witnessed("bound identity reads back; unknown identity refuses truthfully", "issue-identity (2 instruction calls after a controlled setup capture)", "warm", 2, "grouped-missing-facts"),
   "issue.occurrence": unverified("append an occurrence under mutation scope", "mutation scope and authorization matrix not exercised in this baseline suite"),
-  "issue.triage": witnessed("privileged revision tokens: current explicit token with a bound session accepted; stale or missing explicit token refused without state change", "issue-cas (success leg 2 calls; refusal legs 3 calls)", "warm", 3, "safety-refusal"),
-  "issue.close": witnessed("unauthorized terminal disposition is refused and issue state survives", "issue-disposition-guard", "warm", 1, "safety-refusal"),
+  "issue.triage": witnessed("privileged revision tokens: current explicit token with a bound session accepted; stale or missing explicit token refused without state change", "issue-cas (success leg 1 call after a controlled setup capture; refusal legs 3 calls)", "warm", 3, "safety-refusal"),
+  "issue.close": witnessed("unauthorized terminal disposition is refused and the readback leg verifies issue state survives", "issue-disposition-guard (refused close + readback, 2 calls, after a controlled setup capture)", "warm", 2, "safety-refusal"),
   "issue.waive": unverified("waive an issue", "terminal disposition authorization matrix not exercised in this baseline suite"),
   "issue.duplicate": unverified("mark an issue duplicate", "terminal disposition authorization matrix not exercised in this baseline suite"),
   "issue.supersede": unverified("supersede an issue", "terminal disposition authorization matrix not exercised in this baseline suite"),
@@ -218,7 +238,7 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   // store family
   "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.upgrade witness"),
   "store.migrate": unverified("stage a legacy migration", "requires manifests, coverage sets and recovery receipts; deferred to the versioned scenario set"),
-  "store.upgrade": witnessed("partial-applied receipt after a retirement failure; replay resumes to completion within budget", "partial-receipt-replay", "warm", 2, "partial-receipt-then-resolved"),
+  "store.upgrade": witnessed("a retirement failure refuses with a generic envelope that exposes no partial-applied facts; persisted state alone evidences the partial application; replay completes within budget", "partial-application-replay (2 calls; envelope-to-partial-state agreement unverified — asserted not exposed)", "warm", 2, "partial-application-then-resolved"),
   "store.backup": unverified("back up the store", "requires an initialized store fixture; deferred to the versioned scenario set"),
   "store.activate": unverified("activate store authority", "requires staged authority state; no in-package fixture"),
   "store.retire": unverified("retire store sources", "requires staged authority state; no in-package fixture"),
@@ -654,7 +674,8 @@ describe("issue family witnesses", () => {
     const { context } = await issueStoreContext();
     const interaction: Interaction = { label: "identity resolution", context: "warm", extraDependency: "", calls: [] };
 
-    const added = await countedCall(interaction, "execute", "issue.add", { payload: capturePayload(), operationId: "op-capture", actor: "project-manager" }, context);
+    // Controlled setup: create the bound identity the instruction reads.
+    const added = await setupCall(interaction, "issue.add", { payload: capturePayload(), operationId: "op-capture", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
     const capture = added.data as { issueId: string }; // capture receipt shape (captureIssue)
@@ -674,20 +695,22 @@ describe("issue family witnesses", () => {
     const { harness, context } = await issueStoreContext();
     const sessionPath = bindSession(harness);
 
-    // Success leg: capture (1) then triage with the current explicit revision
-    // and the bound session (2).
+    // Controlled setup: create the issue the token legs mutate.
     const success: Interaction = { label: "token threading", context: "warm", extraDependency: "", calls: [] };
-    const added = await countedCall(success, "execute", "issue.add", { payload: capturePayload(), operationId: "op-cas", actor: "project-manager" }, context);
+    const added = await setupCall(success, "issue.add", { payload: capturePayload(), operationId: "op-cas", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
     const receipt = added.data as { issueId: string; revision: number }; // capture receipt shape (captureIssue)
+
+    // Success leg: the instruction call itself — triage with the current
+    // explicit revision and the bound session (1 counted call).
     const accepted = await countedCall(success, "execute", "issue.triage", { id: receipt.issueId, payload: { reason: "reclassify", severity: "low" }, operationId: "op-current", actor: "project-manager", session: sessionPath, expect: receipt.revision }, context);
     expect(accepted.status).toBe("ok");
     expect(audit(success, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
-      .toMatchObject({ compliant: true, countedCalls: 2 });
+      .toMatchObject({ compliant: true, countedCalls: 1 });
 
     // Refusal legs: missing explicit revision and stale explicit revision both
-    // refuse; the issue keeps the triaged revision from the success leg.
+    // refuse; the readback leg verifies the issue keeps the triaged revision.
     const refusals: Interaction = { label: "revision refusals", context: "warm", extraDependency: "", calls: [] };
     const derivedAttempt = await countedCall(refusals, "execute", "issue.triage", { id: receipt.issueId, payload: { reason: "reclassify", severity: "critical" }, operationId: "op-derived", actor: "project-manager", session: sessionPath }, context);
     expect(derivedAttempt).toMatchObject({ status: "refused", code: "issue.revision-conflict", exitCode: 1 });
@@ -719,10 +742,11 @@ describe("issue family witnesses", () => {
     const { context } = await issueStoreContext();
     const interaction: Interaction = { label: "disposition guard", context: "warm", extraDependency: "", calls: [] };
 
-    const added = await countedCall(interaction, "execute", "issue.add", { payload: capturePayload(), operationId: "op-guard", actor: "project-manager" }, context);
+    // Controlled setup: create the issue the guard instruction targets.
+    const added = await setupCall(interaction, "issue.add", { payload: capturePayload(), operationId: "op-guard", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
-    const receipt = added.data as { issueId: string; revision: number };
+    const receipt = added.data as { issueId: string; revision: number }; // capture receipt shape (captureIssue)
 
     const closed = await countedCall(interaction, "execute", "issue.close", {
       id: receipt.issueId, payload: { reason: "done", references: ["qa.md"], alignmentRef: "QA approved" },
@@ -734,7 +758,26 @@ describe("issue family witnesses", () => {
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ revision: receipt.revision, disposition: "open" });
 
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 3 });
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 2 });
+  });
+
+  test("a single listing call reflects the captured issue", async () => {
+    const { context } = await issueStoreContext();
+    const interaction: Interaction = { label: "issue listing", context: "warm", extraDependency: "", calls: [] };
+
+    // Controlled setup: create the issue the listing instruction reads.
+    const added = await setupCall(interaction, "issue.add", { payload: capturePayload(), operationId: "op-list-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    const seed = added.data as { issueId: string }; // capture receipt shape (captureIssue)
+
+    const listed = await countedCall(interaction, "execute", "issue.list", {}, context);
+    expect(listed.status).toBe("ok");
+    if (listed.status === "ok") {
+      const page = listed.data as { items: Array<{ id: string }> }; // listing page shape (listIssues)
+      expect(page.items.map((item) => item.id)).toContain(seed.issueId);
+    }
+
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 1 });
   });
 });
 
@@ -810,11 +853,16 @@ describe("store.upgrade partial-receipt witness", () => {
     };
 
     // Call 1 fails at the induced retirement stage — after the activation has
-    // committed and the legacy files were renamed away. The envelope is a
-    // refusal, not a completion receipt.
+    // committed and the legacy files were renamed away. The envelope is the
+    // generic upgrade-blocked refusal and carries NO partial-applied facts.
     useEnv({ MSTAR_STORE_TEST_RUNNER: "1", MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "after-rename" });
     const first = await countedCall(interaction, "execute", "store.upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
-    expect(first).toMatchObject({ status: "refused", exitCode: 1 });
+    expect(first).toMatchObject({ status: "refused", code: "store.upgrade-blocked", exitCode: 1 });
+    // Surface limitation, asserted: the first envelope exposes no receipt or
+    // diagnostic of what applied, so envelope-to-partial-state agreement is
+    // unverifiable — the persisted state below is the only partial evidence,
+    // and the refusal itself proves non-completion.
+    expect(first.details).toBeUndefined();
     delete process.env.MSTAR_STORE_FAIL_EXECUTION_RETIREMENT;
 
     // The on-disk state is partially applied: the archive exists and the
@@ -846,6 +894,9 @@ describe("store.upgrade partial-receipt witness", () => {
     }
 
     // Two counted calls; the instruction completed only after the replay.
+    // receiptsMatchStore is grounded ONLY in the replay receipt above
+    // (sourcesRetired + retired phase + status.json gone) — the first
+    // envelope exposes no receipt to compare against the partial state.
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
       .toMatchObject({ compliant: true, countedCalls: 2 });
   });
