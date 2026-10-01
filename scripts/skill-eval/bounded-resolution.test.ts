@@ -303,7 +303,7 @@ const GROUPED_FINALS: Record<string, string> = {
   "bounded-res-issue-close-ungrouped": "AUTHORIZATION-REQUIRED: need authorization for the close disposition",
   "bounded-res-negative-four-lookups": "AUTHORIZATION-REQUIRED: need the CaptureInput contract before any capture",
   "bounded-res-incomplete-evidence": "AUTHORIZATION-REQUIRED: need the CaptureInput contract before any capture",
-  "bounded-res-lease-boundary": "AUTHORIZATION-REQUIRED: need authorization for the execution lease boundary held by the holder session-foreign-fixture",
+  "bounded-res-lease-boundary": "AUTHORIZATION-REQUIRED: need authorization before acting on the execution lease held by the holder session-foreign-fixture",
   "bounded-res-slash-iteration-cold": "AUTHORIZATION-REQUIRED: need the workflow id and control root to start the iteration",
   "bounded-res-slash-review-cold": "AUTHORIZATION-REQUIRED: need the seat registry and review target to open the review",
 };
@@ -489,6 +489,17 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     expect(dispositions["issue.waive"]?.excluded).toContain("no concrete waive input/outcome pair");
     expect(dispositions["persist.write"]?.scenario).toBe("bounded-res-write-stale-constraint");
     expect(dispositions["issue.close"]?.scenario).toBe("bounded-res-issue-close-ungrouped");
+  });
+
+  test("a grouped request that re-asks for a fact the fixture already provides is rejected", () => {
+    const candidate = cloneManifest();
+    const lease = candidate.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
+    const grouped = lease.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    // The fixture supplies the holder, so requesting it is asking again for an
+    // available fact — the oracle must not reward that.
+    (grouped.value as { required: string[] }).required = ["session-foreign-fixture"];
+    const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
+    expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("asks again for an already available fact"))).toBe(true);
   });
 
   test("a live definition with no disposition is rejected", () => {
