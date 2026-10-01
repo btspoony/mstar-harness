@@ -31,4 +31,4 @@ Expanded path redaction to common Unix/macOS/Windows locations and redacts inter
 - Attempted unreadable fixture test selection: `bun test test/execution-migrate.test.ts -t 'unreadable live store'` (from `packages/cli`): zero tests matched; no empirical reproduction completed.
 - Primary checkout safety before/after writes: `git -C /Users/bibi/workspace/ai/mstar-harness status --short` empty; branch `main`.
 
-Commit SHA: pending.
+Commit SHA: `f0345c22`.
