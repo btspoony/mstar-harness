@@ -299,9 +299,11 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     // The already-prepared row keeps its own pin: a re-prepare of that row is
     // answered from the seal it already holds (already-satisfied, no write),
     // so the move cannot be applied retroactively.
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
     const again = await preparePlan(fixture, PLAN_ID);
     expect(again.outcome).toBe("already-satisfied");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
     expect(view.catalog_pin?.catalog_moved).toBe(true);
