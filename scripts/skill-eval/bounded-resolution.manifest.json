@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "3784d5d65534c72af84dd4f1b4d6d8a01c6e754005db54d82ce1d1837ffdfee7",
+  "casesHash": "2def4735abe4a3ecc1dd8febde2d3324872e8c37f0b52353b7eb7206fe797bd3",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -85,6 +85,18 @@
           "note": "the expected outcome is read from the contract fixture, whose required list has 15 entries"
         },
         {
+          "id": "a-schema-fields",
+          "kind": "final_contains",
+          "value": "projectId, title, kind, severity, impact, acceptance, sourceIdentity, rootCauseKey, acceptanceKey, occurrenceKey, sourceKind, location, observedBehavior, evidence, discoveredAt",
+          "note": "the exact required field names from the contract fixture — a field count alone proves no schema result"
+        },
+        {
+          "id": "a-issue-document",
+          "kind": "final_contains",
+          "value": "issueId I-000001 revision 1",
+          "note": "the stored issue document's actual values — mentioning the read proves no document result"
+        },
+        {
           "id": "a-not-outcome",
           "kind": "final_not_contains",
           "value": "outcome: unresolved",
@@ -103,7 +115,7 @@
         "context": "warm",
         "evidence": "contract already published; no discovery call needed"
       },
-      "integrityHash": "99b38fb5d07c5941799a73253102298bc04708a8f03eaf38c2d29d57bb202a75"
+      "integrityHash": "e37a36a93cd5e3363677409d030fd781a730a49e08a768eea3096cc8a80618a7"
     },
     {
       "id": "bounded-res-write-stale-constraint",
@@ -283,6 +295,12 @@
           "kind": "final_not_contains",
           "value": "provide the issue identity I-000001",
           "note": "the identity is already supplied: naming it in the refusal is expected, requesting it again is not"
+        },
+        {
+          "id": "a-not-identity-need-request",
+          "kind": "final_not_contains",
+          "value": "need the issue identity I-000001",
+          "note": "the identity is already supplied: the configured need cue must not re-request it either"
         }
       ],
       "provenance": {
@@ -297,7 +315,7 @@
         "context": "warm",
         "evidence": "issue identity supplied by the instruction"
       },
-      "integrityHash": "e326ecfac20fb11acf759bce1b4dbe0ea6a161b6bed3c2b089d6a76654d62103"
+      "integrityHash": "c4d05a109af4b636ff75be7c5660aef4b5b52db993540e9fca84cdaf75d30998"
     },
     {
       "id": "bounded-res-negative-four-lookups",
@@ -591,14 +609,26 @@
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "outcome: replay completed partial upgrade (phase retired)",
-          "note": "the receipt must show the completed replay"
+          "value": "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)",
+          "note": "the replay binds the receipt's actual recorded state, not a wished-for one"
+        },
+        {
+          "id": "a-next-action",
+          "kind": "final_contains",
+          "value": "next: apply the sources phase, then retire",
+          "note": "a concrete executable next-action contract: resolution, not a claimed completed mutation"
         },
         {
           "id": "a-not-outcome",
           "kind": "final_not_contains",
           "value": "outcome: upgrade started fresh",
           "note": "a fresh start is not a replay of the partial receipt"
+        },
+        {
+          "id": "a-not-retired-claim",
+          "kind": "final_not_contains",
+          "value": "phase retired",
+          "note": "a retired/completed claim in a no-write trace is a false completion claim, never the withheld replay's result"
         }
       ],
       "provenance": {
@@ -613,7 +643,7 @@
         "context": "warm",
         "evidence": "partial receipt present before the instruction"
       },
-      "integrityHash": "2c7d9825fe7950e0fd11a5e4f333edc2d5f457914abb3d661b042a2323467b85"
+      "integrityHash": "a1204d55c0d1c96a4d9bb14d35e370b14f31aff53719fd5a9a891b8fd0485f54"
     },
     {
       "id": "bounded-res-lease-boundary",
@@ -683,6 +713,18 @@
           "kind": "final_not_contains",
           "value": "provide the execution lease boundary",
           "note": "the lease boundary is already available: referencing it is fine, requesting it again is not"
+        },
+        {
+          "id": "a-not-holder-need-request",
+          "kind": "final_not_contains",
+          "value": "need the holder session-foreign-fixture",
+          "note": "the holder is already available: the configured need cue must not re-request it either"
+        },
+        {
+          "id": "a-not-boundary-need-request",
+          "kind": "final_not_contains",
+          "value": "need the execution lease boundary",
+          "note": "the lease boundary is already available: the configured need cue must not re-request it either"
         }
       ],
       "provenance": {
@@ -697,7 +739,7 @@
         "context": "warm",
         "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "a95dc9cef497da50d31f9ff6e49438440205cdad961bc101eb8c639a7bdc49f9"
+      "integrityHash": "36ce3e1886804a37cfd5bfa3c10669053760a6f4d0921fecad7f8bb14446bd1b"
     },
     {
       "id": "bounded-res-slash-iteration-cold",

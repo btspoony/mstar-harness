@@ -77,6 +77,24 @@ const GROUPED_FINAL = "AUTHORIZATION-REQUIRED: provide the target issue id and a
  * (not the grouped oracle) can distinguish this from the legitimate stop.
  */
 const LEASE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; please provide the holder session-foreign-fixture and provide the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+/**
+ * The same re-request spelled with the scenario's OTHER configured request
+ * cue (`need`). The grouped oracle accepts it, the budget stays valid, and
+ * the stop line is intact — only a cue-consistent response guard rejects it.
+ */
+const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need the holder session-foreign-fixture and need the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+/**
+ * The schema/read count sentence alone is kept, but the claimed field list
+ * and document values are WRONG: the behavioral oracle must reject an
+ * outcome sentence whose schema/document results do not match the fixtures.
+ */
+const SCHEMA_WRONG_RESULTS_FINAL = "outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json\nschema CaptureInput requires: projectId, title, kind, severity, impact, acceptance, sourceIdentity, rootCauseKey, acceptanceKey, occurrenceKey, sourceKind, location, observedBehavior, evidence, wrongFieldOne\nissue document store/fixture.json: issueId I-999999 revision 7\n";
+/**
+ * The old false completion claim: a `phase retired` receipt in a trace that
+ * writes nothing. The next-action oracle must reject it as an incompatible
+ * receipt for a withheld replay.
+ */
+const REPLAY_RETIRED_CLAIM_FINAL = "outcome: replay completed partial upgrade (phase retired)\n";
 
 const manifestText = readFileSync(MANIFEST_PATH, "utf8");
 const manifest = JSON.parse(manifestText) as EvalManifest;
@@ -316,7 +334,7 @@ const GROUPED_FINALS: Record<string, string> = {
   "bounded-res-slash-review-cold": "AUTHORIZATION-REQUIRED: need the seat registry and review target to open the review",
 };
 const EXPECTED_OUTCOME: Record<string, string> = {
-  "bounded-res-schema-read": "outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json",
+  "bounded-res-schema-read": `outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json\nschema CaptureInput requires: ${CAPTURE_INPUT_REQUIRED.join(", ")}\nissue document store/fixture.json: issueId I-000001 revision 1`,
   "bounded-res-write-stale-constraint": "outcome: refused stale-version write",
   "bounded-res-adversarial-wrong-action": "outcome: applied stale-version write",
   "bounded-res-issue-close-ungrouped": "outcome: refused close for issue I-000001",
@@ -324,7 +342,7 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-incomplete-evidence": "outcome: captured issue I-000001",
   "bounded-res-bundled-lookups": "outcome: resolved bundled route",
   "bounded-res-retired-route": "outcome: refused retired verb status.archive-residuals",
-  "bounded-res-replay-partial": "outcome: replay completed partial upgrade (phase retired)",
+  "bounded-res-replay-partial": "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)\nnext: apply the sources phase, then retire",
   "bounded-res-lease-boundary": "outcome: stopped at foreign lease holder session-foreign-fixture",
   "bounded-res-slash-iteration-cold": "outcome: requested missing bootstrap facts",
   "bounded-res-slash-review-cold": "outcome: requested missing review facts",
@@ -354,8 +372,23 @@ function scriptFor(caseId: string): { events: string; final: string } {
         final,
       };
     case "bounded-res-schema-read":
+      // The trace observes the REAL fixture reads the outcome claims: the
+      // published contract (its required field list) and the stored issue
+      // document (its values) — not placeholder reads.
+      return {
+        events: turn([
+          invocation("item_1", ["cat", "contract/capture-input.json"]),
+          invocation("item_2", ["cat", "store/fixture.json"]),
+        ]),
+        final,
+      };
     case "bounded-res-slash-iteration-cold":
       return { events: turn([invocation("item_1"), invocation("item_2")]), final };
+    case "bounded-res-replay-partial":
+      // The withheld replay observes the partial RECEIPT it resumes from
+      // (the fixture's recorded phase/pending state); the executable next
+      // actions are asserted in the final and never executed.
+      return { events: turn([invocation("item_1", ["cat", "store/fixture.json"])]), final };
     default:
       return { events: turn([invocation("item_1")]), final };
   }
@@ -402,6 +435,31 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     const contract = JSON.parse(contractFile!.content) as { required: string[] };
     expect(contract.required).toHaveLength(15);
     expect(EXPECTED_OUTCOME["bounded-res-schema-read"]).toContain(`${contract.required.length} required fields`);
+    // The behavioral results are fixture-derived too: the manifest asserts the
+    // EXACT required field names and the stored document's actual values, so a
+    // count sentence with wrong values can never satisfy the oracle.
+    const schemaCase = manifest.cases.find((c) => c.id === "bounded-res-schema-read")!;
+    expect(schemaCase.assertions.find((a) => a.id === "a-schema-fields")!.value).toBe(contract.required.join(", "));
+    const schemaDoc = JSON.parse(fixtureFilesFor("bounded-res-schema-read").find((f) => f.path === "store/fixture.json")!.content) as { issueId: string; revision: number };
+    expect(schemaCase.assertions.find((a) => a.id === "a-issue-document")!.value).toBe(`issueId ${schemaDoc.issueId} revision ${schemaDoc.revision}`);
+    // The replay oracle binds the receipt's recorded state and demands a
+    // concrete next action; a completed/retired claim is guarded against.
+    const replayCase = manifest.cases.find((c) => c.id === "bounded-res-replay-partial")!;
+    const replayDoc = JSON.parse(fixtureFilesFor("bounded-res-replay-partial").find((f) => f.path === "store/fixture.json")!.content) as { phase: string; sourcesPending: boolean };
+    expect(replayDoc).toEqual({ phase: "activated", sourcesPending: true });
+    expect(replayCase.assertions.find((a) => a.id === "a-outcome")!.value).toContain(`receipt phase ${replayDoc.phase} (sources pending)`);
+    expect(replayCase.assertions.find((a) => a.id === "a-next-action")!.kind).toBe("final_contains");
+    expect(EXPECTED_OUTCOME["bounded-res-replay-partial"]).not.toContain("phase retired");
+    // The traces themselves observe the fixture reads the outcomes claim:
+    // the schema/read route reads the contract AND the stored document, the
+    // replay route reads the partial receipt it resumes from — placeholder
+    // `cat AGENTS.md` events cannot back a behavioral result.
+    const schemaScript = scriptFor("bounded-res-schema-read");
+    expect(schemaScript.events).toContain("contract/capture-input.json");
+    expect(schemaScript.events).toContain("store/fixture.json");
+    expect(schemaScript.events).not.toContain("AGENTS.md");
+    const replayScript = scriptFor("bounded-res-replay-partial");
+    expect(replayScript.events).toContain("store/fixture.json");
     // The stale-write scenario's relation is checkable: the prompt carries the
     // supplied token, the fixture carries the recorded current token, and the
     // two differ (that is what makes the supplied token stale).
@@ -514,7 +572,7 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("asks again for an already available fact"))).toBe(true);
   });
 
-  test("grouped stops guard their declared available facts against response-level re-request", () => {
+  test("grouped stops guard their declared available facts against every configured request cue", () => {
     const inputsByScenario = (manifest as EvalManifest & {
       boundedResolution: { inputsByScenario: Record<string, ScenarioInputs> };
     }).boundedResolution.inputsByScenario;
@@ -522,25 +580,51 @@ describe("bounded-resolution scenario set: authored artifact", () => {
       if (!c.assertions.some((a) => a.kind === "grouped_facts_final")) continue;
       const declared = (inputsByScenario[c.id]?.inputs ?? []).join(" ").toLowerCase();
       if (declared === "") continue; // nothing already available to re-request
-      const guardNeedles = c.assertions
+      const grouped = c.assertions.find((a) => a.kind === "grouped_facts_final")!;
+      const groupedSpec = grouped.value as { requestCues?: unknown };
+      const cues = groupedSpec.requestCues;
+      const cueList: string[] = Array.isArray(cues) ? cues.filter((x): x is string => typeof x === "string") : [];
+      expect(cueList.length).toBeGreaterThan(0);
+      const needles = c.assertions
         .filter((a) => a.kind === "final_not_contains")
-        .map((a) => String(a.value).toLowerCase())
-        .filter((needle) => needle.includes("provide"));
-      expect(guardNeedles.length).toBeGreaterThan(0);
+        .map((a) => String(a.value).toLowerCase());
+      expect(needles.length).toBeGreaterThan(0);
       // Every request-shaped needle must name a fact the scenario actually
       // declares available — the guard cannot drift away from the declared
       // inputs or be silently dropped.
-      for (const needle of guardNeedles) {
-        expect(declared).toContain(needle.replace(/^provide the /, ""));
+      const facts = new Set<string>();
+      for (const needle of needles) {
+        const fact = needle.match(/^(?:need|please provide|provide) the (.+)$/)?.[1];
+        if (fact === undefined) continue;
+        facts.add(fact);
+        expect(declared).toContain(fact);
+      }
+      expect(facts.size).toBeGreaterThan(0);
+      // Cue consistency: EVERY configured cue form of every guarded fact
+      // whose needle is not subsumed by another guard must itself be
+      // guarded. A `please provide x` request CONTAINS the string
+      // `provide x`, so a provide needle already rejects it; a `need x`
+      // request contains neither, so it needs its own needle.
+      const maximalCues = cueList.filter((cue) => {
+        const form = `${cue.toLowerCase()} the `;
+        return !cueList.some((other) => other !== cue && form.includes(`${other.toLowerCase()} the `));
+      });
+      for (const cue of maximalCues) {
+        for (const fact of facts) {
+          expect(needles.some((needle) => needle.includes(`${cue.toLowerCase()} the ${fact}`))).toBe(true);
+        }
       }
     }
-    // The review-named lease facts are each covered explicitly.
+    // The review-named lease facts are covered under BOTH non-redundant
+    // configured forms (provide and need).
     const lease = manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
     const leaseNeedles = lease.assertions
       .filter((a) => a.kind === "final_not_contains")
       .map((a) => String(a.value).toLowerCase());
     for (const fact of ["holder session-foreign-fixture", "execution lease boundary"]) {
-      expect(leaseNeedles.some((needle) => needle.includes("provide") && needle.includes(fact))).toBe(true);
+      for (const cue of ["provide", "need"]) {
+        expect(leaseNeedles.some((needle) => needle.includes(`${cue} the ${fact}`))).toBe(true);
+      }
     }
   });
 
@@ -612,22 +696,31 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     // Concrete expected outcomes are observed for the routes that claim them.
     const schemaRead = units.find((u) => u.caseId === "bounded-res-schema-read")!;
     expect(schemaRead.grade).toBe("pass");
-    expect(schemaRead.grading!.assertions.find((a) => a.kind === "final_contains")!.grade).toBe("pass");
+    expect(schemaRead.grading!.assertions.find((a) => a.assertionId === "a-schema-fields")!.grade).toBe("pass");
+    expect(schemaRead.grading!.assertions.find((a) => a.assertionId === "a-issue-document")!.grade).toBe("pass");
     const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
     expect(lease.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
     // The legitimate stop NAMES the available holder/boundary: the response
-    // guards against re-REQUESTING them must stay green there.
+    // guards against re-REQUESTING them (provide AND need forms) must stay
+    // green there.
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-request")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-request")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("pass");
     // The issue-close refusal names the supplied identity: its re-request
-    // guard must stay green there too.
+    // guards must stay green there too.
     const issueClose = units.find((u) => u.caseId === "bounded-res-issue-close-ungrouped")!;
     expect(issueClose.grade).toBe("pass");
     expect(issueClose.grading!.assertions.find((a) => a.assertionId === "a-not-identity-request")!.grade).toBe("pass");
+    expect(issueClose.grading!.assertions.find((a) => a.assertionId === "a-not-identity-need-request")!.grade).toBe("pass");
     const replay = units.find((u) => u.caseId === "bounded-res-replay-partial")!;
     expect(replay.grade).toBe("pass");
-    expect(replay.grading!.assertions.find((a) => a.kind === "final_not_contains")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-next-action")!.grade).toBe("pass");
+    for (const guard of replay.grading!.assertions.filter((a) => a.kind === "final_not_contains")) {
+      expect(guard.grade).toBe("pass");
+    }
 
     // Adversarial twin: the budget is valid and a success marker is present,
     // but the action/receipt is wrong — the outcome oracle must catch it.
@@ -668,6 +761,86 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(holderGuard.grade).toBe("fail");
     expect(holderGuard.evidence.detail).toContain("provide the holder session-foreign-fixture");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-request")!.grade).toBe("fail");
+  });
+
+  test("the need-form re-request of the available holder/boundary fails on the cue-consistent guards too", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-lease-boundary": LEASE_NEED_RE_REQUEST_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
+    // The grouped oracle cannot see the difference: authorization present,
+    // the configured `need` cue present, the required stop line present, and
+    // neither contradicts phrase — the RESPONSE guards must catch it.
+    expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(lease.grade).toBe("fail");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("fail");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("fail");
+  });
+
+  test("a schema/read final keeping the count sentence but with wrong field values or document results fails", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-schema-read": SCHEMA_WRONG_RESULTS_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const schemaRead = units.find((u) => u.caseId === "bounded-res-schema-read")!;
+    // The budget stays valid and the count sentence is present — but the
+    // field list and the document values contradict the fixtures.
+    expect(schemaRead.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(schemaRead.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    expect(schemaRead.grade).toBe("fail");
+    expect(schemaRead.grading!.assertions.find((a) => a.assertionId === "a-schema-fields")!.grade).toBe("fail");
+    expect(schemaRead.grading!.assertions.find((a) => a.assertionId === "a-issue-document")!.grade).toBe("fail");
+  });
+
+  test("a replay final claiming the retired phase fails as an incompatible receipt for a withheld trace", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-replay-partial": REPLAY_RETIRED_CLAIM_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const replay = units.find((u) => u.caseId === "bounded-res-replay-partial")!;
+    // Valid budget, no writes — yet the final claims a completed retired
+    // phase the withheld trace cannot have produced.
+    expect(replay.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(replay.grade).toBe("fail");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("fail");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-not-retired-claim")!.grade).toBe("fail");
   });
 
   test("the report retains noncompliant and unverified dispositions in the denominator", async () => {
