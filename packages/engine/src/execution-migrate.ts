@@ -1265,6 +1265,41 @@ function readDiscoveredWorkflow(input: {
     };
   }
   const coordinator = legacyBinding(snapshotSource.snapshot.coordination?.coordinator);
+  // A plan holding an execution lease whose holder resolves to neither this
+  // workflow's coordinator nor its own plan session has no owner to import.
+  // Detected BEFORE any ownership record is discovered, so the exclusion never
+  // leaves the staged graph expecting this workflow's plans or sessions: the
+  // excluded workflow is archived at apply and named in the manifest.
+  const coordinatorSessionId = coordinator?.session_id ?? null;
+  const rawPlans = Array.isArray(snapshotSource.snapshot.plans)
+    ? (snapshotSource.snapshot.plans as Array<Record<string, unknown>>)
+    : [];
+  const orphanLease = rawPlans.some((row) => {
+    if (row.execution_lease === undefined) return false;
+    const holder = typeof row.execution_lease === "object" && row.execution_lease !== null && "holder" in row.execution_lease
+      ? String((row.execution_lease as Record<string, unknown>).holder)
+      : "";
+    const planSession = legacyBinding(isPlainObject(row.coordination) ? row.coordination.session : undefined);
+    return holder !== coordinatorSessionId && holder !== (planSession?.session_id ?? null);
+  });
+  if (orphanLease) {
+    const scan = scanWorkflowDir(dir, workflowId);
+    for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
+    deferred.push(...scan.deferred);
+    const bytes = readFileSync(snapshotSource.path);
+    return {
+      entry, registered, workflowId, dir, snapshotPath: snapshotSource.path, snapshotSha: snapshotSource.sha256,
+      snapshot: null, coordinator: null, plans: [], envelopes: scan.envelopes,
+      referencedEnvelopes: new Set<string>(), surfaceFiles: scan.surfaceFiles, lockDirs: scan.lockDirs,
+      exclusion: { workflowId, codes: ["workflow.snapshot.orphan-held-lease"], snapshotPath: relative(roots.control, snapshotSource.path), sha256: sha256Of(bytes) },
+      skippedEntries: scan.skipped,
+      diagnostics: [
+        ...snapshotSource.diagnostics,
+        ...scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`),
+        "a plan holds an execution lease whose holder resolves to neither the recorded coordinator nor the plan session; the workflow is excluded and its bytes archived.",
+      ],
+    };
+  }
   if (snapshotSource.snapshot.coordination !== undefined && coordinator === null) {
     throw conflict(`workflow ${workflowId} carries a coordinator block that is not a complete session binding.`);
   }
@@ -1324,46 +1359,6 @@ function readDiscoveredWorkflow(input: {
   for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
   deferred.push(...scan.deferred);
 
-  // A plan holding an execution lease whose holder resolves to neither this
-  // workflow's coordinator nor its own plan session has no owner to import:
-  // the workflow is excluded (its bytes are archived at apply) rather than
-  // staging an orphan claim.
-  const coordinatorSessionId = coordinator?.session_id ?? null;
-  const orphanLease = plans.some((plan) => {
-    if (plan.lease === null) return false;
-    // Mirror `insertExecutionLease` exactly: the holder is compared by exact
-    // equality with the recorded coordinator session id or the plan's own
-    // plan-pm session id. No prefix normalization.
-    const holder = typeof plan.lease.holder === "string" ? plan.lease.holder : "";
-    const planSessionId = plan.session?.session_id ?? null;
-    return holder !== coordinatorSessionId && holder !== planSessionId;
-  });
-  if (orphanLease) {
-    const bytes = readFileSync(snapshotSource.path);
-    const sha256 = sha256Of(bytes);
-    return {
-      entry,
-      registered,
-      workflowId,
-      dir,
-      snapshotPath: snapshotSource.path,
-      snapshotSha: snapshotSource.sha256,
-      snapshot: snapshotSource.snapshot,
-      coordinator,
-      plans,
-      envelopes: scan.envelopes,
-      referencedEnvelopes: new Set(referenced),
-      surfaceFiles: scan.surfaceFiles,
-      lockDirs: scan.lockDirs,
-      exclusion: { workflowId, codes: ["workflow.snapshot.orphan-held-lease"], snapshotPath: relative(roots.control, snapshotSource.path), sha256 },
-      skippedEntries: scan.skipped,
-      diagnostics: [
-        ...snapshotSource.diagnostics,
-        ...scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`),
-        "a plan holds an execution lease whose holder resolves to neither the recorded coordinator nor the plan session; the workflow is excluded and its bytes archived.",
-      ],
-    };
-  }
 
   return {
     entry,
