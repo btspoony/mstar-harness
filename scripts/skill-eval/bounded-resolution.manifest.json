@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "0f0eff14c2466de845adf6b1697055cc25f245238ea868c0f4296120d0be8da1",
+  "casesHash": "291b5436f4594d8f985d03e0680e34be2c86fdc3446247ba30db5de444248531",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -475,7 +475,7 @@
         {
           "id": "a-not-outcome",
           "kind": "final_not_contains",
-          "value": "outcome: unresolved",
+          "value": "outcome: one envelope counts as one lookup",
           "note": "an unresolved route is not this instruction's result"
         }
       ],
@@ -491,7 +491,7 @@
         "context": "warm",
         "evidence": "one envelope bundling four commands"
       },
-      "integrityHash": "e873834e77d91aff7fc7cffa4bdc036d94a4ae7cd057bd7e67100c8c0a274766"
+      "integrityHash": "59605e741c6b93ff715e0d3445f6139f6281f48b64d1db98ee013a327584a74b"
     },
     {
       "id": "bounded-res-retired-route",
@@ -955,7 +955,7 @@
         "excluded": "store-backed route; the schema-read and stale-constraint scenarios represent the read/refusal outcomes"
       },
       "persist.delete": {
-        "scenario": "bounded-res-write-stale-constraint"
+        "excluded": "no concrete delete input/outcome pair authored (the stale-write refusal is a different action); explicit unverified route"
       },
       "migrate": {
         "excluded": "host-environment dependent or destructive corpus route; explicit unverified route"
@@ -1075,7 +1075,7 @@
         "scenario": "bounded-res-issue-close-ungrouped"
       },
       "issue.waive": {
-        "scenario": "bounded-res-issue-close-ungrouped"
+        "excluded": "no concrete waive input/outcome pair authored (the close refusal is a different disposition); explicit unverified route"
       },
       "issue.duplicate": {
         "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"

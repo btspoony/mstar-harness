@@ -382,11 +382,14 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     // case set, and the manifest records that basis explicitly.
     expect((manifest as EvalManifest & { boundedResolution: { casesHashBasis?: string } }).boundedResolution.casesHashBasis).toContain("canonicalJson(cases)");
     expect(sha256Hex(canonicalJson(manifest.cases))).toBe((manifest as EvalManifest & { casesHash: string }).casesHash);
-    // The schema-read scenario's expected outcome cites a contract fixture; the
-    // cited required-field count is grounded in that authored contract.
-    expect(CAPTURE_INPUT_REQUIRED).toHaveLength(15);
-    expect(EXPECTED_OUTCOME["bounded-res-schema-read"]).toContain("15 required fields");
-    expect(fixtureFilesFor("bounded-res-schema-read").some((f) => f.path === "contract/capture-input.json")).toBe(true);
+    // The schema-read scenario's expected outcome is DERIVED from its contract
+    // fixture (not a case-selected label): the fixture's required list is what
+    // the assertion's cited count must match.
+    const contractFile = fixtureFilesFor("bounded-res-schema-read").find((f) => f.path === "contract/capture-input.json");
+    expect(contractFile).toBeDefined();
+    const contract = JSON.parse(contractFile!.content) as { required: string[] };
+    expect(contract.required).toHaveLength(15);
+    expect(EXPECTED_OUTCOME["bounded-res-schema-read"]).toContain(`${contract.required.length} required fields`);
     // The stale-write scenario's relation is checkable: the prompt carries the
     // supplied token, the fixture carries the recorded current token, and the
     // two differ (that is what makes the supplied token stale).
@@ -474,6 +477,18 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     (grouped.value as { required: string[] }).required = ["target issue id"];
     const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
     expect(errors.some((e) => e.includes("not among the scenario's declared unavailable facts"))).toBe(true);
+  });
+
+  test("routes without a concrete action oracle are excluded, never mapped to a different action", () => {
+    const dispositions = (manifest as EvalManifest & {
+      boundedResolution: { routeDispositions: Record<string, { scenario?: string; excluded?: string }> };
+    }).boundedResolution.routeDispositions;
+    // A delete is not a replace and a waive is not a close: neither has a
+    // concrete input/outcome pair authored here, so both stay excluded.
+    expect(dispositions["persist.delete"]?.excluded).toContain("no concrete delete input/outcome pair");
+    expect(dispositions["issue.waive"]?.excluded).toContain("no concrete waive input/outcome pair");
+    expect(dispositions["persist.write"]?.scenario).toBe("bounded-res-write-stale-constraint");
+    expect(dispositions["issue.close"]?.scenario).toBe("bounded-res-issue-close-ungrouped");
   });
 
   test("a live definition with no disposition is rejected", () => {
