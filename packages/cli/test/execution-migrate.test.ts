@@ -325,7 +325,7 @@ function previewAndCover(fixture: Fixture, label: string): ReviewedArtifacts {
   ], fixture);
   const summary = dataOf(preview);
   expectSuccess(preview, "preview");
-  expect(summary.version).toBe(2);
+  expect(summary.version).toBe(3);
   expect(summary.inventoryPath).toBe(fixture.inventoryPath);
   expect(existsSync(manifestPath)).toBe(true);
   expect(existsSync(coveragePath)).toBe(true);
