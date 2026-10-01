@@ -281,6 +281,8 @@ describe("store.upgrade unified entry", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
+      expect(Array.isArray(result.data.exclusions)).toBe(true);
+      expect(Array.isArray(result.data.normalizations)).toBe(true);
     }
     expect(existsSync(join(harness, "status.json"))).toBe(false);
     const active = await openStore({ harnessDir: harness }, "read");
