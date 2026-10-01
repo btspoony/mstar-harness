@@ -23,6 +23,12 @@ export type StoreUpgradeInput = {
   /** Explicit operator disposition for any stale unpublished registration retired at staging. */
   catalogDeltaDisposition: string;
   inventoryPath?: string;
+  /**
+   * The operator's attestation. Coverage counts the declared stopped sessions
+   * against the imported session owners; staging passes it through so the
+   * coverage evidence sees the operator's declaration.
+   */
+  attestation?: ActivationAttestation;
 };
 
 
