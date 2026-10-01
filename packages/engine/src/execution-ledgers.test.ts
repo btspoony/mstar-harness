@@ -359,14 +359,12 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
     expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
   });
 
-  test("an accepted id recorded twice refuses the append", async () => {
-    shared.seed({ ledger: `${lineOf(note("note-dup", "body"))}${lineOf(note("note-dup", "other body"))}` });
-    const before = readFileSync(shared.ledgerPath);
-    const refusal = await refusalOf(() =>
-      appendWorkflowNote(shared.coordContext, shared.session, note("note-new", "fresh")),
-    );
-    expect(refusal.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
+  test("duplicate historical accepted ids do not block preserving and appending", async () => {
+    const retained = `${lineOf(note("note-dup", "body"))}${lineOf(note("note-dup", "other body"))}`;
+    shared.seed({ ledger: retained });
+    const receipt = await appendWorkflowNote(shared.coordContext, shared.session, note("note-new", "fresh"));
+    expect(receipt).toEqual({ id: "note-new", replayed: false });
+    expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(`${retained}${lineOf(note("note-new", "fresh"))}`);
   });
 
   test("a crash-cut partial line of the same record is reconciled into exactly one accepted line", async () => {
@@ -477,22 +475,14 @@ describe("execution-ledgers: identity, dedup and crash boundaries", () => {
     expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(seedText);
   });
 
-  test("a foreign or malformed retained line refuses the append", async () => {
-    shared.seed({ ledger: `${LEGACY_LINE}${JSON.stringify({ kind: "something-else", payload: 1 })}\n` });
-    const before = readFileSync(shared.ledgerPath);
-    const foreign = await refusalOf(() =>
-      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
-    );
-    expect(foreign.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(shared.ledgerPath).equals(before)).toBe(true);
-
-    shared.seed({ ledger: `${LEGACY_LINE}not json at all\n` });
-    const malformedBefore = readFileSync(shared.ledgerPath);
-    const malformed = await refusalOf(() =>
-      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
-    );
-    expect(malformed.code).toBe("execution-ledgers.ledger-foreign");
-    expect(readFileSync(shared.ledgerPath).equals(malformedBefore)).toBe(true);
+  test("unknown historical lines remain byte-identical when appending", async () => {
+    for (const unknown of [JSON.stringify({ kind: "something-else", payload: 1 }), "not json at all"]) {
+      const retained = `${LEGACY_LINE}${unknown}\n`;
+      shared.seed({ ledger: retained });
+      const receipt = await appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body"));
+      expect(receipt).toEqual({ id: "note-1", replayed: false });
+      expect(readFileSync(shared.ledgerPath).toString("utf8")).toBe(`${retained}${lineOf(note("note-1", "body"))}`);
+    }
   });
 
   test("concurrent distinct accepted records each appear exactly once in append order", async () => {

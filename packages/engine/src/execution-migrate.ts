@@ -668,7 +668,7 @@ type DiscoveredWorkflow = {
   surfaceFiles: ReadonlyMap<ExecutionSurface, readonly string[]>;
   lockDirs: readonly string[];
   exclusion?: ExecutionSnapshotExclusion;
-  skippedEntries: readonly string[];
+  skippedEntries: readonly { path: string; sha256: string | null; symlinkTarget?: string }[];
   diagnostics: readonly string[];
 };
 
@@ -953,9 +953,8 @@ function readInventoryFile(path: string): { inventory: ExecutionMigrationInvento
 type SnapshotSource =
   | { path: string; sha256: string; snapshot: WorkflowSnapshot; diagnostics: string[]; exclusion?: undefined }
   | { path: string; sha256: string; diagnostics: string[]; exclusion: ExecutionSnapshotExclusion };
-function archiveInvalidSnapshot(dir: string, workflowId: string, bytes: Buffer, sha256: string): string {
-  const root = dirname(dirname(dir));
-  const archiveDir = join(root, "archived", "execution-snapshot-exclusions");
+function archiveInvalidSnapshot(archiveRoot: string, workflowDir: string, workflowId: string, bytes: Buffer, sha256: string): string {
+  const archiveDir = join(archiveRoot, "archived", "execution-snapshot-exclusions");
   const archivePath = join(archiveDir, `${workflowId}-${sha256}.snapshot.json`);
   mkdirSync(archiveDir, { recursive: true });
   if (existsSync(archivePath)) {
@@ -969,7 +968,7 @@ function archiveInvalidSnapshot(dir: string, workflowId: string, bytes: Buffer, 
   try {
     writeFileSync(temporaryPath, bytes, { flag: "wx" });
     const archived = readFileSync(temporaryPath);
-    const sourceNow = readFileSync(join(dir, WORKFLOW_SNAPSHOT_FILE));
+    const sourceNow = readFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE));
     if (!archived.equals(bytes) || sha256Of(archived) !== sha256 || !sourceNow.equals(bytes)) {
       throw conflict(`workflow ${workflowId}'s snapshot changed while its exclusion archive was verified.`);
     }
@@ -995,6 +994,7 @@ function archiveInvalidSnapshot(dir: string, workflowId: string, bytes: Buffer, 
 function readSnapshotSource(
   dir: string,
   workflowId: string,
+  archiveRoot: string,
 ): SnapshotSource {
   const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
   const bytes = readSourceBytes(path, `the snapshot of workflow ${workflowId}`, `the snapshot of workflow ${workflowId} is missing at ${path}`);
@@ -1003,11 +1003,11 @@ function readSnapshotSource(
     doc = JSON.parse(bytes.toString("utf8"));
   } catch {
     const sha256 = sha256Of(bytes);
-    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid-json"], snapshotPath: relative(dirname(dirname(dir)), path), sha256 } };
+    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid-json"], snapshotPath: relative(archiveRoot, path), sha256 } };
   }
   if (!isPlainObject(doc)) {
     const sha256 = sha256Of(bytes);
-    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid"], snapshotPath: relative(dirname(dirname(dir)), path), sha256 } };
+    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid"], snapshotPath: relative(archiveRoot, path), sha256 } };
   }
 
   // Never repair an incomplete live lease: only a terminal snapshot proves
@@ -1065,7 +1065,7 @@ function readSnapshotSource(
   const gate = validateWorkflowSnapshot(normalized);
   if (!gate.ok) {
     const codes = [...new Set(gate.violations.map((entry) => entry.code))].sort();
-    return { path, sha256: sha256Of(bytes), diagnostics, exclusion: { workflowId, codes, snapshotPath: relative(dirname(dirname(dir)), path), sha256: sha256Of(bytes) } };
+    return { path, sha256: sha256Of(bytes), diagnostics, exclusion: { workflowId, codes, snapshotPath: relative(archiveRoot, path), sha256: sha256Of(bytes) } };
   }
   return { path, sha256: sha256Of(bytes), snapshot: normalized as unknown as WorkflowSnapshot, diagnostics };
 }
@@ -1131,14 +1131,14 @@ function readSessionSource(
  * `execution.coverage-incomplete` — the inventory never skips what it cannot
  * name — and a present compaction journal refuses outright (§5).
  */
-function scanWorkflowDir(dir: string, workflowId: string): {
+function scanWorkflowDir(dir: string, workflowId: string, relativeDir: string): {
   envelopes: string[];
   surfaceFiles: Map<ExecutionSurface, string[]>;
   lockDirs: string[];
   deferred: ExecutionDeferredSurface[];
-  skipped: string[];
+  skipped: Array<{ path: string; sha256: string | null; symlinkTarget?: string }>;
 } {
-  const skipped: string[] = [];
+  const skipped: Array<{ path: string; sha256: string | null; symlinkTarget?: string }> = [];
   const sessions: string[] = [];
   const lockPaths: string[] = [];
   const files = new Map<ExecutionSurface, string[]>();
@@ -1151,13 +1151,12 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     if (entry.name === WORKFLOW_SNAPSHOT_FILE) continue;
     if (entry.name === SESSION_DIR) {
       if (!entry.isDirectory()) {
-        throw incomplete(`workflows/${workflowId}/${SESSION_DIR} is not a directory, so the session surface cannot be classified.`);
+        throw incomplete(`${relativeDir}/${SESSION_DIR} is not a directory, so the session surface cannot be classified.`);
       }
       for (const nested of directoryEntries(join(dir, SESSION_DIR), `the sessions dir of ${workflowId}`)) {
         if (!nested.isFile()) {
           throw incomplete(
-            `workflows/${workflowId}/${SESSION_DIR}/${nested.name} is neither a regular file nor a directory entry this ` +
-              `inventory classifies (a symlink or a nested directory), so coverage cannot be claimed.`,
+            `${relativeDir}/${SESSION_DIR}/${nested.name} is neither a regular file nor a directory entry this inventory classifies (a symlink or a nested directory), so coverage cannot be claimed.`,
           );
         }
         sessions.push(join(dir, SESSION_DIR, nested.name));
@@ -1178,12 +1177,12 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     }
     if (entry.name === AGENT_FLOW_HISTORY_DIR) {
       if (!entry.isDirectory()) {
-        throw incomplete(`workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR} is not a directory, so the sealed history chunks cannot be classified.`);
+        throw incomplete(`${relativeDir}/${AGENT_FLOW_HISTORY_DIR} is not a directory, so the sealed history chunks cannot be classified.`);
       }
       for (const nested of directoryEntries(join(dir, AGENT_FLOW_HISTORY_DIR), `the agent-flow history dir of ${workflowId}`)) {
         if (!nested.isFile() || !AGENT_FLOW_CHUNK.test(nested.name)) {
           throw incomplete(
-            `workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR}/${nested.name} is not a sealed history chunk ` +
+            `${relativeDir}/${AGENT_FLOW_HISTORY_DIR}/${nested.name} is not a sealed history chunk ` +
               `(chunk-NNNNNN.jsonl); an unknown companion of the retained ledger blocks coverage.`,
           );
         }
@@ -1199,7 +1198,25 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     if (known === undefined) {
       // An entry no surface claims is left exactly where it is and recorded:
       // blocking the whole migration on it would lose nothing by skipping it.
-      skipped.push(`workflows/${workflowId}/${entry.name}`);
+      // Entries unclaimed by a surface are kept with their source-relative path.
+      const path = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        skipped.push({ path, sha256: null });
+        const collect = (absolute: string, prefix: string): void => {
+          for (const nested of directoryEntries(absolute, `unclassified dir ${prefix}`)) {
+            const nestedPath = `${prefix}/${nested.name}`;
+            const nestedAbs = join(absolute, nested.name);
+            if (nested.isSymbolicLink()) skipped.push({ path: nestedPath, sha256: null, symlinkTarget: readlinkSync(nestedAbs) });
+            else if (nested.isDirectory()) {
+              skipped.push({ path: nestedPath, sha256: null });
+              collect(nestedAbs, nestedPath);
+            } else if (nested.isFile()) skipped.push({ path: nestedPath, sha256: sha256Of(readFileSync(nestedAbs)) });
+          }
+        };
+        collect(join(dir, entry.name), path);
+      } else if (entry.isSymbolicLink()) {
+        skipped.push({ path, sha256: null, symlinkTarget: readlinkSync(join(dir, entry.name)) });
+      } else if (entry.isFile()) skipped.push({ path, sha256: sha256Of(readFileSync(join(dir, entry.name))) });
       continue;
     }
     push(known.surface, join(dir, known.file));
@@ -1210,6 +1227,10 @@ function scanWorkflowDir(dir: string, workflowId: string): {
   return { envelopes: sessions, surfaceFiles: files, lockDirs: lockPaths, deferred, skipped };
 }
 
+
+function skippedEntryDiagnostic(entry: { path: string; sha256: string | null; symlinkTarget?: string }): string {
+  return `unclassified entry skipped: ${entry.path} (sha256=${entry.sha256 ?? "directory"}${entry.symlinkTarget === undefined ? "" : `; symlink-target=${JSON.stringify(entry.symlinkTarget)}`}; left in place, not a migration source).`;
+}
 /** One workflow dir read as a lifecycle: the core snapshot, its ownership, its envelopes and its retained surfaces. */
 function readDiscoveredWorkflow(input: {
   ledger: DiscoveryLedger;
@@ -1246,17 +1267,17 @@ function readDiscoveredWorkflow(input: {
     throw conflict(`workflow ${workflowId}'s dir ${dir} is not a real directory under the control root.`);
   }
 
-  const snapshotSource = readSnapshotSource(dir, workflowId);
+  const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
   const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
   if (snapshotWitness.sha256 !== snapshotSource.sha256) {
     throw conflict(`the snapshot of workflow ${workflowId} changed while it was read; nothing was staged.`);
   }
 
   if (snapshotSource.exclusion !== undefined) {
-    const scan = scanWorkflowDir(dir, workflowId);
+    const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
     for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
     deferred.push(...scan.deferred);
-    const diagnostics: string[] = scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`);
+    const diagnostics: string[] = scan.skipped.map(skippedEntryDiagnostic);
     return {
       entry, registered, workflowId, dir, snapshotPath: snapshotSource.path, snapshotSha: snapshotSource.sha256,
       snapshot: null, coordinator: null, plans: [], envelopes: scan.envelopes,
@@ -1283,7 +1304,7 @@ function readDiscoveredWorkflow(input: {
     return holder !== coordinatorSessionId && holder !== (planSession?.session_id ?? null);
   });
   if (orphanLease) {
-    const scan = scanWorkflowDir(dir, workflowId);
+    const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
     for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
     deferred.push(...scan.deferred);
     const bytes = readFileSync(snapshotSource.path);
@@ -1295,7 +1316,7 @@ function readDiscoveredWorkflow(input: {
       skippedEntries: scan.skipped,
       diagnostics: [
         ...snapshotSource.diagnostics,
-        ...scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`),
+        ...scan.skipped.map(skippedEntryDiagnostic),
         "a plan holds an execution lease whose holder resolves to neither the recorded coordinator nor the plan session; the workflow is excluded and its bytes archived.",
       ],
     };
@@ -1304,6 +1325,15 @@ function readDiscoveredWorkflow(input: {
     throw conflict(`workflow ${workflowId} carries a coordinator block that is not a complete session binding.`);
   }
   const referenced: string[] = [];
+  const seenOwnerKeys = new Set<string>();
+  const addOwner = (owner: DiscoveredOwner): void => {
+    const key = `${owner.role}\u0000${owner.sessionId}`;
+    if (seenOwnerKeys.has(key)) {
+      throw conflict(`workflow ${workflowId} records session ${owner.sessionId} more than once for role ${owner.role}.`);
+    }
+    seenOwnerKeys.add(key);
+    owners.push(owner);
+  };
   if (coordinator !== null) {
     const envelope = readSessionSource(
       coordinator,
@@ -1311,7 +1341,7 @@ function readDiscoveredWorkflow(input: {
       `workflow ${workflowId}'s coordinator binding`,
     );
     referenced.push(envelope.path);
-    owners.push({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
+    addOwner({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
   }
 
   const plans: DiscoveredPlan[] = [];
@@ -1331,7 +1361,7 @@ function readDiscoveredWorkflow(input: {
     if (session !== null) {
       const envelope = readSessionSource(session, { ...scope, role: "plan-pm", planId }, `plan ${planId}`);
       referenced.push(envelope.path);
-      owners.push({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
+      addOwner({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
     }
     const leaseValue = planRow.execution_lease;
     if (leaseValue !== undefined) {
@@ -1352,7 +1382,7 @@ function readDiscoveredWorkflow(input: {
     });
   }
 
-  const scan = scanWorkflowDir(dir, workflowId);
+  const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
   // Every envelope file is a source of the workflow's session surface, whether a
   // recorded binding references it or not: an unreferenced envelope is
   // historical evidence this surface owns, never an unclassified stranger.
@@ -1376,7 +1406,7 @@ function readDiscoveredWorkflow(input: {
     lockDirs: scan.lockDirs,
     diagnostics: [
       ...snapshotSource.diagnostics,
-      ...scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`),
+      ...scan.skipped.map(skippedEntryDiagnostic),
     ],
     skippedEntries: scan.skipped,
   };
@@ -2552,6 +2582,12 @@ function assertReviewedManifestHolds(input: {
   if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
     throw conflict("the core authority content changed since the preview; nothing was written.");
   }
+  if (
+    serializeExecutionValue(discovered.exclusions) !== serializeExecutionValue(manifest.exclusions) ||
+    serializeExecutionValue(discovered.normalizations) !== serializeExecutionValue(manifest.normalizations)
+  ) {
+    throw conflict("snapshot exclusions or normalization evidence changed since preview; re-preview before applying.");
+  }
   const foundDeferred = discovered.deferred.map((surface) =>
     surface.surface === LEGACY_LOCK_SURFACE
       ? deferredSurface(surface.surface, surface.paths.filter((path) => !selfHeldLockDirs.has(path)))
@@ -3064,7 +3100,7 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
                     `workflow ${workflow.workflowId}'s snapshot changed since discovery; its recorded digest no longer matches, so it cannot be archived and excluded.`,
                   );
                 }
-                archiveInvalidSnapshot(dirname(workflow.snapshotPath), workflow.workflowId, bytes, workflow.exclusion.sha256);
+                archiveInvalidSnapshot(discovered.roots.control, dirname(workflow.snapshotPath), workflow.workflowId, bytes, workflow.exclusion.sha256);
               } else {
                 assertCatalogCoherence(tx.db, workflow, tx.storeId);
                 importWorkflow(tx, workflow);
@@ -3072,17 +3108,26 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
               }
               // Entries no surface claims are preserved byte-for-byte into the
               // migration archive as well, and stay in place in the workspace.
-              // A directory is walked whole; each file keeps its relative path.
+              // Verify their entire no-follow inventory immediately before copying.
+              const current = scanWorkflowDir(workflow.dir, workflow.workflowId, relative(discovered.roots.control, workflow.dir));
+              if (serializeExecutionValue(current.skipped) !== serializeExecutionValue(workflow.skippedEntries)) {
+                throw conflict(`unclassified entries of workflow ${workflow.workflowId} changed since review; nothing unreviewed was archived.`);
+              }
+              const skippedDirectories = new Set(
+                workflow.skippedEntries.filter((entry) => entry.sha256 === null && entry.symlinkTarget === undefined).map((entry) => entry.path),
+              );
               for (const entry of workflow.skippedEntries) {
-                const sourcePath = join(discovered.root, entry);
-                const name = entry.replaceAll("/", "--");
+                const components = entry.path.split("/");
+                if (components.slice(1, -1).some((_, index) => skippedDirectories.has(components.slice(0, index + 2).join("/")))) continue;
+                const sourcePath = join(discovered.roots.control, entry.path);
+                const name = entry.path.replaceAll("/", "--");
                 const archiveFile = (absolute: string, relative: string): void => {
-                  const archivedPath = join(discovered.root, "archived", "unclassified-entries", workflow.workflowId, name, relative);
+                  const archivedPath = join(discovered.roots.control, "archived", "unclassified-entries", workflow.workflowId, name, relative);
                   mkdirSync(dirname(archivedPath), { recursive: true });
                   const bytes = readFileSync(absolute);
                   writeFileSync(archivedPath, bytes);
                   if (!readFileSync(archivedPath).equals(bytes)) {
-                    throw conflict(`the archived copy of ${relative} under ${entry} does not match its original bytes.`);
+                    throw conflict(`the archived copy of ${relative} under ${entry.path} does not match its original bytes.`);
                   }
                 };
                 const walk = (absolute: string, relative: string): void => {
@@ -3092,8 +3137,20 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
                   const stats = lstatSync(absolute);
                   if (stats.isSymbolicLink()) {
                     // Preserve the link itself, never its target.
-                    const archivedPath = join(discovered.root, "archived", "unclassified-entries", workflow.workflowId, name, relative);
+                    const archivedPath = join(discovered.roots.control, "archived", "unclassified-entries", workflow.workflowId, name, relative);
                     mkdirSync(dirname(archivedPath), { recursive: true });
+                    let archiveTarget: Stats | undefined;
+                    try {
+                      archiveTarget = lstatSync(archivedPath);
+                    } catch (error) {
+                      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+                    }
+                    if (archiveTarget !== undefined) {
+                      if (!archiveTarget.isSymbolicLink()) {
+                        throw conflict(`unclassified archive target ${archivedPath} exists and is not a symbolic link.`);
+                      }
+                      rmSync(archivedPath);
+                    }
                     symlinkSync(readlinkSync(absolute), archivedPath);
                     return;
                   }
@@ -3479,7 +3536,7 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
   // §2.2/§4.2 `execution_registry` holds the ACTIVE lifecycles only, so terminal
   // (unregistered) history is compared against the workflow/plan rows it landed
   // in and never against root membership it must not gain.
-  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered).map((workflow) => workflow.workflowId);
+  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered && workflow.exclusion === undefined).map((workflow) => workflow.workflowId);
   if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
     throw conflict(
       `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +

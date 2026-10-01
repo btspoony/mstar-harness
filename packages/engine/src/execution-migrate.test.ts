@@ -993,6 +993,27 @@ describe("execution-preview", () => {
     expect(primary).toBeDefined();
   });
 
+  test("execution-apply-refuses-unreviewed-unclassified-entry-changes", async () => {
+    const fixture = await legacyWorkspace("apply-unclassified-drift");
+    const stray = join(fixture.workflowDir, "stray-artifact.txt");
+    writeText(stray, "reviewed bytes");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unclassified-drift"));
+    expect(manifest.normalizations.some((entry) => entry.diagnostics.some((item) => item.includes("sha256=")))).toBe(true);
+    const coverage = await coverageOf(fixture, manifest);
+    const backup = await recoveryPoint(fixture);
+    writeText(stray, "changed after review");
+    const refusal = await refusalOf(() => applyExecutionMigration({
+      ...migrationInput(fixture, "op-unclassified-drift-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      coverage,
+      backup,
+    }));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("normalization evidence changed");
+    expect(existsSync(join(fixture.harness, "archived", "unclassified-entries"))).toBe(false);
+  });
+
   test("execution-preview-archives-a-snapshot-with-an-unrecognized-field", async () => {
     // §2.2: an unrecognized field is never silently dropped into the DB
     // columns — and it is not a dead end either: the workflow is excluded, its
@@ -1870,18 +1891,17 @@ describe("execution-snapshot-resolutions", () => {
     (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
     writeJson(fixture.snapshotPaths[0]!, snapshot);
     const before = readFileSync(fixture.snapshotPaths[0]!);
-    await stageAndAssertUnchanged(fixture, "snapshot-excluded-archived-at-apply");
-    // Staging copies the excluded bytes into the migration archive, byte for
-    // byte, and leaves the original exactly where it was.
+    const manifest = await stageCore(fixture, "snapshot-excluded-archived-at-apply");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
     const digest = createHash("sha256").update(new Uint8Array(before)).digest("hex");
-    const archived = join(
-      fixture.harness,
-      "archived",
-      "execution-snapshot-exclusions",
-      `${CORE_A}-${digest}.snapshot.json`,
-    );
+    const archived = join(fixture.harness, "archived", "execution-snapshot-exclusions", `${CORE_A}-${digest}.snapshot.json`);
     expect(existsSync(archived)).toBe(true);
     expect(readFileSync(archived)).toEqual(before);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
+    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "snapshot-excluded"));
+    expect(receipt.phase).toBe("active");
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
   });
 
   test("execution-snapshot-resolutions-exact-owner-lease-imports", async () => {
@@ -1919,12 +1939,17 @@ describe("execution-snapshot-resolutions", () => {
     const snapshotPath = fixture.snapshotPaths[0]!;
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
     const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const sessionsDir = join(dirname(snapshotPath), "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const envelope = join(sessionsDir, "plan-pm-owner-1.json");
+    writeJson(envelope, {
+      schema_version: 1, role: "plan-pm", session_id: "plan-pm-owner-1",
+      workflow_id: fixture.workflowIds[0]!, harness_root: fixture.harness, plan_id: `${fixture.workflowIds[0]}-plan`,
+    });
     plan.status = "InProgress";
-    plan.execution_lease = { ...completeExecutionLease, holder: "someone-else" };
+    plan.coordination = { revision: 1, session: { session_id: "plan-pm-owner-1", session_file: envelope, bound_at: "2026-09-02" } };
+    plan.execution_lease = { ...completeExecutionLease, holder: "omp-primary:plan-pm-owner-1" };
     writeJson(snapshotPath, snapshot);
-    // A holder that resolves to neither owner is an orphan: the workflow is
-    // excluded (hash-bound in the manifest), never staged with a claim whose
-    // owner cannot be imported.
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-orphan-holder"));
     expect(manifest.exclusions).toHaveLength(1);
     expect(manifest.exclusions[0]!.codes).toContain("workflow.snapshot.orphan-held-lease");
