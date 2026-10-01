@@ -2291,9 +2291,18 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
               "bind a session for this role first \u2014 the active bind verb takes the workflow, the role, the plan " +
                 "(a coordinator binds none), the full execution token and an operation id",
             ]
-          : mine.ref.epoch !== tx.epoch
-            ? [`resume or rebind your own execution session at the current epoch ${tx.epoch}`]
-            : []),
+          : address.role === "coordinator"
+            ? [
+                `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token ` +
+                  `of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(address.sessionId)} ` +
+                  `as the prior holder it replaces and carries a valid operator attestation \u2014 exactly one installed ` +
+                  `current-coordinator consumer plus an entry naming that holder stopped/reloaded \u2014 and it reactivates ` +
+                  `this ${mine.state} row (epoch ${mine.ref.epoch}) at the current epoch; a normal bind never revives it`,
+              ]
+            : [
+                `no recovery transition exists for a ${address.role} session row in this engine \u2014 the row stays ` +
+                  `${mine.state} at epoch ${mine.ref.epoch} and no bind revives it`,
+              ]),
         "retry the operation with the reference and token of the current epoch",
       ],
     };

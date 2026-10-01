@@ -36,7 +36,7 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
-import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
+import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -44,6 +44,7 @@ import {
   initializeExecutionAuthority,
   readExecutionPlan,
   readExecutionState,
+  readOwnExecutionSession,
   serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
@@ -55,6 +56,7 @@ import {
   type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
+import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { CoordinationOperation } from "../src/index.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { WorkflowEntry } from "../src/status.js";
@@ -488,6 +490,121 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
 
     expect(ran).toBe(0);
     expect(footprint(context)).toEqual(before);
+  });
+
+  test("reports truthful recovery facts for suspended, revoked and previous-epoch rows", async () => {
+    const fixture = await seededWorkflow("boundary-truthful-recovery");
+    const { context, epoch, planPmCaller, coordinatorCaller } = fixture;
+    const workflowToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const setRow = (state: string, rowEpoch: number, sessionId: string) =>
+      withRaw(context, (db) => {
+        db.prepare("update execution_sessions set state = ?, epoch = ? where workflow_id = ? and session_id = ?").run(
+          state,
+          rowEpoch,
+          WORKFLOW_ID,
+          sessionId,
+        );
+      });
+    type RefusalDetails = { available_work?: string[]; row_state?: string; row_epoch?: number };
+    const refusalOf = (caller: ExecutionCaller): Promise<{ code?: string; details?: RefusalDetails }> =>
+      readOwnExecutionSession(domainContext(context, caller)).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: RefusalDetails }) => error,
+      );
+    const facts = (refusal: { details?: RefusalDetails }): string => JSON.stringify(refusal.details?.available_work);
+
+    // (a) plan-pm rows: suspended, revoked and epoch-invalidated states are all
+    // dead ends for the unchanged bind gate, so the facts say the recovery does
+    // not exist instead of offering a rebind that refusal always rejects.
+    setRow("suspended", epoch, PLAN_PM_ID);
+    const suspended = await refusalOf(planPmCaller);
+    expect(suspended.code).toBe("execution.session-unavailable");
+    expect(suspended.details?.row_state).toBe("suspended");
+    expect(facts(suspended)).not.toContain("resume or rebind");
+    expect(facts(suspended)).toContain("no recovery transition exists for a plan-pm session row");
+
+    setRow("revoked", epoch, PLAN_PM_ID);
+    const revoked = await refusalOf(planPmCaller);
+    expect(revoked.details?.row_state).toBe("revoked");
+    expect(facts(revoked)).not.toContain("resume or rebind");
+    expect(facts(revoked)).toContain("no recovery transition exists for a plan-pm session row");
+
+    setRow("active", epoch - 1, PLAN_PM_ID);
+    const staleEpoch = await refusalOf(planPmCaller);
+    expect(staleEpoch.details?.row_epoch).toBe(epoch - 1);
+    expect(facts(staleEpoch)).not.toContain("resume or rebind");
+    expect(facts(staleEpoch)).toContain("no recovery transition exists for a plan-pm session row");
+    // This row owns p-1's execution lease, and the view reader refuses ANY bind
+    // while its holder row is not active at this epoch — so the bind gate is
+    // proven unchanged on the coordinator row in (b), the one scope where a
+    // bind actually reaches it. Restore the holder row first.
+    setRow("active", epoch, PLAN_PM_ID);
+
+    // (b) coordinator rows: the facts name the ONE transition that actually
+    // reaches back — with its real, complete inputs — instead of a rebind.
+    setRow("suspended", epoch - 1, COORDINATOR_ID);
+    const staleCoord = await refusalOf(coordinatorCaller);
+    expect(facts(staleCoord)).not.toContain("resume or rebind");
+    const staleCoordFacts = facts(staleCoord);
+    expect(staleCoordFacts).toContain("recoverExecutionCoordinator");
+    expect(staleCoordFacts).toContain("operation id and a non-empty reason");
+    expect(staleCoordFacts).toContain("exactly one installed current-coordinator consumer");
+    expect(staleCoordFacts).toContain("stopped/reloaded");
+    expect(staleCoordFacts).toContain(COORDINATOR_ID);
+
+    setRow("revoked", epoch, COORDINATOR_ID);
+    const revokedCoord = await refusalOf(coordinatorCaller);
+    expect(facts(revokedCoord)).not.toContain("resume or rebind");
+    expect(facts(revokedCoord)).toContain("recoverExecutionCoordinator");
+    // The bind gate itself is proven UNCHANGED here — the coordinator scope is
+    // where a bind actually reaches it (no held lease lets the view reader
+    // refuse first): the state-specific recovery guidance names the transition
+    // and the bind on the revoked row still refuses.
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: workflowToken,
+        operationId: "bind-revoked-coordinator",
+      }),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+
+    // The named transition is REAL: walked with exactly the inputs the facts
+    // name — the current-epoch workflow token, an operation id and reason, this
+    // row as the named prior holder, and a valid attestation (the one current
+    // coordinator consumer plus the stop entry) — it revives the row the
+    // refusal reported as dead.
+    const attestation: ActivationAttestation = {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: TS,
+      operator: { actor: "ops-engineer", authorizationRef: "fixture-only-recovery" },
+      consumers: [
+        {
+          entryId: "fixture-coordinator",
+          kind: "coordinator",
+          entrypoint: "/fixture/engine",
+          runtime: "bun",
+          runtimeVersion: "1.4.0",
+          version: "fixture",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId: COORDINATOR_ID, host: "fixture", state: "stopped" }],
+    };
+    const recovered = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+      expected: workflowToken,
+      operationId: "recover-revoked-row",
+      priorSessionId: COORDINATOR_ID,
+      reason: "regression: revive the row the recovery facts name",
+      attestation,
+    });
+    expect(recovered.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    const live = await readOwnExecutionSession(domainContext(context, coordinatorCaller));
+    expect(live.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
   });
 
   test("refuses a nested plan operation on the same store and commits only the outer one", async () => {
