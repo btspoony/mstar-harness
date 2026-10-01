@@ -127,20 +127,25 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
     const value = decoded[option.key];
     const schema = optionJsonSchema(definition, option.key);
     if (Array.isArray(value) && option.key in (definition.payloads ?? {})) {
-      // A repeated (variadic) payload option collects scalar occurrences, and
-      // an occurrence that is itself an explicit JSON array still decodes to
-      // its members. Elements are otherwise literal documents — never split.
+      // A repeated (variadic) payload option collects scalar occurrences. Each
+      // occurrence stays one literal entry — except an occurrence that is
+      // itself JSON: an explicit array still decodes to its members, and an
+      // object (or malformed JSON) becomes a non-string element so the
+      // declared schema refuses it exactly as the single-value form does.
       const flattened: unknown[] = [];
       for (const entry of value) {
-        if (typeof entry === "string" && entry.trimStart().startsWith("[")) {
+        if (typeof entry === "string" && /^[[{]/.test(entry.trimStart())) {
           try {
             const parsed: unknown = JSON.parse(entry);
             if (Array.isArray(parsed)) {
               flattened.push(...parsed);
               continue;
             }
+            flattened.push(parsed);
+            continue;
           } catch {
-            // Keep malformed JSON-looking occurrences literal for the command decoder.
+            flattened.push(undefined); // indexed schema refusal, never a literal path
+            continue;
           }
         }
         flattened.push(entry);

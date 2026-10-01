@@ -439,6 +439,26 @@ describe("payload option decoding", () => {
     expect(envelope.message).not.toContain("valid JSON");
     expect(envelope.details?.diagnostics).toBeUndefined();
   });
+
+  test("worktree cleanup refuses a JSON-object --worktree occurrence via the declared schema", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", '{"a":1}']);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).toContain("Invalid command payload");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
+    expect(diagnostics[0]?.path).toBe("worktree[0]");
+  });
+
+  test("worktree cleanup refuses a malformed JSON-looking --worktree occurrence", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", "{not json"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).toContain("Invalid command payload");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
+    expect(diagnostics[0]?.path).toBe("worktree[0]");
+  });
 });
 
 test("payload decoding reports malformed JSON as usage without executing the command", async () => {
