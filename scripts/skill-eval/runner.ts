@@ -61,6 +61,7 @@ import {
   type AssertionKind,
   type CaseSplit,
   type EvalManifest,
+  type GroupedFactsSpec,
   type Io,
   type PreparedManifestCase,
   type RunSplit,
@@ -337,14 +338,22 @@ export interface UsageObservation {
   usage: Record<string, number>;
 }
 
+/** Observed outcome of one invocation call: unsupported encodings stay `unknown`. */
+export type InvocationOutcome = "failed" | "succeeded" | "unknown";
+
 export interface InvocationCallObservation {
   line: number;
-  /** Invocation identity (json.id / item.id); null = identity absent (honest unknown). */
+  /** Invocation identity (item id, then outer event id); null = absent (honest unknown). */
   identity: string | null;
   itemType: string;
   phase: "single" | "started" | "completed";
-  /** Failed attempt (observed status "failed"); failed attempts still count. */
+  /** Observed failure only; unsupported failure shapes are NOT coerced to success. */
   failed: boolean;
+  outcome: InvocationOutcome;
+  /** Observable constituent lookups beyond the envelope itself (bundled shell commands). */
+  bundledLookups: number;
+  /** The payload shape could not be decomposed → bundled accounting is unknown. */
+  bundleUnknown: boolean;
 }
 
 export interface EventStreamScan {
@@ -363,12 +372,18 @@ export interface EventStreamScan {
   invocationCalls: InvocationCallObservation[];
   /** Distinct identities observed (+1 per identity-less record). */
   countedInvocations: number;
-  /** Failed attempts among the counted calls. */
+  /** Observed failures among the counted calls (unsupported shapes excluded). */
   failedInvocations: number;
+  /** Counted calls whose outcome could not be determined from the record shape. */
+  unknownOutcomeInvocations: number;
   /** Counted calls whose invocation identity was absent. */
   unknownIdentityCalls: number;
-  /** Read-shaped invocations among the counted calls (lookup depth). */
+  /** Read-shaped invocations among the counted calls (type-based count, not lookup depth). */
   readShapedInvocations: number;
+  /** Observable constituent lookups bundled inside counted envelopes. */
+  bundledLookups: number;
+  /** Counted calls whose internal bundle could not be decomposed. */
+  bundleUnknownCalls: number;
 }
 
 export function parseEventLines(raw: string): ParsedEventRecord[] {
@@ -420,6 +435,48 @@ function invocationIdOfRecord(record: ParsedEventRecord): string | null {
   return eventIdOfRecord(record);
 }
 
+const SUCCESS_STATUS_ENCODINGS = new Set(["completed", "succeeded", "success", "ok"]);
+
+/**
+ * Observed outcome from the VERIFIED shapes only: an explicit `failed`
+ * status, a verified success status, or a numeric exit code. Anything else —
+ * including a status spelling this adapter does not recognize — stays
+ * `unknown`; it is never coerced into a known success or a known zero-failure.
+ */
+function invocationOutcomeOf(json: Record<string, unknown>, item: Record<string, unknown> | null): InvocationOutcome {
+  const status = item !== null && typeof item.status === "string" ? item.status : typeof json.status === "string" ? json.status : null;
+  if (status === "failed") return "failed";
+  if (status !== null && SUCCESS_STATUS_ENCODINGS.has(status)) return "succeeded";
+  const exit = item !== null ? item.exit_code ?? item.exitCode : json.exit_code ?? json.exitCode;
+  if (typeof exit === "number") return exit === 0 ? "succeeded" : "failed";
+  return "unknown";
+}
+
+const SHELL_COMMAND_ITEM_TYPES = new Set(["command_execution", "local_shell_call", "shell_command", "exec_command"]);
+/** Generic tool envelopes whose internal call bundle cannot be decomposed here. */
+const OPAQUE_TOOL_ITEM_TYPES = new Set(["tool_call", "function_call", "mcp_tool_call"]);
+
+/**
+ * Observable constituent lookups inside one counted envelope. A shell line
+ * (`cmd && cmd2`) bundles several causal commands; argv arrays are one
+ * command. An opaque tool envelope has an unknown internal bundle, and
+ * is reported as such rather than assumed to be a single lookup.
+ */
+function constituentLookups(itemType: string, item: Record<string, unknown> | null): { bundled: number; unknown: boolean } {
+  if (OPAQUE_TOOL_ITEM_TYPES.has(itemType)) return { bundled: 0, unknown: true };
+  if (item === null) return { bundled: 0, unknown: true };
+  const command = item.command;
+  if (Array.isArray(command)) return { bundled: 0, unknown: false };
+  if (typeof command === "string" && command.trim() !== "") {
+    const parts = command.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
+    return { bundled: Math.max(0, parts.length - 1), unknown: false };
+  }
+  // file_read / read_file are single-lookup types; other read-shaped item
+  // types carry payloads this adapter cannot decompose.
+  if (itemType === "file_read" || itemType === "read_file") return { bundled: 0, unknown: false };
+  return { bundled: 0, unknown: true };
+}
+
 export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan {
   const scan: EventStreamScan = {
     threadId: null,
@@ -432,10 +489,46 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     invocationCalls: [],
     countedInvocations: 0,
     failedInvocations: 0,
+    unknownOutcomeInvocations: 0,
     unknownIdentityCalls: 0,
     readShapedInvocations: 0,
+    bundledLookups: 0,
+    bundleUnknownCalls: 0,
   };
   const seenIdentities = new Map<string, number>();
+  /** Merges one observation into its already-counted identity (never a second call). */
+  const mergeInto = (existing: InvocationCallObservation, observation: InvocationCallObservation): void => {
+    if (observation.outcome === "failed" && existing.outcome !== "failed") {
+      if (existing.outcome === "unknown") scan.unknownOutcomeInvocations -= 1;
+      existing.outcome = "failed";
+      existing.failed = true;
+      scan.failedInvocations += 1;
+    } else if (observation.outcome === "succeeded" && existing.outcome === "unknown") {
+      existing.outcome = "succeeded";
+      scan.unknownOutcomeInvocations -= 1;
+    }
+    if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
+      existing.itemType = observation.itemType;
+      scan.readShapedInvocations += 1;
+    }
+    if (observation.bundledLookups > existing.bundledLookups) {
+      scan.bundledLookups += observation.bundledLookups - existing.bundledLookups;
+      existing.bundledLookups = observation.bundledLookups;
+    }
+    if (observation.bundleUnknown && !existing.bundleUnknown) {
+      existing.bundleUnknown = true;
+      scan.bundleUnknownCalls += 1;
+    }
+  };
+  const countNew = (observation: InvocationCallObservation): void => {
+    scan.countedInvocations += 1;
+    if (observation.identity === null) scan.unknownIdentityCalls += 1;
+    if (observation.outcome === "failed") scan.failedInvocations += 1;
+    if (observation.outcome === "unknown") scan.unknownOutcomeInvocations += 1;
+    if (READ_ITEM_TYPES.has(observation.itemType)) scan.readShapedInvocations += 1;
+    scan.bundledLookups += observation.bundledLookups;
+    if (observation.bundleUnknown) scan.bundleUnknownCalls += 1;
+  };
   for (const record of records) {
     if (record.parseError !== null) {
       scan.malformedRecords += 1;
@@ -492,34 +585,29 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
         : /item[._-]?completed$/i.test(type)
           ? "completed"
           : "single";
-      const failed = json.status === "failed" || (item !== null && typeof item === "object" && (item as Record<string, unknown>).status === "failed");
+      const outcome = invocationOutcomeOf(json, item);
+      const bundle = constituentLookups(itemTypeForCall, item);
+      const observation: InvocationCallObservation = {
+        line: record.line,
+        identity,
+        itemType: itemTypeForCall,
+        phase,
+        failed: outcome === "failed",
+        outcome,
+        bundledLookups: bundle.bundled,
+        bundleUnknown: bundle.unknown,
+      };
       if (identity === null) {
-        scan.invocationCalls.push({ line: record.line, identity: null, itemType: itemTypeForCall, phase, failed });
-        scan.countedInvocations += 1;
-        scan.unknownIdentityCalls += 1;
-        if (failed) scan.failedInvocations += 1;
-        if (READ_ITEM_TYPES.has(itemTypeForCall)) scan.readShapedInvocations += 1;
+        scan.invocationCalls.push(observation);
+        countNew(observation);
       } else {
         const seenAt = seenIdentities.get(identity);
         if (seenAt === undefined) {
           seenIdentities.set(identity, scan.invocationCalls.length);
-          scan.invocationCalls.push({ line: record.line, identity, itemType: itemTypeForCall, phase, failed });
-          scan.countedInvocations += 1;
-          if (failed) scan.failedInvocations += 1;
-          if (READ_ITEM_TYPES.has(itemTypeForCall)) scan.readShapedInvocations += 1;
+          scan.invocationCalls.push(observation);
+          countNew(observation);
         } else {
-          // Same invocation identity: one call. A failed phase marks the
-          // call failed even if the paired record did not; a read-shaped
-          // phase marks it read-shaped even if the first phase was generic.
-          const existing = scan.invocationCalls[seenAt]!;
-          if (failed && !existing.failed) {
-            existing.failed = true;
-            scan.failedInvocations += 1;
-          }
-          if (READ_ITEM_TYPES.has(itemTypeForCall) && !READ_ITEM_TYPES.has(existing.itemType)) {
-            existing.itemType = itemTypeForCall;
-            scan.readShapedInvocations += 1;
-          }
+          mergeInto(scan.invocationCalls[seenAt]!, observation);
         }
       }
       continue;
@@ -532,6 +620,133 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
 
 export function scanEventStream(raw: string): EventStreamScan {
   return scanEventRecords(parseEventLines(raw));
+}
+
+const TURN_FAILED_RE = /^turn[._-]?failed$/i;
+
+/** One turn's event stream as read from disk, with readability evidence. */
+export interface UnitTurnStream {
+  turn: number;
+  threadId: string | null;
+  /** false = the event artifact could not be read at all (missing/unreadable). */
+  readable: boolean;
+  records: ParsedEventRecord[];
+}
+
+/**
+ * Unit-scope invocation accounting (Task 2 R1/R5): identity is deduplicated
+ * across the unit's turns under the turn's thread identity, so a start phase
+ * in turn 1 and its completed phase in turn 2 count once. Terminal evidence
+ * (`turn.completed` / `turn.failed`) is tracked per stream: a missing,
+ * empty, unterminated, or unreadable stream cannot establish accounting
+ * completeness, so a zero-call total from such a stream is never a pass.
+ */
+export interface UnitInvocationAccounting {
+  envelopes: number;
+  bundledLookups: number;
+  effectiveLookups: number;
+  failed: number;
+  unknownOutcome: number;
+  unknownIdentity: number;
+  readShaped: number;
+  unrecognizedRecords: number;
+  malformedRecords: number;
+  unreadableTurns: number[];
+  emptyTurns: number[];
+  /** Readable, non-empty streams with no terminal completion/failure marker. */
+  unterminatedTurns: number[];
+  bundleUnknownCalls: number;
+  /** Identities observed across turns without a thread scope to bind them. */
+  scopeUnknownIdentities: string[];
+}
+
+export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocationAccounting {
+  const accounting: UnitInvocationAccounting = {
+    envelopes: 0,
+    bundledLookups: 0,
+    effectiveLookups: 0,
+    failed: 0,
+    unknownOutcome: 0,
+    unknownIdentity: 0,
+    readShaped: 0,
+    unrecognizedRecords: 0,
+    malformedRecords: 0,
+    unreadableTurns: [],
+    emptyTurns: [],
+    unterminatedTurns: [],
+    bundleUnknownCalls: 0,
+    scopeUnknownIdentities: [],
+  };
+  interface ScopeEntry { itemType: string; outcome: InvocationOutcome; bundled: number; bundleUnknown: boolean }
+  const byScope = new Map<string, ScopeEntry>();
+  const unscopedIdentities = new Set<string>();
+  const countNew = (entry: ScopeEntry, identity: string | null): void => {
+    accounting.envelopes += 1;
+    if (identity === null) accounting.unknownIdentity += 1;
+    if (entry.outcome === "failed") accounting.failed += 1;
+    if (entry.outcome === "unknown") accounting.unknownOutcome += 1;
+    if (READ_ITEM_TYPES.has(entry.itemType)) accounting.readShaped += 1;
+    accounting.bundledLookups += entry.bundled;
+    if (entry.bundleUnknown) accounting.bundleUnknownCalls += 1;
+  };
+  for (const stream of streams) {
+    if (!stream.readable) {
+      accounting.unreadableTurns.push(stream.turn);
+      continue;
+    }
+    if (stream.records.length === 0) {
+      accounting.emptyTurns.push(stream.turn);
+      continue;
+    }
+    const sawTerminal = stream.records.some((record) => {
+      const type = record.json !== null && typeof record.json.type === "string" ? record.json.type : "";
+      return TURN_COMPLETED_RE.test(type) || TURN_FAILED_RE.test(type);
+    });
+    if (!sawTerminal) accounting.unterminatedTurns.push(stream.turn);
+    const scan = scanEventRecords(stream.records);
+    accounting.unrecognizedRecords += scan.unknownRecords;
+    accounting.malformedRecords += scan.malformedRecords;
+    for (const observation of scan.invocationCalls) {
+      if (observation.identity === null) {
+        countNew({ itemType: observation.itemType, outcome: observation.outcome, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown }, null);
+        continue;
+      }
+      if (stream.threadId === null) unscopedIdentities.add(observation.identity);
+      const key = `${stream.threadId ?? "<no-thread>"}::${observation.identity}`;
+      const existing = byScope.get(key);
+      if (existing === undefined) {
+        const entry: ScopeEntry = { itemType: observation.itemType, outcome: observation.outcome, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown };
+        byScope.set(key, entry);
+        countNew(entry, observation.identity);
+        continue;
+      }
+      // Same scoped invocation identity across the unit's turns: one call;
+      // failure and read-shape merge onto the already-counted entry.
+      if (observation.outcome === "failed" && existing.outcome !== "failed") {
+        if (existing.outcome === "unknown") accounting.unknownOutcome -= 1;
+        existing.outcome = "failed";
+        accounting.failed += 1;
+      } else if (observation.outcome === "succeeded" && existing.outcome === "unknown") {
+        existing.outcome = "succeeded";
+        accounting.unknownOutcome -= 1;
+      }
+      if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
+        existing.itemType = observation.itemType;
+        accounting.readShaped += 1;
+      }
+      if (observation.bundledLookups > existing.bundled) {
+        accounting.bundledLookups += observation.bundledLookups - existing.bundled;
+        existing.bundled = observation.bundledLookups;
+      }
+      if (observation.bundleUnknown && !existing.bundleUnknown) {
+        existing.bundleUnknown = true;
+        accounting.bundleUnknownCalls += 1;
+      }
+    }
+  }
+  accounting.scopeUnknownIdentities = [...unscopedIdentities];
+  accounting.effectiveLookups = accounting.envelopes + accounting.bundledLookups;
+  return accounting;
 }
 
 /**
@@ -618,8 +833,8 @@ export interface TurnMetrics {
   usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null; reason: string | null };
   usageBasis: UsageBasis;
   readEvidence: ReadEvidence;
- /** Bounded-resolution invocation accounting, straight from the event scan (raw observations, not attribution). */
-  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number; unrecognized: number };
+ /** Bounded-resolution invocation accounting, straight from this turn's event scan (raw observations, not attribution; unit-scope dedupe is graded by the assertion). */
+  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number };
  /** Declared bootstrap context for this case ("warm"/"cold"); null = the case declares none. */
   resolutionContext: "warm" | "cold" | null;
  /** Loaded-bytes accounting: labelled bytes, null with reason until verifiable. */
@@ -670,8 +885,11 @@ function buildTurnMetrics(args: {
     invocations: {
       counted: scan.countedInvocations,
       failed: scan.failedInvocations,
+      unknownOutcome: scan.unknownOutcomeInvocations,
       unknownIdentity: scan.unknownIdentityCalls,
       readShaped: scan.readShapedInvocations,
+      bundled: scan.bundledLookups,
+      bundleUnknown: scan.bundleUnknownCalls,
       unrecognized: scan.unknownRecords,
     },
     resolutionContext: args.resolutionContext,
@@ -927,6 +1145,22 @@ function collectTurnRecords(unit: UnitRecord, io: RunnerIo): { turn: number; rec
   return out.sort((a, b) => a.turn - b.turn);
 }
 
+/** Turn streams with readability evidence, for unit-scope accounting. */
+function collectTurnStreams(unit: UnitRecord, io: RunnerIo): UnitTurnStream[] {
+  const out: UnitTurnStream[] = [];
+  for (const turnRec of Object.values(unit.turns)) {
+    let records: ParsedEventRecord[] = [];
+    let readable = true;
+    try {
+      records = parseEventLines(io.readText(turnRec.artifacts.events));
+    } catch {
+      readable = false;
+    }
+    out.push({ turn: turnRec.turn, threadId: turnRec.threadId, readable, records });
+  }
+  return out.sort((a, b) => a.turn - b.turn);
+}
+
 function gradeToolReadAssertion(
   ctx: GradingContext,
   assertionId: string,
@@ -985,49 +1219,45 @@ function gradeToolReadAssertion(
  * "unverified" (in the denominator), never a pass.
  */
 function gradeCallsWithin(ctx: GradingContext, assertionId: string, limit: number): AssertionGrade {
-  const perTurn = collectTurnRecords(ctx.unit, ctx.io);
-  if (perTurn.length === 0) {
+  const streams = collectTurnStreams(ctx.unit, ctx.io);
+  if (streams.length === 0) {
     return {
       assertionId,
       kind: "calls_within",
       grade: "unverified",
-      evidence: { detail: "no turn event files were readable; invocation accounting unverified" },
+      evidence: { detail: "no turns were recorded; invocation accounting unverified" },
     };
   }
-  let counted = 0;
-  let failed = 0;
-  let unknownIdentity = 0;
-  let readShaped = 0;
-  let malformed = 0;
-  let unrecognized = 0;
-  for (const { records } of perTurn) {
-    const scan = scanEventRecords(records);
-    counted += scan.countedInvocations;
-    failed += scan.failedInvocations;
-    unknownIdentity += scan.unknownIdentityCalls;
-    readShaped += scan.readShapedInvocations;
-    malformed += scan.malformedRecords;
-    unrecognized += scan.unknownRecords;
-  }
-  if (unknownIdentity > 0 || malformed > 0 || unrecognized > 0) {
+  const accounting = accountUnitInvocations(streams);
+  const incomplete: string[] = [];
+  if (accounting.unreadableTurns.length > 0) incomplete.push(`turn(s) ${accounting.unreadableTurns.join(", ")} have no readable event artifact`);
+  if (accounting.emptyTurns.length > 0) incomplete.push(`turn(s) ${accounting.emptyTurns.join(", ")} recorded no events at all`);
+  if (accounting.unterminatedTurns.length > 0) incomplete.push(`turn(s) ${accounting.unterminatedTurns.join(", ")} carry no terminal turn.completed/turn.failed marker (truncation cannot be excluded)`);
+  if (accounting.scopeUnknownIdentities.length > 0) incomplete.push(`${accounting.scopeUnknownIdentities.length} invocation identit(ies) observed without a thread scope (cross-turn identity unknowable)`);
+  if (accounting.bundleUnknownCalls > 0) incomplete.push(`${accounting.bundleUnknownCalls} call(s) carry an internal bundle this adapter cannot decompose`);
+  if (accounting.unknownIdentity > 0) incomplete.push(`${accounting.unknownIdentity} call(s) without identity`);
+  if (accounting.malformedRecords > 0) incomplete.push(`${accounting.malformedRecords} malformed record(s)`);
+  if (accounting.unrecognizedRecords > 0) incomplete.push(`${accounting.unrecognizedRecords} unrecognized record(s)`);
+  if (incomplete.length > 0) {
     return {
       assertionId,
       kind: "calls_within",
       grade: "unverified",
       evidence: {
-        detail: `incomplete accounting: ${unknownIdentity} invocation call(s) without identity, ${malformed} malformed record(s) and ${unrecognized} unrecognized record(s); a complete compliance claim is impossible (unknown stays unknown, never zero)`,
+        detail: `incomplete accounting: ${incomplete.join("; ")}; a complete compliance claim is impossible (unknown stays unknown, never zero)`,
       },
     };
   }
-  const pass = counted <= limit;
+  const pass = accounting.effectiveLookups <= limit;
+  const measured = `counted ${accounting.envelopes} invocation envelope(s) + ${accounting.bundledLookups} bundled constituent lookup(s) = ${accounting.effectiveLookups} effective lookup(s) (observed failures ${accounting.failed}, unknown outcomes ${accounting.unknownOutcome}, read-shaped ${accounting.readShaped})`;
   return {
     assertionId,
     kind: "calls_within",
     grade: pass ? "pass" : "fail",
     evidence: {
       detail: pass
-        ? `counted ${counted} deduplicated invocation call(s) (failed ${failed}, read-shaped ${readShaped}) within the limit ${limit}`
-        : `counted ${counted} deduplicated invocation call(s) (failed ${failed}, read-shaped ${readShaped}) exceed the limit ${limit}; extra causal calls are named by the instruction, not hidden`,
+        ? `${measured} within the limit ${limit}`
+        : `${measured} exceed the limit ${limit}; the batch envelope count is not the metric`,
     },
   };
 }
@@ -1055,7 +1285,7 @@ function gradeMutationWithheld(ctx: GradingContext, assertionId: string): Assert
 }
 
 /** Grouped-facts outcome: the final message carries the grouped request verbatim. */
-function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, needle: string): AssertionGrade {
+function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: GroupedFactsSpec): AssertionGrade {
   const turn = lastCompletedTurn(ctx.unit);
   if (!turn) {
     return {
@@ -1079,17 +1309,70 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, needle
       evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "final.md missing; grouped-facts outcome unverified until evidence adjudicated" },
     };
   }
-  const pass = content.includes(needle);
+  const missing = spec.required.filter((fact) => !content.includes(fact));
+  if (missing.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `grouped request omits required unavailable fact(s): ${missing.join(", ")}`,
+      },
+    };
+  }
+  const contradictions = (spec.contradicts ?? []).filter((text) => content.includes(text));
+  if (contradictions.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `final asserts a contradictory outcome despite requested facts: ${contradictions.join(", ")}`,
+      },
+    };
+  }
+  // Marker-only guard: after removing the required facts themselves, real
+  // request content must remain — echoing the marker is not a request.
+  let remainder = content;
+  for (const fact of spec.required) remainder = remainder.split(fact).join(" ");
+  const residual = remainder.replace(/[^A-Za-z0-9]+/g, "");
+  if (residual.length < 8) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: "final is a marker echo: the required facts appear with no other request content",
+      },
+    };
+  }
+  const cues = spec.requestCues ?? [];
+  if (cues.length > 0 && !cues.some((cue) => content.includes(cue))) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `final carries none of the specified request cues [${cues.join(", ")}]`,
+      },
+    };
+  }
   return {
     assertionId,
     kind: "grouped_facts_final",
-    grade: pass ? "pass" : "fail",
+    grade: "pass",
     evidence: {
       turn: turn.turn,
       file: turn.artifacts.final,
-      detail: pass
-        ? `final message carries the grouped-facts/authorization request ${JSON.stringify(needle)} — a truthful non-mutation stop, distinct from an applied mutation`
-        : `final message does not carry the expected grouped-facts request ${JSON.stringify(needle)}`,
+      detail: `final requests every unavailable fact [${spec.required.join(", ")}] with no contradictory outcome text`,
     },
   };
 }
@@ -1178,7 +1461,7 @@ function gradeUnit(ctx: GradingContext): UnitGrading {
         assertions.push(gradeMutationWithheld(ctx, assertion.id));
         break;
       case "grouped_facts_final":
-        assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as string));
+        assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as GroupedFactsSpec));
         break;
       case "thread_reused":
         assertions.push(gradeThreadReused(ctx, assertion.id));

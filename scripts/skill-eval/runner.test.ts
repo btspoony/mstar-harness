@@ -54,6 +54,7 @@ import {
   type SourceTree,
 } from "./manifest.ts";
 import {
+  accountUnitInvocations,
   assertResumeAllowed,
   buildFirstTurnArgv,
   buildResumeArgv,
@@ -637,6 +638,8 @@ interface SyntheticScript {
   spawnError?: string | null;
   writes?: { path: string; content: string }[];
   fail?: Error;
+  /** Simulates a missing events artifact: the adapter writes no events file. */
+  omitEvents?: boolean;
 }
 
 /** SYNTHETIC adapter: records spawn requests, writes scripted evidence files. */
@@ -648,7 +651,7 @@ function syntheticSpawn(
     fn.requests.push(req);
     const script = handler(req);
     if (script.fail) throw script.fail;
-    io.writeText(req.stdoutFile, script.events ?? "");
+    if (script.omitEvents !== true) io.writeText(req.stdoutFile, script.events ?? "");
     io.writeText(req.stderrFile, script.stderr ?? "");
     if (script.final !== undefined) {
       const i = req.argv.indexOf("--output-last-message");
@@ -1621,6 +1624,13 @@ describe("Task 2: report stage (synthetic state)", () => {
 // ---------------------------------------------------------------------------
 
 const BOUNDED_NEEDLE = "AUTHORIZATION-REQUIRED";
+/** Independently specified grouped-facts oracle: required facts, forbidden outcomes. */
+const GROUPED_SPEC = {
+  required: ["target issue id", "authorization"],
+  contradicts: ["was not necessary", "operation completed"],
+  requestCues: ["provide", "please provide", "need"],
+};
+const VALID_GROUPED_FINAL = `${BOUNDED_NEEDLE}: provide the target issue id and authorization before any change`;
 
 /** One synthetic tool invocation record; identity optional (absent = unknown). */
 function invocationLine(id: string | null, opts: { failed?: boolean; phase?: "started" | "completed" } = {}): string {
@@ -1643,7 +1653,10 @@ async function preparedBoundedRunDir(
   target.assertions = [
     { id: "b-calls", kind: "calls_within", value: limit },
     { id: "b-withheld", kind: "mutation_withheld", value: true },
-    { id: "b-grouped", kind: "grouped_facts_final", value: BOUNDED_NEEDLE },
+    { id: "b-grouped", kind: "grouped_facts_final", value: GROUPED_SPEC },
+    // A resumable case must keep its thread_reused assertion: the resume
+    // contract is validated at prepare time from the case's own assertions.
+    ...(typeof target.resumePrompt === "string" ? [{ id: "b-thread", kind: "thread_reused", value: true }] : []),
   ];
   if (context !== null) target.boundedResolution = { context };
   const io = memoryRunnerIo();
@@ -1722,7 +1735,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
 
   test("four-call causal help/read trace fails the three-call metric", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
-    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3", "item_4"]), `${BOUNDED_NEEDLE}: provide the target issue id and authorization`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3", "item_4"]), VALID_GROUPED_FINAL);
     const result = await runSmoke(io, manifest, spawn);
     expect(result.exit).toBe(1);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -1731,13 +1744,13 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
     expect(calls.grade).toBe("fail");
     expect(calls.evidence.detail).toContain("counted 4");
     expect(unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
-    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownIdentity: 0, readShaped: 4, unrecognized: 0 });
+    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownOutcome: 4, unknownIdentity: 0, readShaped: 4, bundled: 0, bundleUnknown: 0, unrecognized: 0 });
     expect(unit.turns["1"]!.metrics.resolutionContext).toBe("cold");
   });
 
   test("three counted calls ending in a grouped authorization request pass resolution and never execute the withheld mutation", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
-    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3"]), `${BOUNDED_NEEDLE}: provide the target issue id and authorization`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3"]), VALID_GROUPED_FINAL);
     const result = await runSmoke(io, manifest, spawn);
     expect(result.exit).toBe(0);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -1753,6 +1766,9 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
       unitsContextUnknown: 0,
       totalCallsCounted: 6,
       totalFailedCalls: 0,
+      totalBundledLookups: 0,
+      totalBundleUnknownCalls: 0,
+      totalUnknownOutcomeCalls: 6,
       totalUnknownIdentityCalls: 0,
       totalUnrecognizedRecords: 0,
       unitsWithUnknownIdentityCalls: 0,
@@ -1762,7 +1778,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
 
   test("unknown identity calls and malformed records prevent a complete compliance claim", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
-    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", null], { malformed: true }), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", null], { malformed: true }), VALID_GROUPED_FINAL);
     const result = await runSmoke(io, manifest, spawn);
     expect(result.exit).toBe(2);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -1782,7 +1798,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
       JSON.stringify({ type: "mystery.record", x: 1 }),
       JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }),
     ].join("\n")}\n`;
-    const spawn = boundedSpawn(io, manifest, RO_CASE, events, `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
     const result = await runSmoke(io, manifest, spawn);
     expect(result.exit).toBe(2);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -1799,7 +1815,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
       manifest,
       WW_CASE,
       boundedEvents(["item_1"]),
-      `${BOUNDED_NEEDLE}: provide the target issue id`,
+      VALID_GROUPED_FINAL,
       [{ path: "notes.md", content: "written despite the grouped request\n" }],
     );
     const result = await runSmoke(io, manifest, spawn);
@@ -1812,7 +1828,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
 
   test("warm and cold contexts are recorded explicitly from the case declaration, never inferred", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "warm");
-    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
     const result = await runSmoke(io, manifest, spawn);
     expect(result.exit).toBe(0);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -1823,7 +1839,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
 
   test("a pending unit's context is unknown — never labeled undeclared", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
-    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
     const run = await runSmoke(io, manifest, spawn);
     expect(run.exit).toBe(0);
 
@@ -1840,5 +1856,232 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
       unitsContextUnknown: 1,
     });
     expect(io.readText(report.mdPath)).toContain("context-unknown(pending)=1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded resolution fix round (R1–R5), synthetic
+// ---------------------------------------------------------------------------
+
+describe("bounded resolution fix round: completeness, bundles, oracle, outcomes, cross-turn scope (synthetic)", () => {
+  /** Grades one bounded RO unit with a scripted final message. */
+  async function gradeGroupedFinal(finalText: string): Promise<{ grade: string; detail: string }> {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), finalText);
+    await runSmoke(io, manifest, spawn);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    const assertion = unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    return { grade: assertion.grade, detail: assertion.evidence.detail };
+  }
+
+  test("a missing or empty event artifact cannot become a zero-call pass", async () => {
+    const empty = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const emptySpawn = boundedSpawn(empty.io, empty.manifest, RO_CASE, "", VALID_GROUPED_FINAL);
+    const emptyRun = await runSmoke(empty.io, empty.manifest, emptySpawn);
+    expect(emptyRun.exit).toBe(2);
+    const emptyCalls = Object.values(readState(empty.io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(emptyCalls.grade).toBe("unverified");
+    expect(emptyCalls.evidence.detail).toContain("recorded no events at all");
+
+    const missing = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const missingSpawn = syntheticSpawn(missing.io, (req) => {
+      const id = caseIdFromCwd(missing.manifest, req.cwd);
+      if (id === RO_CASE) return { omitEvents: true, final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+      return basePassScript(missing.manifest, id);
+    });
+    const missingRun = await runSmoke(missing.io, missing.manifest, missingSpawn);
+    expect(missingRun.exit).toBe(2);
+    const missingCalls = Object.values(readState(missing.io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(missingCalls.grade).toBe("unverified");
+    expect(missingCalls.evidence.detail).toContain("no readable event artifact");
+  });
+
+  test("a truncated stream without a terminal marker cannot establish accounting completeness", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const truncated = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1"),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, truncated, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("no terminal turn.completed");
+  });
+
+  test("a complete stream with zero tool records is a valid affirmative zero", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const zeroEvents = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5 } }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, zeroEvents, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("pass");
+    expect(calls.evidence.detail).toContain("counted 0 invocation envelope(s)");
+  });
+
+  test("a partially missing multi-turn stream is unverified, never silently summed", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(PM_RESUME_CASE, 3, null);
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== PM_RESUME_CASE) return basePassScript(manifest, id);
+      if (req.argv.includes("resume")) return { omitEvents: true, final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+      return { events: boundedEvents(["item_1"]), final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+    });
+    const result = await runSmoke(io, manifest, spawn);
+    // The missing second-turn stream makes the budget claim unverified; the
+    // resume-evidence assertion additionally fails (no terminal events for
+    // turn 2), so only the accounting grade is asserted here.
+    expect(result.exit).not.toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === PM_RESUME_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("no readable event artifact");
+  });
+
+  test("a bundled multi-lookup envelope is measured by constituent lookups, not by envelope count", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const bundled = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "command_execution", command: "cat AGENTS.md && grep -r x . ; ls\nwc -l y" },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      bundled,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("4 effective lookup(s)");
+  });
+
+  test("an undecomposable internal bundle is unverified, never a complete budget pass", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const opaque = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "tool_call", arguments: { nested: ["a", "b"] } },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      opaque,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("grouped-facts oracle: valid request passes; omitted facts, contradictions, marker-only and list-only fail", async () => {
+    const valid = await gradeGroupedFinal(VALID_GROUPED_FINAL);
+    expect(valid.grade).toBe("pass");
+
+    const omitted = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: please provide the target issue id`);
+    expect(omitted.grade).toBe("fail");
+    expect(omitted.detail).toContain("omits required unavailable fact(s): authorization");
+
+    const contradictory = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: please provide the target issue id and authorization; operation completed`);
+    expect(contradictory.grade).toBe("fail");
+    expect(contradictory.detail).toContain("contradictory outcome");
+
+    const markerOnly = await gradeGroupedFinal("target issue id authorization");
+    expect(markerOnly.grade).toBe("fail");
+    expect(markerOnly.detail).toContain("marker echo");
+
+    const listOnly = await gradeGroupedFinal("the target issue id and authorization are listed below in this report");
+    expect(listOnly.grade).toBe("fail");
+    expect(listOnly.detail).toContain("request cues");
+  });
+
+  test("observed failure, observed success and unknown outcome stay distinct", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const items = [
+      JSON.stringify({ type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], exit_code: 1 } }),
+      JSON.stringify({ type: "item.completed", id: "item_2", item: { id: "item_2", type: "command_execution", command: ["cat", "b"], status: "completed" } }),
+      JSON.stringify({ type: "item.completed", id: "item_3", item: { id: "item_3", type: "command_execution", command: ["cat", "c"], status: "weird-new-status" } }),
+    ];
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      ...items,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    await runSmoke(io, manifest, spawn);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.turns["1"]!.metrics.invocations).toMatchObject({ counted: 3, failed: 1, unknownOutcome: 1 });
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    // RO: 1 unknown outcome. Base-pass units carry status-less items: WW 1 +
+    // PM turn1/turn2 = 2 more unknown outcomes; observed failures stay 1.
+    expect(report.report.boundedResolution).toMatchObject({ totalFailedCalls: 1, totalUnknownOutcomeCalls: 4 });
+  });
+
+  test("a start/completed pair split across turns counts once under the thread scope", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(PM_RESUME_CASE, 3, null);
+    const turnEvents = (resume: boolean): string => `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_cross" }),
+      JSON.stringify(resume
+        ? { type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "b"] } }
+        : { type: "item.started", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== PM_RESUME_CASE) return basePassScript(manifest, id);
+      return { events: turnEvents(req.argv.includes("resume")), final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+    });
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === PM_RESUME_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("pass");
+    expect(calls.evidence.detail).toContain("counted 1 invocation envelope(s)");
+  });
+
+  test("unit-scope accounting merges cross-turn identity and flags unscoped ones", () => {
+    const turn1 = {
+      turn: 1,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    };
+    const turn2 = {
+      turn: 2,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    };
+    const merged = accountUnitInvocations([turn1, turn2]);
+    expect(merged.envelopes).toBe(1);
+    expect(merged.failed).toBe(1);
+    expect(merged.unterminatedTurns).toEqual([]);
+    expect(merged.scopeUnknownIdentities).toEqual([]);
+
+    const unscoped = accountUnitInvocations([{ ...turn1, threadId: null }, { ...turn2, threadId: null }]);
+    expect(unscoped.envelopes).toBe(1);
+    expect(unscoped.scopeUnknownIdentities).toEqual(["item_1"]);
   });
 });

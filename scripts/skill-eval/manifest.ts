@@ -91,6 +91,20 @@ export type AssertionKind = (typeof ASSERTION_KINDS)[number];
 export const RESOLUTION_CONTEXTS = ["warm", "cold"] as const;
 export type ResolutionContext = (typeof RESOLUTION_CONTEXTS)[number];
 
+/**
+ * Independently specified behavioral oracle for a grouped-facts outcome: a
+ * truthful stop must REQUEST every unavailable fact, must not assert a
+ * contradictory (completed) outcome, and must not be a bare marker echo.
+ */
+export interface GroupedFactsSpec {
+  /** Every fact the run could not resolve; each must appear in the final. */
+  required: string[];
+  /** Outcome text that contradicts a truthful non-mutation stop — must be absent. */
+  contradicts?: string[];
+  /** Optional request cues; when given, at least one must appear. */
+  requestCues?: string[];
+}
+
 export interface BoundedResolutionContext {
   /**
    * "warm" = bootstrap policy reads are already available to the run;
@@ -138,8 +152,8 @@ export interface FixtureDef {
 export interface CaseAssertion {
   id: string;
   kind: AssertionKind;
- /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused and mutation_withheld, positive integer for calls_within. */
-  value: string | string[] | true | number;
+ /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused and mutation_withheld, positive integer for calls_within, GroupedFactsSpec for grouped_facts_final. */
+  value: string | string[] | true | number | GroupedFactsSpec;
   note?: string;
 }
 
@@ -681,6 +695,22 @@ export function validateCases(
           }
         } else if (kind === "mutation_withheld") {
           if (rec.value !== true) errors.push(`${alabel}.value must be true`);
+        } else if (kind === "grouped_facts_final") {
+          const spec = rec.value;
+          if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+            errors.push(`${alabel}.value must be a grouped-facts specification object`);
+          } else {
+            const grouped = spec as Record<string, unknown>;
+            if (!Array.isArray(grouped.required) || grouped.required.length === 0 || grouped.required.some((fact) => typeof fact !== "string" || fact.trim() === "")) {
+              errors.push(`${alabel}.value.required must be a non-empty array of non-empty fact strings`);
+            }
+            for (const field of ["contradicts", "requestCues"] as const) {
+              const list = grouped[field];
+              if (list !== undefined && (!Array.isArray(list) || list.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
+                errors.push(`${alabel}.value.${field} must be a non-empty-string array when present`);
+              }
+            }
+          }
         } else if (typeof rec.value !== "string" || rec.value === "") {
           errors.push(`${alabel}.value must be a non-empty string for kind ${kind}`);
         }

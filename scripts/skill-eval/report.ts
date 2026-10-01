@@ -50,7 +50,7 @@ export interface ReportTurnRow {
   usageBasis: UsageBasis;
   usageReason: string | null;
   readEvidence: string;
-  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number; unrecognized: number };
+  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number };
   resolutionContext: "warm" | "cold" | null;
 }
 
@@ -105,6 +105,12 @@ export interface EvalReport {
     unitsContextUnknown: number;
     totalCallsCounted: number;
     totalFailedCalls: number;
+    /** Observable constituent lookups bundled inside counted envelopes. */
+    totalBundledLookups: number;
+    /** Calls with an unobservable internal bundle. */
+    totalBundleUnknownCalls: number;
+    /** Counted calls whose outcome could not be determined (never a known zero-failure). */
+    totalUnknownOutcomeCalls: number;
     /** Raw magnitude of unresolvable accounting (not just a flag). */
     totalUnknownIdentityCalls: number;
     totalUnrecognizedRecords: number;
@@ -141,6 +147,8 @@ const HONESTY_NOTES = [
   "unverified assertions remain in the attempted denominator and are listed explicitly; they are not passes (AC4/AC5)",
   "invocation calls are deduplicated by invocation identity; a record without any identity stays an unknown (never zero-filled), and failed attempts still count",
   "the warm/cold resolution context is the case's declared bootstrap precondition, never an inference from the event stream; a record whose shape is unrecognized is an unknown, not a zero",
+  "invocation outcomes distinguish observed failure, observed success and unknown; an unsupported status/exit encoding stays unknown and is surfaced, never folded into a known-zero failure total",
+  "a missing, empty, or unterminated event stream cannot establish accounting completeness, and observable bundled constituent lookups are counted separately from their envelope; an undecomposable internal bundle stays unknown",
   "this report aggregates recorded evidence only — it never reruns a model and never substitutes synthetic results for real ones (AC4)",
 ];
 
@@ -239,16 +247,16 @@ function toMarkdown(report: EvalReport): string {
     `- declared context: warm=${report.boundedResolution.unitsDeclaredWarm} cold=${report.boundedResolution.unitsDeclaredCold} undeclared=${report.boundedResolution.unitsUndeclared} context-unknown(pending)=${report.boundedResolution.unitsContextUnknown}`,
   );
   lines.push(
-    `- invocation calls counted=${report.boundedResolution.totalCallsCounted} failed=${report.boundedResolution.totalFailedCalls} unknown-identity=${report.boundedResolution.totalUnknownIdentityCalls} unrecognized-records=${report.boundedResolution.totalUnrecognizedRecords} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
+    `- invocation envelopes counted=${report.boundedResolution.totalCallsCounted} bundled-constituent-lookups=${report.boundedResolution.totalBundledLookups} bundle-unknown-calls=${report.boundedResolution.totalBundleUnknownCalls} observed-failures=${report.boundedResolution.totalFailedCalls} unknown-outcomes=${report.boundedResolution.totalUnknownOutcomeCalls} unknown-identity=${report.boundedResolution.totalUnknownIdentityCalls} unrecognized-records=${report.boundedResolution.totalUnrecognizedRecords} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
   );
   lines.push("");
   lines.push("## Units");
   lines.push("");
-  lines.push("| unit | split | grade | turns (calls/failed/unknown-id) | failure reason |");
+  lines.push("| unit | split | grade | turns (calls/failed/unknown-outcome/unknown-id/read-shaped/bundled) | failure reason |");
   lines.push("|---|---|---|---|---|");
   for (const u of report.units) {
     lines.push(
-      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}[c${t.invocations.counted}/f${t.invocations.failed}/u${t.invocations.unknownIdentity}/r${t.invocations.readShaped}]`).join(" ")} | ${u.failureReason ?? ""} |`,
+      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}[c${t.invocations.counted}/f${t.invocations.failed}/o${t.invocations.unknownOutcome}/u${t.invocations.unknownIdentity}/r${t.invocations.readShaped}/b${t.invocations.bundled}]`).join(" ")} | ${u.failureReason ?? ""} |`,
     );
   }
   const unverified = report.units.flatMap((u) => u.unverifiedAssertions.map((a) => `${u.unitId} ${a}`));
@@ -324,6 +332,9 @@ export function buildReport(args: ReportArgs): ReportResult {
         unitsContextUnknown: 0,
         totalCallsCounted: 0,
         totalFailedCalls: 0,
+        totalBundledLookups: 0,
+        totalBundleUnknownCalls: 0,
+        totalUnknownOutcomeCalls: 0,
         totalUnknownIdentityCalls: 0,
         totalUnrecognizedRecords: 0,
         unitsWithUnknownIdentityCalls: 0,
@@ -395,6 +406,9 @@ export function buildReport(args: ReportArgs): ReportResult {
     unitsContextUnknown: 0,
     totalCallsCounted: 0,
     totalFailedCalls: 0,
+    totalBundledLookups: 0,
+    totalBundleUnknownCalls: 0,
+    totalUnknownOutcomeCalls: 0,
     totalUnknownIdentityCalls: 0,
     totalUnrecognizedRecords: 0,
     unitsWithUnknownIdentityCalls: 0,
@@ -438,6 +452,9 @@ export function buildReport(args: ReportArgs): ReportResult {
       if (t.metrics.usageEvents.length > 0) unitHasUsage = true;
       bounded.totalCallsCounted += t.metrics.invocations.counted;
       bounded.totalFailedCalls += t.metrics.invocations.failed;
+      bounded.totalBundledLookups += t.metrics.invocations.bundled;
+      bounded.totalBundleUnknownCalls += t.metrics.invocations.bundleUnknown;
+      bounded.totalUnknownOutcomeCalls += t.metrics.invocations.unknownOutcome;
       bounded.totalUnknownIdentityCalls += t.metrics.invocations.unknownIdentity;
       bounded.totalUnrecognizedRecords += t.metrics.invocations.unrecognized;
       if (t.metrics.invocations.unknownIdentity > 0) unitUnknownIdentity = true;
