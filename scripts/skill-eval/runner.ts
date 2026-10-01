@@ -509,11 +509,16 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
           if (READ_ITEM_TYPES.has(itemTypeForCall)) scan.readShapedInvocations += 1;
         } else {
           // Same invocation identity: one call. A failed phase marks the
-          // call failed even if the paired record did not.
+          // call failed even if the paired record did not; a read-shaped
+          // phase marks it read-shaped even if the first phase was generic.
           const existing = scan.invocationCalls[seenAt]!;
           if (failed && !existing.failed) {
             existing.failed = true;
             scan.failedInvocations += 1;
+          }
+          if (READ_ITEM_TYPES.has(itemTypeForCall) && !READ_ITEM_TYPES.has(existing.itemType)) {
+            existing.itemType = itemTypeForCall;
+            scan.readShapedInvocations += 1;
           }
         }
       }
@@ -614,7 +619,7 @@ export interface TurnMetrics {
   usageBasis: UsageBasis;
   readEvidence: ReadEvidence;
  /** Bounded-resolution invocation accounting, straight from the event scan (raw observations, not attribution). */
-  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number };
+  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number; unrecognized: number };
  /** Declared bootstrap context for this case ("warm"/"cold"); null = the case declares none. */
   resolutionContext: "warm" | "cold" | null;
  /** Loaded-bytes accounting: labelled bytes, null with reason until verifiable. */
@@ -667,6 +672,7 @@ function buildTurnMetrics(args: {
       failed: scan.failedInvocations,
       unknownIdentity: scan.unknownIdentityCalls,
       readShaped: scan.readShapedInvocations,
+      unrecognized: scan.unknownRecords,
     },
     resolutionContext: args.resolutionContext,
     bytesLoaded: { bytes: null, unit: "bytes", reason: BYTES_UNVERIFIED_REASON },

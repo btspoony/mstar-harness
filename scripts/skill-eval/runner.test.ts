@@ -1731,7 +1731,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
     expect(calls.grade).toBe("fail");
     expect(calls.evidence.detail).toContain("counted 4");
     expect(unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
-    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownIdentity: 0, readShaped: 4 });
+    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownIdentity: 0, readShaped: 4, unrecognized: 0 });
     expect(unit.turns["1"]!.metrics.resolutionContext).toBe("cold");
   });
 
@@ -1750,8 +1750,11 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
       unitsDeclaredCold: 1,
       unitsDeclaredWarm: 0,
       unitsUndeclared: 2,
+      unitsContextUnknown: 0,
       totalCallsCounted: 6,
       totalFailedCalls: 0,
+      totalUnknownIdentityCalls: 0,
+      totalUnrecognizedRecords: 0,
       unitsWithUnknownIdentityCalls: 0,
     });
     expect(io.readText(report.mdPath)).toContain("Bounded-resolution accounting");
@@ -1815,6 +1818,27 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
     expect(unit.turns["1"]!.metrics.resolutionContext).toBe("warm");
     const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
-    expect(report.report.boundedResolution).toMatchObject({ unitsDeclaredWarm: 1, unitsDeclaredCold: 0, unitsUndeclared: 2 });
+    expect(report.report.boundedResolution).toMatchObject({ unitsDeclaredWarm: 1, unitsDeclaredCold: 0, unitsUndeclared: 2, unitsContextUnknown: 0 });
+  });
+
+  test("a pending unit's context is unknown — never labeled undeclared", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const run = await runSmoke(io, manifest, spawn);
+    expect(run.exit).toBe(0);
+
+    const state = readState(io);
+    const pendingId = Object.values(state.units).find((u) => u.caseId === RO_CASE)!.unitId;
+    delete state.units[pendingId];
+    writeState(io, state);
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(2);
+    expect(report.report.boundedResolution).toMatchObject({
+      unitsDeclaredCold: 0,
+      unitsUndeclared: 2,
+      unitsContextUnknown: 1,
+    });
+    expect(io.readText(report.mdPath)).toContain("context-unknown(pending)=1");
   });
 });

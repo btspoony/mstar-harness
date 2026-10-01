@@ -50,7 +50,7 @@ export interface ReportTurnRow {
   usageBasis: UsageBasis;
   usageReason: string | null;
   readEvidence: string;
-  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number };
+  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number; unrecognized: number };
   resolutionContext: "warm" | "cold" | null;
 }
 
@@ -99,9 +99,15 @@ export interface EvalReport {
   boundedResolution: {
     unitsDeclaredWarm: number;
     unitsDeclaredCold: number;
+    /** RECORDED units whose selected case declares no context (a known absence). */
     unitsUndeclared: number;
+    /** Units with no recorded evidence (pending): context unobserved, never "undeclared". */
+    unitsContextUnknown: number;
     totalCallsCounted: number;
     totalFailedCalls: number;
+    /** Raw magnitude of unresolvable accounting (not just a flag). */
+    totalUnknownIdentityCalls: number;
+    totalUnrecognizedRecords: number;
     unitsWithUnknownIdentityCalls: number;
   };
   units: ReportUnitRow[];
@@ -230,19 +236,19 @@ function toMarkdown(report: EvalReport): string {
   lines.push("## Bounded-resolution accounting");
   lines.push("");
   lines.push(
-    `- declared context: warm=${report.boundedResolution.unitsDeclaredWarm} cold=${report.boundedResolution.unitsDeclaredCold} undeclared=${report.boundedResolution.unitsUndeclared}`,
+    `- declared context: warm=${report.boundedResolution.unitsDeclaredWarm} cold=${report.boundedResolution.unitsDeclaredCold} undeclared=${report.boundedResolution.unitsUndeclared} context-unknown(pending)=${report.boundedResolution.unitsContextUnknown}`,
   );
   lines.push(
-    `- invocation calls counted=${report.boundedResolution.totalCallsCounted} failed=${report.boundedResolution.totalFailedCalls} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
+    `- invocation calls counted=${report.boundedResolution.totalCallsCounted} failed=${report.boundedResolution.totalFailedCalls} unknown-identity=${report.boundedResolution.totalUnknownIdentityCalls} unrecognized-records=${report.boundedResolution.totalUnrecognizedRecords} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
   );
   lines.push("");
   lines.push("## Units");
   lines.push("");
-  lines.push("| unit | split | grade | turns | failure reason |");
+  lines.push("| unit | split | grade | turns (calls/failed/unknown-id) | failure reason |");
   lines.push("|---|---|---|---|---|");
   for (const u of report.units) {
     lines.push(
-      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}`).join(" ")} | ${u.failureReason ?? ""} |`,
+      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}[c${t.invocations.counted}/f${t.invocations.failed}/u${t.invocations.unknownIdentity}/r${t.invocations.readShaped}]`).join(" ")} | ${u.failureReason ?? ""} |`,
     );
   }
   const unverified = report.units.flatMap((u) => u.unverifiedAssertions.map((a) => `${u.unitId} ${a}`));
@@ -315,8 +321,11 @@ export function buildReport(args: ReportArgs): ReportResult {
         unitsDeclaredWarm: 0,
         unitsDeclaredCold: 0,
         unitsUndeclared: 0,
+        unitsContextUnknown: 0,
         totalCallsCounted: 0,
         totalFailedCalls: 0,
+        totalUnknownIdentityCalls: 0,
+        totalUnrecognizedRecords: 0,
         unitsWithUnknownIdentityCalls: 0,
       },
       units: [],
@@ -383,8 +392,11 @@ export function buildReport(args: ReportArgs): ReportResult {
     unitsDeclaredWarm: 0,
     unitsDeclaredCold: 0,
     unitsUndeclared: 0,
+    unitsContextUnknown: 0,
     totalCallsCounted: 0,
     totalFailedCalls: 0,
+    totalUnknownIdentityCalls: 0,
+    totalUnrecognizedRecords: 0,
     unitsWithUnknownIdentityCalls: 0,
   };
 
@@ -405,7 +417,9 @@ export function buildReport(args: ReportArgs): ReportResult {
         failedAssertions: [],
         unverifiedAssertions: [],
       });
-      bounded.unitsUndeclared += 1;
+      // No recorded evidence: the context was never observed. This is NOT
+      // the same fact as a recorded case that declares no context.
+      bounded.unitsContextUnknown += 1;
       continue;
     }
     const manifestCase = manifest.cases.find((c) => c.id === unit.caseId);
@@ -424,6 +438,8 @@ export function buildReport(args: ReportArgs): ReportResult {
       if (t.metrics.usageEvents.length > 0) unitHasUsage = true;
       bounded.totalCallsCounted += t.metrics.invocations.counted;
       bounded.totalFailedCalls += t.metrics.invocations.failed;
+      bounded.totalUnknownIdentityCalls += t.metrics.invocations.unknownIdentity;
+      bounded.totalUnrecognizedRecords += t.metrics.invocations.unrecognized;
       if (t.metrics.invocations.unknownIdentity > 0) unitUnknownIdentity = true;
     }
     if (unitUnknownIdentity) bounded.unitsWithUnknownIdentityCalls += 1;
