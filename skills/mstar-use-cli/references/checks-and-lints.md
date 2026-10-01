@@ -14,7 +14,7 @@ Payload discovery is read-only: `mstar-harness schema <type>` prints the runtime
 | `1` | violations or data errors — one row per violation on stderr, each with a stable code; also used for a missing document, an unreadable input, or a resolution failure |
 | `2` | usage: missing target, unknown option value, or a path the command cannot classify |
 
-The description-driven commands follow the same convention: a missing **required argument** or option is answered by the usage envelope — `command.invalid-input`, exit `2` — whose message is the parser's own line, for example `error: missing required argument 'kind'` (probed on the current built CLI). Read the message before classifying an exit.
+The description-driven commands follow the same convention: a missing **required argument** is answered by the usage envelope — `command.invalid-input`, exit `2` — carrying the parser's own message line, for example `error: missing required argument 'kind'` (the probed behavior of the current built CLI); the parser routes its missing-input failures to this same usage envelope. Read the message before classifying an exit.
 
 Diagnostics go to stderr in every case; a check that prints a rollup (the tech-debt and lease checks) puts it on stdout.
 
