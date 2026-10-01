@@ -82,8 +82,17 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
           "record is missing or incomplete; do not re-preview or apply a different manifest",
       );
     }
-    const manifest = JSON.parse(row.manifest_json) as ExecutionManifest;
-    const coverage = JSON.parse(row.coverage_json) as ExecutionCoverageSet;
+    let manifest: ExecutionManifest;
+    let coverage: ExecutionCoverageSet;
+    try {
+      manifest = JSON.parse(row.manifest_json) as ExecutionManifest;
+      coverage = JSON.parse(row.coverage_json) as ExecutionCoverageSet;
+    } catch {
+      throw Object.assign(
+        new Error("store upgrade found malformed JSON in the persisted staged manifest or coverage record"),
+        { code: "store.upgrade-staged-record-malformed" },
+      );
+    }
     if (
       executionManifestHash(manifest) !== row.manifest_hash ||
       typeof coverage.digest !== "string" ||
