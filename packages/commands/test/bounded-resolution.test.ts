@@ -246,9 +246,9 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "roadmap.show": unverified("show roadmap content", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "roadmap.export": unverified("export the roadmap", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   // store family
-  "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.upgrade witness"),
+  "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.safe-upgrade witness"),
   "store.migrate": unverified("stage a legacy migration", "requires manifests, coverage sets and recovery receipts; deferred to the versioned scenario set"),
-  "store.upgrade": witnessed("a retirement failure refuses with a generic envelope that exposes no partial-applied facts; persisted state alone evidences the partial application; replay completes within budget", "partial-application-replay (2 calls; envelope-to-partial-state agreement unverified — asserted not exposed)", "warm", 2, "partial-application-then-resolved"),
+  "store.safe-upgrade": witnessed("a retirement failure refuses with a generic envelope that exposes no partial-applied facts; persisted state alone evidences the partial application; replay completes within budget", "partial-application-replay (2 calls; envelope-to-partial-state agreement unverified — asserted not exposed)", "warm", 2, "partial-application-then-resolved"),
   "store.backup": unverified("back up the store", "requires an initialized store fixture; deferred to the versioned scenario set"),
   "store.activate": unverified("activate store authority", "requires staged authority state; no in-package fixture"),
   "store.retire": unverified("retire store sources", "requires staged authority state; no in-package fixture"),
@@ -492,12 +492,6 @@ const fixtureAttestation = {
   }],
   stoppedSessions: [],
 };
-
-async function runStoreUpgrade(root: string, harness: string): Promise<CommandEnvelope> {
-  const attestation = join(root, "attestation.json");
-  writeFileSync(attestation, `${JSON.stringify(fixtureAttestation)}\n`);
-  return executeCommand("store.upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
-}
 
 function writeLeaseSnapshot(harness: string, workflowId: string, plans: unknown[]): void {
   const workflowDir = join(harness, "workflows", workflowId);
@@ -846,7 +840,7 @@ describe("lease witness", () => {
   });
 });
 
-describe("store.upgrade partial-application witness", () => {
+describe("store.safe-upgrade partial-application witness", () => {
   test("a retirement failure leaves a partially applied state; replay completes within the budget", async () => {
     const root = mkdtempSync(join(tmpdir(), "bounded-store-"));
     roots.push(root);
@@ -865,10 +859,11 @@ describe("store.upgrade partial-application witness", () => {
 
     // Call 1 fails at the induced retirement stage — after the activation has
     // committed and the legacy files were renamed away. The envelope is the
-    // generic upgrade-blocked refusal and carries NO partial-applied facts.
+    // unclassified-failure refusal (the induced error carries no producer
+    // code) and carries NO partial-applied facts.
     useEnv({ MSTAR_STORE_TEST_RUNNER: "1", MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "after-rename" });
-    const first = await countedCall(interaction, "execute", "store.upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
-    expect(first).toMatchObject({ status: "refused", code: "store.upgrade-blocked", exitCode: 1 });
+    const first = await countedCall(interaction, "execute", "store.safe-upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
+    expect(first).toMatchObject({ status: "refused", code: "store.safe-upgrade.unexpected-failure", exitCode: 1 });
     // Surface limitation, asserted: the first envelope exposes no receipt or
     // diagnostic of what applied, so envelope-to-partial-state agreement is
     // unverifiable — the persisted state below is the only partial evidence,
@@ -890,7 +885,7 @@ describe("store.upgrade partial-application witness", () => {
     }
 
     // Call 2 (replay) resumes and completes.
-    const second = await countedCall(interaction, "execute", "store.upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
+    const second = await countedCall(interaction, "execute", "store.safe-upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
     expect(second.status).toBe("ok");
     if (second.status === "ok") {
       expect(second.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
