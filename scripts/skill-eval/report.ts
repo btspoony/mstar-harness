@@ -50,7 +50,7 @@ export interface ReportTurnRow {
   usageBasis: UsageBasis;
   usageReason: string | null;
   readEvidence: string;
-  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number };
+  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number; conflictingOutcome: number };
   resolutionContext: "warm" | "cold" | null;
 }
 
@@ -103,6 +103,11 @@ export interface EvalReport {
     unitsUndeclared: number;
     /** Units with no recorded evidence (pending): context unobserved, never "undeclared". */
     unitsContextUnknown: number;
+    /**
+     * RAW PER-TURN observations summed across turns — NOT the unit-scope
+     * deduplicated budget (that is computed by the calls_within assertion).
+     * A cross-turn start/completed pair appears once per turn here.
+     */
     totalCallsCounted: number;
     totalFailedCalls: number;
     /** Observable constituent lookups bundled inside counted envelopes. */
@@ -111,6 +116,8 @@ export interface EvalReport {
     totalBundleUnknownCalls: number;
     /** Counted calls whose outcome could not be determined (never a known zero-failure). */
     totalUnknownOutcomeCalls: number;
+    /** Calls whose phases reported contradictory outcomes. */
+    totalConflictingOutcomeCalls: number;
     /** Raw magnitude of unresolvable accounting (not just a flag). */
     totalUnknownIdentityCalls: number;
     totalUnrecognizedRecords: number;
@@ -149,6 +156,8 @@ const HONESTY_NOTES = [
   "the warm/cold resolution context is the case's declared bootstrap precondition, never an inference from the event stream; a record whose shape is unrecognized is an unknown, not a zero",
   "invocation outcomes distinguish observed failure, observed success and unknown; an unsupported status/exit encoding stays unknown and is surfaced, never folded into a known-zero failure total",
   "a missing, empty, or unterminated event stream cannot establish accounting completeness, and observable bundled constituent lookups are counted separately from their envelope; an undecomposable internal bundle stays unknown",
+  "boundedResolution totals are RAW PER-TURN observations summed across turns — the unit-scope deduplicated budget is what the calls_within assertion grades, so the two numbers are not interchangeable",
+  "contradictory phase outcomes (one failed, one succeeded) surface as conflicting/unknown rather than being resolved into either",
   "this report aggregates recorded evidence only — it never reruns a model and never substitutes synthetic results for real ones (AC4)",
 ];
 
@@ -247,7 +256,7 @@ function toMarkdown(report: EvalReport): string {
     `- declared context: warm=${report.boundedResolution.unitsDeclaredWarm} cold=${report.boundedResolution.unitsDeclaredCold} undeclared=${report.boundedResolution.unitsUndeclared} context-unknown(pending)=${report.boundedResolution.unitsContextUnknown}`,
   );
   lines.push(
-    `- invocation envelopes counted=${report.boundedResolution.totalCallsCounted} bundled-constituent-lookups=${report.boundedResolution.totalBundledLookups} bundle-unknown-calls=${report.boundedResolution.totalBundleUnknownCalls} observed-failures=${report.boundedResolution.totalFailedCalls} unknown-outcomes=${report.boundedResolution.totalUnknownOutcomeCalls} unknown-identity=${report.boundedResolution.totalUnknownIdentityCalls} unrecognized-records=${report.boundedResolution.totalUnrecognizedRecords} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
+    `- raw per-turn invocation observations (unit-scope dedupe is applied by the calls_within assertion): envelopes counted=${report.boundedResolution.totalCallsCounted} bundled-constituent-lookups=${report.boundedResolution.totalBundledLookups} bundle-unknown-calls=${report.boundedResolution.totalBundleUnknownCalls} observed-failures=${report.boundedResolution.totalFailedCalls} unknown-outcomes=${report.boundedResolution.totalUnknownOutcomeCalls} conflicting-outcomes=${report.boundedResolution.totalConflictingOutcomeCalls} unknown-identity=${report.boundedResolution.totalUnknownIdentityCalls} unrecognized-records=${report.boundedResolution.totalUnrecognizedRecords} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
   );
   lines.push("");
   lines.push("## Units");
@@ -256,7 +265,7 @@ function toMarkdown(report: EvalReport): string {
   lines.push("|---|---|---|---|---|");
   for (const u of report.units) {
     lines.push(
-      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}[c${t.invocations.counted}/f${t.invocations.failed}/o${t.invocations.unknownOutcome}/u${t.invocations.unknownIdentity}/r${t.invocations.readShaped}/b${t.invocations.bundled}]`).join(" ")} | ${u.failureReason ?? ""} |`,
+      `| ${u.unitId} | ${u.caseSplit} | ${u.grade} | ${u.turns.map((t) => `t${t.turn}:${t.status}${t.infrastructureReason ? `(${t.infrastructureReason})` : ""}[c${t.invocations.counted}/f${t.invocations.failed}/o${t.invocations.unknownOutcome}/u${t.invocations.unknownIdentity}/rs${t.invocations.readShaped}/b${t.invocations.bundled}]`).join(" ")} | ${u.failureReason ?? ""} |`,
     );
   }
   const unverified = report.units.flatMap((u) => u.unverifiedAssertions.map((a) => `${u.unitId} ${a}`));
@@ -335,6 +344,8 @@ export function buildReport(args: ReportArgs): ReportResult {
         totalBundledLookups: 0,
         totalBundleUnknownCalls: 0,
         totalUnknownOutcomeCalls: 0,
+    totalConflictingOutcomeCalls: 0,
+        totalConflictingOutcomeCalls: 0,
         totalUnknownIdentityCalls: 0,
         totalUnrecognizedRecords: 0,
         unitsWithUnknownIdentityCalls: 0,
@@ -409,6 +420,7 @@ export function buildReport(args: ReportArgs): ReportResult {
     totalBundledLookups: 0,
     totalBundleUnknownCalls: 0,
     totalUnknownOutcomeCalls: 0,
+    totalConflictingOutcomeCalls: 0,
     totalUnknownIdentityCalls: 0,
     totalUnrecognizedRecords: 0,
     unitsWithUnknownIdentityCalls: 0,
@@ -455,6 +467,7 @@ export function buildReport(args: ReportArgs): ReportResult {
       bounded.totalBundledLookups += t.metrics.invocations.bundled;
       bounded.totalBundleUnknownCalls += t.metrics.invocations.bundleUnknown;
       bounded.totalUnknownOutcomeCalls += t.metrics.invocations.unknownOutcome;
+      bounded.totalConflictingOutcomeCalls += t.metrics.invocations.conflictingOutcome;
       bounded.totalUnknownIdentityCalls += t.metrics.invocations.unknownIdentity;
       bounded.totalUnrecognizedRecords += t.metrics.invocations.unrecognized;
       if (t.metrics.invocations.unknownIdentity > 0) unitUnknownIdentity = true;

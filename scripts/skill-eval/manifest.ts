@@ -101,8 +101,10 @@ export interface GroupedFactsSpec {
   required: string[];
   /** Outcome text that contradicts a truthful non-mutation stop — must be absent. */
   contradicts?: string[];
-  /** Optional request cues; when given, at least one must appear. */
-  requestCues?: string[];
+  /** Request cues — at least one MUST appear: a fact list is not a request. */
+  requestCues: string[];
+  /** Optional marker token echoed by the case; stripped before the echo guard. */
+  marker?: string;
 }
 
 export interface BoundedResolutionContext {
@@ -704,11 +706,16 @@ export function validateCases(
             if (!Array.isArray(grouped.required) || grouped.required.length === 0 || grouped.required.some((fact) => typeof fact !== "string" || fact.trim() === "")) {
               errors.push(`${alabel}.value.required must be a non-empty array of non-empty fact strings`);
             }
-            for (const field of ["contradicts", "requestCues"] as const) {
-              const list = grouped[field];
-              if (list !== undefined && (!Array.isArray(list) || list.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
-                errors.push(`${alabel}.value.${field} must be a non-empty-string array when present`);
-              }
+            if (!Array.isArray(grouped.requestCues) || grouped.requestCues.length === 0 || grouped.requestCues.some((cue) => typeof cue !== "string" || cue.trim() === "")) {
+              errors.push(`${alabel}.value.requestCues must be a non-empty array of request-cue strings (a fact list is not a request)`);
+            }
+            const contradicts = grouped.contradicts;
+            if (contradicts !== undefined && (!Array.isArray(contradicts) || contradicts.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
+              errors.push(`${alabel}.value.contradicts must be a non-empty-string array when present`);
+            }
+            const marker = grouped.marker;
+            if (marker !== undefined && (typeof marker !== "string" || marker.trim() === "")) {
+              errors.push(`${alabel}.value.marker must be a non-empty string when present`);
             }
           }
         } else if (typeof rec.value !== "string" || rec.value === "") {

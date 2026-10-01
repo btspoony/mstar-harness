@@ -350,6 +350,8 @@ export interface InvocationCallObservation {
   /** Observed failure only; unsupported failure shapes are NOT coerced to success. */
   failed: boolean;
   outcome: InvocationOutcome;
+  /** Contradictory phases (one failed, one succeeded) — the outcome is not coherent. */
+  outcomeConflicted: boolean;
   /** Observable constituent lookups beyond the envelope itself (bundled shell commands). */
   bundledLookups: number;
   /** The payload shape could not be decomposed → bundled accounting is unknown. */
@@ -384,6 +386,8 @@ export interface EventStreamScan {
   bundledLookups: number;
   /** Counted calls whose internal bundle could not be decomposed. */
   bundleUnknownCalls: number;
+  /** Counted calls whose phases reported contradictory outcomes (not coherent). */
+  conflictingOutcomeCalls: number;
 }
 
 export function parseEventLines(raw: string): ParsedEventRecord[] {
@@ -468,6 +472,10 @@ function constituentLookups(itemType: string, item: Record<string, unknown> | nu
   const command = item.command;
   if (Array.isArray(command)) return { bundled: 0, unknown: false };
   if (typeof command === "string" && command.trim() !== "") {
+    // Quoted shell syntax makes the separator split ambiguous (`;`, `|`, `&&`
+    // can live inside a quoted argument). This adapter has no shell parser, so
+    // ambiguous syntax stays unknown instead of a guessed constituent count.
+    if (/["'`]/.test(command)) return { bundled: 0, unknown: true };
     const parts = command.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
     return { bundled: Math.max(0, parts.length - 1), unknown: false };
   }
@@ -475,6 +483,16 @@ function constituentLookups(itemType: string, item: Record<string, unknown> | nu
   // types carry payloads this adapter cannot decompose.
   if (itemType === "file_read" || itemType === "read_file") return { bundled: 0, unknown: false };
   return { bundled: 0, unknown: true };
+}
+
+/** Applies an incoming outcome to an already-counted call; never coerces a conflict. */
+function mergeOutcomeState(
+  current: { outcome: InvocationOutcome; outcomeConflicted: boolean },
+  incoming: InvocationOutcome,
+): "noop" | "set" | "conflict" {
+  if (incoming === "unknown" || current.outcomeConflicted) return "noop";
+  if (current.outcome === "unknown") return "set";
+  return current.outcome === incoming ? "noop" : "conflict";
 }
 
 export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan {
@@ -494,18 +512,29 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     readShapedInvocations: 0,
     bundledLookups: 0,
     bundleUnknownCalls: 0,
+    conflictingOutcomeCalls: 0,
   };
   const seenIdentities = new Map<string, number>();
+  const setOutcome = (target: InvocationCallObservation, next: InvocationOutcome): void => {
+    if (target.outcome === next) return;
+    if (target.outcome === "failed") scan.failedInvocations -= 1;
+    if (target.outcome === "unknown") scan.unknownOutcomeInvocations -= 1;
+    if (next === "failed") scan.failedInvocations += 1;
+    if (next === "unknown") scan.unknownOutcomeInvocations += 1;
+    target.outcome = next;
+    target.failed = next === "failed";
+  };
   /** Merges one observation into its already-counted identity (never a second call). */
   const mergeInto = (existing: InvocationCallObservation, observation: InvocationCallObservation): void => {
-    if (observation.outcome === "failed" && existing.outcome !== "failed") {
-      if (existing.outcome === "unknown") scan.unknownOutcomeInvocations -= 1;
-      existing.outcome = "failed";
-      existing.failed = true;
-      scan.failedInvocations += 1;
-    } else if (observation.outcome === "succeeded" && existing.outcome === "unknown") {
-      existing.outcome = "succeeded";
-      scan.unknownOutcomeInvocations -= 1;
+    const merge = mergeOutcomeState(existing, observation.outcome);
+    if (merge === "conflict") {
+      // Contradictory phases (one failed, one succeeded): the call has no
+      // coherent observed outcome — surfaced as unknown, never resolved.
+      existing.outcomeConflicted = true;
+      setOutcome(existing, "unknown");
+      scan.conflictingOutcomeCalls += 1;
+    } else if (merge === "set") {
+      setOutcome(existing, observation.outcome);
     }
     if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
       existing.itemType = observation.itemType;
@@ -594,6 +623,7 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
         phase,
         failed: outcome === "failed",
         outcome,
+        outcomeConflicted: false,
         bundledLookups: bundle.bundled,
         bundleUnknown: bundle.unknown,
       };
@@ -656,6 +686,8 @@ export interface UnitInvocationAccounting {
   /** Readable, non-empty streams with no terminal completion/failure marker. */
   unterminatedTurns: number[];
   bundleUnknownCalls: number;
+  /** Calls whose phases reported contradictory outcomes (not coherent). */
+  conflictingOutcomeCalls: number;
   /** Identities observed across turns without a thread scope to bind them. */
   scopeUnknownIdentities: string[];
 }
@@ -675,11 +707,20 @@ export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocatio
     emptyTurns: [],
     unterminatedTurns: [],
     bundleUnknownCalls: 0,
+    conflictingOutcomeCalls: 0,
     scopeUnknownIdentities: [],
   };
-  interface ScopeEntry { itemType: string; outcome: InvocationOutcome; bundled: number; bundleUnknown: boolean }
+  interface ScopeEntry { itemType: string; outcome: InvocationOutcome; outcomeConflicted: boolean; bundled: number; bundleUnknown: boolean }
   const byScope = new Map<string, ScopeEntry>();
-  const unscopedIdentities = new Set<string>();
+  const unscopedTurnsByIdentity = new Map<string, Set<number>>();
+  const setOutcome = (entry: ScopeEntry, next: InvocationOutcome): void => {
+    if (entry.outcome === next) return;
+    if (entry.outcome === "failed") accounting.failed -= 1;
+    if (entry.outcome === "unknown") accounting.unknownOutcome -= 1;
+    if (next === "failed") accounting.failed += 1;
+    if (next === "unknown") accounting.unknownOutcome += 1;
+    entry.outcome = next;
+  };
   const countNew = (entry: ScopeEntry, identity: string | null): void => {
     accounting.envelopes += 1;
     if (identity === null) accounting.unknownIdentity += 1;
@@ -708,27 +749,32 @@ export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocatio
     accounting.malformedRecords += scan.malformedRecords;
     for (const observation of scan.invocationCalls) {
       if (observation.identity === null) {
-        countNew({ itemType: observation.itemType, outcome: observation.outcome, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown }, null);
+        countNew({ itemType: observation.itemType, outcome: observation.outcome, outcomeConflicted: observation.outcomeConflicted, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown }, null);
         continue;
       }
-      if (stream.threadId === null) unscopedIdentities.add(observation.identity);
+      if (stream.threadId === null) {
+        const turns = unscopedTurnsByIdentity.get(observation.identity) ?? new Set<number>();
+        turns.add(stream.turn);
+        unscopedTurnsByIdentity.set(observation.identity, turns);
+      }
       const key = `${stream.threadId ?? "<no-thread>"}::${observation.identity}`;
       const existing = byScope.get(key);
       if (existing === undefined) {
-        const entry: ScopeEntry = { itemType: observation.itemType, outcome: observation.outcome, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown };
+        const entry: ScopeEntry = { itemType: observation.itemType, outcome: observation.outcome, outcomeConflicted: observation.outcomeConflicted, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown };
         byScope.set(key, entry);
         countNew(entry, observation.identity);
         continue;
       }
       // Same scoped invocation identity across the unit's turns: one call;
-      // failure and read-shape merge onto the already-counted entry.
-      if (observation.outcome === "failed" && existing.outcome !== "failed") {
-        if (existing.outcome === "unknown") accounting.unknownOutcome -= 1;
-        existing.outcome = "failed";
-        accounting.failed += 1;
-      } else if (observation.outcome === "succeeded" && existing.outcome === "unknown") {
-        existing.outcome = "succeeded";
-        accounting.unknownOutcome -= 1;
+      // failure and read-shape merge onto the already-counted entry, and
+      // contradictory phase outcomes are surfaced as a conflict, not resolved.
+      const merge = mergeOutcomeState(existing, observation.outcome);
+      if (merge === "conflict") {
+        existing.outcomeConflicted = true;
+        setOutcome(existing, "unknown");
+        accounting.conflictingOutcomeCalls += 1;
+      } else if (merge === "set") {
+        setOutcome(existing, observation.outcome);
       }
       if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
         existing.itemType = observation.itemType;
@@ -744,7 +790,12 @@ export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocatio
       }
     }
   }
-  accounting.scopeUnknownIdentities = [...unscopedIdentities];
+  // An identity is scope-ambiguous only when it actually recurs across a turn
+  // boundary that carries no thread scope to bind it; a single unscoped turn
+  // still dedupes locally and is NOT flagged.
+  accounting.scopeUnknownIdentities = [...unscopedTurnsByIdentity.entries()]
+    .filter(([, turns]) => turns.size > 1)
+    .map(([identity]) => identity);
   accounting.effectiveLookups = accounting.envelopes + accounting.bundledLookups;
   return accounting;
 }
@@ -834,7 +885,7 @@ export interface TurnMetrics {
   usageBasis: UsageBasis;
   readEvidence: ReadEvidence;
  /** Bounded-resolution invocation accounting, straight from this turn's event scan (raw observations, not attribution; unit-scope dedupe is graded by the assertion). */
-  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number };
+  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number; conflictingOutcome: number };
  /** Declared bootstrap context for this case ("warm"/"cold"); null = the case declares none. */
   resolutionContext: "warm" | "cold" | null;
  /** Loaded-bytes accounting: labelled bytes, null with reason until verifiable. */
@@ -891,6 +942,7 @@ function buildTurnMetrics(args: {
       bundled: scan.bundledLookups,
       bundleUnknown: scan.bundleUnknownCalls,
       unrecognized: scan.unknownRecords,
+      conflictingOutcome: scan.conflictingOutcomeCalls,
     },
     resolutionContext: args.resolutionContext,
     bytesLoaded: { bytes: null, unit: "bytes", reason: BYTES_UNVERIFIED_REASON },
@@ -1238,6 +1290,7 @@ function gradeCallsWithin(ctx: GradingContext, assertionId: string, limit: numbe
   if (accounting.unknownIdentity > 0) incomplete.push(`${accounting.unknownIdentity} call(s) without identity`);
   if (accounting.malformedRecords > 0) incomplete.push(`${accounting.malformedRecords} malformed record(s)`);
   if (accounting.unrecognizedRecords > 0) incomplete.push(`${accounting.unrecognizedRecords} unrecognized record(s)`);
+  if (accounting.conflictingOutcomeCalls > 0) incomplete.push(`${accounting.conflictingOutcomeCalls} call(s) with contradictory phase outcomes`);
   if (incomplete.length > 0) {
     return {
       assertionId,
@@ -1249,7 +1302,7 @@ function gradeCallsWithin(ctx: GradingContext, assertionId: string, limit: numbe
     };
   }
   const pass = accounting.effectiveLookups <= limit;
-  const measured = `counted ${accounting.envelopes} invocation envelope(s) + ${accounting.bundledLookups} bundled constituent lookup(s) = ${accounting.effectiveLookups} effective lookup(s) (observed failures ${accounting.failed}, unknown outcomes ${accounting.unknownOutcome}, read-shaped ${accounting.readShaped})`;
+  const measured = `counted ${accounting.envelopes} invocation envelope(s) + ${accounting.bundledLookups} bundled constituent lookup(s) = ${accounting.effectiveLookups} effective lookup(s) (observed failures ${accounting.failed}, unknown outcomes ${accounting.unknownOutcome}, conflicting outcomes ${accounting.conflictingOutcomeCalls}, read-shaped invocations ${accounting.readShaped})`;
   return {
     assertionId,
     kind: "calls_within",
@@ -1335,10 +1388,12 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       },
     };
   }
-  // Marker-only guard: after removing the required facts themselves, real
-  // request content must remain — echoing the marker is not a request.
+  // Marker-only guard: after removing the required facts AND the declared
+  // marker token, real request content must remain — echoing the marker is
+  // not a request. An absent/empty cue list is impossible: validation
+  // requires at least one request cue.
   let remainder = content;
-  for (const fact of spec.required) remainder = remainder.split(fact).join(" ");
+  for (const token of [...spec.required, ...(spec.marker === undefined ? [] : [spec.marker])]) remainder = remainder.split(token).join(" ");
   const residual = remainder.replace(/[^A-Za-z0-9]+/g, "");
   if (residual.length < 8) {
     return {
@@ -1352,8 +1407,8 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       },
     };
   }
-  const cues = spec.requestCues ?? [];
-  if (cues.length > 0 && !cues.some((cue) => content.includes(cue))) {
+  const cues = spec.requestCues;
+  if (cues.length === 0 || !cues.some((cue) => content.includes(cue))) {
     return {
       assertionId,
       kind: "grouped_facts_final",
@@ -1361,7 +1416,7 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       evidence: {
         turn: turn.turn,
         file: turn.artifacts.final,
-        detail: `final carries none of the specified request cues [${cues.join(", ")}]`,
+        detail: `final carries none of the required request cues [${cues.join(", ")}]`,
       },
     };
   }

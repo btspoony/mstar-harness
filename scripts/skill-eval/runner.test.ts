@@ -1629,6 +1629,7 @@ const GROUPED_SPEC = {
   required: ["target issue id", "authorization"],
   contradicts: ["was not necessary", "operation completed"],
   requestCues: ["provide", "please provide", "need"],
+  marker: BOUNDED_NEEDLE,
 };
 const VALID_GROUPED_FINAL = `${BOUNDED_NEEDLE}: provide the target issue id and authorization before any change`;
 
@@ -1744,7 +1745,7 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
     expect(calls.grade).toBe("fail");
     expect(calls.evidence.detail).toContain("counted 4");
     expect(unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
-    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownOutcome: 4, unknownIdentity: 0, readShaped: 4, bundled: 0, bundleUnknown: 0, unrecognized: 0 });
+    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownOutcome: 4, unknownIdentity: 0, readShaped: 4, bundled: 0, bundleUnknown: 0, unrecognized: 0, conflictingOutcome: 0 });
     expect(unit.turns["1"]!.metrics.resolutionContext).toBe("cold");
   });
 
@@ -2001,7 +2002,7 @@ describe("bounded resolution fix round: completeness, bundles, oracle, outcomes,
     expect(contradictory.grade).toBe("fail");
     expect(contradictory.detail).toContain("contradictory outcome");
 
-    const markerOnly = await gradeGroupedFinal("target issue id authorization");
+    const markerOnly = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: provide target issue id authorization`);
     expect(markerOnly.grade).toBe("fail");
     expect(markerOnly.detail).toContain("marker echo");
 
@@ -2083,5 +2084,72 @@ describe("bounded resolution fix round: completeness, bundles, oracle, outcomes,
     const unscoped = accountUnitInvocations([{ ...turn1, threadId: null }, { ...turn2, threadId: null }]);
     expect(unscoped.envelopes).toBe(1);
     expect(unscoped.scopeUnknownIdentities).toEqual(["item_1"]);
+  });
+});
+
+describe("bounded resolution hardening: conflicts, quoting, scope flagging (synthetic)", () => {
+  test("contradictory phases surface a conflicting outcome instead of resolving to failure", () => {
+    const scan = scanEventStream(`${[
+      JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+    ].join("\n")}\n`);
+    expect(scan.countedInvocations).toBe(1);
+    expect(scan.conflictingOutcomeCalls).toBe(1);
+    expect(scan.invocationCalls[0]!.outcome).toBe("unknown");
+    expect(scan.failedInvocations).toBe(0);
+
+    const turn1 = { turn: 1, threadId: "thr_x", readable: true, records: parseEventLines(`${JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } })}\n${JSON.stringify({ type: "turn.completed" })}\n`) };
+    const turn2 = { turn: 2, threadId: "thr_x", readable: true, records: parseEventLines(`${JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } })}\n${JSON.stringify({ type: "turn.completed" })}\n`) };
+    const accounting = accountUnitInvocations([turn1, turn2]);
+    expect(accounting.envelopes).toBe(1);
+    expect(accounting.conflictingOutcomeCalls).toBe(1);
+    expect(accounting.failed).toBe(0);
+    expect(accounting.unknownOutcome).toBe(1);
+  });
+
+  test("quoting-ambiguous shell syntax is unknown bundle accounting, not a guessed split", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const quoted = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "command_execution", command: "grep -r \"a && b\" . | wc -l" },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      quoted,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("a single unscoped turn is not flagged; a recurring unscoped identity is", () => {
+    const events = (status: string | null): string => `${[
+      JSON.stringify(status === null
+        ? { type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }
+        : { type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status } }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n")}\n`;
+    const single = accountUnitInvocations([{ turn: 1, threadId: null, readable: true, records: parseEventLines(events(null)) }]);
+    expect(single.scopeUnknownIdentities).toEqual([]);
+
+    const recurring = accountUnitInvocations([
+      { turn: 1, threadId: null, readable: true, records: parseEventLines(events("failed")) },
+      { turn: 2, threadId: null, readable: true, records: parseEventLines(events("completed")) },
+    ]);
+    expect(recurring.scopeUnknownIdentities).toEqual(["item_1"]);
+  });
+
+  test("the report labels invocation totals as raw per-turn observations", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
+    await runSmoke(io, manifest, spawn);
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(io.readText(report.mdPath)).toContain("raw per-turn invocation observations");
   });
 });
