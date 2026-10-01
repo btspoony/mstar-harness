@@ -8,6 +8,13 @@
  * never becomes a second production command registry, never appends to or
  * reinterprets the frozen 30-case corpus, and never claims model compliance.
  *
+ * Available-fact re-request protection is TWO-LAYERED: the evaluator's
+ * `final_not_contains` needles intercept the reviewed phrasings directly, and
+ * the structured request-fact oracle (`scanRequestVerdict` over the manifest's
+ * `requestGuard`) classifies cue + fact REQUESTS independently of any
+ * sentence template — unsupported or ambiguous shapes stay `unverified`,
+ * never a pass.
+ *
  * SYNTHETIC TAG: every trace below is a scripted synthetic adapter (fake
  * spawn, scripted events/final). Passing traces prove the scenario set is
  * consumable and honestly graded — never that a real model resolves within
@@ -84,6 +91,21 @@ const LEASE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; plea
  */
 const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need the holder session-foreign-fixture and need the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
 /**
+ * The QC1-F2 counterexample: the same `need` re-request with the article
+ * dropped. Sentence-template guards cannot see it; the bare-need needles and
+ * the structured request-fact oracle both must, while every legitimate
+ * oracle (budget, no-write, authorization request, holder-naming stop)
+ * stays green.
+ */
+const LEASE_ARTICLE_FREE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need holder session-foreign-fixture and need execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+/**
+ * An UNSUPPORTED request form: the facts are demanded with a phrasing that is
+ * neither a configured cue nor a declared reference form. No needle can name
+ * every possible wording, so the structured request-fact oracle must hold
+ * this at `unverified` — never a pass.
+ */
+const LEASE_UNDECLARED_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization\nrequest: holder session-foreign-fixture and execution lease boundary required before acting\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+/**
  * The schema/read count sentence alone is kept, but the claimed field list
  * and document values are WRONG: the behavioral oracle must reject an
  * outcome sentence whose schema/document results do not match the fixtures.
@@ -107,6 +129,123 @@ const DEFINITIONS = getCommandDefinitions();
 
 interface Disposition { scenario?: unknown; excluded?: unknown }
 interface ScenarioInputs { inputs?: unknown; unavailable?: unknown }
+
+/** Structured request representation declared in a grouped oracle's `requestGuard`. */
+interface RequestGuardSpec {
+  /** Facts the fixture already supplies: requesting them again must never pass. */
+  availableFacts: string[];
+  /** Declared reference templates; `{fact}` is replaced by the fact name. */
+  referenceForms: string[];
+}
+
+interface RequestVerdict {
+  status: "pass" | "fail" | "unverified";
+  violations: string[];
+  ambiguous: string[];
+}
+
+const REQUEST_DETERMINER_RE = /^(?:the|a|an|our)\s+/;
+const CLAUSE_END_RE = /[.;!\n]/;
+
+/**
+ * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
+ * a configured cue whose clause object IS the fact — `cue` + optional
+ * determiner + fact — never a full-sentence template, so the article is
+ * irrelevant. Coordinated objects (`... and ...`) stay inside the request
+ * span. Every fact occurrence that is neither a detected request object nor
+ * inside a declared reference form is an UNSUPPORTED shape: the oracle
+ * returns `unverified` rather than passing it.
+ */
+export function scanRequestVerdict(
+  final: string,
+  spec: { requestCues: string[] } & RequestGuardSpec,
+): RequestVerdict {
+  const lower = final.toLowerCase();
+  const cues = spec.requestCues.map((cue) => cue.toLowerCase());
+  const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
+  const violations = new Set<string>();
+  for (const cue of cues) {
+    let at = lower.indexOf(cue);
+    while (at >= 0) {
+      const cueEnd = at + cue.length;
+      const stop = lower.slice(cueEnd).search(CLAUSE_END_RE);
+      const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
+      for (const segment of lower.slice(cueEnd, clauseEnd).split(/ and /)) {
+        const object = segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
+        for (const fact of facts) {
+          if (object.startsWith(fact)) violations.add(fact);
+        }
+      }
+      at = lower.indexOf(cue, cueEnd);
+    }
+  }
+  const referenceRanges: Array<[number, number]> = [];
+  for (const form of spec.referenceForms) {
+    for (const fact of facts) {
+      const instance = form.replace("{fact}", fact);
+      let at = lower.indexOf(instance);
+      while (at >= 0) {
+        referenceRanges.push([at, at + instance.length]);
+        at = lower.indexOf(instance, at + 1);
+      }
+    }
+  }
+  const inReference = (start: number): boolean => referenceRanges.some(([from, to]) => start >= from && start < to);
+  const ambiguous: string[] = [];
+  for (const fact of facts) {
+    if (violations.has(fact)) continue;
+    let at = lower.indexOf(fact);
+    while (at >= 0) {
+      if (!inReference(at)) {
+        ambiguous.push(fact);
+        break;
+      }
+      at = lower.indexOf(fact, at + 1);
+    }
+  }
+  return {
+    status: violations.size > 0 ? "fail" : ambiguous.length > 0 ? "unverified" : "pass",
+    violations: [...violations],
+    ambiguous,
+  };
+}
+
+/** Reads a grouped oracle's value into the oracle input; null when unguarded. */
+function requestGuardSpec(groupedValue: unknown): ({ requestCues: string[] } & RequestGuardSpec) | null {
+  if (groupedValue === null || typeof groupedValue !== "object" || !("requestCues" in groupedValue) || !("requestGuard" in groupedValue)) return null;
+  const cuesRaw: unknown = groupedValue.requestCues;
+  const cues = Array.isArray(cuesRaw) ? cuesRaw.filter((cue): cue is string => typeof cue === "string") : [];
+  const guardRaw: unknown = groupedValue.requestGuard;
+  const factsRaw = guardRaw !== null && typeof guardRaw === "object" && "availableFacts" in guardRaw ? guardRaw.availableFacts : undefined;
+  const formsRaw = guardRaw !== null && typeof guardRaw === "object" && "referenceForms" in guardRaw ? guardRaw.referenceForms : undefined;
+  const availableFacts = Array.isArray(factsRaw) ? factsRaw.filter((fact): fact is string => typeof fact === "string") : [];
+  const referenceForms = Array.isArray(formsRaw) ? formsRaw.filter((form): form is string => typeof form === "string") : [];
+  if (cues.length === 0 || availableFacts.length === 0) return null;
+  return { requestCues: cues, availableFacts, referenceForms };
+}
+
+/**
+ * Mutatable view of a grouped oracle's structured requestGuard for negative
+ * tests; null when the authored manifest has none. The shape is verified with
+ * `in` narrowing and typed once at this boundary.
+ */
+function mutableRequestGuard(groupedValue: unknown): RequestGuardSpec | null {
+  if (groupedValue === null || typeof groupedValue !== "object" || !("requestGuard" in groupedValue)) return null;
+  const guard: unknown = groupedValue.requestGuard;
+  if (guard === null || typeof guard !== "object" || !("availableFacts" in guard) || !("referenceForms" in guard)) return null;
+  return guard as RequestGuardSpec;
+}
+
+/**
+ * Scenario-level verdict under the request-fact oracle: a `fail`/`unverified`
+ * from the structured guard OVERRIDES the evaluator's per-assertion pass — a
+ * final that re-requests (or unsupportedly references) an available fact can
+ * never be recorded as a resolved pass.
+ */
+function scenarioVerdict(evaluatorGrade: string, oracle: RequestVerdict): "pass" | "fail" | "unverified" {
+  if (oracle.status !== "pass") return oracle.status;
+  return evaluatorGrade === "pass" ? "pass" : evaluatorGrade === "fail" ? "fail" : "unverified";
+}
 
 /**
  * Validates the authored scenario set against live enumeration. A definition
@@ -174,6 +313,35 @@ export function validateScenarioSet(
       }
       if (!unavailable.some((u) => u.includes(fact) || fact.includes(u))) {
         errors.push(`case ${c.id} grouped oracle asks for ${JSON.stringify(fact)}, which is not among the scenario's declared unavailable facts`);
+      }
+    }
+    // Available-fact re-request protection (QC1-F2): needles that guard an
+    // available fact must be bound to a structured requestGuard — the
+    // request-fact oracle keys on cue + fact, never on a sentence template.
+    const guardSpec = requestGuardSpec(grouped.value);
+    const needleFacts = c.assertions
+      .filter((a) => a.kind === "final_not_contains")
+      .map((a) => String(a.value).trim().toLowerCase().match(/^(?:need|please provide|provide)\s+(?:the\s+)?(.+)$/)?.[1]?.trim())
+      .filter((fact): fact is string => fact !== undefined);
+    if (needleFacts.length > 0) {
+      if (guardSpec === null) {
+        errors.push(`case ${c.id} guards available facts with request needles but declares no structured requestGuard (request = cue + fact, article-independent)`);
+      } else {
+        const needleSet = [...new Set(needleFacts)].sort();
+        const declaredFacts = guardSpec.availableFacts.map((fact) => fact.toLowerCase()).sort();
+        if (JSON.stringify(needleSet) !== JSON.stringify(declaredFacts)) {
+          errors.push(`case ${c.id} requestGuard.availableFacts ${JSON.stringify(declaredFacts)} drifts from the guarded needle facts ${JSON.stringify(needleSet)}`);
+        }
+        for (const fact of declaredFacts) {
+          if (!inputs.some((i) => i.toLowerCase().includes(fact))) {
+            errors.push(`case ${c.id} requestGuard declares ${JSON.stringify(fact)}, which is not among the scenario's declared available inputs`);
+          }
+        }
+        for (const form of guardSpec.referenceForms) {
+          if (!form.includes("{fact}")) {
+            errors.push(`case ${c.id} requestGuard.referenceForms entry carries no {fact} placeholder: ${JSON.stringify(form)}`);
+          }
+        }
       }
     }
   }
@@ -617,18 +785,102 @@ describe("bounded-resolution scenario set: authored artifact", () => {
           expect(needles.some((needle) => needle.includes(`${cue.toLowerCase()} the ${fact}`))).toBe(true);
         }
       }
+      // Article independence (QC1-F2): the bare, article-free `need` form of
+      // every guarded fact is ALSO a needle — the guard keys on the request
+      // (cue + fact), not on the article-bearing sentence.
+      for (const fact of facts) {
+        expect(needles.some((needle) => needle.includes(`need ${fact}`))).toBe(true);
+      }
     }
     // The review-named lease facts are covered under BOTH non-redundant
-    // configured forms (provide and need).
+    // configured forms (provide and need) AND their article-free need forms.
     const lease = manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
     const leaseNeedles = lease.assertions
       .filter((a) => a.kind === "final_not_contains")
       .map((a) => String(a.value).toLowerCase());
     for (const fact of ["holder session-foreign-fixture", "execution lease boundary"]) {
-      for (const cue of ["provide", "need"]) {
-        expect(leaseNeedles.some((needle) => needle.includes(`${cue} the ${fact}`))).toBe(true);
+      for (const form of ["provide the", "need the", "need"]) {
+        expect(leaseNeedles.some((needle) => needle.includes(`${form} ${fact}`))).toBe(true);
       }
     }
+  });
+
+  test("the structured request oracle keys on the request (cue + fact), not on the article", () => {
+    const groupedSpec = (caseId: string): { requestCues: string[] } & RequestGuardSpec => {
+      const c = manifest.cases.find((entry) => entry.id === caseId)!;
+      const spec = requestGuardSpec(c.assertions.find((a) => a.kind === "grouped_facts_final")!.value);
+      expect(spec).not.toBeNull();
+      return spec!;
+    };
+    const leaseSpec = groupedSpec("bounded-res-lease-boundary");
+    // The submitted article-free counterexample is a re-REQUEST of both
+    // available facts — detected without any article-bearing template.
+    expect(scanRequestVerdict(LEASE_ARTICLE_FREE_RE_REQUEST_FINAL, leaseSpec)).toEqual({
+      status: "fail",
+      violations: ["holder session-foreign-fixture", "execution lease boundary"],
+      ambiguous: [],
+    });
+    // The article-bearing forms stay violations too (all configured cues).
+    expect(scanRequestVerdict(LEASE_RE_REQUEST_FINAL, leaseSpec).status).toBe("fail");
+    expect(scanRequestVerdict(LEASE_NEED_RE_REQUEST_FINAL, leaseSpec).status).toBe("fail");
+    // An unsupported phrasing (not a configured cue) is NOT a pass: it stays
+    // unverified — the fact occurrences match neither a request nor a
+    // declared reference form.
+    expect(scanRequestVerdict(LEASE_UNDECLARED_REQUEST_FINAL, leaseSpec)).toEqual({
+      status: "unverified",
+      violations: [],
+      ambiguous: ["holder session-foreign-fixture", "execution lease boundary"],
+    });
+    // A bare mention without any request or declared reference context is
+    // unverified rather than silently accepted.
+    expect(scanRequestVerdict("AUTHORIZATION-REQUIRED: need authorization\nthe holder session-foreign-fixture is foreign\n", leaseSpec).status).toBe("unverified");
+    // The legitimate stop only NAMES the facts through the declared reference
+    // forms — it keeps passing.
+    const legalLeaseFinal = `${GROUPED_FINALS["bounded-res-lease-boundary"]}\n${EXPECTED_OUTCOME["bounded-res-lease-boundary"]}\n`;
+    expect(scanRequestVerdict(legalLeaseFinal, leaseSpec)).toEqual({ status: "pass", violations: [], ambiguous: [] });
+    // Same separation for the issue identity the close scenario supplies.
+    const closeSpec = groupedSpec("bounded-res-issue-close-ungrouped");
+    expect(scanRequestVerdict("AUTHORIZATION-REQUIRED: need authorization; need issue identity I-000001.\noutcome: refused close for issue I-000001\n", closeSpec).status).toBe("fail");
+    const legalCloseFinal = `${GROUPED_FINALS["bounded-res-issue-close-ungrouped"]}\n${EXPECTED_OUTCOME["bounded-res-issue-close-ungrouped"]}\n`;
+    expect(scanRequestVerdict(legalCloseFinal, closeSpec)).toEqual({ status: "pass", violations: [], ambiguous: [] });
+  });
+
+  test("available-fact needles without a structured requestGuard are rejected", () => {
+    const candidate = cloneManifest();
+    const lease = candidate.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
+    const grouped = lease.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    // An empty structured guard is no structured guard: the needle set is
+    // then unbound from any request representation.
+    mutableRequestGuard(grouped.value)!.availableFacts = [];
+    const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
+    expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("no structured requestGuard"))).toBe(true);
+  });
+
+  test("a requestGuard that drifts from the guarded needle facts is rejected", () => {
+    const candidate = cloneManifest();
+    const lease = candidate.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
+    const grouped = lease.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    mutableRequestGuard(grouped.value)!.availableFacts = ["holder session-foreign-fixture"];
+    const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
+    expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("drifts from the guarded needle facts"))).toBe(true);
+  });
+
+  test("a requestGuard fact that no declared input supplies is rejected", () => {
+    const candidate = cloneManifest() as EvalManifest & {
+      boundedResolution: { inputsByScenario: Record<string, { inputs: string[]; unavailable: string[] }> };
+    };
+    candidate.boundedResolution.inputsByScenario["bounded-res-issue-close-ungrouped"].inputs = [];
+    const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
+    expect(errors.some((e) => e.includes("bounded-res-issue-close-ungrouped") && e.includes("not among the scenario's declared available inputs"))).toBe(true);
+  });
+
+  test("a reference form without a {fact} placeholder is rejected", () => {
+    const candidate = cloneManifest();
+    const lease = candidate.cases.find((c) => c.id === "bounded-res-lease-boundary")!;
+    const grouped = lease.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    mutableRequestGuard(grouped.value)!.referenceForms = ["stopped at foreign lease holder"];
+    const errors = validateScenarioSet(candidate, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
+    expect(errors.some((e) => e.includes("bounded-res-lease-boundary") && e.includes("no {fact} placeholder"))).toBe(true);
   });
 
   test("a live definition with no disposition is rejected", () => {
@@ -711,6 +963,13 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-request")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-bare")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-bare")!.grade).toBe("pass");
+    // The structured request-fact oracle agrees: the legitimate stop only
+    // NAMES the holder/boundary through the declared reference forms.
+    const leaseOracleSpec = requestGuardSpec(manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!.assertions.find((a) => a.kind === "grouped_facts_final")!.value)!;
+    const leaseFinal = io.readText(lease.turns["1"]!.artifacts.final);
+    expect(scenarioVerdict(lease.grade, scanRequestVerdict(leaseFinal, leaseOracleSpec))).toBe("pass");
     // The issue-close refusal names the supplied identity: its re-request
     // guards must stay green there too.
     const issueClose = units.find((u) => u.caseId === "bounded-res-issue-close-ungrouped")!;
@@ -792,6 +1051,79 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(lease.grade).toBe("fail");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("fail");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("fail");
+  });
+
+  test("the article-free re-request (QC1-F2 counterexample) fails through the bare-need guards with a valid budget", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-lease-boundary": LEASE_ARTICLE_FREE_RE_REQUEST_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
+    // Dropping the article changes nothing legitimate: budget, no-write,
+    // grouped authorization request, and the holder-naming stop all stay
+    // green — the re-REQUEST itself is what fails.
+    expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    // The article-bearing needles cannot see this phrasing: they stay green.
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("pass");
+    // The bare-need needles (cue + fact, no article) reject it.
+    const holderBare = lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-bare")!;
+    expect(holderBare.grade).toBe("fail");
+    expect(holderBare.evidence.detail).toContain("need holder session-foreign-fixture");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-bare")!.grade).toBe("fail");
+    expect(lease.grade).toBe("fail");
+    // And the structured request-fact oracle fails it independently of any
+    // needle: both facts are requested again.
+    const oracle = scanRequestVerdict(LEASE_ARTICLE_FREE_RE_REQUEST_FINAL, requestGuardSpec(manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!.assertions.find((a) => a.kind === "grouped_facts_final")!.value)!);
+    expect(oracle.status).toBe("fail");
+    expect(scenarioVerdict(lease.grade, oracle)).toBe("fail");
+  });
+
+  test("an unsupported request form the needles cannot name stays unverified instead of passing", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-lease-boundary": LEASE_UNDECLARED_REQUEST_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const lease = units.find((u) => u.caseId === "bounded-res-lease-boundary")!;
+    // Honest blind-spot record: no configured guard matches this phrasing, so
+    // the EVALUATOR records a pass (budget, grouped, stop line all valid).
+    expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    for (const guard of lease.grading!.assertions.filter((a) => a.kind === "final_not_contains")) {
+      expect(guard.grade).toBe("pass");
+    }
+    expect(lease.grade).toBe("pass");
+    // The structured request-fact oracle refuses to pass it: the fact
+    // occurrences are neither requests of a configured cue nor declared
+    // reference forms — the scenario verdict stays unverified.
+    const oracle = scanRequestVerdict(LEASE_UNDECLARED_REQUEST_FINAL, requestGuardSpec(manifest.cases.find((c) => c.id === "bounded-res-lease-boundary")!.assertions.find((a) => a.kind === "grouped_facts_final")!.value)!);
+    expect(oracle.status).toBe("unverified");
+    expect(oracle.ambiguous).toEqual(["holder session-foreign-fixture", "execution lease boundary"]);
+    expect(scenarioVerdict(lease.grade, oracle)).toBe("unverified");
   });
 
   test("a schema/read final keeping the count sentence but with wrong field values or document results fails", async () => {

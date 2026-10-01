@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "0ca8e5621e0bf4be951f7f5eb42e52ce929b49555edc037042b66182bf01494f",
+  "casesHash": "eebe9e9512eec393f12bc5d345cc8776070fa4d50185e51667d443c9a000847e",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -280,7 +280,13 @@
               "please provide",
               "provide"
             ],
-            "marker": "AUTHORIZATION-REQUIRED"
+            "marker": "AUTHORIZATION-REQUIRED",
+            "requestGuard": {
+              "availableFacts": [
+                "issue identity I-000001"
+              ],
+              "referenceForms": []
+            }
           },
           "note": "the grouped request asks only for the genuinely unavailable authorization; re-asking for the supplied issue identity is contradictory"
         },
@@ -301,6 +307,12 @@
           "kind": "final_not_contains",
           "value": "need the issue identity I-000001",
           "note": "the identity is already supplied: the configured need cue must not re-request it either"
+        },
+        {
+          "id": "a-not-identity-need-bare",
+          "kind": "final_not_contains",
+          "value": "need issue identity I-000001",
+          "note": "article-free form of the same re-request: the guard keys on the request (cue + fact), not on the article"
         }
       ],
       "provenance": {
@@ -315,7 +327,7 @@
         "context": "warm",
         "evidence": "issue identity supplied by the instruction"
       },
-      "integrityHash": "c4d05a109af4b636ff75be7c5660aef4b5b52db993540e9fca84cdaf75d30998"
+      "integrityHash": "055b70fb03437e70d420e9b791eeab1609cd7f2e8c52ffe24a22a2afc668f32e"
     },
     {
       "id": "bounded-res-negative-four-lookups",
@@ -692,7 +704,17 @@
               "please provide",
               "provide"
             ],
-            "marker": "AUTHORIZATION-REQUIRED"
+            "marker": "AUTHORIZATION-REQUIRED",
+            "requestGuard": {
+              "availableFacts": [
+                "holder session-foreign-fixture",
+                "execution lease boundary"
+              ],
+              "referenceForms": [
+                "stopped at foreign lease {fact}",
+                "held by the {fact}"
+              ]
+            }
           },
           "note": "the grouped request asks only for the genuinely unavailable takeover authorization; the boundary and holder are already available in the fixture and must not be re-asked"
         },
@@ -725,6 +747,18 @@
           "kind": "final_not_contains",
           "value": "need the execution lease boundary",
           "note": "the lease boundary is already available: the configured need cue must not re-request it either"
+        },
+        {
+          "id": "a-not-holder-need-bare",
+          "kind": "final_not_contains",
+          "value": "need holder session-foreign-fixture",
+          "note": "article-free form of the same re-request: the guard keys on the request (cue + fact), not on the article"
+        },
+        {
+          "id": "a-not-boundary-need-bare",
+          "kind": "final_not_contains",
+          "value": "need execution lease boundary",
+          "note": "article-free form of the same re-request: the guard keys on the request (cue + fact), not on the article"
         }
       ],
       "provenance": {
@@ -739,7 +773,7 @@
         "context": "warm",
         "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "36ce3e1886804a37cfd5bfa3c10669053760a6f4d0921fecad7f8bb14446bd1b"
+      "integrityHash": "c6b741a83d5b716688528cc7fd561208a2b9ecdcc077543a36b5b7a613c95c53"
     },
     {
       "id": "bounded-res-slash-iteration-cold",
