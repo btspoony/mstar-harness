@@ -1324,6 +1324,45 @@ function readDiscoveredWorkflow(input: {
   for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
   deferred.push(...scan.deferred);
 
+  // A plan holding an execution lease whose holder resolves to neither this
+  // workflow's coordinator nor its own plan session has no owner to import:
+  // the workflow is excluded (its bytes are archived at apply) rather than
+  // staging an orphan claim.
+  const coordinatorSessionId = coordinator?.session_id ?? null;
+  const orphanLease = plans.some((plan) => {
+    if (plan.lease === null) return false;
+    const holder = typeof plan.lease.holder === "string" ? plan.lease.holder : "";
+    const holderSession = holder.includes(":") ? holder.slice(holder.lastIndexOf(":") + 1) : holder;
+    const planSessionId = plan.session?.session_id ?? null;
+    return holderSession !== coordinatorSessionId && holderSession !== planSessionId;
+  });
+  if (orphanLease) {
+    const bytes = readFileSync(snapshotSource.path);
+    const sha256 = sha256Of(bytes);
+    return {
+      entry,
+      registered,
+      workflowId,
+      dir,
+      snapshotPath: snapshotSource.path,
+      snapshotSha: snapshotSource.sha256,
+      snapshot: snapshotSource.snapshot,
+      coordinator,
+      plans,
+      envelopes: scan.envelopes,
+      referencedEnvelopes: new Set(referenced),
+      surfaceFiles: scan.surfaceFiles,
+      lockDirs: scan.lockDirs,
+      exclusion: { workflowId, codes: ["workflow.snapshot.orphan-held-lease"], snapshotPath: relative(roots.control, snapshotSource.path), sha256 },
+      skippedEntries: scan.skipped,
+      diagnostics: [
+        ...snapshotSource.diagnostics,
+        ...scan.skipped.map((path) => `unclassified entry skipped: ${path} (left in place, not a migration source).`),
+        "a plan holds an execution lease whose holder resolves to neither the recorded coordinator nor the plan session; the workflow is excluded and its bytes archived.",
+      ],
+    };
+  }
+
   return {
     entry,
     registered,
@@ -2651,14 +2690,7 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
  *   selection.
  */
 function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, storeId: string): void {
-  const rows = db
-    .prepare("select catalog_kind, catalog_id, input_hash, pin_json from catalog_execution_bindings where workflow_id = ?")
-    .all(workflow.workflowId) as Array<{
-    catalog_kind?: unknown;
-    catalog_id?: unknown;
-    input_hash?: unknown;
-    pin_json?: unknown;
-  }>;
+  void db;
   for (const plan of workflow.plans) {
     if (plan.pin === null) continue;
     if (plan.pin.store_id !== storeId) {
@@ -2675,16 +2707,6 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
           `${inputHash.slice(0, 12)}\u2026; the pin and its row disagree, and neither side is rewritten.`,
       );
     }
-    const binding = rows.find((row) => row.catalog_kind === "plan" && row.catalog_id === plan.planId);
-    if (binding === undefined) continue;
-    // `binding.input_hash` is the binding's own identity (writeBinding), not an
-    // execution pin: requiring it to equal the frozen execution input would
-    // refuse a state the contract keeps importable. The binding's recorded pin
-    // is compared against the row's own pin only when the row carries one.
-    // `binding.pin_json` is serialized by `writeBinding` from the catalog
-    // association identity (kind/id/path/sourceHash) — a different schema from
-    // the plan's own catalog pin, which is checked above against this store and
-    // the frozen execution input. The two records are never compared.
   }
 }
 
