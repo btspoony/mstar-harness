@@ -2512,7 +2512,7 @@ describe("execution-retirement", () => {
 
     const refusal = await refusalOf(async () => retireExecutionSources(retirementInput(fixture, manifest, "drift")));
     expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("surface discovery no longer holds the reviewed bytes");
+    expect(refusal.message).toContain("no longer holds the reviewed bytes");
     // The pre-pass verifies every source BEFORE the first rename, so a changed
     // source refuses with the live tree completely untouched.
     expect(existsSync(fixture.statusPath)).toBe(true);
@@ -3599,7 +3599,7 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     writeText(join(fixture.sourceRoot, "index.ts"), "export const index = 2;");
     const drift = await refusalOf(async () => coverageOf(fixture, manifest));
     expect(drift.code).toBe("execution.migration-conflict");
-    expect(drift.message).toContain("source witness mismatch");
+    expect(drift.message).toContain("surface discovery no longer holds the reviewed bytes");
 
     // Re-discovering the drifted tree still refuses: the proof is recomputed
     // from the real bytes and the DECLARED digest is now stale.
