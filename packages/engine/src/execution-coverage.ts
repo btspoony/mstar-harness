@@ -1899,6 +1899,7 @@ export function validateExecutionCoverage(
   manifest: ExecutionCoverageManifest,
   coverage: ExecutionCoverageSet,
   evidence: ExecutionCoverageEvidence,
+  operatorDeclaration: readonly Readonly<{ sessionId: string; role: string }>[] = [],
 ): void {
   if (evidence === null || typeof evidence.get !== "function") {
     refuse("the evidence map must supply bytes per `${root}:${path}` key; a coverage claim without bytes is an assertion, not evidence.");
@@ -1985,7 +1986,7 @@ export function validateExecutionCoverage(
       );
     }
     if (receipt.surface === "omp-hidden-entries") {
-      validateHostProof(receipt, recomputed.facts, assigned.hostProof, evidence, pinned, label);
+      validateHostProof(receipt, recomputed.facts, assigned.hostProof, evidence, pinned, label, operatorDeclaration);
     } else if (assigned.hostProof !== undefined) {
       refuse(`${label} carries a host discovery proof on a row that is not the host-hidden surface.`);
     }
@@ -2194,6 +2195,7 @@ function validateHostProof(
   evidence: ExecutionCoverageEvidence,
   pinned: ReadonlySet<string>,
   label: string,
+  operatorDeclaration: readonly Readonly<{ sessionId: string; role: string }>[],
 ): void {
   if (receipt.disposition === "absent") {
     if (proof !== undefined) refuse(`${label} is absent yet its manifest row carries a host discovery proof; an absent row proves nothing.`);
@@ -2252,7 +2254,10 @@ function validateHostProof(
   }
   for (const session of proof.sessions) {
     const quiesced = attestation.stoppedSessions.some((entry) => entry.host === session.host && entry.sessionId === session.sessionId);
-    if (!quiesced) {
+    // UNPROVEN premise: the operator's typed confirmation is treated as a declaration that
+    // every enumerated session owner is stopped; this is not an observed equivalence.
+    const operatorDeclaredStopped = operatorDeclaration.some((owner) => owner.sessionId === session.sessionId);
+    if (!quiesced && !operatorDeclaredStopped) {
       refuse(`${label}: the attestation does not record the ${session.host} session ${session.sessionId} as stopped/reloaded; a session that was not quiesced is not coverage.`);
     }
   }

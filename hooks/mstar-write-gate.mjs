@@ -12240,7 +12240,7 @@ function requireRoadmapSchema(db) {
     throw new StoreError("store.corrupt", "The store database has no schema_version table.");
   const row = db.prepare("select max(version) as version from schema_version").get();
   if (typeof row?.version !== "number" || row.version < 6) {
-    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store upgrade" first.');
+    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store safe-upgrade" first.');
   }
 }
 function requireActive(db) {
@@ -12477,7 +12477,7 @@ var fail = (code2, message) => {
 function guard(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
-    fail("milestone.schema-outdated", 'Milestones require store schema 7; run "mstar store upgrade" first.');
+    fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store safe-upgrade" first.');
   const active = db.prepare("select authority_state from store_meta where id=1").get();
   if (active?.authority_state !== "active")
     fail("store.not-active", "Milestone access requires an active store.");
@@ -12972,7 +12972,7 @@ function verifyCaptureStable(capture) {
 function assertProjectionTables(handle) {
   const row = handle.db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'").get();
   if (!row?.n) {
-    throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store upgrade path (mstar store upgrade) and retry; nothing was projected.`);
+    throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was projected.`);
   }
 }
 function readProjectionMeta(db) {
@@ -13257,7 +13257,7 @@ async function withStoreRead(context, query) {
       }
       const projectionTable = db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'").get();
       if (!projectionTable?.n) {
-        throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store upgrade path (mstar store upgrade) and retry; nothing was read.`);
+        throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was read.`);
       }
       const projection = readProjectionBlock(db);
       const data = query.run(handle);

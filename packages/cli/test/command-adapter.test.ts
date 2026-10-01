@@ -32,7 +32,7 @@ const census = [
   "plan.prepare", "plan.progress", "plan.issue-add", "plan.issue-close", "plan.residual-add", "plan.residual-close",
   "plan.handoff", "plan.accept", "plan.return", "plan.integration-start", "plan.integration-accept", "plan.complete",
   "plan.reconcile", "plan.repair-delivery-source", "session.recover", "session.run", "store.init", "store.migrate",
-  "store.upgrade", "store.backup", "store.activate", "store.retire", "store.execution.preview", "store.execution.apply",
+  "store.safe-upgrade", "store.backup", "store.activate", "store.retire", "store.execution.preview", "store.execution.apply",
   "store.execution.activate", "store.execution.retire", "store.execution.abort", "store.execution.restore-preview",
   "store.execution.restore", "store.execution.export", "judgment.review-advice", "dashboard", "report",
 ];

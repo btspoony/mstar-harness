@@ -652,7 +652,7 @@ describe("projection publication and last-good handling", () => {
     // ... and publication refuses with the upgrade pointer, writing nothing.
     await expect(refreshProjections(f.context)).rejects.toMatchObject({
       code: "projection.schema-outdated",
-      message: expect.stringContaining("mstar store upgrade"),
+      message: expect.stringContaining("mstar store safe-upgrade"),
     });
   });
 });

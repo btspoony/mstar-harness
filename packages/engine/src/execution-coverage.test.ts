@@ -1067,6 +1067,13 @@ describe("execution-coverage", () => {
       sessions: [{ host: "omp", sessionId: SESSION_A, source: witnessOf(envelope) }],
       attestation: unquiescedWitness,
     });
+    // Discovery's plain session-owner list is an operator declaration, not proof
+    // that those processes were observed stopped independently.
+    expect(() =>
+      validateExecutionCoverage(unquiesced.manifest, unquiesced.coverage, unquiesced.evidence, [
+        { sessionId: SESSION_A, role: "coordinator" },
+      ]),
+    ).not.toThrow();
     refuseLeavingState(unquiesced);
 
     // An attestation the existing contract rejects outright.

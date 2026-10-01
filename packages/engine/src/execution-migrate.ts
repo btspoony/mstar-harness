@@ -665,6 +665,7 @@ type DiscoveredWorkflow = {
   snapshot: WorkflowSnapshot | null;
   coordinator: LegacyBinding | null;
   plans: DiscoveredPlan[];
+  operatorDeclaration: readonly Readonly<{ sessionId: string; role: string }>[];
   envelopes: string[];
   referencedEnvelopes: ReadonlySet<string>;
   surfaceFiles: ReadonlyMap<ExecutionSurface, readonly string[]>;
@@ -682,6 +683,7 @@ type DiscoveredSources = {
   inventoryPath: string | null;
   inventory: ExecutionMigrationInventory | null;
   workflows: DiscoveredWorkflow[];
+  operatorDeclaration: readonly Readonly<{ sessionId: string; role: string }>[];
   witnesses: ExecutionSourceWitness[];
   deferred: ExecutionDeferredSurface[];
   owners: DiscoveredOwner[];
@@ -1328,6 +1330,7 @@ function excludedWorkflow(input: {
     snapshot: null,
     coordinator: null,
     plans: [],
+    operatorDeclaration: [],
     envelopes: [],
     referencedEnvelopes: new Set(),
     surfaceFiles: scan.surfaceFiles,
@@ -1527,17 +1530,19 @@ function readDiscoveredWorkflow(input: {
     });
   }
 
+  const operatorDeclaration: Array<{ sessionId: string; role: string }> = [];
   for (const path of scan.envelopes) {
-    if (referenced.some((entryPath) => canonicalPath(entryPath) === canonicalPath(path))) continue;
     let envelope: CoordinationSession;
     try {
       envelope = readSessionEnvelope(path);
     } catch (error) {
       return exclude(
         "workflow.snapshot.session-envelope-invalid",
-        `unreferenced session envelope ${path} cannot be read or validated (${(error as Error).message}).`,
+        `session envelope ${path} cannot be read or validated (${(error as Error).message}).`,
       );
     }
+    operatorDeclaration.push({ sessionId: envelope.session_id, role: envelope.role });
+    if (referenced.some((entryPath) => canonicalPath(entryPath) === canonicalPath(path))) continue;
     if (envelope.workflow_id !== workflowId) {
       throw conflict(`session envelope ${path} belongs to workflow ${envelope.workflow_id}, not ${workflowId}.`);
     }
@@ -1560,6 +1565,7 @@ function readDiscoveredWorkflow(input: {
     referencedEnvelopes: new Set(referenced),
     surfaceFiles: scan.surfaceFiles,
     lockDirs: scan.lockDirs,
+    operatorDeclaration,
     diagnostics: [
       ...snapshotSource.diagnostics,
       ...scan.skipped.map(skippedEntryDiagnostic),
@@ -2405,6 +2411,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     witnesses: orderedExecutionSources(ledger.witnesses, roots),
     deferred,
     owners,
+    operatorDeclaration: workflows.flatMap((workflow) => workflow.operatorDeclaration),
     coreHash: digestOf({
       root: { path: rootPath, sha256: sha256Of(rootBytes) },
       workflows: workflows.map((workflow) => ({
@@ -2561,7 +2568,7 @@ function coverageFromDiscovery(input: {
     receipts,
     digest: executionCoverageDigest(receipts),
   };
-  validateExecutionCoverage(manifestView, set, evidence);
+  validateExecutionCoverage(manifestView, set, evidence, discovered.operatorDeclaration);
   return { set, manifestView, evidence };
 }
 

@@ -65,7 +65,7 @@ function requireRoadmapSchema(db: StoreDb): void {
   if (present?.count !== 1) throw new StoreError("store.corrupt", "The store database has no schema_version table.");
   const row = db.prepare("select max(version) as version from schema_version").get() as { version?: unknown } | undefined;
   if (typeof row?.version !== "number" || row.version < 6) {
-    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store upgrade" first.');
+    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store safe-upgrade" first.');
   }
 }
 
