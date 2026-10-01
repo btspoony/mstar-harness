@@ -1,6 +1,8 @@
 /**
  * CLI `mstar lease verify` — execution_lease verification over the v3
  * workflow snapshot plan row.
+ * A separate sibling group covers `lease verify-integration` against the
+ * snapshot's top-level integration_merge_lease; it is not the plan-row lease.
  *
  * The engine validates the lease object itself; the CLI resolves
  * `--workflow <id>` to `{HARNESS_DIR}/workflows/<id>/snapshot.json` and
@@ -23,6 +25,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { runCli, withTempDir } from "./harness";
+import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { planExecutionLeaseLocations, verifyPlanExecutionLease } from "@mstar-harness/engine";
 import {
   planExecutionLeaseLocations as cliLocations,
@@ -239,5 +243,87 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar lease verify-integration — snapshot top-level merge lease (audit-004)
+// ---------------------------------------------------------------------------
+
+const LEASE_VALID = {
+  holder: "Main",
+  claimed_at: "2026-08-16",
+  plan_id: "20260816-audit-004",
+  source_branch: "feature/20260816-audit-004-validator-cli",
+  target_branch: "spec_integration_branch",
+};
+
+const LEASE_MISSING_HOLDER = { ...LEASE_VALID } as Record<string, unknown>;
+delete LEASE_MISSING_HOLDER.holder;
+
+/** Snapshot with a top-level integration_merge_lease (or none). */
+function leaseSnapshot(lease: unknown): string {
+  return JSON.stringify(
+    {
+      schema_version: 1,
+      id: "wf-1",
+      type: "iteration",
+      status: "running",
+      started_at: "2026-08-08",
+      updated_at: "2026-08-16",
+      plans: [],
+      ...(lease === undefined ? {} : { integration_merge_lease: lease }),
+    },
+    null,
+    2,
+  );
+}
+
+function withMergeLeaseSnapshot(lease: unknown, fn: (dir: string) => void): void {
+  withTempDir("mstar-slice4-cli-", (dir) => {
+    const workflowDir = join(dir, "workflows", "wf-1");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, "snapshot.json"), leaseSnapshot(lease));
+    fn(dir);
+  });
+}
+
+describe("mstar lease verify-integration — snapshot top-level integration_merge_lease (audit-004)", () => {
+  test("valid lease prints holder and passes (exit 0)", () => {
+    withMergeLeaseSnapshot(LEASE_VALID, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "lease.verify-integration.ok").data?.lease).toMatchObject({ holder: "Main" });
+    });
+  });
+
+  test("absent lease is the valid unclaimed state (exit 0)", () => {
+    withMergeLeaseSnapshot(undefined, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "lease.verify-integration.ok").data?.claimed).toBe(false);
+    });
+  });
+
+  test("null lease is a tombstone and fails with the engine code (exit 1)", () => {
+    withMergeLeaseSnapshot(null, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("lease.merge-lease.invalid");
+    });
+  });
+
+  test("lease missing a required field fails with the engine code (exit 1)", () => {
+    withMergeLeaseSnapshot(LEASE_MISSING_HOLDER, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("lease.merge-lease.missing-holder");
+    });
+  });
+
+  test("missing --workflow is a usage error (exit 2)", () => {
+    const result = runCli(["lease", "verify-integration"]);
+    expect(result.exitCode).toBe(2);
+    expect(String(cliEnvelope(result, "usage").message)).toContain("required option '--workflow <id>' not specified");
   });
 });

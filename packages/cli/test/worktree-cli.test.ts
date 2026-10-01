@@ -3,6 +3,8 @@
  * `l1PreDispatchCheck` (main-worktree residency + integration topology +
  * feature/lease isolation) and `l2PreDispatchCheck` (parallel writable
  * tracks) — mstar-branch-worktree L1/L2 tables.
+ * A sibling `worktree qc-alignment` group verifies assignment alignment
+ * fields independently of worktree isolation and topology.
  *
  * L1 input in v3 comes from the workflow snapshot through the canonical
  * reader (`readWorkflowSnapshot` — the v1 `control_worktree_path` key is
@@ -24,6 +26,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { runCli as runOwnerCli, withTempDir } from "./harness";
+import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -816,4 +820,84 @@ test("degraded Git refuses a linked checkout marker before local harness discove
     // marker, so the assertion tracks the engine's own reason string.
     expect(proc.stderr.toString()).toContain("whose main worktree is unreadable");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// mstar worktree qc-alignment — byte-identical alignment fields (audit-004)
+// ---------------------------------------------------------------------------
+
+/** One QC Assignment fixture with the three alignment fields — canonical
+ * combined `Review range / Diff basis` label form (the PM template shape,
+ * real QC/QA packs use it). */
+function qcAssignmentFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range / Diff basis**: ${range}
+`;
+}
+
+/** Separate-label Assignment fixture (non-canonical form, still accepted). */
+function qcAssignmentSeparateFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range**: ${range}
+**Diff basis**: ${range}
+`;
+}
+
+describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
+  test("real-shape tri pack: 3 assignments, canonical combined label, byte-identical (exit 0)", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
+        writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      }
+      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(3);
+    });
+  });
+
+  test("separate-label form still parses as aligned (exit 0)", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(2);
+    });
+  });
+
+  test("a differing Diff basis fails with qc.alignment.mismatch (exit 1)", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
+      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toEqual(["qc.alignment.mismatch", "qc.alignment.mismatch"]);
+    });
+  });
+  test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      // Separate-label variant with the Diff basis line removed (the combined
+      // form cannot drop a single range field).
+      const incomplete = qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
+        "**Diff basis**: merge-base: main + tip: HEAD\n",
+        "",
+      );
+      writeFileSync(join(dir, "qc1.md"), incomplete);
+      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toEqual(["qc.alignment.field.missing"]);
+    });
+  });
+
+  test("no assignment files is a usage error (exit 2)", () => {
+    const result = runOwnerCli(["worktree", "qc-alignment"]);
+    expect(result.exitCode).toBe(2);
+    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'files'");
+  });
 });
