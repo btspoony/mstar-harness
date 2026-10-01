@@ -490,8 +490,21 @@ function argvShellLookup(argv: string[]): { bundled: number; unknown: boolean } 
   const head = basename(args[0]!);
   const rest = args.slice(1);
   if (SHELL_EXECUTABLES.has(head)) {
-    const cIndex = rest.indexOf("-c");
-    if (cIndex >= 0 && cIndex + 1 < rest.length) return shellConstituents(rest[cIndex + 1]!);
+    // Inline-command flag: `-c` or a combined cluster containing `c`
+    // (`-lc`, `-ec`, `-xc`) — the payload that follows is an observable
+    // shell line, so it is decomposable.
+    let inlineIndex = -1;
+    for (const [index, arg] of rest.entries()) {
+      if (arg === "-c" || (/^-[A-Za-z]+$/.test(arg) && arg.includes("c"))) {
+        inlineIndex = index;
+        break;
+      }
+    }
+    if (inlineIndex >= 0) {
+      const payload = rest[inlineIndex + 1];
+      if (payload === undefined) return { bundled: 0, unknown: true };
+      return shellConstituents(payload);
+    }
     // A shell running a script file (or stdin) has an opaque nested program.
     return { bundled: 0, unknown: true };
   }

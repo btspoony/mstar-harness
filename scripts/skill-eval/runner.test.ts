@@ -2224,13 +2224,27 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     expect(plainOption.bundledLookups).toBe(0);
     expect(plainOption.bundleUnknownCalls).toBe(0);
 
-    // A shell running a script file (no `-c`) has an opaque nested program.
+    // A shell running a script file (no inline flag) has an opaque nested program.
     const shellScript = scanEventStream(`${invocationLine("item_1", { command: ["sh", "script.sh"] })}\n`);
     expect(shellScript.bundleUnknownCalls).toBe(1);
     const shellFlaggedScript = scanEventStream(`${invocationLine("item_1", { command: ["bash", "-l", "script.sh"] })}\n`);
     expect(shellFlaggedScript.bundleUnknownCalls).toBe(1);
     const nodeScript = scanEventStream(`${invocationLine("item_1", { command: ["node", "script.js"] })}\n`);
     expect(nodeScript.bundleUnknownCalls).toBe(1);
+
+    // Combined-flag shells (`-lc`, `-ec`) carry an observable inline payload:
+    // decompose it, and stay unknown when that payload is not decomposable.
+    const combinedFlag = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-lc", "cat A.md; ls"] })}\n`);
+    expect(combinedFlag.bundledLookups).toBe(1);
+    expect(combinedFlag.bundleUnknownCalls).toBe(0);
+    const combinedFlagQuoted = scanEventStream(`${invocationLine("item_1", { command: ["bash", "-ec", "cat 'a;b'"] })}\n`);
+    expect(combinedFlagQuoted.bundleUnknownCalls).toBe(1);
+    const combinedFlagNoPayload = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-lc"] })}\n`);
+    expect(combinedFlagNoPayload.bundleUnknownCalls).toBe(1);
+
+    // Interpreter inline-program wrappers (`-e` as well as `-c`) stay unknown.
+    const interpreterEval = scanEventStream(`${invocationLine("item_1", { command: ["python", "-e", "print(1)"] })}\n`);
+    expect(interpreterEval.bundleUnknownCalls).toBe(1);
 
     const plainArgv = scanEventStream(`${invocationLine("item_1", { command: ["cat", "AGENTS.md"] })}\n`);
     expect(plainArgv.bundledLookups).toBe(0);
