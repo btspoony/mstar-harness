@@ -735,6 +735,19 @@ describe("issue family witnesses", () => {
   });
 });
 
+describe("status family witness", () => {
+  test("the retired archive route refuses in one call and mutates nothing", async () => {
+    const { context } = await issueStoreContext();
+    const interaction: Interaction = { label: "retired archive", context: "warm", extraDependency: "", calls: [] };
+
+    const retired = await countedCall(interaction, "execute", "status.archive-residuals", {}, context);
+    expect(retired).toMatchObject({ status: "refused", code: "status.verb-retired", exitCode: 1 });
+
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
+      .toMatchObject({ compliant: true, countedCalls: 1 });
+  });
+});
+
 describe("lease witness", () => {
   test("a foreign-holder receipt stops the interaction; malformed leases and missing snapshots refuse truthfully", async () => {
     const { harness, context } = leaseContext();
@@ -865,15 +878,24 @@ describe("call-depth accounting", () => {
     const witness = noncompliantWitnesses[0]!;
     const interaction: Interaction = { label: witness.instruction, context: witness.context, extraDependency: witness.extraDependency, calls: [] };
 
-    // 1. Cold-start contract discovery: the schema read is causally required.
+    // 1. Cold-start contract discovery: the schema read is causally required —
+    //    both capture attempts below are built from the discovered field names.
     const contract = await countedCall(interaction, "schema", "schema", { type: "CaptureInput" }, context);
     expect(contract.status).toBe("ok");
-    // 2. First capture attempt from the discovered contract fails (missing
-    //    required field) — a failed attempt still counts.
-    const failed = await countedCall(interaction, "execute", "issue.add", { payload: capturePayload({ evidence: undefined }), operationId: "op-cold-1", actor: "project-manager" }, context);
+    if (contract.status !== "ok") return;
+    const contractReceipt = contract.data as { fields: Array<{ name: string; required?: boolean }> }; // schema.ok receipt shape (schema.ts)
+    const requiredNames = contractReceipt.fields.filter((field) => field.required === true).map((field) => field.name);
+    const fixtureValues = capturePayload();
+    const fromContract = Object.fromEntries(requiredNames.map((name) => [name, fixtureValues[name]])) as Record<string, unknown>;
+    // 2. First attempt omits a required field the discovered contract named —
+    //    a failed attempt still counts.
+    const incomplete = { ...fromContract };
+    delete incomplete.evidence;
+    const failed = await countedCall(interaction, "execute", "issue.add", { payload: incomplete, operationId: "op-cold-1", actor: "project-manager" }, context);
     expect(failed.status).toBe("refused");
-    // 3-5. Corrected capture, verification read, triage mutation.
-    const added = await countedCall(interaction, "execute", "issue.add", { payload: capturePayload(), operationId: "op-cold-2", actor: "project-manager" }, context);
+    // 3-5. Corrected capture (every discovered required field), verification
+    //    read, triage mutation.
+    const added = await countedCall(interaction, "execute", "issue.add", { payload: fromContract, operationId: "op-cold-2", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status === "ok") {
       const capture = added.data as { issueId: string; revision: number }; // capture receipt shape (captureIssue)
