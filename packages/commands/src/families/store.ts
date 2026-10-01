@@ -132,7 +132,6 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
     : "";
   const pendingOperationIds = errorMessage.match(/catalog operation\(s\) are still pending \(([^)]*)\)/)?.[1];
   const isPendingRegistration = rawCode === "execution.migration-conflict" && pendingOperationIds !== undefined;
-  const isJsonParseError = error !== null && typeof error === "object" && "name" in error && error.name === "SyntaxError";
   const unclassifiedCode = rawCode === undefined
     ? errorMessage.includes("persisted staged migration record is missing or incomplete")
       ? "store.upgrade-staged-record-missing"
@@ -146,9 +145,7 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
               ? "store.upgrade-staged-manifest-missing"
               : errorMessage.startsWith("store upgrade is blocked:") || errorMessage === "unreachable store upgrade state"
                 ? "store.upgrade-state-changed"
-                : isJsonParseError
-                  ? "store.corrupt"
-                  : undefined
+                : undefined
     : undefined;
   const errorCode = isPendingRegistration ? "store.upgrade-pending-registration" : rawCode ?? unclassifiedCode;
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {

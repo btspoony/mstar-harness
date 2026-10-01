@@ -62,13 +62,18 @@ describe("store upgrade refusal diagnostics", () => {
     expect(result.message).not.toContain("store.upgrade-blocked");
   });
 
-  test("unreadable corrupt store explicitly does not claim preview can recover it", () => {
-    const result = storeUpgradeFailure("store.upgrade", new SyntaxError("invalid JSON"));
-    expect(result.code).toBe("store.corrupt");
-    expect(result.message).toContain("store execution restore-preview");
-    expect(result.message).toContain("cannot recover an unreadable live store");
-    expect(result.message).toContain("store init");
-    expect(result.message).toContain("SQLite-only catalog/execution data");
+  test("staged JSON parse failure stays distinct from database corruption", () => {
+    const staged = storeUpgradeFailure("store.upgrade", Object.assign(
+      new Error("store upgrade found malformed JSON in the persisted staged manifest or coverage record"),
+      { code: "store.upgrade-staged-record-malformed" },
+    ));
+    const corrupt = storeUpgradeFailure("store.upgrade", { code: "store.corrupt", message: "database cannot be read" });
+    expect(staged.code).toBe("store.upgrade-staged-record-malformed");
+    expect(staged.message).toContain("staged migration manifest or coverage JSON is malformed");
+    expect(staged.message).toContain("archive-first recovery path");
+    expect(corrupt.code).toBe("store.corrupt");
+    expect(corrupt.message).toContain("unreadable or structurally invalid");
+    expect(corrupt.message).toContain("store init");
   });
 
   test("unclassified payloads redact paths and internal identifiers", () => {
