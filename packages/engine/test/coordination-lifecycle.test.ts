@@ -139,6 +139,28 @@ describe("handoff-transitions", () => {
     expect(acceptedHandoff.accepted_by).toBe(coordinatorSessionId);
     expect(typeof acceptedHandoff.accepted_at).toBe("string");
 
+    // A reviewed prepare cannot replace the seal consumed by an accepted
+    // handoff, even when the coordinator supplies changed Assignment bytes.
+    const assignmentBytes = readFileSync(fixture.assignmentPath, "utf8");
+    const acceptedBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const sealedView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    writeText(fixture.assignmentPath, assignmentBytes.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+    try {
+      expect(
+        await errorCodeOf(() =>
+          mutatePlanCoordination({
+            sessionPath: fixture.coordinatorSession,
+            planId: PLAN_ID,
+            expectedRevision: sealedView.revision,
+            operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+          }),
+        ),
+      ).toBe("coordination.prepare-already-prepared");
+      expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(acceptedBytes);
+    } finally {
+      writeText(fixture.assignmentPath, assignmentBytes);
+    }
+
     // A return needs a reason, and it puts the row back with its own session.
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "return" }))).toBe(
       "coordination.invalid-input",

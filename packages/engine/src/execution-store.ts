@@ -43,6 +43,7 @@ import {
   executionInputSelection,
   leaseFailure,
   type CatalogExecutionPin,
+  type ResealReceiptDetails,
 } from "./coordination.js";
 import {
   CoordinationError,
@@ -155,8 +156,17 @@ export type ExecutionSessionRef = {
   planId: string | null;
 };
 
-/** §3: one consistent authority read — data, its token and the store it came from. */
-export type ExecutionRead<T> = { data: T; token: ExecutionToken; storeId: string; epoch: number };
+/** Immutable previous-seal provenance carried by a prepare action's sidecar. */
+export type ExecutionReceiptRecovery = RecoveryDetails & { readonly details?: ResealReceiptDetails };
+
+/** §3: one consistent authority read, optionally carrying a committed action's sidecar. */
+export type ExecutionRead<T> = {
+  data: T;
+  token: ExecutionToken;
+  storeId: string;
+  epoch: number;
+  operationRecovery?: ExecutionReceiptRecovery;
+};
 
 /** §3: the per-plan view of an authoritative state read. */
 export type ExecutionPlanView = {
@@ -224,7 +234,7 @@ export type ExecutionReceipt<T> = ExecutionRead<T> & {
    * the known commit boundary (`RecoveryDetails`). Present on every frame
    * result; a refusal carries the same object under `error.details.recovery`.
    */
-  recovery?: RecoveryDetails;
+  recovery?: ExecutionReceiptRecovery;
 };
 
 // ---------------------------------------------------------------------------
@@ -1746,11 +1756,40 @@ function readCommittedReceipt<T>(
     throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
   }
   if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
+  const recovery = receipt.operationRecovery;
+  if (recovery !== undefined) {
+    if (
+      !isPlainObject(recovery) ||
+      !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) ||
+      !["none", "committed", "partial", "unknown"].includes(String(recovery.commitState)) ||
+      !isPlainObject(recovery.target) ||
+      !Array.isArray(recovery.applied) ||
+      !Array.isArray(recovery.unresolved) ||
+      !Array.isArray(recovery.resolvedFrom) ||
+      !Array.isArray(recovery.warnings)
+    ) {
+      throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
+    }
+    const details = recovery.details;
+    if (
+      details !== undefined &&
+      (!isPlainObject(details) ||
+        !isNonEmptyString(details.previous_prepared_at) ||
+        !isNonEmptyString(details.previous_prepared_by) ||
+        typeof details.previous_assignment_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(details.previous_assignment_sha256))
+    ) {
+      throw corrupt(`${what}.result_json carries invalid previous-seal provenance`);
+    }
+  }
+  // Stored diagnostic payload; its envelope and immutable seal identity were checked above.
+  const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   return {
     data: receipt.data as T,
     token: recordedToken as ExecutionToken,
     storeId: receipt.storeId,
     epoch: receipt.epoch,
+    ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }),
   };
 }
 

@@ -349,9 +349,18 @@ export function assertPrepareAdmission(input: {
    * ordered rule every other seat obeys — preparation precedes the bind.
    */
   rowClaimant?: boolean;
+  /**
+   * The reviewed-amendment seat: the caller is the workflow coordinator and
+   * the row is an unbound, unleased, handed-off-free Todo row, so an existing
+   * changed seal may be replaced through the ordinary mutate path (full intent
+   * validation still runs). The transport computes this from its own session
+   * and row state; every protected row leaves it false and keeps the
+   * already-prepared refusal it has always answered.
+   */
+  coordinatorReseal?: boolean;
 }): void {
   const { planId, row, coordination } = input;
-  if (coordination?.prepared !== undefined) {
+  if (coordination?.prepared !== undefined && input.coordinatorReseal !== true) {
     throw new CoordinationError(
       "coordination.prepare-already-prepared",
       `plan ${planId} is already prepared from ${coordination.prepared.assignment_path}`,
