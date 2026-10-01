@@ -1082,6 +1082,20 @@ export async function prepareExecutionPlan(
   const admitSatisfied = (witness: ExecutionPlanWitness, tx: ExecutionTransaction): ExecutionRead<ExecutionPlanView> | null => {
     const prepared = witness.view.coordination?.prepared;
     if (prepared === undefined) return null;
+    // §D Assignment PATH identity — the same rule the file route enforces while
+    // resolving its scope (`scopeFromAssignment`): a prepared row is addressed
+    // through the Assignment path its seal names. A different path is never the
+    // held effect, even when the bytes match, and the eligible coordinator may
+    // not reseal across it either: that would silently replace the stored
+    // assignment_path. This runs before every result below — satisfied or
+    // reseal — so both active-route answers share the file route's refusal.
+    if (canonicalTarget(prepared.assignment_path) !== seal.assignment.assignmentPath) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `plan ${planId} is prepared from ${prepared.assignment_path}, not from ${seal.assignment.assignmentPath}`,
+        { expected: prepared.assignment_path, actual: seal.assignment.assignmentPath },
+      );
+    }
     const claimant = witness.view.session !== null && witness.view.session.sessionId === context.caller.sessionId;
     if (context.caller.role !== "coordinator" && !claimant) return null;
     if (prepared.assignment_sha256 !== seal.assignmentSha256) return null;

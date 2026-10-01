@@ -920,6 +920,58 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     });
   });
 
+  test("a prepared row addressed through a different Assignment path refuses the seal's path identity even on identical bytes", async () => {
+    const fixture = await liveWorkflow("prepare-path-identity");
+    const { context, documents, planTokens } = fixture;
+    const first = await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    const sealed = first.data.coordination?.prepared;
+    if (sealed === undefined) throw new Error("first prepare did not seal the Assignment");
+    const before = planFootprint(context, OWN_PLAN);
+
+    // The same BYTES at a different path are not the effect the row's seal
+    // holds: a prepared row is addressed through the Assignment path its seal
+    // names, so the answer is the file route's own scope-mismatch — never
+    // already-satisfied.
+    const copyUnresolved = join(dirname(documents[OWN_PLAN]!.assignmentPath), `${OWN_PLAN}-copy.md`);
+    writeFileSync(copyUnresolved, readFileSync(documents[OWN_PLAN]!.assignmentPath));
+    const copiedPath = realpathSync(copyUnresolved);
+    const copyToken = await planTokenOf(fixture, OWN_PLAN);
+    expect(await refusalOf(() => prepareCall(fixture, OWN_PLAN, "prepare-copy", copyToken, copiedPath))).toMatchObject({
+      code: "coordination.scope-mismatch",
+      message: expect.stringContaining(`is prepared from ${sealed.assignment_path}, not from ${copiedPath}`),
+    });
+    // The refusal wrote nothing: the seal, its revision and the row stand.
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before);
+  });
+
+  test("an eligible coordinator may not reseal a prepared row through a different Assignment path", async () => {
+    const fixture = await liveWorkflow("prepare-path-reseal");
+    const { context, documents, planTokens } = fixture;
+    const first = await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    const sealed = first.data.coordination?.prepared;
+    if (sealed === undefined) throw new Error("first prepare did not seal the Assignment");
+    const before = planFootprint(context, OWN_PLAN);
+
+    // The reviewed-amendment seat replaces a CHANGED seal, never the seal's
+    // Assignment PATH: changed bytes at a different path refuse with the same
+    // scope-mismatch the file route answers, so the stored assignment_path is
+    // never silently replaced.
+    const copyUnresolved = join(dirname(documents[OWN_PLAN]!.assignmentPath), `${OWN_PLAN}-copy.md`);
+    writeFileSync(
+      copyUnresolved,
+      readFileSync(documents[OWN_PLAN]!.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+    );
+    const copiedPath = realpathSync(copyUnresolved);
+    const changedToken = await planTokenOf(fixture, OWN_PLAN);
+    expect(
+      await refusalOf(() => prepareCall(fixture, OWN_PLAN, "prepare-copy-changed", changedToken, copiedPath)),
+    ).toMatchObject({
+      code: "coordination.scope-mismatch",
+      message: expect.stringContaining(`is prepared from ${sealed.assignment_path}, not from ${copiedPath}`),
+    });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(before);
+  });
+
   test("a bound claimant's identical prepare is satisfied and replayable but cannot reseal or bypass CAS", async () => {
     const fixture = await liveWorkflow("prepare-claimant");
     await prepareCall(fixture, OWN_PLAN, "prepare-first", fixture.planTokens[OWN_PLAN]!);

@@ -7850,6 +7850,29 @@ describe("file-route frames — semantic replay, unrelated revision, sealed inpu
     return { fixture, evidence, revision: report.view.revision };
   }
 
+  test("a deleted plan document is not a held effect: the identical reissue refuses instead of answering from the seal", async () => {
+    const fixture = makeFixture();
+    const view = await preparePlan(fixture, PLAN_ID);
+    expect(view.outcome).toBe("prepared");
+    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    rmSync(fixture.planPath);
+    // `mutatePrepare` refuses a missing plan document BEFORE its satisfied
+    // check reads the seal, so a byte-identical Assignment can never report an
+    // effect the row cannot hold: a later file-route bind would have to adopt
+    // the missing document. The refusal withholds the effect — the snapshot
+    // the row lives in is unchanged.
+    let refused: CoordinationError | null = null;
+    try {
+      await preparePlan(fixture, PLAN_ID);
+    } catch (error) {
+      if (error instanceof CoordinationError) refused = error;
+    }
+    if (refused === null) throw new Error("prepare must refuse a deleted plan document, not answer already-satisfied");
+    expect(refused.code).toBe("coordination.plan-not-found");
+    expect(refused.message).toContain(fixture.planPath);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+  });
+
   test("semantic replay: an already-satisfied report is current success with no byte churn (A09/A12)", async () => {
     const fixture = makeFixture();
     await preparePlan(fixture, PLAN_ID);
