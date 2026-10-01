@@ -1748,4 +1748,48 @@ describe("mstar worktree cleanup — candidate scope", () => {
     }
   }, 30000);
 
+  test("a comma-containing --worktree path stays one literal assertion (dry-run and --apply)", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-comma-");
+    try {
+      // The operator's literal path contains a comma, and its first
+      // comma-split fragment would name the eligible wt-a1 — exactly the
+      // fabricated assertion a naive value.split(",") payload decode produces.
+      const commaRaw = join(fx.root, "wt-a1,x");
+      git(["worktree", "add", "-q", commaRaw, "-b", "feature/comma-work"], fx.root);
+      writeFileSync(join(commaRaw, "comma.txt"), "comma work\n");
+      git(["add", "-A"], commaRaw);
+      git(["commit", "-q", "-m", "comma work"], commaRaw);
+      git(["merge", "-q", "--no-ff", "-m", "merge comma-work", "feature/comma-work"], fx.root);
+      // Canonical spelling as git records it (macOS /var vs /private/var).
+      const commaWt = wt(worktreeList(fx.root), "wt-a1,x").path;
+      updateWorkflow(fx.root, "wf-a", (snapshot) => {
+        snapshot.plans.push(
+          row("plan-comma", "Done", { metadata: { working_branch: "feature/comma-work", worktree_path: commaWt } }),
+        );
+      });
+
+      // Dry-run: the whole comma path is the only asserted candidate; the
+      // fragments (wt-a1, "x") select nothing.
+      const dry = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", commaWt], fx.root);
+      expect(dry.exitCode).toBe(0);
+      expect(decisionRows(dry)).toEqual([
+        `remove | worktree | ${commaWt} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/comma-work | cleanup.refuse.checked-out",
+      ]);
+      expect(decisionRows(dry).join("\n")).not.toContain(`| ${fx.wtA1} |`);
+
+      // --apply removes the asserted comma worktree only: the eligible wt-a1
+      // named by the first comma-split fragment MUST survive.
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--apply", "--worktree", commaWt], fx.root);
+      expect(applied.exitCode).toBe(0);
+      const listed = git(["worktree", "list", "--porcelain"], fx.root);
+      expect(listed).not.toContain(commaWt);
+      expect(listed.split("\n")).toContain(`worktree ${fx.wtA1}`);
+      // The removed worktree's own merged working branch is reclaimed.
+      expect(git(["for-each-ref", "refs/heads/feature/comma-work"], fx.root)).toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
 });

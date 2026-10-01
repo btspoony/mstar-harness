@@ -147,6 +147,16 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
           continue;
         }
       }
+      // A payload field's lone string value is ONE literal entry: the payload
+      // document is opaque (a worktree path may contain a comma), and silently
+      // comma-splitting it fabricates extra asserted paths — with --apply a
+      // fragment can name an unintended eligible worktree. Only an explicit
+      // JSON array introduces multiple entries. Plain list options keep the
+      // comma-list convenience.
+      if (option.key in (definition.payloads ?? {})) {
+        decoded[option.key] = [value];
+        continue;
+      }
       decoded[option.key] = value.split(",").map((entry) => entry.trim()).filter(Boolean);
       continue;
     }
