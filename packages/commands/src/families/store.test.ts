@@ -83,8 +83,8 @@ function invocation(cwd: string, answer = "no"): { context: InvocationContext; m
 }
 
 function upgradeDefinition() {
-  const found = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
-  if (found === undefined) throw new Error("missing store.upgrade definition");
+  const found = getStoreCommandDefinitions().find(({ id }) => id === "store.safe-upgrade");
+  if (found === undefined) throw new Error("missing store.safe-upgrade definition");
   return found;
 }
 
@@ -242,7 +242,7 @@ async function runUpgradeHandler(harness: string, root: string, answer = "preser
     expect(existsSync(join(harness, "status.json"))).toBe(false);
   });
 
-describe("store.upgrade unified entry", () => {
+describe("store.safe-upgrade unified entry", () => {
   test("reports an active store as up-to-date with exit 0 and no protocol prompt", async () => {
     const root = fixture();
     const harness = join(root, ".mstar");
@@ -492,8 +492,8 @@ describe("store.upgrade unified entry", () => {
     const coverage = Object.assign(new Error("missing stopped-session evidence for session-secret 123e4567-e89b-12d3-a456-426614174000"), {
       code: "execution.coverage-incomplete",
     });
-    const conflictResult = storeUpgradeFailure("store.upgrade", conflict);
-    const coverageResult = storeUpgradeFailure("store.upgrade", coverage);
+    const conflictResult = storeUpgradeFailure("store.safe-upgrade", conflict);
+    const coverageResult = storeUpgradeFailure("store.safe-upgrade", coverage);
     expect(conflictResult.status).toBe("refused");
     expect(coverageResult.status).toBe("refused");
     if (conflictResult.status !== "refused" || coverageResult.status !== "refused") throw new Error("expected refusal envelopes");

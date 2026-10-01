@@ -39,7 +39,7 @@ const fixtureAttestation = {
 };
 
 /**
- * Invokes `store upgrade` through its real command definition. The recovery
+ * Invokes `store safe-upgrade` through its real command definition. The recovery
  * path runs before the confirmation prompt, and a control root without legacy
  * execution files completes without an interactive answer, so the fixture
  * needs no confirmation input.
@@ -75,8 +75,8 @@ async function runUpgrade(
   inventory?: string,
   actor = "fixture-operator",
 ): Promise<CommandEnvelope> {
-  const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
-  if (definition === undefined) throw new Error("missing store.upgrade definition");
+  const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.safe-upgrade");
+  if (definition === undefined) throw new Error("missing store.safe-upgrade definition");
   const attestation = join(cwd, `attestation-${actor}.json`);
   writeFileSync(
     attestation,
@@ -91,7 +91,7 @@ async function runUpgrade(
   return definition.execute(parsed, invocationContext(cwd, answer));
 }
 
-test("store upgrade archives a damaged store, completes, and reports the archive", async () => {
+test("store safe-upgrade archives a damaged store, completes, and reports the archive", async () => {
   const harnessDir = join(root, "damaged", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("this is not a sqlite database at all", "utf8");
@@ -119,7 +119,7 @@ test("store upgrade archives a damaged store, completes, and reports the archive
   expect(state.verdict).not.toBe("blocked");
 });
 
-test("store upgrade restores the original store when the operator declines confirmation", async () => {
+test("store safe-upgrade restores the original store when the operator declines confirmation", async () => {
   const harnessDir = join(root, "declined", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("a damaged store that is not sqlite", "utf8");
@@ -134,7 +134,7 @@ test("store upgrade restores the original store when the operator declines confi
   expect(readFileSync(join(harnessDir, "store.db"))).toEqual(damaged);
 });
 
-test("store upgrade archives a damaged store and still migrates valid legacy sources", async () => {
+test("store safe-upgrade archives a damaged store and still migrates valid legacy sources", async () => {
   const harnessDir = join(root, "legacy", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("legacy root with a destroyed database", "utf8");
@@ -185,7 +185,7 @@ test("store upgrade archives a damaged store and still migrates valid legacy sou
   expect(state.executionAuthorityState).toBe("active");
 });
 
-test("store upgrade restores the original when staging refuses after confirmation", async () => {
+test("store safe-upgrade restores the original when staging refuses after confirmation", async () => {
   const harnessDir = join(root, "staging-refusal", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("a damaged store that fails staging", "utf8");
@@ -202,25 +202,9 @@ test("store upgrade restores the original when staging refuses after confirmatio
     }),
   );
   writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: workflowId }));
-  // An inventory declaring roots that do not exist cannot close, so staging refuses.
+  // Malformed inventory JSON forces staging to refuse after confirmation.
   const inventoryPath = join(harnessDir, "unclosable-inventory.json");
-  writeFileSync(
-    inventoryPath,
-    JSON.stringify({
-      version: 2,
-      roots: {
-        sdd: join(harnessDir, "workflows"),
-        host: join(harnessDir, "absent-host"),
-        package: join(harnessDir, "absent-package"),
-      },
-      hostSessions: [],
-      sddEvidence: [],
-      consumers: [],
-      injectors: [],
-      injectorInventory: null,
-      backup: null,
-    }),
-  );
+  writeFileSync(inventoryPath, "{");
 
   const result = await runUpgrade(harnessDir, root, "preserve for later review", inventoryPath);
 
@@ -229,7 +213,7 @@ test("store upgrade restores the original when staging refuses after confirmatio
   expect(readFileSync(join(harnessDir, "store.db"))).toEqual(damaged);
 });
 
-test("store upgrade refuses to archive a damaged store under another operator's attestation", async () => {
+test("store safe-upgrade refuses to archive a damaged store under another operator's attestation", async () => {
   const harnessDir = join(root, "mismatch", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("a damaged store behind a mismatched attestation", "utf8");
@@ -243,7 +227,7 @@ test("store upgrade refuses to archive a damaged store under another operator's 
   expect(existsSync(join(harnessDir, "archived"))).toBe(false);
 });
 
-test("store upgrade leaves the original in place when the archive cannot be published", async () => {
+test("store safe-upgrade leaves the original in place when the archive cannot be published", async () => {
   const harnessDir = join(root, "unwritable", ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const damaged = Buffer.from("still not a sqlite database", "utf8");

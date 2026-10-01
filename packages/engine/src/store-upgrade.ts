@@ -60,7 +60,7 @@ export async function upgradeStoreWithRecoveryPoint(
 ): Promise<{ schemaVersion: number; schemaBackup: BackupReceipt }> {
   const state = await probeStoreUpgradeState(context);
   if (!state.storeExists || state.verdict === "blocked" || state.schemaVersion === null) {
-    throw new Error(`store upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
+    throw new Error(`store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
   }
   const schemaBackup = await backupStore(context, {
     out: join(context.harnessDir, "archived", "store-migration", "backups", `${operationId}-pre-schema.db`),
@@ -84,7 +84,7 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       typeof row.coverage_json !== "string"
     ) {
       throw new Error(
-        `store upgrade found execution authority staged under ${JSON.stringify(manifestId)}, but its persisted staged migration ` +
+        `store safe-upgrade found execution authority staged under ${JSON.stringify(manifestId)}, but its persisted staged migration ` +
           "record is missing or incomplete; do not re-preview or apply a different manifest",
       );
     }
@@ -95,7 +95,7 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       coverage = JSON.parse(row.coverage_json) as ExecutionCoverageSet;
     } catch {
       throw Object.assign(
-        new Error("store upgrade found malformed JSON in the persisted staged manifest or coverage record"),
+        new Error("store safe-upgrade found malformed JSON in the persisted staged manifest or coverage record"),
         { code: "store.upgrade-staged-record-malformed" },
       );
     }
@@ -105,13 +105,13 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       !/^[0-9a-f]{64}$/.test(coverage.digest)
     ) {
       throw new Error(
-        `store upgrade found a staged migration ${JSON.stringify(manifestId)} whose persisted manifest or coverage identity is ` +
+        `store safe-upgrade found a staged migration ${JSON.stringify(manifestId)} whose persisted manifest or coverage identity is ` +
           "inconsistent; refusing to re-preview or apply another manifest",
       );
     }
     if (input.inventoryPath !== undefined && input.inventoryPath !== manifest.inventoryPath) {
       throw new Error(
-        `store upgrade retry inventory ${JSON.stringify(input.inventoryPath)} does not match the staged manifest scope ` +
+        `store safe-upgrade retry inventory ${JSON.stringify(input.inventoryPath)} does not match the staged manifest scope ` +
           `${JSON.stringify(manifest.inventoryPath)}; resume with the reviewed inventory or omit --inventory to use it`,
       );
     }
@@ -134,11 +134,11 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
 export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<StagedStoreUpgrade> {
   const state = await probeStoreUpgradeState(input.context);
   if (!state.storeExists || state.verdict === "blocked") {
-    throw new Error(`store upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
+    throw new Error(`store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
   }
   if (state.executionAuthorityState === "staged") {
     if (state.manifestId === null || state.executionMigrationPhase !== "staged") {
-      throw new Error("store upgrade found a staged execution authority without its matching recorded manifest; refusing to re-preview");
+      throw new Error("store safe-upgrade found a staged execution authority without its matching recorded manifest; refusing to re-preview");
     }
     return await resumeStagedStoreUpgrade(input, state.manifestId);
   }

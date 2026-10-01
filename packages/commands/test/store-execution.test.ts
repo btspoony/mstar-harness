@@ -69,7 +69,7 @@ async function storeSnapshot(harnessDir: string): Promise<{ revision: number; ep
 describe("store and execution command surface", () => {
   test("registers the six store and eight store execution identities", () => {
     expect(getStoreCommandDefinitions().map(({ id }) => id)).toEqual([
-      "store.init", "store.migrate", "store.upgrade", "store.backup", "store.activate", "store.retire",
+      "store.init", "store.migrate", "store.safe-upgrade", "store.backup", "store.activate", "store.retire",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.preview", "store.execution.apply", "store.execution.activate", "store.execution.retire",
@@ -91,7 +91,7 @@ describe("store and execution command surface", () => {
     expect(dataOf(migrate).blocksApply).toBe(false);
     expect(dataOf(migrate).manifestFile).toBe(null);
 
-    const upgraded = await invoke(definition("store.upgrade"), { harness }, root);
+    const upgraded = await invoke(definition("store.safe-upgrade"), { harness }, root);
     expect(upgraded.status).toBe("ok");
     expect(typeof dataOf(upgraded).schemaVersion).toBe("number");
 
@@ -110,7 +110,7 @@ describe("store and execution command surface", () => {
     // this before the engine is entered, so the operator sees the flag it needs
     // rather than an engine-internal "inventory is not closed" verdict.
     const manifestPath = join(root, "control-root-manifest.json");
-    writeJson(manifestPath, { version: 2, id: "control-root-manifest", root: harness, surfaces: [] });
+    writeJson(manifestPath, { version: 3, id: "control-root-manifest", root: harness, surfaces: [] });
     const apply = await invoke(definition("store.execution.apply"), {
       harness,
       operation: "control-root-only",
@@ -144,7 +144,7 @@ describe("store and execution command surface", () => {
       backup: null,
     });
     const manifestPath = join(root, "execution-manifest.json");
-    writeJson(manifestPath, { version: 2, id: "fixture-manifest", root: harness, inventoryPath: inventory, surfaces: [] });
+    writeJson(manifestPath, { version: 3, id: "fixture-manifest", root: harness, inventoryPath: inventory, surfaces: [] });
     const apply = await invoke(definition("store.execution.apply"), {
       harness,
       operation: "sparse-apply",

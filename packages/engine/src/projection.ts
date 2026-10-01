@@ -871,7 +871,7 @@ function assertProjectionTables(handle: StoreHandle): void {
     throw new ProjectionError(
       "projection.schema-outdated",
       `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). ` +
-        `Apply the pending migrations through the store upgrade path (mstar store upgrade) and retry; nothing was projected.`,
+        `Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was projected.`,
     );
   }
 }
