@@ -2626,8 +2626,9 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
 /**
  * §7 the catalog half of the import check: a plan's recorded pin is checked
  * against this store and the frozen input it is sealed with. The committed
- * `catalog_execution_bindings` row carries its own association identity and is
- * never compared against the plan's pin.
+ * `catalog_execution_bindings` row carries its own association identity
+ * (`input_hash` / `pin_json` from `writeBinding`) and is never compared
+ * against the plan's pin or the frozen input.
  *
  * - a pin freezes the very row it is sealed with, so `document_hash` must be
  *   that row's frozen-input hash. Both live routes enforce it (create:
