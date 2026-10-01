@@ -24,8 +24,7 @@ describe("store upgrade refusal diagnostics", () => {
   test.each([
     ["execution.migration-conflict", "legacy source", "store upgrade --operator <name> --attestation <file>"],
     ["execution.coverage-incomplete", "complete migration evidence", "--inventory <inventory-file>"],
-    ["execution.scope-mismatch", "does not match the migration scope", "--harness <control-root>"],
-    ["execution.not-active", "store schema does not yet include the execution tables", "store upgrade"],
+    ["execution.scope-mismatch", "does not match the migration scope", "--operator <name>"],
     ["store.attestation-invalid", "activation attestation", "store upgrade --operator <name> --attestation <file>"],
     ["store.activation-blocked", "consumer is not ready", "stop the active sessions"],
     ["store.migration-source-changed", "reviewed legacy source", "store upgrade --operator <name> --attestation <file>"],

@@ -494,6 +494,7 @@ describe("store.upgrade unified entry", () => {
     expect(conflictResult.message).not.toContain("--inventory");
     expect(coverageResult.message).toContain("stop-session evidence");
     expect(coverageResult.message).toContain("only if discovery inventory is the missing item");
+    expect(coverageResult.message).toContain("--inventory <inventory-file>");
     expect(coverageResult.message).not.toContain("provide the required inventory");
     expect(coverageResult.message).not.toContain("--inventory,");
     for (const result of [conflictResult, coverageResult]) {
