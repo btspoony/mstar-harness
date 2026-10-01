@@ -839,6 +839,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const { context, coordinatorCaller, planTokens } = fixture;
     const first = await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
     expect(first.replayed).toBe(false);
+    expect(first.recovery?.details).toBeUndefined();
     const committed = planFootprint(context, OWN_PLAN);
 
     // A NEW operation id, the CURRENT token and byte-identical input: a fresh
@@ -850,6 +851,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(again.recovery?.outcome).toBe("already-satisfied");
     expect(again.recovery?.commitState).toBe("none");
     expect(again.recovery?.applied).toEqual([]);
+    expect(again.recovery?.details).toBeUndefined();
     expect(again.data).toEqual(first.data);
     expect(again.token).toBe(first.token);
     expect(planFootprint(context, OWN_PLAN)).toEqual({
@@ -862,6 +864,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(replay.replayed).toBe(true);
     expect(replay.recovery?.outcome).toBe("already-satisfied");
     expect(replay.recovery?.commitState).toBe("committed");
+    expect(replay.recovery?.details).toBeUndefined();
     expect(planFootprint(context, OWN_PLAN)).toEqual({
       ...committed,
       operations: (committed.operations as number) + 1,
@@ -871,7 +874,15 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
   test("an eligible coordinator's changed Assignment reseals once, then the identical repeat is already-satisfied", async () => {
     const fixture = await liveWorkflow("prepare-reseal");
     const { context, coordinatorCaller, documents, planTokens } = fixture;
-    await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    const first = await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    expect(first.recovery?.details).toBeUndefined();
+    const previous = first.data.coordination?.prepared;
+    if (previous === undefined) throw new Error("first prepare did not seal the Assignment");
+    const previousDetails = {
+      previous_prepared_at: previous.prepared_at,
+      previous_prepared_by: previous.prepared_by,
+      previous_assignment_sha256: previous.assignment_sha256,
+    };
     const afterFirst = planFootprint(context, OWN_PLAN);
 
     // The coordinator reviews a changed Assignment: the reviewed-amendment seat
@@ -881,7 +892,8 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
       documents[OWN_PLAN]!.assignmentPath,
       readFileSync(documents[OWN_PLAN]!.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
     );
-    const reseal = await prepareCall(fixture, OWN_PLAN, "prepare-reseal", await planTokenOf(fixture, OWN_PLAN));
+    const resealToken = await planTokenOf(fixture, OWN_PLAN);
+    const reseal = await prepareCall(fixture, OWN_PLAN, "prepare-reseal", resealToken);
     expect(reseal.replayed).toBe(false);
     expect(reseal.recovery?.outcome).toBe("applied");
     expect(reseal.recovery?.commitState).toBe("committed");
@@ -889,6 +901,11 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const afterReseal = planFootprint(context, OWN_PLAN);
     expect(afterReseal.plan_revision).toBe((afterFirst.plan_revision as number) + 1);
     expect(afterReseal.plan_coordination).not.toBe(afterFirst.plan_coordination);
+    expect(reseal.recovery?.details).toEqual(previousDetails);
+    const replay = await prepareCall(fixture, OWN_PLAN, "prepare-reseal", resealToken);
+    expect(replay.replayed).toBe(true);
+    expect(replay.recovery?.details).toEqual(previousDetails);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(afterReseal);
 
     // The identical repeat of the resealed input is already-satisfied: the row
     // keeps the reseal's revision and seal, and only the receipt lands.
@@ -896,13 +913,87 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(repeat.replayed).toBe(false);
     expect(repeat.recovery?.outcome).toBe("already-satisfied");
     expect(repeat.recovery?.commitState).toBe("none");
+    expect(repeat.recovery?.details).toBeUndefined();
     expect(planFootprint(context, OWN_PLAN)).toEqual({
       ...afterReseal,
       operations: (afterReseal.operations as number) + 1,
     });
   });
 
-  test("refuses a second prepare, a foreign Assignment, a held lease and a non-running workflow", async () => {
+  test("a bound claimant's identical prepare is satisfied and replayable but cannot reseal or bypass CAS", async () => {
+    const fixture = await liveWorkflow("prepare-claimant");
+    await prepareCall(fixture, OWN_PLAN, "prepare-first", fixture.planTokens[OWN_PLAN]!);
+    const stale = await planTokenOf(fixture, OWN_PLAN);
+    const session = await bindPlanPm(fixture, OWN_PLAN, "prepare-claimant");
+    const caller = trustedCaller(PLAN_PM_ID, "plan-pm", OWN_PLAN);
+    const current = await planTokenOf(fixture, OWN_PLAN);
+    const before = planFootprint(fixture.context, OWN_PLAN);
+    const call = (operationId: string, expected: ExecutionToken) =>
+      prepareExecutionPlan(domainContext(fixture.context, caller), {
+        session,
+        planId: OWN_PLAN,
+        operationId,
+        expected,
+        operation: { kind: "prepare", assignmentPath: fixture.documents[OWN_PLAN]!.assignmentPath },
+      });
+    const satisfied = await call("claimant-satisfied", current);
+    expect(satisfied.replayed).toBe(false);
+    expect(satisfied.recovery?.outcome).toBe("already-satisfied");
+    expect(satisfied.recovery?.details).toBeUndefined();
+    expect(satisfied.token).toBe(current);
+    const after = planFootprint(fixture.context, OWN_PLAN);
+    expect(after).toEqual({ ...before, operations: (before.operations as number) + 1 });
+    const replay = await call("claimant-satisfied", current);
+    expect(replay.replayed).toBe(true);
+    expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(after);
+    expect(await refusalOf(() => call("claimant-stale", stale))).toMatchObject({ code: "execution.stale-token" });
+    writeFileSync(
+      fixture.documents[OWN_PLAN]!.assignmentPath,
+      readFileSync(fixture.documents[OWN_PLAN]!.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+    );
+    expect(await refusalOf(() => call("claimant-reseal", current))).toMatchObject({
+      code: "coordination.prepare-already-prepared",
+    });
+    expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(after);
+  });
+
+  test("prepare refuses outsiders on unsealed and sealed rows without recording an action", async () => {
+    const fixture = await liveWorkflow("prepare-outsider");
+    await prepareCall(fixture, PEER_PLAN, "prepare-peer", fixture.planTokens[PEER_PLAN]!);
+    const peer = await bindPlanPm(fixture, PEER_PLAN, "prepare-outsider");
+    const caller = trustedCaller(PLAN_PM_ID, "plan-pm", PEER_PLAN);
+    for (const sealed of [false, true]) {
+      if (sealed) await prepareCall(fixture, OWN_PLAN, "prepare-own", await planTokenOf(fixture, OWN_PLAN));
+      const before = planFootprint(fixture.context, OWN_PLAN);
+      const expected = await planTokenOf(fixture, OWN_PLAN);
+      expect(
+        await refusalOf(() =>
+          prepareExecutionPlan(domainContext(fixture.context, caller), {
+            session: peer,
+            planId: OWN_PLAN,
+            operationId: `outsider-${sealed}`,
+            expected,
+            operation: { kind: "prepare", assignmentPath: fixture.documents[OWN_PLAN]!.assignmentPath },
+          }),
+        ),
+      ).toMatchObject({ code: "coordination.session-mismatch" });
+      const impostor = trustedCaller("unbound-impostor", "plan-pm", OWN_PLAN);
+      expect(
+        await refusalOf(() =>
+          prepareExecutionPlan(domainContext(fixture.context, impostor), {
+            session: { ...peer, sessionId: impostor.sessionId, planId: OWN_PLAN },
+            planId: OWN_PLAN,
+            operationId: `impostor-${sealed}`,
+            expected,
+            operation: { kind: "prepare", assignmentPath: fixture.documents[OWN_PLAN]!.assignmentPath },
+          }),
+        ),
+      ).toMatchObject({ code: "execution.session-unavailable" });
+      expect(planFootprint(fixture.context, OWN_PLAN)).toEqual(before);
+    }
+  });
+
+  test("satisfies identical prepare but refuses foreign input, held leases and non-running workflows", async () => {
     const fixture = await liveWorkflow("prepare-refusals");
     const { context, coordinator, coordinatorCaller, documents, planTokens } = fixture;
     await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
