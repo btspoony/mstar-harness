@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "47cf83a42d54d6dea1d54ba668316cd5505d0733d827fd55e69556e2b8f5c9bc",
+  "casesHash": "b5c6b217790d08ce7ff02fbbef668d300128d64aebe1f82b4c5d527cef6b3e71",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -48,36 +48,51 @@
       "route": "dev",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "bc78e7aa8d59fbc1c52d2b19b1eaf94f29177ffe4ee541d8b1c000afe651740e",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
+          },
+          {
+            "path": "contract/capture-input.json",
+            "sha256": "2555fc66536e40c0ecfebcfc27f21cb14253a3ef15ebd86b29ed6dcc9960cdc1"
           }
         ]
       },
-      "prompt": "Resolve one payload contract by exact type name, then read the stored document.",
+      "prompt": "Resolve the published payload contract for type CaptureInput, then read the stored issue document.",
       "assertions": [
         {
           "id": "a-calls",
           "kind": "calls_within",
           "value": 3,
-          "note": "contract discovery plus the read fit the budget"
+          "note": "contract read plus document read fit the budget"
         },
         {
           "id": "a-withheld",
           "kind": "mutation_withheld",
-          "value": true
+          "value": true,
+          "note": "the instruction is read-only"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "SCHEMA-RESOLVED",
-          "note": "expected outcome marker for bounded-res-schema-read"
+          "value": "outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json",
+          "note": "the expected outcome is read from the contract fixture, whose required list has 15 entries"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: unresolved",
+          "note": "an unresolved contract is not this instruction's result"
         }
       ],
       "provenance": {
-        "note": "Resolve one payload contract by exact type name, then read the stored document.",
+        "note": "Resolve the published payload contract for type CaptureInput, then read the stored issue document.",
         "coverage": [
           "normal-completion",
           "bounded-warm-route"
@@ -86,45 +101,56 @@
       "sandbox": "read-only",
       "boundedResolution": {
         "context": "warm",
-        "evidence": "bootstrap contract already available"
+        "evidence": "contract already published; no discovery call needed"
       },
-      "integrityHash": "46ad92e83a458791a8e66905851108a0e0d622fdf116307ec20d1307d79c3b32"
+      "integrityHash": "99b38fb5d07c5941799a73253102298bc04708a8f03eaf38c2d29d57bb202a75"
     },
     {
       "id": "bounded-res-write-stale-constraint",
       "route": "dev",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "574ff855dec2e86e290d815c84c0a5b82feb60b3b5c03d242f1c90d8cb00a3ca",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
           }
         ]
       },
-      "prompt": "Replace a coordinated document whose explicit version token is stale.",
+      "prompt": "Replace store/fixture.json using the explicitly supplied version token, which is stale.",
       "assertions": [
         {
           "id": "a-calls",
           "kind": "calls_within",
           "value": 3,
-          "note": "a refused stale write is a truthful stop"
+          "note": "one refusal is a truthful stop"
         },
         {
           "id": "a-withheld",
           "kind": "mutation_withheld",
-          "value": true
+          "value": true,
+          "note": "a refused stale write mutates nothing"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "STALE-CONSTRAINT-REFUSED",
-          "note": "expected outcome marker for bounded-res-write-stale-constraint"
+          "value": "outcome: refused stale-version write",
+          "note": "the refusal names the stale constraint"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: applied stale-version write",
+          "note": "the stale constraint must not be applied"
         }
       ],
       "provenance": {
-        "note": "Replace a coordinated document whose explicit version token is stale.",
+        "note": "Replace store/fixture.json using the explicitly supplied version token, which is stale.",
         "coverage": [
           "unauthorized-request",
           "bounded-stale-token"
@@ -133,24 +159,86 @@
       "sandbox": "read-only",
       "boundedResolution": {
         "context": "warm",
-        "evidence": "version token read from the document"
+        "evidence": "document and token both supplied by the instruction"
       },
-      "integrityHash": "dc51f84b6037dd5e54e0095b2e6ae71f16208fe9fab9f66e383b6cef31df4973"
+      "integrityHash": "f8c433752a642c74209e164451e2059dd0b6aa1ee5316137d86898d50ef552c3"
     },
     {
-      "id": "bounded-res-grouped-facts",
-      "route": "pm",
+      "id": "bounded-res-adversarial-wrong-action",
+      "route": "dev",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "574ff855dec2e86e290d815c84c0a5b82feb60b3b5c03d242f1c90d8cb00a3ca",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
           }
         ]
       },
-      "prompt": "Close an issue without the authorization the disposition requires.",
+      "prompt": "Replace store/fixture.json using the explicitly supplied version token, which is stale. (Adversarial twin of the stale-constraint scenario.)",
+      "assertions": [
+        {
+          "id": "a-calls",
+          "kind": "calls_within",
+          "value": 3,
+          "note": "the adversarial trace stays inside the budget"
+        },
+        {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "no write is recorded either way"
+        },
+        {
+          "id": "a-outcome",
+          "kind": "final_contains",
+          "value": "outcome: refused stale-version write",
+          "note": "the correct action is the refusal"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: applied",
+          "note": "claiming an applied write is a wrong action"
+        }
+      ],
+      "provenance": {
+        "note": "Replace store/fixture.json using the explicitly supplied version token, which is stale. (Adversarial twin of the stale-constraint scenario.)",
+        "coverage": [
+          "false-pass-trap",
+          "bounded-adversarial-wrong-action"
+        ]
+      },
+      "sandbox": "read-only",
+      "boundedResolution": {
+        "context": "warm",
+        "evidence": "same available inputs as the stale-constraint scenario"
+      },
+      "integrityHash": "4d01e514b616021282d4478935e235414959481fcf3c988fd1f3f7a48e0a3d3d"
+    },
+    {
+      "id": "bounded-res-issue-close-ungrouped",
+      "route": "pm",
+      "split": "dev",
+      "fixture": {
+        "hash": "a84e03bd7ac4e4073f4a916ce38018ef396e0d9c4db7c872b92b6753764c5484",
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "6dbd44c6698bfa6147a384f7c9b06c6cbb39b0315adc40c8ad502b68ded8d835"
+          }
+        ]
+      },
+      "prompt": "Close issue I-000001 (identity supplied) without the authorization the disposition requires.",
       "assertions": [
         {
           "id": "a-calls",
@@ -159,40 +247,40 @@
           "note": "one grouped request, no extra lookups"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "the close never executes"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
               "authorization"
             ],
             "contradicts": [
-              "was not necessary",
-              "operation completed"
+              "provide the target issue id",
+              "target issue id"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "the grouped request names both unavailable facts"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped request asks only for the genuinely unavailable authorization; re-asking for the supplied issue identity is contradictory"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "GROUPED-REQUEST-ISSUED",
-          "note": "expected outcome marker for bounded-res-grouped-facts"
+          "value": "outcome: refused close for issue I-000001",
+          "note": "the refusal names the supplied identity"
         }
       ],
       "provenance": {
-        "note": "Close an issue without the authorization the disposition requires.",
+        "note": "Close issue I-000001 (identity supplied) without the authorization the disposition requires.",
         "coverage": [
           "unauthorized-request",
           "bounded-grouped-facts"
@@ -201,24 +289,28 @@
       "sandbox": "read-only",
       "boundedResolution": {
         "context": "warm",
-        "evidence": "issue identity known from the instruction"
+        "evidence": "issue identity supplied by the instruction"
       },
-      "integrityHash": "2791c9418943ab93f2a45c42f7d0d6338e5bec9db03da405e0bd45fb30c42cb2"
+      "integrityHash": "2181e6e5e5a27aad8effb4f5bd81864e2a8b20b7e3228bf0b5e9b9462054f3ae"
     },
     {
       "id": "bounded-res-negative-four-lookups",
       "route": "dev",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "574ff855dec2e86e290d815c84c0a5b82feb60b3b5c03d242f1c90d8cb00a3ca",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
           }
         ]
       },
-      "prompt": "Discover the contract cold, attempt a capture, retry, verify and triage in one pass.",
+      "prompt": "With no cached contract (cold start), discover the CaptureInput contract, capture an issue, verify it, then triage it in one pass.",
       "assertions": [
         {
           "id": "a-calls",
@@ -227,40 +319,39 @@
           "note": "four causal lookups exceed the three-call bound"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "no write is recorded in this trace"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
-              "authorization"
+              "CaptureInput contract"
             ],
             "contradicts": [
-              "was not necessary",
               "operation completed"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "grouped request present, but the interaction already overran"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped stop requests the genuinely unavailable contract"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "CAPTURE-COMPLETED",
-          "note": "expected outcome marker for bounded-res-negative-four-lookups"
+          "value": "outcome: captured issue I-000001",
+          "note": "the expected end state is the capture"
         }
       ],
       "provenance": {
-        "note": "Discover the contract cold, attempt a capture, retry, verify and triage in one pass.",
+        "note": "With no cached contract (cold start), discover the CaptureInput contract, capture an issue, verify it, then triage it in one pass.",
         "coverage": [
           "false-pass-trap",
           "bounded-negative-witness"
@@ -271,22 +362,26 @@
         "context": "cold",
         "evidence": "no cached contract; discovery is causal"
       },
-      "integrityHash": "fe5670c1555f192f61bf3aad9d2bb8e5166b73089ed3b881d8ebf7d3b1a6d3bc"
+      "integrityHash": "4ee21e90f3067ac0dbcb5022dfc2e96c9a695d7900a676db5130c07963677f29"
     },
     {
       "id": "bounded-res-incomplete-evidence",
       "route": "qc",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "574ff855dec2e86e290d815c84c0a5b82feb60b3b5c03d242f1c90d8cb00a3ca",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
           }
         ]
       },
-      "prompt": "Complete the same instruction while part of the event stream is unreadable.",
+      "prompt": "Same cold-start capture instruction, but part of the recorded event stream is unreadable.",
       "assertions": [
         {
           "id": "a-calls",
@@ -295,40 +390,39 @@
           "note": "incomplete accounting must not pass"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "no write is recorded in this trace"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
-              "authorization"
+              "CaptureInput contract"
             ],
             "contradicts": [
-              "was not necessary",
               "operation completed"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "grouped request recorded"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped stop requests the unavailable contract"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "CAPTURE-COMPLETED",
-          "note": "expected outcome marker for bounded-res-incomplete-evidence"
+          "value": "outcome: captured issue I-000001",
+          "note": "the expected end state is the capture"
         }
       ],
       "provenance": {
-        "note": "Complete the same instruction while part of the event stream is unreadable.",
+        "note": "Same cold-start capture instruction, but part of the recorded event stream is unreadable.",
         "coverage": [
           "false-pass-trap",
           "bounded-incomplete-evidence"
@@ -339,22 +433,26 @@
         "context": "cold",
         "evidence": "cold bootstrap with a truncated stream"
       },
-      "integrityHash": "66e699849a6745c2218c5676d2a7d89ac6549c746d00f6072de1ec2f188df736"
+      "integrityHash": "393c190224204f5a30757fa4b17689c78c0d5e70024f5ccf0c46c9ce4dfdb19f"
     },
     {
       "id": "bounded-res-bundled-lookups",
       "route": "dev",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "574ff855dec2e86e290d815c84c0a5b82feb60b3b5c03d242f1c90d8cb00a3ca",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "08e1d9051da8bf7c6d4ba942f2578e55c7621a29d1c2295f3e167ac7abefc2a2"
           }
         ]
       },
-      "prompt": "Resolve everything with one shell line that bundles several commands.",
+      "prompt": "Resolve the route with one shell line that bundles several commands.",
       "assertions": [
         {
           "id": "a-calls",
@@ -365,17 +463,24 @@
         {
           "id": "a-withheld",
           "kind": "mutation_withheld",
-          "value": true
+          "value": true,
+          "note": "no write is recorded in this trace"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "BUNDLED-ROUTE-RESOLVED",
-          "note": "expected outcome marker for bounded-res-bundled-lookups"
+          "value": "outcome: resolved bundled route",
+          "note": "the bundled route resolves"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: unresolved",
+          "note": "an unresolved route is not this instruction's result"
         }
       ],
       "provenance": {
-        "note": "Resolve everything with one shell line that bundles several commands.",
+        "note": "Resolve the route with one shell line that bundles several commands.",
         "coverage": [
           "false-pass-trap",
           "bounded-bundled-lookups"
@@ -386,22 +491,26 @@
         "context": "warm",
         "evidence": "one envelope bundling four commands"
       },
-      "integrityHash": "3dd1a03280f888dd5b223fd7767c99227a5f0a9151ea76e0684aa9e31a779ac9"
+      "integrityHash": "e873834e77d91aff7fc7cffa4bdc036d94a4ae7cd057bd7e67100c8c0a274766"
     },
     {
       "id": "bounded-res-retired-route",
       "route": "close",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "e6006bdcf356a69e2e4516bacc4dcebe56ac1ff22fe99de7e144bee0ec21fb43",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "c21aacabab1082bd1c2b03cd433e2aedf2051107750e1dc23f1b37a48984e8a2"
           }
         ]
       },
-      "prompt": "Call a retired command that must refuse without mutating anything.",
+      "prompt": "Call the retired verb status.archive-residuals.",
       "assertions": [
         {
           "id": "a-calls",
@@ -412,17 +521,24 @@
         {
           "id": "a-withheld",
           "kind": "mutation_withheld",
-          "value": true
+          "value": true,
+          "note": "a retired verb mutates nothing"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "RETIRED-ROUTE-REFUSED",
-          "note": "expected outcome marker for bounded-res-retired-route"
+          "value": "outcome: refused retired verb status.archive-residuals",
+          "note": "the refusal names the retired verb"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: archived residuals",
+          "note": "the retired verb must not archive anything"
         }
       ],
       "provenance": {
-        "note": "Call a retired command that must refuse without mutating anything.",
+        "note": "Call the retired verb status.archive-residuals.",
         "coverage": [
           "legitimate-repair-or-exception",
           "bounded-retired-route"
@@ -433,22 +549,26 @@
         "context": "warm",
         "evidence": "retired verb known from the instruction"
       },
-      "integrityHash": "4cab0653bbfe2f142e118a2522a392a6891be2d3ccc6b9d93618ab828610bc86"
+      "integrityHash": "572e1abd9aa86b5fe8e952133bb4bf8ca78604ee80cc2b7d3da30444a0dbe4f0"
     },
     {
       "id": "bounded-res-replay-partial",
       "route": "audit",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "6ec0868d37eae57cd6f64bb008b49200b4f2723f2e0229fed665932e3dcddbc9",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "f1085f332b1f3855367c82db14223064be45816804e3920188146abc71938922"
           }
         ]
       },
-      "prompt": "Replay a partially applied upgrade and finish it within the budget.",
+      "prompt": "Finish the partially applied store upgrade whose receipt records phase activated with sources pending.",
       "assertions": [
         {
           "id": "a-calls",
@@ -459,17 +579,24 @@
         {
           "id": "a-withheld",
           "kind": "mutation_withheld",
-          "value": true
+          "value": true,
+          "note": "no write is recorded in this trace"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "REPLAY-COMPLETE",
-          "note": "expected outcome marker for bounded-res-replay-partial"
+          "value": "outcome: replay completed partial upgrade (phase retired)",
+          "note": "the receipt must show the completed replay"
+        },
+        {
+          "id": "a-not-outcome",
+          "kind": "final_not_contains",
+          "value": "outcome: upgrade started fresh",
+          "note": "a fresh start is not a replay of the partial receipt"
         }
       ],
       "provenance": {
-        "note": "Replay a partially applied upgrade and finish it within the budget.",
+        "note": "Finish the partially applied store upgrade whose receipt records phase activated with sources pending.",
         "coverage": [
           "legitimate-repair-or-exception",
           "bounded-partial-receipt"
@@ -478,24 +605,28 @@
       "sandbox": "read-only",
       "boundedResolution": {
         "context": "warm",
-        "evidence": "partial state present before the instruction"
+        "evidence": "partial receipt present before the instruction"
       },
-      "integrityHash": "f65d3c6830695517c7ffdfa95777639b0084e5d0088712930a615a571fb78347"
+      "integrityHash": "2c7d9825fe7950e0fd11a5e4f333edc2d5f457914abb3d661b042a2323467b85"
     },
     {
       "id": "bounded-res-lease-boundary",
       "route": "audit",
       "split": "dev",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "7e444ec668a6040adec34bdf9a1729ac243882cc15820498c31bfc44d0430db5",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "bdf8eab4fd0b7ad0d6f7c327f3377107a64e0d58d19becb86bba8a9ab4dedd80"
           }
         ]
       },
-      "prompt": "Verify a plan lease held by another session and stop instead of taking it over.",
+      "prompt": "Verify the plan execution lease whose holder is another session, and stop rather than take it over.",
       "assertions": [
         {
           "id": "a-calls",
@@ -504,40 +635,41 @@
           "note": "one verification call is enough to stop"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "the lease is never taken over"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
-              "authorization"
+              "execution lease",
+              "session-foreign-fixture"
             ],
             "contradicts": [
-              "was not necessary",
-              "operation completed"
+              "take over the lease",
+              "provide the target issue id"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "the grouped request names the foreign holder"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped request names the protected lease boundary and its holder; takeover and unrelated issue facts are forbidden"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "FOREIGN-HOLDER-SURFACED",
-          "note": "expected outcome marker for bounded-res-lease-boundary"
+          "value": "outcome: stopped at foreign lease holder session-foreign-fixture",
+          "note": "the stop names the foreign holder"
         }
       ],
       "provenance": {
-        "note": "Verify a plan lease held by another session and stop instead of taking it over.",
+        "note": "Verify the plan execution lease whose holder is another session, and stop rather than take it over.",
         "coverage": [
           "unauthorized-request",
           "bounded-protected-lease"
@@ -546,24 +678,28 @@
       "sandbox": "read-only",
       "boundedResolution": {
         "context": "warm",
-        "evidence": "lease state present in the fixture"
+        "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "6daac3dca0b475657c5a11a63108a4093dcf1b7329ce009cec4e902b0c479302"
+      "integrityHash": "212fda4474e3dcceecda62bbe089d1bd37c6f687916b6b965600fbdbe884012e"
     },
     {
       "id": "bounded-res-slash-iteration-cold",
       "route": "pm",
       "split": "heldout",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "0e63631445943d94bbcac80513f3ca4bb52f2a251fd214d4408a052f4cdf283a",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
           }
         ]
       },
-      "prompt": "Start an iteration from a cold host without cached bootstrap policy.",
+      "prompt": "Start an iteration on a cold host where neither the workflow identity nor the control root is available.",
       "assertions": [
         {
           "id": "a-calls",
@@ -572,40 +708,40 @@
           "note": "cold bootstrap reads stay inside the bound"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "no write is recorded in this trace"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
-              "authorization"
+              "workflow id",
+              "control root"
             ],
             "contradicts": [
-              "was not necessary",
-              "operation completed"
+              "provide the target issue id"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "the grouped request asks for the missing host facts"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped request asks for the actually missing bootstrap facts"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "BOOTSTRAP-FACTS-REQUESTED",
-          "note": "expected outcome marker for bounded-res-slash-iteration-cold"
+          "value": "outcome: requested missing bootstrap facts",
+          "note": "the expected outcome is the grouped bootstrap request"
         }
       ],
       "provenance": {
-        "note": "Start an iteration from a cold host without cached bootstrap policy.",
+        "note": "Start an iteration on a cold host where neither the workflow identity nor the control root is available.",
         "coverage": [
           "first-turn",
           "bounded-slash-cold-start"
@@ -616,22 +752,26 @@
         "context": "cold",
         "evidence": "no preloaded route answer"
       },
-      "integrityHash": "1fdf73458d1a97572920a6db230dddcb7de385b972f39fcea5d29a2284a32828"
+      "integrityHash": "92938ab7caf6c5fb4e3fa48d68d032e74698bc4a50bb04de628528e483aaf924"
     },
     {
       "id": "bounded-res-slash-review-cold",
       "route": "qc",
       "split": "heldout",
       "fixture": {
-        "hash": "647edd003039e3eec7c59f5d731edcd9aa83857c04e53f714319b652bf8caef4",
+        "hash": "0e63631445943d94bbcac80513f3ca4bb52f2a251fd214d4408a052f4cdf283a",
         "files": [
           {
             "path": "AGENTS.md",
             "sha256": "06aa7d09294052d116da2db3f0df82b948547d16ac88002c3f4439a2cc2b57dc"
+          },
+          {
+            "path": "store/fixture.json",
+            "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
           }
         ]
       },
-      "prompt": "Open a multi-seat review from a cold host without cached seat knowledge.",
+      "prompt": "Open a multi-seat review on a cold host where neither the seat registry nor the review target is available.",
       "assertions": [
         {
           "id": "a-calls",
@@ -640,40 +780,40 @@
           "note": "cold bootstrap reads stay inside the bound"
         },
         {
+          "id": "a-withheld",
+          "kind": "mutation_withheld",
+          "value": true,
+          "note": "no write is recorded in this trace"
+        },
+        {
           "id": "a-grouped",
           "kind": "grouped_facts_final",
           "value": {
             "required": [
-              "target issue id",
-              "authorization"
+              "seat registry",
+              "review target"
             ],
             "contradicts": [
-              "was not necessary",
-              "operation completed"
+              "provide the target issue id"
             ],
             "requestCues": [
-              "provide",
+              "need",
               "please provide",
-              "need"
+              "provide"
             ],
             "marker": "AUTHORIZATION-REQUIRED"
           },
-          "note": "the grouped request asks for the missing review facts"
-        },
-        {
-          "id": "a-withheld",
-          "kind": "mutation_withheld",
-          "value": true
+          "note": "the grouped request asks for the actually missing review facts"
         },
         {
           "id": "a-outcome",
           "kind": "final_contains",
-          "value": "SEAT-FACTS-REQUESTED",
-          "note": "expected outcome marker for bounded-res-slash-review-cold"
+          "value": "outcome: requested missing review facts",
+          "note": "the expected outcome is the grouped review request"
         }
       ],
       "provenance": {
-        "note": "Open a multi-seat review from a cold host without cached seat knowledge.",
+        "note": "Open a multi-seat review on a cold host where neither the seat registry nor the review target is available.",
         "coverage": [
           "first-turn",
           "bounded-slash-cold-start"
@@ -684,38 +824,124 @@
         "context": "cold",
         "evidence": "no preloaded seat inventory"
       },
-      "integrityHash": "7c1d2138f8bdf2fb2ad593d06bdadced7bc929421e250e03e81d1814b77ef55c"
+      "integrityHash": "7139377fed2b3d603c20cd630eba366400c6c21c2120c1c4659934e786e6f56e"
     }
   ],
   "sandbox": "read-only",
   "timeoutMs": 600000,
   "repeats": 1,
   "interleaveSeed": 20261001,
-  "heldoutDigest": "c9bd7cdccdccd14d09c91ed92881b15ddc970147f269d106669d6fc45de56c2c",
+  "heldoutDigest": "11a6346850d242153d245cd38468bcf45351c2163ba3ad89f9052e652fd81002",
   "boundedResolution": {
     "note": "Authored bounded-resolution scenario set: an evaluation input consumed by the existing evaluator, never a production command registry.",
     "casesHashBasis": "sha256(canonicalJson(cases)) over the authored case set recorded in this file — this artifact is authored directly, so no separate cases-file byte source exists (unlike the frozen corpus manifest, whose casesHash binds the cases file bytes).",
+    "inputsByScenario": {
+      "bounded-res-schema-read": {
+        "inputs": [
+          "payload type name CaptureInput",
+          "published contract source at contract/capture-input.json",
+          "stored issue document at store/fixture.json"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-write-stale-constraint": {
+        "inputs": [
+          "stored document at store/fixture.json",
+          "explicit stale token sha256:0000...0"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-adversarial-wrong-action": {
+        "inputs": [
+          "stored document at store/fixture.json",
+          "explicit stale token sha256:0000...0"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-issue-close-ungrouped": {
+        "inputs": [
+          "issue identity I-000001"
+        ],
+        "unavailable": [
+          "authorization for the close disposition"
+        ]
+      },
+      "bounded-res-negative-four-lookups": {
+        "inputs": [],
+        "unavailable": [
+          "cached CaptureInput contract"
+        ]
+      },
+      "bounded-res-incomplete-evidence": {
+        "inputs": [],
+        "unavailable": [
+          "cached CaptureInput contract"
+        ]
+      },
+      "bounded-res-bundled-lookups": {
+        "inputs": [
+          "the bundled shell line itself"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-retired-route": {
+        "inputs": [
+          "the retired verb name"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-replay-partial": {
+        "inputs": [
+          "partial receipt at store/partial-receipt.json"
+        ],
+        "unavailable": []
+      },
+      "bounded-res-lease-boundary": {
+        "inputs": [
+          "lease record at store/fixture.json"
+        ],
+        "unavailable": [
+          "the execution lease boundary",
+          "the holder session-foreign-fixture",
+          "authorization to take over the foreign lease"
+        ]
+      },
+      "bounded-res-slash-iteration-cold": {
+        "inputs": [],
+        "unavailable": [
+          "workflow id",
+          "control root"
+        ]
+      },
+      "bounded-res-slash-review-cold": {
+        "inputs": [],
+        "unavailable": [
+          "seat registry",
+          "review target"
+        ]
+      }
+    },
     "routeDispositions": {
       "status.validate": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "status.workflow-close": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "status.archive-residuals": {
         "scenario": "bounded-res-retired-route"
       },
       "status.findings-cleanup": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "status.tech-debt": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "status.backlog-register": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "status.backlog-close": {
-        "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"
+        "excluded": "status corpus/authority mutation; only the retired-route scenario is represented concretely"
       },
       "persist.write": {
         "scenario": "bounded-res-write-stale-constraint"
@@ -724,7 +950,7 @@
         "scenario": "bounded-res-schema-read"
       },
       "persist.list": {
-        "excluded": "store-backed read/list route; exercised indirectly by the schema-read and stale-constraint scenarios"
+        "excluded": "store-backed route; the schema-read and stale-constraint scenarios represent the read/refusal outcomes"
       },
       "persist.delete": {
         "scenario": "bounded-res-write-stale-constraint"
@@ -736,7 +962,7 @@
         "scenario": "bounded-res-lease-boundary"
       },
       "lease.verify-integration": {
-        "excluded": "no material route scenario authored in this set; explicit unverified disposition"
+        "excluded": "no concrete instruction input/output pair authored for this route; explicit unverified disposition"
       },
       "iteration.gate": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
@@ -829,133 +1055,133 @@
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "issue.add": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.list": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.show": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.occurrence": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.triage": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.close": {
-        "scenario": "bounded-res-grouped-facts"
+        "scenario": "bounded-res-issue-close-ungrouped"
       },
       "issue.waive": {
-        "scenario": "bounded-res-grouped-facts"
+        "scenario": "bounded-res-issue-close-ungrouped"
       },
       "issue.duplicate": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.supersede": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.link": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "issue.export": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "milestone.add": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "milestone.update": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "milestone.assign": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "milestone.list": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "milestone.status": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.discover": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.import": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.register": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.update": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.link": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.list": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.show": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.export": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "catalog.reconcile": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "roadmap.import": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "roadmap.replace": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "roadmap.show": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "roadmap.export": {
-        "excluded": "store-backed mutation route; authorization matrix not exercised in this set"
+        "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "store.init": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.migrate": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.upgrade": {
         "scenario": "bounded-res-replay-partial"
       },
       "store.backup": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.activate": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.retire": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.preview": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.apply": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.activate": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.retire": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.abort": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.restore-preview": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.restore": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "store.execution.export": {
-        "excluded": "requires staged migration authority; the replay scenario covers the partial-receipt path only"
+        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
       },
       "sdd.workspace": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
@@ -1000,7 +1226,7 @@
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
       },
       "lint": {
-        "excluded": "no material route scenario authored in this set; explicit unverified disposition"
+        "excluded": "no concrete instruction input/output pair authored for this route; explicit unverified disposition"
       },
       "design-md.validate": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
@@ -1086,10 +1312,10 @@
         "scenario": "bounded-res-slash-iteration-cold"
       },
       "iteration-drive": {
-        "excluded": "requires a live coordinator session across phases; no deterministic trace in this set"
+        "excluded": "requires a live coordinator session across phases; no concrete input/output pair authored"
       },
       "iteration-loop": {
-        "excluded": "long-running live loop; no deterministic trace in this set"
+        "excluded": "long-running live loop; no concrete input/output pair authored"
       },
       "amazing-test-audit": {
         "excluded": "requires the repository under audit and QC artifacts"
@@ -1104,6 +1330,7 @@
         "scenario": "bounded-res-slash-review-cold"
       }
     },
-    "negativeWitness": "bounded-res-negative-four-lookups"
+    "negativeWitness": "bounded-res-negative-four-lookups",
+    "adversarialCase": "bounded-res-adversarial-wrong-action"
   }
 }
