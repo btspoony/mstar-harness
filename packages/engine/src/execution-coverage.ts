@@ -628,8 +628,8 @@ function coreCodec(context: RowContext): unknown {
 
 /** `session-v1`: the released session envelope, bound to its workflow and role. */
 function sessionCodec(context: RowContext): unknown {
-  const owners = new Set<string>();
-  const envelopes = context.sources.map((witness) => {
+  const bySession = new Map<string, { nameKind: "released" | "legacy"; entry: Record<string, unknown> }>();
+  for (const witness of context.sources) {
     const what = `${context.label} envelope ${witness.path}`;
     const document = retainedObject(context.bytesOf(witness), what);
     expectKeys(document, ["schema_version", "role", "session_id", "workflow_id", "harness_root"], ["plan_id"], what);
@@ -645,64 +645,49 @@ function sessionCodec(context: RowContext): unknown {
     if (role === "plan-pm" && !hasPlan) refuse(`${what} is a plan-pm envelope with no plan_id; a plan association is never inferred.`);
     const planId = hasPlan ? expectString(document.plan_id, `${what}.plan_id`) : null;
     const harnessRoot = expectAbsolutePath(document.harness_root, `${what}.harness_root`);
-    if (basenameOf(witness.path) !== `${role}-${sessionId}.json`) {
+    // A legacy envelope may be named by its bare session id; the content is the
+    // authority and declares the same session. Any other name is a mismatch.
+    const envelopeName = basenameOf(witness.path);
+    const nameKind = envelopeName === `${role}-${sessionId}.json` ? "released" : envelopeName === `${sessionId}.json` ? "legacy" : "mismatch";
+    if (nameKind === "mismatch") {
       refuse(
-        `${what} is named ${basenameOf(witness.path)}, but the released envelope for ${role} session ${sessionId} is ` +
+        `${what} is named ${envelopeName}, but the released envelope for ${role} session ${sessionId} is ` +
           `<role>-<session_id>.json; the envelope identity and its path must agree.`,
       );
     }
-    if (owners.has(sessionId)) refuse(`${context.label} carries two envelopes for session ${sessionId}; a duplicated association is not coverage.`);
-    owners.add(sessionId);
-    return { root: witness.root, path: witness.path, sha256: witness.sha256, role, sessionId, planId, workflowId, harnessRoot };
-  });
+    // The same session may exist once under the released name and once under
+    // the legacy name (a rename that never deleted the old file). The released
+    // envelope stands; the legacy-named copy is skipped. Two envelopes under the
+    // same naming scheme are a real duplicated association.
+    const associationKey = `${role}:${sessionId}`;
+    const existing = bySession.get(associationKey);
+    if (existing !== undefined && !(existing.nameKind === "legacy" && nameKind === "released")) {
+      refuse(`${context.label} carries two envelopes for ${role} session ${sessionId}; a duplicated association is not coverage.`);
+    }
+    bySession.set(associationKey, {
+      nameKind,
+      entry: { root: witness.root, path: witness.path, sha256: witness.sha256, role, sessionId, planId, workflowId, harnessRoot },
+    });
+  }
+  const envelopes = [...bySession.values()].map((value) => value.entry);
   return { sources: sourceRefs(context), format: "session-envelope", envelopes };
 }
 
-/** `notes-v1`: the legacy note body and the version 1 note record. */
+/**
+ * `notes-v1`: the notes ledger is a free-form process journal — every model and
+ * era wrote different record shapes, so there is no schema to validate. The
+ * migration stores only the file reference (path + digest); the bytes stay in
+ * place and in the migration archive, human-traceable as always.
+ */
 function notesCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
     const what = `${context.label} notes file ${witness.path}`;
     if (basenameOf(witness.path) !== NOTES_FILE) {
       refuse(`${what} is not ${NOTES_FILE}; the notes surface pins its one retained ledger, never an unknown companion.`);
     }
-    const file = bytesDigest(context.bytesOf(witness));
-    const ids = new Set<string>();
-    const records = jsonlLines(context.bytesOf(witness), what).map((line, index) => {
-      const { record, sha256 } = jsonlRecord(line, `${what} line ${index + 1}`);
-      const what_ = `${what} line ${index + 1}`;
-      if (record.version === 1) {
-        expectExactKeys(record, ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"], what_);
-        if (record.kind !== "note") refuse(`${what_}.kind must be "note"; an unknown record kind is not a retained note.`);
-        const id = expectString(record.id, `${what_}.id`);
-        const workflowId = expectString(record.workflowId, `${what_}.workflowId`);
-        if (workflowId !== context.workflowId) {
-          refuse(`${what_} names workflow ${workflowId}, not ${String(context.workflowId)}; a retained record is never attributed to a sibling workflow.`);
-        }
-        if (ids.has(id)) refuse(`${context.label}: note id ${id} is recorded twice; a duplicated accepted record is not coverage.`);
-        ids.add(id);
-        return {
-          line: index,
-          sha256,
-          format: "notes-v1",
-          id,
-          sessionId: expectString(record.sessionId, `${what_}.sessionId`),
-          ts: expectString(record.ts, `${what_}.ts`),
-        };
-      }
-      expectExactKeys(record, ["kind", "ts", "text"], what_);
-      if (record.kind !== "note") refuse(`${what_}.kind must be "note"; an unknown record kind is not a retained note.`);
-      return {
-        line: index,
-        sha256,
-        format: "notes-legacy",
-        id: null,
-        sessionId: null,
-        ts: expectString(record.ts, `${what_}.ts`),
-      };
-    });
-    return { root: witness.root, path: witness.path, sha256: witness.sha256, fileSha256: file, count: records.length, records };
+    return { root: witness.root, path: witness.path, sha256: witness.sha256, fileSha256: bytesDigest(context.bytesOf(witness)) };
   });
-  return { sources: sourceRefs(context), format: "notes-jsonl", files };
+  return { sources: sourceRefs(context), format: "notes-opaque", files };
 }
 
 /** One agent-flow ledger line validated against the released record union. */

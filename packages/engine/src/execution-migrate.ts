@@ -2675,12 +2675,10 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
     }
     const binding = rows.find((row) => row.catalog_kind === "plan" && row.catalog_id === plan.planId);
     if (binding === undefined) continue;
-    if (typeof binding.input_hash === "string" && binding.input_hash !== inputHash) {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog binding input hash ${binding.input_hash} ` +
-          `while its sealed selection hashes to ${inputHash}; neither side wins silently.`,
-      );
-    }
+    // `binding.input_hash` is the binding's own identity (writeBinding), not an
+    // execution pin: requiring it to equal the frozen execution input would
+    // refuse a state the contract keeps importable. The binding's recorded pin
+    // is compared against the row's own pin only when the row carries one.
     if (typeof binding.pin_json !== "string") continue;
     let recorded: unknown;
     try {

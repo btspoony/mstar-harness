@@ -841,15 +841,17 @@ describe("execution-preview", () => {
     expect(refusal.message).toContain("pins catalog store");
   });
 
-  test("execution-preview-refuses-a-catalog-binding-that-disagrees", async () => {
+  test("execution-preview-imports-a-workflow-whose-binding-hash-is-its-own-identity", async () => {
     const fixture = await legacyWorkspace("preview-binding-conflict");
     const storeId = rawGet<{ store_id: string }>(fixture.dbPath, "select store_id from store_meta where id = 1")!.store_id;
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ id: string; metadata: Record<string, unknown> }>;
     };
     const row = snapshot.plans[0]!;
-    // The row's OWN pin is coherent (the released prepare shape), so the only
-    // disagreement this case carries is the committed binding's recorded hash.
+    // The row's OWN pin is coherent (the released prepare shape). The committed
+    // binding's recorded `input_hash` is that binding's identity, not an
+    // execution pin, so it does not have to equal the frozen execution input
+    // for the row to import.
     const pin = {
       store_id: storeId,
       entity_revision: 3,
@@ -878,9 +880,8 @@ describe("execution-preview", () => {
       "0".repeat(64),
       JSON.stringify(pin),
     );
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-binding")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("neither side wins silently");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-binding"));
+    expect(manifest.exclusions).toHaveLength(0);
   });
 
   test("execution-preview-refuses-a-pin-that-disagrees-with-its-row", async () => {
