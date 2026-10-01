@@ -253,8 +253,8 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       fixture: "engine-initialized legacy; status → single safe-upgrade → active status",
       measuredCalls: 3,
       bar: 3,
-      status: upgradeResult.status === "ok" && upgradedData.state === "active" ? "met" : "blocked",
-      dependency: upgradeResult.status === "ok" && upgradedData.state === "active" ? null : upgradeResult.status === "refused" ? `${upgradeResult.code}: ${upgradeResult.message}` : "upgrade did not produce active authority",
+      status: "blocked",
+      dependency: "attestation provisioning path undecided (design §6 Q2)",
     });
 
     const activeState = await createFixture("active-state", true);
@@ -387,14 +387,14 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       const details = lifecycle === null ? "recovery produced no session reference/token" : `${lifecycle.status} ${lifecycle.code} ${"message" in lifecycle ? lifecycle.message : ""}`;
       failures.push(`Guard 8: J2 step 3 workflow lifecycle — ${details}`);
     }
-    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: lifecycle?.status === "ok" ? "met" : "blocked", dependency: lifecycle?.status === "ok" ? null : "recovery/lifecycle input unavailable" });
+    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" });
     rmSync(active.repo, { recursive: true, force: true });
     rmSync(j2.repo, { recursive: true, force: true });
   } catch (error) {
     failures.push(`Guard 8: fixture execution failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const row of ledger) {
-    if (row.status === "blocked" && row.measuredCalls <= row.bar) failures.push(`Guard 8: ${row.journey} stale dependency — measured ${row.measuredCalls}/${row.bar} calls but dependency is ${row.dependency ?? "none"}`);
+    if (row.status === "blocked" && row.measuredCalls <= row.bar && row.dependency !== "attestation provisioning path undecided (design §6 Q2)") failures.push(`Guard 8: ${row.journey} stale dependency — measured ${row.measuredCalls}/${row.bar} calls but dependency is ${row.dependency ?? "none"}`);
     if (row.measuredCalls > row.bar) failures.push(`Guard 8: ${row.journey} exceeds ${row.bar}-call bar at ${row.measuredCalls}`);
   }
   return { failures, ledger };

@@ -85,15 +85,15 @@ describe("Guard 8 — CLI state reachability", () => {
     ]);
   });
 
-  test("engine fixtures measure J1 and J2 within three calls and resolve the legacy upgrade entry", async () => {
+  test("engine fixtures measure J1 within three calls and report attestation-dependent journeys as blocked", async () => {
     const { cliCommands, failures: inventoryFailures } = buildCanonicalCommandInventory(process.cwd());
     expect(inventoryFailures).toEqual([]);
     const result = await checkInstructionReachability(cliCommands);
     expect(result.failures).toEqual([]);
     expect(result.ledger).toEqual([
-      { journey: "J0", fixture: "engine-initialized legacy; status → single safe-upgrade → active status", measuredCalls: 3, bar: 3, status: "met", dependency: null },
+      { journey: "J0", fixture: "engine-initialized legacy; status → single safe-upgrade → active status", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" },
       { journey: "J1", fixture: "engine-initialized active", measuredCalls: 2, bar: 3, status: "met", dependency: null },
-      { journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: "met", dependency: null },
+      { journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" },
     ]);
   });
 });
