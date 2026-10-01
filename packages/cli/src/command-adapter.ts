@@ -37,7 +37,37 @@ export function commandIdFromArgv(argv: readonly string[]): string {
 
 export function mapParserError(error: unknown, argv: readonly string[]): CommandEnvelope | null {
   if (!(error instanceof CommanderError) || error.exitCode === 0) return null;
-  return usageEnvelope(commandIdFromArgv(argv), error.message);
+  return usageEnvelope(commandIdFromArgv(argv), error.message, { diagnostics: [parserDiagnostic(error, argv)] });
+}
+
+/**
+ * Deterministic field identity for Commander missing argument/option errors and
+ * the leaf help route when argv resolves to a known command; any other parser
+ * failure keeps the honest diagnostic (stable code + original message) without
+ * a guessed field.
+ */
+function parserDiagnostic(error: CommanderError, argv: readonly string[]): Record<string, unknown> {
+  const field = parserField(error);
+  const helpRoute = cliHelpRoute(argv);
+  return {
+    ...(field === undefined ? {} : { path: field }),
+    code: error.code,
+    message: error.message,
+    ...(helpRoute === undefined ? {} : { helpRoute }),
+  };
+}
+
+function parserField(error: CommanderError): string | undefined {
+  const quoted = /'([^']+)'/.exec(error.message)?.[1];
+  if (quoted === undefined) return undefined;
+  if (error.code === "commander.missingArgument") return quoted;
+  if (error.code === "commander.missingMandatoryOptionValue") return optionKey(quoted);
+  return undefined;
+}
+
+function cliHelpRoute(argv: readonly string[]): string | undefined {
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandIdFromArgv(argv));
+  return definition === undefined ? undefined : `mstar ${definition.cli.path.join(" ")} --help`;
 }
 
 function optionKey(flags: string): string {
