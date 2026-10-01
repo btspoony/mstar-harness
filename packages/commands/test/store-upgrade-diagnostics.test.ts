@@ -51,6 +51,7 @@ describe("store upgrade refusal diagnostics", () => {
     ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory"],
     ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest"],
     ["store.upgrade-state-changed", "store upgrade is blocked: changed precondition", "preconditions changed"],
+    ["store.upgrade-state-changed", "unreachable store upgrade state", "preconditions changed"],
     ["store.corrupt", "invalid JSON", "execution restore-preview --backup <backup-file>"],
   ])("%s maps a producer refusal to a cause-specific action", (code, producerMessage, cause) => {
     const failure = code === "store.corrupt" ? new SyntaxError(producerMessage) : new Error(producerMessage);

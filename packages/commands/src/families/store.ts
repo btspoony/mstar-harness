@@ -142,7 +142,7 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
           ? "store.upgrade-staged-inventory-mismatch"
           : errorMessage.includes("staged execution authority without its matching recorded manifest")
             ? "store.upgrade-staged-manifest-missing"
-            : errorMessage.startsWith("store upgrade is blocked:")
+            : errorMessage.startsWith("store upgrade is blocked:") || errorMessage === "unreachable store upgrade state"
               ? "store.upgrade-state-changed"
               : isJsonParseError
                 ? "store.corrupt"
