@@ -85,7 +85,7 @@ test("a fresh staged retry resumes persisted migration identity after failed act
 
   await expect(activateStoreUpgrade(resumed, validAttestation())).rejects.toMatchObject({
     code: "execution.migration-conflict",
-    message: expect.stringContaining("no longer holds the reviewed bytes"),
+    message: expect.stringContaining("source witness mismatch"),
   });
 });
 test("migration retirement refuses a foreign snapshot identity without changing journal bytes", async () => {
