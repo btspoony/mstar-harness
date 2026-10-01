@@ -55,6 +55,8 @@ type Verdict = {
   compliant: boolean;
   countedCalls: number;
   reason: string;
+  /** Legs whose envelope/state agreement could not be checked (no exposed receipt). */
+  unverifiedReceiptLegs: string[];
 };
 
 type InteractionFacts = {
@@ -62,8 +64,14 @@ type InteractionFacts = {
   unvalidatedMutation: boolean;
   /** A safety refusal was treated as success or a write was attempted anyway. */
   refusalBypassed: boolean;
-  /** Envelope receipts agree with the observable fixture state. */
+  /**
+   * Envelope receipts agree with observable fixture state for every leg that
+   * EXPOSES a receipt. Legs without any exposed receipt are listed in
+   * `receiptUnverifiableLegs` instead of being silently covered here.
+   */
   receiptsMatchStore: boolean;
+  /** Legs whose envelope exposes no receipt — agreement is unverified, not true. */
+  receiptUnverifiableLegs?: string[];
   /** The instruction reached its executable end state (or a truthful stop). */
   complete: boolean;
 };
@@ -75,26 +83,28 @@ type InteractionFacts = {
  */
 function audit(interaction: Interaction, facts: InteractionFacts): Verdict {
   const countedCalls = interaction.calls.length;
+  const unverifiedReceiptLegs = facts.receiptUnverifiableLegs ?? [];
   if (facts.unvalidatedMutation) {
-    return { compliant: false, countedCalls, reason: "a mutation executed without validated input or authorized scope" };
+    return { compliant: false, countedCalls, reason: "a mutation executed without validated input or authorized scope", unverifiedReceiptLegs };
   }
   if (facts.refusalBypassed) {
-    return { compliant: false, countedCalls, reason: "a safety refusal was bypassed instead of stopping the interaction" };
+    return { compliant: false, countedCalls, reason: "a safety refusal was bypassed instead of stopping the interaction", unverifiedReceiptLegs };
   }
   if (!facts.receiptsMatchStore) {
-    return { compliant: false, countedCalls, reason: "envelope receipts disagree with observable fixture state" };
+    return { compliant: false, countedCalls, reason: "envelope receipts disagree with observable fixture state", unverifiedReceiptLegs };
   }
   if (!facts.complete) {
-    return { compliant: false, countedCalls, reason: "the instruction ended without an executable result or a truthful stop" };
+    return { compliant: false, countedCalls, reason: "the instruction ended without an executable result or a truthful stop", unverifiedReceiptLegs };
   }
   if (countedCalls > CALL_LIMIT) {
     return {
       compliant: false,
       countedCalls,
       reason: `needed ${countedCalls} counted calls (> ${CALL_LIMIT}); extra dependency: ${interaction.extraDependency}`,
+      unverifiedReceiptLegs,
     };
   }
-  return { compliant: true, countedCalls, reason: `resolved within ${countedCalls} counted calls` };
+  return { compliant: true, countedCalls, reason: `resolved within ${countedCalls} counted calls`, unverifiedReceiptLegs };
 }
 
 /** Records one causal call. Every executeCommand pass through here is counted. */
@@ -895,11 +905,18 @@ describe("store.upgrade partial-receipt witness", () => {
     }
 
     // Two counted calls; the instruction completed only after the replay.
-    // receiptsMatchStore is grounded ONLY in the replay receipt above
-    // (sourcesRetired + retired phase + status.json gone) — the first
-    // envelope exposes no receipt to compare against the partial state.
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
-      .toMatchObject({ compliant: true, countedCalls: 2 });
+    // receiptsMatchStore covers ONLY the replay receipt (sourcesRetired +
+    // retired phase + status.json gone); the first envelope exposes no
+    // receipt, so its agreement is carried as explicitly unverified below.
+    const verdict = audit(interaction, {
+      unvalidatedMutation: false,
+      refusalBypassed: false,
+      receiptsMatchStore: true,
+      receiptUnverifiableLegs: ["upgrade attempt (refused; no receipt or partial-applied facts exposed)"],
+      complete: true,
+    });
+    expect(verdict).toMatchObject({ compliant: true, countedCalls: 2 });
+    expect(verdict.unverifiedReceiptLegs).toEqual(["upgrade attempt (refused; no receipt or partial-applied facts exposed)"]);
   });
 });
 
