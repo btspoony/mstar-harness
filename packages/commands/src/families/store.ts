@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   activationReceiptFor,
   appliedReceiptFor,
   applyStoreMigration,
+  archiveStoreUpgradeFiles,
   backupStore,
   initializeExecutionAuthority,
   initializeStore,
@@ -19,6 +20,7 @@ import {
   retireStoreSources,
   retireExecutionSources,
   stageStoreUpgrade,
+  storeDbPath,
   upgradeStore,
   upgradeStoreWithRecoveryPoint,
   executionManifestHash,
@@ -201,13 +203,138 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
   return { version: 1, command: id, status: "refused", code, exitCode: 1, message: `The store upgrade command raised an unclassified error (code: ${detailCode}; message: ${detailMessage}). Preserve the legacy sources and store bytes. The refusal was raised while running \`store upgrade\`; use the cause details above to correct the request or state, then rerun \`store upgrade\`. If the cause is not operator-correctable, provide this full diagnostic and the preserved state to the store recovery owner.` };
 }
 
+type UpgradeRecovery = { archivePath?: string; rollback?: () => void };
+
+const SQLITE_FORMAT_MAGIC = "SQLite format 3\u0000";
+
+/**
+ * Recover an existing-but-unreadable store.
+ *
+ * Eligibility is deliberately narrow, because displacing a live store is
+ * destructive. `store.corrupt` also covers a symlink, a directory, a device
+ * file, an unreadable path, and every non-busy open failure, so the code alone
+ * proves nothing. Recovery runs only when all of these hold:
+ *
+ *   - the path is a regular file reached without following a link;
+ *   - its header is *positively* identified as not a SQLite database, which is
+ *     what a damaged store image is. A database that merely fails to open for
+ *     some other reason is left exactly where it is;
+ *   - an operator attestation was supplied, since its stopped-session
+ *     declaration is the quiescence basis for the raw capture.
+ *
+ * The archive is the safety barrier: nothing is moved until its bytes were
+ * captured, verified and published. The caller then holds a rollback that puts
+ * the originals back and removes the replacement store, so a failure anywhere
+ * later in the upgrade leaves the control root as it was found.
+ */
+async function recoverUnreadableStore(
+  context: StoreContext,
+  input: StoreInput,
+  invocation: InvocationContext,
+  failure: unknown,
+  recovery: UpgradeRecovery,
+): Promise<boolean> {
+  if (!(failure instanceof StoreError) || failure.code !== "store.corrupt") return false;
+  const attestationInput = input.attestation;
+  if (input.operator === undefined || attestationInput === undefined) return false;
+  const dbPath = storeDbPath(context);
+  const stats = (() => {
+    try {
+      return lstatSync(dbPath);
+    } catch {
+      return undefined;
+    }
+  })();
+  if (stats === undefined || !stats.isFile() || stats.isSymbolicLink()) return false;
+  const header = (() => {
+    try {
+      const descriptor = openSync(dbPath, "r");
+      try {
+        const bytes = Buffer.alloc(16);
+        readSync(descriptor, bytes, 0, 16, 0);
+        return bytes;
+      } finally {
+        closeSync(descriptor);
+      }
+    } catch {
+      return undefined;
+    }
+  })();
+  if (header === undefined || header.toString("latin1", 0, 16) === SQLITE_FORMAT_MAGIC) return false;
+  const attestation = jsonFile<ActivationAttestation>(path.resolve(invocation.cwd, attestationInput), "--attestation");
+  const operationId = randomUUID();
+  const archive = await archiveStoreUpgradeFiles(context, operationId, attestation);
+  const displaced: Array<{ moved: string; original: string }> = [];
+  let initialized = false;
+  const rollback = (): void => {
+    if (initialized) {
+      for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+      initialized = false;
+    }
+    for (const entry of [...displaced].reverse()) {
+      try {
+        renameSync(entry.moved, entry.original);
+      } catch {
+        // The archive still holds these bytes; the primary failure is reported by the caller.
+      }
+    }
+  };
+  try {
+    for (const file of archive.files) {
+      const moved = `${file.sourcePath}.replaced-${operationId}`;
+      renameSync(file.sourcePath, moved);
+      displaced.push({ moved, original: file.sourcePath });
+    }
+    await initializeStore(context);
+    initialized = true;
+  } catch (error) {
+    rollback();
+    throw error;
+  }
+  recovery.archivePath = archive.archivePath;
+  recovery.rollback = rollback;
+  return true;
+}
+
 async function unifiedStoreUpgrade(
   id: string,
   input: StoreInput,
   context: StoreContext,
   invocation: InvocationContext,
 ): Promise<CommandEnvelope> {
-  let state = await probeStoreUpgradeState(context);
+  const recovery: UpgradeRecovery = {};
+  let envelope: CommandEnvelope;
+  try {
+    envelope = await runStoreUpgrade(id, input, context, invocation, recovery);
+  } catch (error) {
+    recovery.rollback?.();
+    throw error;
+  }
+  if (envelope.status !== "ok") {
+    // A refusal or a declined confirmation must not leave the original displaced.
+    recovery.rollback?.();
+    return envelope;
+  }
+  const archivePath = recovery.archivePath;
+  const data = envelope.data;
+  if (archivePath === undefined || typeof data !== "object" || data === null) return envelope;
+  return { ...envelope, data: { ...data, archivedStore: archivePath } };
+}
+
+async function runStoreUpgrade(
+  id: string,
+  input: StoreInput,
+  context: StoreContext,
+  invocation: InvocationContext,
+  recovery: UpgradeRecovery,
+): Promise<CommandEnvelope> {
+  let state: StoreUpgradeState;
+  try {
+    state = await probeStoreUpgradeState(context);
+  } catch (failure) {
+    if (!(await recoverUnreadableStore(context, input, invocation, failure, recovery))) throw failure;
+    state = await probeStoreUpgradeState(context);
+  }
   if (state.verdict === "blocked") { const hasLegacy = hasLegacyExecutionFiles(context.harnessDir); return { version: 1, command: id, status: "refused", code: hasLegacy ? "store.upgrade-legacy-source-only" : "store.upgrade-empty-store", exitCode: 1, message: hasLegacy ? "Legacy execution files exist without an issue store. Run `store init` to create the issue store without modifying `status.json` or workflow files, then run `store upgrade --operator <name> --attestation <file>` to review, migrate, activate, and retire those execution files; do not run `store migrate`, which does not import the execution workflow authority." : "No store or legacy execution sources exist. Run `store init` to create the empty store, then run `store upgrade`." }; }
   const noLegacyExecutionFiles = !hasLegacyExecutionFiles(context.harnessDir);
   if (

@@ -628,6 +628,7 @@ export {
   type StagedStoreUpgrade,
   type StoreUpgradeInput,
 } from "./store-upgrade.js";
+export { archiveStoreUpgradeFiles, type StoreUpgradeArchive } from "./store-upgrade-archive.js";
 export { probeStoreUpgradeState, type StoreUpgradeReason, type StoreUpgradeState } from "./store-upgrade-state.js";
 export { upgradeStoreWithRecoveryPoint } from "./store-upgrade.js";
 // Execution authority: the canonical value form and `exec-v1` version tokens

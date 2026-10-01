@@ -53,9 +53,9 @@ test("raw archive preserves unreadable database and SQLite sidecar bytes before 
   for (const record of archive.files) {
     const original = originals[record.sourcePath]!;
     const saved = readFileSync(record.archivePath);
-    expect(saved).toEqual(original);
+    expect(new Uint8Array(saved)).toEqual(new Uint8Array(original));
     expect(record.bytes).toBe(original.length);
-    expect(record.sha256).toBe(createHash("sha256").update(original).digest("hex"));
+    expect(record.sha256).toBe(createHash("sha256").update(new Uint8Array(original)).digest("hex"));
   }
   const audit = JSON.parse(readFileSync(join(archive.archivePath, "audit.json"), "utf8"));
   expect(audit.quiescence).toBe("operator-attestation-stoppedSessions");
