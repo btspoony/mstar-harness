@@ -2624,9 +2624,10 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
 }
 
 /**
- * §7 the catalog half of the import check: a plan's recorded pin, the frozen
- * input it is sealed with and the committed `catalog_execution_bindings` row
- * must agree, and neither side wins silently.
+ * §7 the catalog half of the import check: a plan's recorded pin is checked
+ * against this store and the frozen input it is sealed with. The committed
+ * `catalog_execution_bindings` row carries its own association identity and is
+ * never compared against the plan's pin.
  *
  * - a pin freezes the very row it is sealed with, so `document_hash` must be
  *   that row's frozen-input hash. Both live routes enforce it (create:
@@ -2679,22 +2680,10 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
     // execution pin: requiring it to equal the frozen execution input would
     // refuse a state the contract keeps importable. The binding's recorded pin
     // is compared against the row's own pin only when the row carries one.
-    if (typeof binding.pin_json !== "string") continue;
-    let recorded: unknown;
-    try {
-      recorded = JSON.parse(binding.pin_json);
-    } catch {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog binding whose pin payload is not JSON, ` +
-          `so the frozen selection cannot be reconciled with it.`,
-      );
-    }
-    if (!isPlainObject(recorded) || serializeExecutionValue(recorded) !== serializeExecutionValue(plan.pin)) {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog pin that disagrees with its catalog ` +
-          `binding; neither side wins silently.`,
-      );
-    }
+    // `binding.pin_json` is serialized by `writeBinding` from the catalog
+    // association identity (kind/id/path/sourceHash) — a different schema from
+    // the plan's own catalog pin, which is checked above against this store and
+    // the frozen execution input. The two records are never compared.
   }
 }
 

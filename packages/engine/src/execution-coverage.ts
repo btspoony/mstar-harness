@@ -677,7 +677,7 @@ function sessionCodec(context: RowContext): unknown {
  * `notes-v1`: the notes ledger is a free-form process journal — every model and
  * era wrote different record shapes, so there is no schema to validate. The
  * migration stores only the file reference (path + digest); the bytes stay in
- * place and in the migration archive, human-traceable as always.
+ * place, human-traceable as always.
  */
 function notesCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
