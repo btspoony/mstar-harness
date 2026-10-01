@@ -126,59 +126,69 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
   }
 }
 export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope<never> {
-  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  const rawCode = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+  const errorMessage = error !== null && typeof error === "object" && "message" in error && typeof error.message === "string"
+    ? error.message
+    : "";
+  const pendingOperationIds = errorMessage.match(/catalog operation\(s\) are still pending \(([^)]*)\)/)?.[1];
+  const isPendingRegistration = rawCode === "execution.migration-conflict" && pendingOperationIds !== undefined;
+  const isJsonParseError = error !== null && typeof error === "object" && "name" in error && error.name === "SyntaxError";
+  const unclassifiedCode = rawCode === undefined
+    ? errorMessage.includes("persisted staged migration record is missing or incomplete")
+      ? "store.upgrade-staged-record-missing"
+      : errorMessage.includes("persisted manifest or coverage identity is inconsistent")
+        ? "store.upgrade-staged-record-inconsistent"
+        : errorMessage.includes("retry inventory") && errorMessage.includes("does not match the staged manifest scope")
+          ? "store.upgrade-staged-inventory-mismatch"
+          : errorMessage.includes("staged execution authority without its matching recorded manifest")
+            ? "store.upgrade-staged-manifest-missing"
+            : errorMessage.startsWith("store upgrade is blocked:")
+              ? "store.upgrade-state-changed"
+              : isJsonParseError
+                ? "store.corrupt"
+                : undefined
+    : undefined;
+  const errorCode = isPendingRegistration ? "store.upgrade-pending-registration" : rawCode ?? unclassifiedCode;
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
-    "execution.migration-conflict": {
-      blocker: "The staged migration conflicts with current workspace state; its reviewed evidence may no longer match.",
-      recovery: "Do not rerun this staged attempt. `store upgrade` will ask you to confirm abandoning it, then create and review a fresh migration.",
-    },
-    "execution.coverage-incomplete": {
-      blocker: "The legacy execution source is missing required completeness evidence.",
-      recovery: "Complete the missing source or stop-session evidence; provide an inventory only if discovery inventory is the missing item, then rerun `store upgrade`.",
-    },
-    "store.attestation-invalid": {
-      blocker: "The activation attestation is invalid or contradictory.",
-      recovery: "Correct the operator-supplied attestation and rerun `store upgrade`.",
-    },
-    "store.activation-blocked": {
-      blocker: "A required installed-consumer or stopped-session readiness condition is unmet.",
-      recovery: "Reload or update the affected consumer and confirm active sessions are stopped in the attestation, then rerun `store upgrade`.",
-    },
-    "store.attestation-missing": {
-      blocker: "The activation attestation file was not found.",
-      recovery: "Provide an existing readable attestation file and rerun `store upgrade`.",
-    },
-    "store.attestation-unreadable": {
-      blocker: "The activation attestation file could not be read.",
-      recovery: "Provide a readable attestation file and rerun `store upgrade`.",
-    },
-    "store.attestation-malformed": {
-      blocker: "The activation attestation file is malformed.",
-      recovery: "Provide a readable, valid JSON attestation file and rerun `store upgrade`.",
-    },
-    "store.operator-file-missing": {
-      blocker: "The operator-supplied file was not found.",
-      recovery: "Provide an existing readable file and rerun the command.",
-    },
-    "store.operator-file-unreadable": {
-      blocker: "The operator-supplied file could not be read.",
-      recovery: "Provide a readable file and rerun the command.",
-    },
-    "store.operator-file-malformed": {
-      blocker: "The operator-supplied file is malformed.",
-      recovery: "Provide a readable, valid JSON file and rerun the command.",
-    },
+    "execution.migration-conflict": { blocker: "A pending catalog registration or changed reviewed execution source prevents migration.", recovery: "For a named pending registration, use the supported catalog recovery operation; for changed execution evidence, restore the reviewed source inputs before requesting the migration again." },
+    "execution.coverage-incomplete": { blocker: "The legacy execution source lacks required completeness evidence.", recovery: "Restore the missing workflow or stop-session evidence and provide an inventory when discovery evidence is missing, then start a fresh upgrade attempt." },
+    "execution.scope-mismatch": { blocker: "The execution migration inputs do not identify a valid control root, operator, or inventory scope.", recovery: "Supply the correct control root and operator; omit an inventory for control-root-only scope or provide a valid inventory." },
+    "execution.not-active": { blocker: "The store does not yet have the execution schema required for migration.", recovery: "Complete the store schema upgrade before starting execution migration." },
+    "store.attestation-invalid": { blocker: "The activation attestation is invalid or contradicts the accountable operator.", recovery: "Correct the operator-supplied attestation and submit it again." },
+    "store.activation-blocked": { blocker: "A required consumer-readiness or stopped-session condition is unmet.", recovery: "Reload or update the named consumer and provide an attestation confirming active sessions are stopped." },
+    "store.migration-source-changed": { blocker: "A reviewed legacy source changed or is missing, so migration retirement cannot be verified.", recovery: "Restore the reviewed source from the migration archive using the supported file recovery process, then resume `store upgrade`." },
+    "store.legacy-write-detected": { blocker: "A legacy consumer wrote to a source during migration retirement.", recovery: "Stop or reload the old consumer, restore the reviewed source from the migration archive if needed, then resume `store upgrade`." },
+    "store.activation-stale": { blocker: "The recovery point or retained-source evidence no longer matches the store.", recovery: "Resolve the recovery-point or retained-source discrepancy and create a fresh staged upgrade." },
+    "store.stale-epoch": { blocker: "The activation evidence belongs to a superseded store generation.", recovery: "Read the current store state and create a fresh activation attempt from the current generation." },
+    "store.not-active": { blocker: "The store is not active for the requested authority transition.", recovery: "Complete or resume the supported store activation workflow before retiring sources." },
+    "store.busy": { blocker: "Another store writer currently holds the database.", recovery: "Wait for that writer to finish, then retry the requested upgrade." },
+    "store.corrupt": { blocker: "The store database is unreadable or structurally invalid.", recovery: "If a verified backup exists, run `execution restore-preview --backup <backup-file> --out <preview-file>`, review the loss preview, then run `execution restore --preview <preview-file> --accept-loss-digest <loss-digest> --operator <name> --authorization <ref>`. Use the exact loss digest from that preview. If no verified backup exists, preserve the legacy sources and store bytes; provide the refusal plus the store corruption diagnostic and the backup-availability result to the store recovery owner because no operator restore point is available." },
+    "store.schema-drift": { blocker: "Applied schema history is inconsistent with this build.", recovery: "Use the harness build that owns this store schema. If no supported build can read it, restore a verified backup with `execution restore-preview --backup <backup-file>` followed by `execution restore --preview <preview-file> --accept-loss-digest <loss-digest> --operator <name> --authorization <ref>`." },
+    "store.upgrade-staged-record-missing": { blocker: "A staged execution migration is missing its complete saved record.", recovery: "This missing-record state cannot be reconstructed safely through the operator interface. Preserve the store and legacy sources; provide this refusal, the reported record-missing diagnostic, and the result of checking whether a verified backup exists to the store recovery owner." },
+    "store.upgrade-staged-record-inconsistent": { blocker: "The saved staged migration identity does not verify.", recovery: "This inconsistent identity cannot be repaired safely through the operator interface. Preserve the store and legacy sources; provide this refusal, the reported identity inconsistency, and the result of checking whether a verified backup exists to the store recovery owner." },
+    "store.upgrade-staged-manifest-missing": { blocker: "The staged authority has no matching recorded migration manifest.", recovery: "This missing-manifest state cannot be reconstructed safely through the operator interface. Preserve the store and legacy sources; provide this refusal, the missing-manifest diagnostic, and the result of checking whether a verified backup exists to the store recovery owner." },
+    "store.schema-unsupported": { blocker: "This build does not support the store schema version.", recovery: "Upgrade the harness to a build that supports this store schema." },
+    "store.runtime-unsupported": { blocker: "The current runtime lacks the SQLite support required by the store.", recovery: "Run the harness on a supported Bun or Node runtime with native SQLite support." },
+    "store.upgrade-staged-inventory-mismatch": { blocker: "The retry inventory differs from the staged migration's reviewed scope.", recovery: "Resume with the reviewed inventory, or omit `--inventory` to reuse that saved scope, then rerun `store upgrade`." },
+    "store.upgrade-state-changed": { blocker: "The upgrade preconditions changed while the upgrade was being prepared.", recovery: "Read the current store state with the supported `store upgrade` command, correct the named blocking condition, and rerun `store upgrade`." },
   };
-  const diagnostic = diagnostics[code];
-  if (error instanceof SddScriptError && diagnostic !== undefined) {
-    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
-  }
-  if (error instanceof SddScriptError) return refused(id, error);
-  const refusal = diagnostic ?? {
-    blocker: "The execution migration could not establish a safe upgrade.",
-    recovery: "Resolve the underlying execution-source or readiness gap, then rerun `store upgrade`.",
-  };
-  return { version: 1, command: id, status: "refused", code: "store.upgrade-blocked", exitCode: 1, message: `${refusal.blocker} ${refusal.recovery}` };
+  const diagnostic = isPendingRegistration
+      ? { blocker: `Pending catalog registration ${pendingOperationIds} blocks execution migration.`, recovery: "Resolve the named pending operation with `catalog reconcile --operation-id <operation-id> --abort` while legacy JSON still owns execution, then retry the store upgrade." }
+      : errorCode === undefined ? undefined : diagnostics[errorCode];
+  if (error instanceof SddScriptError && diagnostic === undefined) return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message: "The supplied store upgrade options or input format are invalid. Correct the request using `store upgrade --help`." };
+  const code = errorCode ?? `${id}.unexpected-failure`;
+  if (diagnostic !== undefined) return { version: 1, command: id, status: "refused", code, exitCode: 1, message: `${diagnostic.blocker} ${diagnostic.recovery}` };
+  const detailCode = rawCode ?? "no error code";
+  const rawMessage = error instanceof Error
+    ? error.message
+    : error !== null && typeof error === "object" && "message" in error && typeof error.message === "string"
+      ? error.message
+      : String(error);
+  const detailMessage = rawMessage
+    .replace(/(?:\/Users\/|\/private\/|\/tmp\/|\/home\/)[^\s,;)]+/g, "[path omitted]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, "[identifier omitted]")
+    .replace(/\bsession(?:\s+id)?\s+\S+/gi, "session [identifier omitted]");
+  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: `The store upgrade command raised an unclassified error (code: ${detailCode}; message: ${detailMessage}). Preserve the legacy sources and store bytes. The refusal was raised while running \`store upgrade\`; use the cause details above to correct the request or state, then rerun \`store upgrade\`. If the cause is not operator-correctable, provide this full diagnostic and the preserved state to the store recovery owner.` };
 }
 
 async function unifiedStoreUpgrade(
@@ -188,18 +198,7 @@ async function unifiedStoreUpgrade(
   invocation: InvocationContext,
 ): Promise<CommandEnvelope> {
   let state = await probeStoreUpgradeState(context);
-  if (state.verdict === "blocked") {
-    return {
-      version: 1,
-      command: id,
-      status: "refused",
-      code: "store.upgrade-blocked",
-      exitCode: 1,
-      message: hasLegacyExecutionFiles(context.harnessDir)
-        ? "No store exists, but legacy execution files are present. Preserve those files and use the supported staged migration; `store init` is not appropriate."
-        : "No store exists in this empty workspace. Initialize it with `store init`, then run `store upgrade`.",
-    };
-  }
+  if (state.verdict === "blocked") { const hasLegacy = hasLegacyExecutionFiles(context.harnessDir); return { version: 1, command: id, status: "refused", code: hasLegacy ? "store.upgrade-legacy-source-only" : "store.upgrade-empty-store", exitCode: 1, message: hasLegacy ? "Legacy execution files exist without an issue store. Run `store migrate --out <manifest-file>` to create a reviewable migration manifest, then apply it with `store migrate --apply --manifest <manifest-file>`; do not initialize over these sources." : "No store or legacy execution sources exist. Run `store init` to create the empty store, then run `store upgrade`." }; }
   const noLegacyExecutionFiles = !hasLegacyExecutionFiles(context.harnessDir);
   if (
     state.reasons.includes("schema-upgrade-pending")
@@ -306,16 +305,7 @@ async function unifiedStoreUpgrade(
       } catch {
         // Preserve the activation/retirement failure if state cannot be reprobed.
       }
-      if (latestState?.executionAuthorityState === "active" && latestState.executionMigrationPhase === "active") {
-        return {
-          version: 1,
-          command: id,
-          status: "refused",
-          code: "store.upgrade-blocked",
-          exitCode: 1,
-          message: "The execution authority is active, but source retirement did not complete because the reviewed evidence changed. Do not abandon the migration; rerun `store upgrade` to resume source retirement.",
-        };
-      }
+      if (latestState?.executionAuthorityState === "active" && latestState.executionMigrationPhase === "active") return storeUpgradeFailure(id, error);
       if (latestState?.executionAuthorityState === "staged") {
         invocation.effects.writeStderr?.(
           "Changed evidence means this staged migration cannot be activated. Abandon this staged migration and its staged execution rows to return to legacy authority? Type `abandon staged migration` to confirm; anything else cancels. ",
