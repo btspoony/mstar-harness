@@ -694,6 +694,7 @@
   "heldoutDigest": "c9bd7cdccdccd14d09c91ed92881b15ddc970147f269d106669d6fc45de56c2c",
   "boundedResolution": {
     "note": "Authored bounded-resolution scenario set: an evaluation input consumed by the existing evaluator, never a production command registry.",
+    "casesHashBasis": "sha256(canonicalJson(cases)) over the authored case set recorded in this file — this artifact is authored directly, so no separate cases-file byte source exists (unlike the frozen corpus manifest, whose casesHash binds the cases file bytes).",
     "routeDispositions": {
       "status.validate": {
         "excluded": "status corpus/authority mutation; no deterministic scenario in this set (covered partially by the retired-route and replay scenarios)"

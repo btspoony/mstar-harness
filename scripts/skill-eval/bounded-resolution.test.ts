@@ -15,7 +15,7 @@
  * real-agent run records traces.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getCommandDefinitions } from "../../packages/commands/src/index.ts";
 import { canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
@@ -99,8 +99,17 @@ export function validateScenarioSet(
   return errors;
 }
 
+/**
+ * Supported slash-command documents, enumerated LIVE from the canonical
+ * `commands/` source (never a hardcoded roster): adding a supported command
+ * document without an authored disposition makes the coverage gate fail.
+ */
+const COMMANDS_DIR = resolve(import.meta.dir, "..", "..", "commands");
+
 function slashDocuments(): string[] {
-  return ["iteration-start", "iteration-drive", "iteration-loop", "amazing-test-audit", "codebase-audit", "amazing-e2e-check", "amazing-pr-review"];
+  return readdirSync(COMMANDS_DIR)
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => name.slice(0, -3));
 }
 
 function cloneManifest(): EvalManifest {
@@ -275,12 +284,27 @@ function syntheticSpawn(io: RunnerIo, candidate: EvalManifest): SpawnFn & { requ
 describe("bounded-resolution scenario set: authored artifact", () => {
   test("passes the evaluator's own integrity checks (configHash, heldoutDigest, casesHash)", () => {
     expect(manifestIntegrityErrors(manifest)).toEqual([]);
+    // This artifact is authored directly (there is no separate cases-file byte
+    // source): `casesHash` binds the canonical serialization of the authored
+    // case set, and the manifest records that basis explicitly.
+    expect((manifest as EvalManifest & { boundedResolution: { casesHashBasis?: string } }).boundedResolution.casesHashBasis).toContain("canonicalJson(cases)");
     expect(sha256Hex(canonicalJson(manifest.cases))).toBe((manifest as EvalManifest & { casesHash: string }).casesHash);
   });
 
   test("every canonical definition and slash document has an explicit disposition", () => {
     const errors = validateScenarioSet(manifest, { commandIds: DEFINITIONS.map((d) => d.id), slashDocuments: slashDocuments() });
     expect(errors).toEqual([]);
+    // Live enumeration, not a pinned roster: the set must cover every document
+    // currently present under commands/.
+    expect(slashDocuments().length).toBeGreaterThan(0);
+  });
+
+  test("a newly supported slash document without a disposition is rejected", () => {
+    const errors = validateScenarioSet(manifest, {
+      commandIds: DEFINITIONS.map((d) => d.id),
+      slashDocuments: [...slashDocuments(), "newly-shipped-family"],
+    });
+    expect(errors.some((e) => e.includes("newly-shipped-family") && e.includes("has no disposition"))).toBe(true);
   });
 
   test("registry inventory alone cannot claim coverage", () => {
