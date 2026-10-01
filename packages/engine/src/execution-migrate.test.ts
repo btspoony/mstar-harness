@@ -1884,6 +1884,52 @@ describe("execution-snapshot-resolutions", () => {
     expect(readFileSync(archived)).toEqual(before);
   });
 
+  test("execution-snapshot-resolutions-exact-owner-lease-imports", async () => {
+    const fixture = await coreWorkspace("snapshot-exact-owner-lease");
+    const snapshotPath = fixture.snapshotPaths[0]!;
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const sessionsDir = join(dirname(snapshotPath), "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const envelope = join(sessionsDir, "plan-pm-owner-1.json");
+    writeJson(envelope, {
+      schema_version: 1, role: "plan-pm", session_id: "plan-pm-owner-1",
+      workflow_id: fixture.workflowIds[0]!, harness_root: fixture.harness, plan_id: `${fixture.workflowIds[0]}-plan`,
+    });
+    plan.status = "InProgress";
+    plan.coordination = { revision: 1, session: { session_id: "plan-pm-owner-1", session_file: envelope, bound_at: "2026-09-02" } };
+    plan.execution_lease = { ...completeExecutionLease, holder: "plan-pm-owner-1" };
+    writeJson(snapshotPath, snapshot);
+    const before = readFileSync(snapshotPath);
+    // The holder matches the plan's own plan-pm session exactly: the lease is
+    // imported WITH its owner and the workflow is not excluded.
+    await stageCore(fixture, "snapshot-exact-owner-lease");
+    expect(readFileSync(snapshotPath)).toEqual(before);
+    const planId = `${fixture.workflowIds[0]}-plan`;
+    const lease = rawGet<{ lease_json: string }>(
+      fixture.dbPath,
+      `select lease_json from execution_leases where plan_id = '${planId}'`,
+    )!;
+    expect(JSON.parse(lease.lease_json).holder_session_id).toBe("plan-pm-owner-1");
+    expect(JSON.parse(lease.lease_json).holder_role).toBe("plan-pm");
+  });
+
+  test("execution-snapshot-resolutions-orphan-holder-is-excluded", async () => {
+    const fixture = await coreWorkspace("snapshot-orphan-holder");
+    const snapshotPath = fixture.snapshotPaths[0]!;
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    plan.status = "InProgress";
+    plan.execution_lease = { ...completeExecutionLease, holder: "someone-else" };
+    writeJson(snapshotPath, snapshot);
+    // A holder that resolves to neither owner is an orphan: the workflow is
+    // excluded (hash-bound in the manifest), never staged with a claim whose
+    // owner cannot be imported.
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-orphan-holder"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes).toContain("workflow.snapshot.orphan-held-lease");
+  });
+
   test("execution-snapshot-resolutions-valid-snapshot-migrates-with-identical-bytes", async () => {
     const fixture = await coreWorkspace("snapshot-valid-unchanged");
     const before = readFileSync(fixture.snapshotPaths[0]!);

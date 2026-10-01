@@ -1331,10 +1331,12 @@ function readDiscoveredWorkflow(input: {
   const coordinatorSessionId = coordinator?.session_id ?? null;
   const orphanLease = plans.some((plan) => {
     if (plan.lease === null) return false;
+    // Mirror `insertExecutionLease` exactly: the holder is compared by exact
+    // equality with the recorded coordinator session id or the plan's own
+    // plan-pm session id. No prefix normalization.
     const holder = typeof plan.lease.holder === "string" ? plan.lease.holder : "";
-    const holderSession = holder.includes(":") ? holder.slice(holder.lastIndexOf(":") + 1) : holder;
     const planSessionId = plan.session?.session_id ?? null;
-    return holderSession !== coordinatorSessionId && holderSession !== planSessionId;
+    return holder !== coordinatorSessionId && holder !== planSessionId;
   });
   if (orphanLease) {
     const bytes = readFileSync(snapshotSource.path);
