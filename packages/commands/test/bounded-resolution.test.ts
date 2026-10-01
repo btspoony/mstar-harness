@@ -846,8 +846,8 @@ describe("lease witness", () => {
   });
 });
 
-describe("store.upgrade partial-receipt witness", () => {
-  test("a retirement failure leaves a partial receipt; replay completes within the budget", async () => {
+describe("store.upgrade partial-application witness", () => {
+  test("a retirement failure leaves a partially applied state; replay completes within the budget", async () => {
     const root = mkdtempSync(join(tmpdir(), "bounded-store-"));
     roots.push(root);
     const harness = join(root, ".mstar");
