@@ -337,6 +337,16 @@ export interface UsageObservation {
   usage: Record<string, number>;
 }
 
+export interface InvocationCallObservation {
+  line: number;
+  /** Invocation identity (json.id / item.id); null = identity absent (honest unknown). */
+  identity: string | null;
+  itemType: string;
+  phase: "single" | "started" | "completed";
+  /** Failed attempt (observed status "failed"); failed attempts still count. */
+  failed: boolean;
+}
+
 export interface EventStreamScan {
   threadId: string | null;
   usageEvents: UsageObservation[];
@@ -345,6 +355,20 @@ export interface EventStreamScan {
   malformedRecords: number;
   unknownRecords: number;
   warnings: string[];
+  /**
+   * Bounded-resolution invocation accounting. A start/completed pair sharing
+   * one invocation identity is ONE call; a record without any identity is an
+   * honest unknown — listed individually, never zero-filled, never deduped.
+   */
+  invocationCalls: InvocationCallObservation[];
+  /** Distinct identities observed (+1 per identity-less record). */
+  countedInvocations: number;
+  /** Failed attempts among the counted calls. */
+  failedInvocations: number;
+  /** Counted calls whose invocation identity was absent. */
+  unknownIdentityCalls: number;
+  /** Read-shaped invocations among the counted calls (lookup depth). */
+  readShapedInvocations: number;
 }
 
 export function parseEventLines(raw: string): ParsedEventRecord[] {
@@ -392,7 +416,13 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     malformedRecords: 0,
     unknownRecords: 0,
     warnings: [],
+    invocationCalls: [],
+    countedInvocations: 0,
+    failedInvocations: 0,
+    unknownIdentityCalls: 0,
+    readShapedInvocations: 0,
   };
+  const seenIdentities = new Map<string, number>();
   for (const record of records) {
     if (record.parseError !== null) {
       scan.malformedRecords += 1;
@@ -440,6 +470,40 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     }
     if (TOOL_ACTIVITY_RE.test(type) || TOOL_ACTIVITY_RE.test(itemType)) {
       scan.toolActivityObserved = true;
+ // Bounded-resolution accounting: dedupe start/completed pairs by
+ // invocation identity; identity-less records stay individual unknowns.
+      const identity = eventIdOfRecord(record);
+      const itemTypeForCall = itemType || type;
+      const phase: InvocationCallObservation["phase"] = /item[._-]?started$/i.test(type)
+        ? "started"
+        : /item[._-]?completed$/i.test(type)
+          ? "completed"
+          : "single";
+      const failed = json.status === "failed" || (item !== null && typeof item === "object" && (item as Record<string, unknown>).status === "failed");
+      if (identity === null) {
+        scan.invocationCalls.push({ line: record.line, identity: null, itemType: itemTypeForCall, phase, failed });
+        scan.countedInvocations += 1;
+        scan.unknownIdentityCalls += 1;
+        if (failed) scan.failedInvocations += 1;
+        if (READ_ITEM_TYPES.has(itemTypeForCall)) scan.readShapedInvocations += 1;
+      } else {
+        const seenAt = seenIdentities.get(identity);
+        if (seenAt === undefined) {
+          seenIdentities.set(identity, scan.invocationCalls.length);
+          scan.invocationCalls.push({ line: record.line, identity, itemType: itemTypeForCall, phase, failed });
+          scan.countedInvocations += 1;
+          if (failed) scan.failedInvocations += 1;
+          if (READ_ITEM_TYPES.has(itemTypeForCall)) scan.readShapedInvocations += 1;
+        } else {
+          // Same invocation identity: one call. A failed phase marks the
+          // call failed even if the paired record did not.
+          const existing = scan.invocationCalls[seenAt]!;
+          if (failed && !existing.failed) {
+            existing.failed = true;
+            scan.failedInvocations += 1;
+          }
+        }
+      }
       continue;
     }
     scan.unknownRecords += 1;
@@ -536,6 +600,10 @@ export interface TurnMetrics {
   usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null; reason: string | null };
   usageBasis: UsageBasis;
   readEvidence: ReadEvidence;
+ /** Bounded-resolution invocation accounting, straight from the event scan (raw observations, not attribution). */
+  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number };
+ /** Declared bootstrap context for this case ("warm"/"cold"); null = the case declares none. */
+  resolutionContext: "warm" | "cold" | null;
  /** Loaded-bytes accounting: labelled bytes, null with reason until verifiable. */
   bytesLoaded: { bytes: number | null; unit: "bytes"; reason: string | null };
  /** Cost only with observed usage AND a recorded price source; otherwise null. */
@@ -553,6 +621,7 @@ function buildTurnMetrics(args: {
   spawn: SpawnResult;
   scan: EventStreamScan;
   finalPresent: boolean;
+  resolutionContext: "warm" | "cold" | null;
 }): TurnMetrics {
   const { runId, turn, elapsedMs, spawn: spawnResult, scan } = args;
   let usageReason: string;
@@ -580,6 +649,13 @@ function buildTurnMetrics(args: {
     usage: { inputTokens: null, outputTokens: null, totalTokens: null, reason: usageReason },
     usageBasis: "unknown",
     readEvidence,
+    invocations: {
+      counted: scan.countedInvocations,
+      failed: scan.failedInvocations,
+      unknownIdentity: scan.unknownIdentityCalls,
+      readShaped: scan.readShapedInvocations,
+    },
+    resolutionContext: args.resolutionContext,
     bytesLoaded: { bytes: null, unit: "bytes", reason: BYTES_UNVERIFIED_REASON },
     costUsd: { amount: null, reason: "no recorded price source; cost stays null (Spec A1)" },
     adapterWarnings: scan.warnings,
@@ -883,6 +959,122 @@ function gradeToolReadAssertion(
       };
 }
 
+/**
+ * Bounded-resolution call budget: sum the deduped invocation count across the
+ * unit's turns and compare with the declared limit. Unknown identity calls
+ * and malformed records prevent a COMPLETE compliance claim — the grade is
+ * "unverified" (in the denominator), never a pass.
+ */
+function gradeCallsWithin(ctx: GradingContext, assertionId: string, limit: number): AssertionGrade {
+  const perTurn = collectTurnRecords(ctx.unit, ctx.io);
+  if (perTurn.length === 0) {
+    return {
+      assertionId,
+      kind: "calls_within",
+      grade: "unverified",
+      evidence: { detail: "no turn event files were readable; invocation accounting unverified" },
+    };
+  }
+  let counted = 0;
+  let failed = 0;
+  let unknownIdentity = 0;
+  let readShaped = 0;
+  let malformed = 0;
+  let unrecognized = 0;
+  for (const { records } of perTurn) {
+    const scan = scanEventRecords(records);
+    counted += scan.countedInvocations;
+    failed += scan.failedInvocations;
+    unknownIdentity += scan.unknownIdentityCalls;
+    readShaped += scan.readShapedInvocations;
+    malformed += scan.malformedRecords;
+    unrecognized += scan.unknownRecords;
+  }
+  if (unknownIdentity > 0 || malformed > 0 || unrecognized > 0) {
+    return {
+      assertionId,
+      kind: "calls_within",
+      grade: "unverified",
+      evidence: {
+        detail: `incomplete accounting: ${unknownIdentity} invocation call(s) without identity, ${malformed} malformed record(s) and ${unrecognized} unrecognized record(s); a complete compliance claim is impossible (unknown stays unknown, never zero)`,
+      },
+    };
+  }
+  const pass = counted <= limit;
+  return {
+    assertionId,
+    kind: "calls_within",
+    grade: pass ? "pass" : "fail",
+    evidence: {
+      detail: pass
+        ? `counted ${counted} deduplicated invocation call(s) (failed ${failed}, read-shaped ${readShaped}) within the limit ${limit}`
+        : `counted ${counted} deduplicated invocation call(s) (failed ${failed}, read-shaped ${readShaped}) exceed the limit ${limit}; extra causal calls are named by the instruction, not hidden`,
+    },
+  };
+}
+
+/**
+ * Withheld-effect boundary: the declared grouped-facts/authorization outcome
+ * must coincide with NO fixture mutation. Any created/modified/deleted file
+ * fails — a withheld mutation that executed is a bypass, not a pass.
+ */
+function gradeMutationWithheld(ctx: GradingContext, assertionId: string): AssertionGrade {
+  const { diff } = ctx;
+  const touched = [...diff.created, ...diff.modified, ...diff.deleted];
+  const pass = touched.length === 0;
+  return {
+    assertionId,
+    kind: "mutation_withheld",
+    grade: pass ? "pass" : "fail",
+    evidence: {
+      file: ctx.unit.fixtureDiff?.diffFile,
+      detail: pass
+        ? "withheld effect honored: fixture diff shows zero created/modified/deleted paths"
+        : `withheld effect was executed anyway; fixture writes observed: ${touched.join(", ")}`,
+    },
+  };
+}
+
+/** Grouped-facts outcome: the final message carries the grouped request verbatim. */
+function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, needle: string): AssertionGrade {
+  const turn = lastCompletedTurn(ctx.unit);
+  if (!turn) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: { detail: "no completed turn produced a final message; grouped-facts outcome stays unverified until evidence adjudicated" },
+    };
+  }
+  let content: string | null = null;
+  try {
+    content = ctx.io.readText(turn.artifacts.final);
+  } catch {
+    content = null;
+  }
+  if (content === null) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "final.md missing; grouped-facts outcome unverified until evidence adjudicated" },
+    };
+  }
+  const pass = content.includes(needle);
+  return {
+    assertionId,
+    kind: "grouped_facts_final",
+    grade: pass ? "pass" : "fail",
+    evidence: {
+      turn: turn.turn,
+      file: turn.artifacts.final,
+      detail: pass
+        ? `final message carries the grouped-facts/authorization request ${JSON.stringify(needle)} — a truthful non-mutation stop, distinct from an applied mutation`
+        : `final message does not carry the expected grouped-facts request ${JSON.stringify(needle)}`,
+    },
+  };
+}
+
 function gradeDiffAssertion(ctx: GradingContext, assertionId: string, allowed: string[]): AssertionGrade {
   const { diff } = ctx;
   const violations = [...diff.deleted, ...diff.created.filter((p) => !allowed.includes(p)), ...diff.modified.filter((p) => !allowed.includes(p))];
@@ -959,6 +1151,15 @@ function gradeUnit(ctx: GradingContext): UnitGrading {
         break;
       case "diff_paths_within":
         assertions.push(gradeDiffAssertion(ctx, assertion.id, assertion.value as string[]));
+        break;
+      case "calls_within":
+        assertions.push(gradeCallsWithin(ctx, assertion.id, assertion.value as number));
+        break;
+      case "mutation_withheld":
+        assertions.push(gradeMutationWithheld(ctx, assertion.id));
+        break;
+      case "grouped_facts_final":
+        assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as string));
         break;
       case "thread_reused":
         assertions.push(gradeThreadReused(ctx, assertion.id));
@@ -1318,7 +1519,7 @@ export async function executeManifest(args: RunArgs): Promise<RunResult> {
       else if (spawnResult.code !== 0) infrastructureReason = scan.authFailure ? "auth_failure" : "nonzero_exit";
       const status: TurnRecord["status"] = infrastructureReason === null ? "completed" : "infrastructure_error";
 
-      const metrics = buildTurnMetrics({ runId, turn, elapsedMs, spawn: spawnResult, scan, finalPresent });
+      const metrics = buildTurnMetrics({ runId, turn, elapsedMs, spawn: spawnResult, scan, finalPresent, resolutionContext: caseRec.boundedResolution?.context ?? null });
       io.writeText(metricsFile, `${JSON.stringify(metrics, null, 2)}\n`);
       const record: TurnRecord = {
         runId,

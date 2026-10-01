@@ -1611,3 +1611,201 @@ describe("Task 2: report stage (synthetic state)", () => {
     expect(io.exists(report.mdPath)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bounded resolution: invocation accounting and behavioral outcomes (SYNTHETIC)
+//
+// SYNTHETIC TAG: same rules as above — fake spawn, scripted events/final.
+// These tests prove the scanner/metric/assertion/report instrumentation only;
+// a passing synthetic trace is never observed model success.
+// ---------------------------------------------------------------------------
+
+const BOUNDED_NEEDLE = "AUTHORIZATION-REQUIRED";
+
+/** One synthetic tool invocation record; identity optional (absent = unknown). */
+function invocationLine(id: string | null, opts: { failed?: boolean; phase?: "started" | "completed" } = {}): string {
+  const item: Record<string, unknown> = { type: "command_execution", command: ["cat", "AGENTS.md"] };
+  if (id !== null) item.id = id;
+  if (opts.failed === true) item.status = "failed";
+  const record: Record<string, unknown> = { type: opts.phase === "started" ? "item.started" : "item.completed", item };
+  if (id !== null) record.id = id;
+  return JSON.stringify(record);
+}
+
+async function preparedBoundedRunDir(
+  caseId: string,
+  limit: number,
+  context: "warm" | "cold" | null,
+): Promise<{ io: ReturnType<typeof memoryRunnerIo>; manifest: EvalManifest }> {
+  const parsed = JSON.parse(CASES_TEXT) as { schemaVersion: number; cases: Array<Record<string, unknown>> };
+  const target = parsed.cases.find((c) => c.id === caseId);
+  if (target === undefined) throw new Error(`test setup: missing case ${caseId}`);
+  target.assertions = [
+    { id: "b-calls", kind: "calls_within", value: limit },
+    { id: "b-withheld", kind: "mutation_withheld", value: true },
+    { id: "b-grouped", kind: "grouped_facts_final", value: BOUNDED_NEEDLE },
+  ];
+  if (context !== null) target.boundedResolution = { context };
+  const io = memoryRunnerIo();
+  io.files.set(resolve("/cfg/config.json"), JSON.stringify(testConfig));
+  io.files.set(resolve("/cfg/cases.json"), JSON.stringify(parsed));
+  const result = await prepareManifest({
+    configPath: "/cfg/config.json",
+    casesPath: "/cfg/cases.json",
+    outDir: OUT_DIR,
+    repoRoot: REPO_ROOT,
+    io,
+    readSourceTree: memReader,
+    exec: makeSubprocessSpy().exec,
+  });
+  if (result.exit !== 0 || !result.manifest) throw new Error(`test setup: prepare failed: ${result.errors.join("; ")}`);
+  return { io, manifest: result.manifest };
+}
+
+function boundedSpawn(
+  io: RunnerIo,
+  manifest: EvalManifest,
+  caseId: string,
+  events: string,
+  finalText: string,
+  writes: { path: string; content: string }[] = [],
+) {
+  return syntheticSpawn(io, (req) => {
+    const id = caseIdFromCwd(manifest, req.cwd);
+    if (id === caseId) return { events, final: `${finalText}\n`, code: 0, writes };
+    return basePassScript(manifest, id);
+  });
+}
+
+function boundedEvents(invocationIds: Array<string | null>, opts: { malformed?: boolean } = {}): string {
+  const lines = [JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" })];
+  for (const id of invocationIds) lines.push(invocationLine(id));
+  if (opts.malformed === true) lines.push("not-json{{{");
+  lines.push(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }));
+  return `${lines.join("\n")}\n`;
+}
+
+describe("bounded resolution: invocation accounting and behavioral outcomes (synthetic)", () => {
+  test("scanner dedupes start/completed by identity; identity-less records stay individual unknowns", () => {
+    const scan = scanEventStream(`${[
+      invocationLine("item_1", { phase: "started" }),
+      invocationLine("item_1"),
+      invocationLine("item_2"),
+      invocationLine(null),
+    ].join("\n")}\n`);
+    expect(scan.countedInvocations).toBe(3);
+    expect(scan.unknownIdentityCalls).toBe(1);
+    expect(scan.invocationCalls.map((c) => c.identity)).toEqual(["item_1", "item_2", null]);
+  });
+
+  test("a failed attempt still counts and a failed phase marks the paired identity once", () => {
+    const paired = scanEventStream(`${[
+      invocationLine("item_1", { phase: "started", failed: true }),
+      invocationLine("item_1"),
+    ].join("\n")}\n`);
+    expect(paired.countedInvocations).toBe(1);
+    expect(paired.failedInvocations).toBe(1);
+
+    const single = scanEventStream(`${[invocationLine("item_1", { failed: true })].join("\n")}\n`);
+    expect(single.countedInvocations).toBe(1);
+    expect(single.failedInvocations).toBe(1);
+  });
+
+  test("four-call causal help/read trace fails the three-call metric", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3", "item_4"]), `${BOUNDED_NEEDLE}: provide the target issue id and authorization`);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("fail");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("counted 4");
+    expect(unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownIdentity: 0, readShaped: 4 });
+    expect(unit.turns["1"]!.metrics.resolutionContext).toBe("cold");
+  });
+
+  test("three counted calls ending in a grouped authorization request pass resolution and never execute the withheld mutation", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3"]), `${BOUNDED_NEEDLE}: provide the target issue id and authorization`);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("pass");
+    expect(unit.fixtureDiff).toMatchObject({ created: [], modified: [], deleted: [] });
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(0);
+    expect(report.report.boundedResolution).toMatchObject({
+      unitsDeclaredCold: 1,
+      unitsDeclaredWarm: 0,
+      unitsUndeclared: 2,
+      totalCallsCounted: 6,
+      totalFailedCalls: 0,
+      unitsWithUnknownIdentityCalls: 0,
+    });
+    expect(io.readText(report.mdPath)).toContain("Bounded-resolution accounting");
+  });
+
+  test("unknown identity calls and malformed records prevent a complete compliance claim", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", null], { malformed: true }), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("unverified");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("incomplete accounting");
+  });
+
+  test("a well-formed but unrecognized record also prevents a complete compliance claim", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1"),
+      invocationLine("item_2"),
+      invocationLine("item_3"),
+      JSON.stringify({ type: "mystery.record", x: 1 }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("unverified");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("1 unrecognized record(s)");
+  });
+
+  test("a withheld mutation that executed anyway fails the withheld-effect assertion", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(WW_CASE, 3, null);
+    const spawn = boundedSpawn(
+      io,
+      manifest,
+      WW_CASE,
+      boundedEvents(["item_1"]),
+      `${BOUNDED_NEEDLE}: provide the target issue id`,
+      [{ path: "notes.md", content: "written despite the grouped request\n" }],
+    );
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === WW_CASE)!;
+    const withheld = unit.grading!.assertions.find((a) => a.kind === "mutation_withheld")!;
+    expect(withheld.grade).toBe("fail");
+    expect(withheld.evidence.detail).toContain("notes.md");
+  });
+
+  test("warm and cold contexts are recorded explicitly from the case declaration, never inferred", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "warm");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), `${BOUNDED_NEEDLE}: provide the target issue id`);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.turns["1"]!.metrics.resolutionContext).toBe("warm");
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.report.boundedResolution).toMatchObject({ unitsDeclaredWarm: 1, unitsDeclaredCold: 0, unitsUndeclared: 2 });
+  });
+});

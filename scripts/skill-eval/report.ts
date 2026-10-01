@@ -50,6 +50,8 @@ export interface ReportTurnRow {
   usageBasis: UsageBasis;
   usageReason: string | null;
   readEvidence: string;
+  invocations: { counted: number; failed: number; unknownIdentity: number; readShaped: number };
+  resolutionContext: "warm" | "cold" | null;
 }
 
 export interface ReportUnitRow {
@@ -93,6 +95,15 @@ export interface EvalReport {
   };
   elapsed: { totalMs: number; unitsCounted: number };
   assertions: { pass: number; fail: number; unverified: number };
+  /** Bounded-resolution aggregates: declared contexts plus raw invocation accounting. */
+  boundedResolution: {
+    unitsDeclaredWarm: number;
+    unitsDeclaredCold: number;
+    unitsUndeclared: number;
+    totalCallsCounted: number;
+    totalFailedCalls: number;
+    unitsWithUnknownIdentityCalls: number;
+  };
   units: ReportUnitRow[];
   notes: string[];
 }
@@ -122,6 +133,8 @@ const HONESTY_NOTES = [
   "cost is null unless observed usage and a recorded price source both exist; no price lookup is performed",
   "bytesLoaded is labelled bytes and stays null until a verified event schema allows accounting (AC3)",
   "unverified assertions remain in the attempted denominator and are listed explicitly; they are not passes (AC4/AC5)",
+  "invocation calls are deduplicated by invocation identity; a record without any identity stays an unknown (never zero-filled), and failed attempts still count",
+  "the warm/cold resolution context is the case's declared bootstrap precondition, never an inference from the event stream; a record whose shape is unrecognized is an unknown, not a zero",
   "this report aggregates recorded evidence only — it never reruns a model and never substitutes synthetic results for real ones (AC4)",
 ];
 
@@ -155,6 +168,8 @@ function unitRow(unit: UnitRecord, grade: UnitGrade | "pending"): ReportUnitRow 
       usageBasis: t.metrics.usageBasis,
       usageReason: t.metrics.usage.reason,
       readEvidence: t.metrics.readEvidence,
+      invocations: t.metrics.invocations,
+      resolutionContext: t.metrics.resolutionContext,
     }));
   const failed = unit.grading?.assertions.filter((a) => a.grade === "fail").map((a) => `${a.assertionId}(${a.kind})`) ?? [];
   const unverified =
@@ -210,6 +225,15 @@ function toMarkdown(report: EvalReport): string {
   );
   lines.push(
     `- elapsed: ${report.elapsed.totalMs} ms over ${report.elapsed.unitsCounted} counted turns`,
+  );
+  lines.push("");
+  lines.push("## Bounded-resolution accounting");
+  lines.push("");
+  lines.push(
+    `- declared context: warm=${report.boundedResolution.unitsDeclaredWarm} cold=${report.boundedResolution.unitsDeclaredCold} undeclared=${report.boundedResolution.unitsUndeclared}`,
+  );
+  lines.push(
+    `- invocation calls counted=${report.boundedResolution.totalCallsCounted} failed=${report.boundedResolution.totalFailedCalls} units with unknown-identity calls=${report.boundedResolution.unitsWithUnknownIdentityCalls}`,
   );
   lines.push("");
   lines.push("## Units");
@@ -287,6 +311,14 @@ export function buildReport(args: ReportArgs): ReportResult {
       usage: { unitsWithObservedUsageEvents: 0, unitsWithoutUsageEvents: 0, basisCounts: { per_turn: 0, cumulative: 0, unknown: 0 } },
       elapsed: { totalMs: 0, unitsCounted: 0 },
       assertions: { pass: 0, fail: 0, unverified: 0 },
+      boundedResolution: {
+        unitsDeclaredWarm: 0,
+        unitsDeclaredCold: 0,
+        unitsUndeclared: 0,
+        totalCallsCounted: 0,
+        totalFailedCalls: 0,
+        unitsWithUnknownIdentityCalls: 0,
+      },
       units: [],
       notes: errors,
     },
@@ -347,6 +379,14 @@ export function buildReport(args: ReportArgs): ReportResult {
   let elapsedTurns = 0;
   let unitsWithUsage = 0;
   const assertions = { pass: 0, fail: 0, unverified: 0 };
+  const bounded = {
+    unitsDeclaredWarm: 0,
+    unitsDeclaredCold: 0,
+    unitsUndeclared: 0,
+    totalCallsCounted: 0,
+    totalFailedCalls: 0,
+    unitsWithUnknownIdentityCalls: 0,
+  };
 
   for (const unitId of requested) {
     const unit = state.units[unitId];
@@ -365,18 +405,28 @@ export function buildReport(args: ReportArgs): ReportResult {
         failedAssertions: [],
         unverifiedAssertions: [],
       });
+      bounded.unitsUndeclared += 1;
       continue;
     }
+    const manifestCase = manifest.cases.find((c) => c.id === unit.caseId);
+    if (manifestCase?.boundedResolution?.context === "warm") bounded.unitsDeclaredWarm += 1;
+    else if (manifestCase?.boundedResolution?.context === "cold") bounded.unitsDeclaredCold += 1;
+    else bounded.unitsUndeclared += 1;
     const row = unitRow(unit, grade);
     units.push(row);
     for (const a of unit.grading?.assertions ?? []) assertions[a.grade] += 1;
     let unitHasUsage = false;
+    let unitUnknownIdentity = false;
     for (const t of Object.values(unit.turns)) {
       totalMs += t.metrics.elapsedMs;
       elapsedTurns += 1;
       basisCounts[t.metrics.usageBasis] += 1;
       if (t.metrics.usageEvents.length > 0) unitHasUsage = true;
+      bounded.totalCallsCounted += t.metrics.invocations.counted;
+      bounded.totalFailedCalls += t.metrics.invocations.failed;
+      if (t.metrics.invocations.unknownIdentity > 0) unitUnknownIdentity = true;
     }
+    if (unitUnknownIdentity) bounded.unitsWithUnknownIdentityCalls += 1;
     if (unitHasUsage) unitsWithUsage += 1;
   }
   const unitsWithoutUsage = requested.length - unitsWithUsage;
@@ -404,6 +454,7 @@ export function buildReport(args: ReportArgs): ReportResult {
     usage: { unitsWithObservedUsageEvents: unitsWithUsage, unitsWithoutUsageEvents: unitsWithoutUsage, basisCounts },
     elapsed: { totalMs, unitsCounted: elapsedTurns },
     assertions,
+    boundedResolution: bounded,
     units,
     notes: [...HONESTY_NOTES],
   };

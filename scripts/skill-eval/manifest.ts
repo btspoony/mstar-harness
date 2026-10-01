@@ -81,8 +81,24 @@ export const ASSERTION_KINDS = [
   "tool_read_not_contains",
   "diff_paths_within",
   "thread_reused",
+  "calls_within",
+  "mutation_withheld",
+  "grouped_facts_final",
 ] as const;
 export type AssertionKind = (typeof ASSERTION_KINDS)[number];
+
+/** Declared bootstrap context for bounded-resolution accounting (never inferred). */
+export const RESOLUTION_CONTEXTS = ["warm", "cold"] as const;
+export type ResolutionContext = (typeof RESOLUTION_CONTEXTS)[number];
+
+export interface BoundedResolutionContext {
+  /**
+   * "warm" = bootstrap policy reads are already available to the run;
+   * "cold" = the run must causally load them. Declared per case, never
+   * inferred from the event stream.
+   */
+  context: ResolutionContext;
+}
 
 export const REPEATS_ALLOWED = [1, 3] as const;
 
@@ -122,8 +138,8 @@ export interface FixtureDef {
 export interface CaseAssertion {
   id: string;
   kind: AssertionKind;
- /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused. */
-  value: string | string[] | true;
+ /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused and mutation_withheld, positive integer for calls_within. */
+  value: string | string[] | true | number;
   note?: string;
 }
 
@@ -147,6 +163,8 @@ export interface RawCase {
   provenance: CaseProvenance;
  /** Optional per-case override of the global sandbox. */
   sandbox?: SandboxMode;
+ /** Optional declared bounded-resolution bootstrap context. */
+  boundedResolution?: BoundedResolutionContext;
 }
 
 export interface CasesFile {
@@ -167,6 +185,8 @@ export interface PreparedManifestCase {
   assertions: CaseAssertion[];
   provenance: CaseProvenance;
   sandbox: SandboxMode;
+ /** Declared bounded-resolution bootstrap context (absent = undeclared). */
+  boundedResolution?: BoundedResolutionContext;
   integrityHash: string;
 }
 
@@ -655,10 +675,27 @@ export function validateCases(
         } else if (kind === "thread_reused") {
           hasThreadReused = true;
           if (rec.value !== true) errors.push(`${alabel}.value must be true`);
+        } else if (kind === "calls_within") {
+          if (typeof rec.value !== "number" || !Number.isInteger(rec.value) || rec.value <= 0) {
+            errors.push(`${alabel}.value must be a positive integer call limit`);
+          }
+        } else if (kind === "mutation_withheld") {
+          if (rec.value !== true) errors.push(`${alabel}.value must be true`);
         } else if (typeof rec.value !== "string" || rec.value === "") {
           errors.push(`${alabel}.value must be a non-empty string for kind ${kind}`);
         }
       });
+      const bounded = (c as Record<string, unknown>).boundedResolution;
+      if (bounded !== undefined) {
+        if (bounded === null || typeof bounded !== "object" || Array.isArray(bounded)) {
+          errors.push(`${label}.boundedResolution must be an object`);
+        } else {
+          const context = (bounded as Record<string, unknown>).context;
+          if (!(RESOLUTION_CONTEXTS as readonly string[]).includes(context as string)) {
+            errors.push(`${label}.boundedResolution.context must be one of ${RESOLUTION_CONTEXTS.join("|")}`);
+          }
+        }
+      }
       if (c.resumePrompt !== undefined && !hasThreadReused) {
         errors.push(`${label} has resumePrompt but no thread_reused assertion`);
       }
@@ -755,6 +792,7 @@ function preparedCaseIntegrityFields(c: RawCase, fixtureHash: string) {
     resumePrompt: c.resumePrompt ?? null,
     assertions: c.assertions,
     provenance: c.provenance,
+    ...(c.boundedResolution !== undefined ? { boundedResolution: c.boundedResolution } : {}),
   };
 }
 
@@ -1117,6 +1155,7 @@ export async function prepareManifest(args: PrepareArgs): Promise<PrepareResult>
       assertions: c.assertions,
       provenance: c.provenance,
       sandbox,
+      ...(c.boundedResolution !== undefined ? { boundedResolution: c.boundedResolution } : {}),
       integrityHash,
     };
   });
