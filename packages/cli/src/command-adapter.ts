@@ -124,10 +124,6 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
 function decodeCliOptions(definition: CommandDefinition, input: Record<string, unknown>): Record<string, unknown> {
   const decoded = { ...input };
   for (const option of definition.cli.options) {
-    // Payload-declared fields decode exactly once: decodePayloadInputs owns
-    // their JSON parsing and shape validation, so the generic array/number
-    // reshaping below must not pre-wrap or split their raw values.
-    if (definition.payloads !== undefined && option.key in definition.payloads) continue;
     const value = decoded[option.key];
     const schema = optionJsonSchema(definition, option.key);
     if (typeof value === "string" && hasType(schema, "array")) {
@@ -138,10 +134,14 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
             decoded[option.key] = parsed;
             continue;
           }
-          if (parsed !== null && typeof parsed === "object") {
+          // An object is pre-wrapped only for plain list options. A payload
+          // field's document value stays verbatim — decodePayloadInputs parses
+          // and validates it against the declared schema, and pre-wrapping a
+          // wrong-typed document would fabricate a one-element member.
+          if (parsed !== null && typeof parsed === "object" && !(option.key in (definition.payloads ?? {}))) {
             decoded[option.key] = [parsed];
-            continue;
           }
+          continue;
         } catch {
           // Keep malformed JSON-looking input intact so the command decoder rejects it.
           continue;

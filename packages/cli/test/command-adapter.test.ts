@@ -417,6 +417,30 @@ describe("schema selector routes", () => {
     expect(empty.structuredContent.message).toContain("exactly one");
   });
 });
+describe("payload option decoding", () => {
+  test("worktree cleanup accepts a lone --worktree path as a one-element list", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", "/abs/some-path"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    // The lone path decoded cleanly into a one-element list: the refusal is
+    // the missing --workflow validation, not a payload JSON decode error.
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).not.toContain("payload");
+    expect(envelope.message).not.toContain("valid JSON");
+    expect(envelope.details?.diagnostics).toBeUndefined();
+  });
+
+  test("worktree cleanup --apply --worktree <path> decodes the lone path before execution", async () => {
+    const result = await run(["worktree", "cleanup", "--apply", "--worktree", "/abs/some-path"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).not.toContain("payload");
+    expect(envelope.message).not.toContain("valid JSON");
+    expect(envelope.details?.diagnostics).toBeUndefined();
+  });
+});
+
 test("payload decoding reports malformed JSON as usage without executing the command", async () => {
   const result = await run(["report", "--arguments", "[not-json"]);
   expect(result.status).toBe(2);
