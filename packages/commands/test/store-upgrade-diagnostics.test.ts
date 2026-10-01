@@ -8,14 +8,16 @@ import type { InvocationContext } from "../src/types.js";
 
 import { SddScriptError } from "@mstar-harness/engine";
 describe("store upgrade refusal diagnostics", () => {
-  test("pending registration names the blocking operation and a supported recovery", () => {
+  test("pending registration names the operation and phase-aware recovery", () => {
     const result = storeUpgradeFailure("store.upgrade", {
       code: "execution.migration-conflict",
       message: "2 catalog operation(s) are still pending (op-safe-42).",
     });
     expect(result.code).toBe("store.upgrade-pending-registration");
     expect(result.message).toContain("Pending catalog registration op-safe-42");
-    expect(result.message).toContain("catalog reconcile --operation-id <operation-id> --abort");
+    expect(result.message).toContain("catalog reconcile --operation-id <operation-id>");
+    expect(result.message).toContain("For phase `prepared` with no workflow snapshot or root registration, rerun with `--abort`");
+    expect(result.message).toContain("if a snapshot or root registration exists, abort is refused");
     expect(result.message).not.toContain("store.upgrade-blocked");
   });
 
@@ -28,12 +30,12 @@ describe("store upgrade refusal diagnostics", () => {
     ["store.activation-blocked", "consumer is not ready", "stop the active sessions"],
     ["store.migration-source-changed", "reviewed legacy source", "store upgrade --operator <name> --attestation <file>"],
     ["store.legacy-write-detected", "legacy consumer", "Stop or reload"],
-    ["store.activation-stale", "recovery point", "execution restore-preview --backup <backup-file>"],
+    ["store.activation-stale", "recovery point", "store execution restore-preview --backup <backup-file> --out <preview-file>"],
     ["store.stale-epoch", "older store generation", "store upgrade --operator <name> --attestation <file>"],
     ["store.not-active", "not active", "store upgrade --operator <name> --attestation <file>"],
     ["store.busy", "Another store writer", "Wait for that writer"],
-    ["store.corrupt", "unreadable or structurally invalid", "execution restore-preview --backup <backup-file>"],
-    ["store.schema-drift", "schema history is inconsistent", "execution restore-preview --backup <backup-file>"],
+    ["store.corrupt", "unreadable or structurally invalid", "No online operator restore is available in this state"],
+    ["store.schema-drift", "schema history is inconsistent", "store execution restore-preview --backup <backup-file> --out <preview-file>"],
     ["store.schema-unsupported", "does not support the store schema", "npm i -g @mstar-harness/cli@latest"],
     ["store.runtime-unsupported", "runtime lacks native SQLite support", "Bun >=1.4.0"],
   ])("%s emits a cause-specific refusal and operator action", (code, cause, recovery) => {
@@ -46,21 +48,41 @@ describe("store upgrade refusal diagnostics", () => {
   });
 
   test.each([
-    ["store.upgrade-staged-record-missing", "persisted staged migration record is missing or incomplete", "missing its complete saved record"],
-    ["store.upgrade-staged-record-inconsistent", "persisted manifest or coverage identity is inconsistent", "saved staged migration identity does not verify"],
-    ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory"],
-    ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest"],
-    ["store.upgrade-state-changed", "store upgrade is blocked: changed precondition", "preconditions changed"],
-    ["store.upgrade-state-changed", "unreachable store upgrade state", "preconditions changed"],
-    ["store.corrupt", "invalid JSON", "execution restore-preview --backup <backup-file>"],
-  ])("%s maps a producer refusal to a cause-specific action", (code, producerMessage, cause) => {
-    const failure = code === "store.corrupt" ? new SyntaxError(producerMessage) : new Error(producerMessage);
-    const result = storeUpgradeFailure("store.upgrade", failure);
+    ["store.upgrade-staged-record-missing", "persisted staged migration record is missing or incomplete", "missing saved record", "No operator-executable in-place recovery is available"],
+    ["store.upgrade-staged-record-inconsistent", "persisted manifest or coverage identity is inconsistent", "identity does not verify", "cannot repair an inconsistent saved identity"],
+    ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory", "rerun `store upgrade`"],
+    ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest", "cannot repair a missing manifest"],
+    ["store.upgrade-state-changed", "store upgrade is blocked: changed precondition", "preconditions changed", "rerun `store upgrade`"],
+    ["store.upgrade-state-changed", "unreachable store upgrade state", "preconditions changed", "rerun `store upgrade`"],
+  ])("%s maps a producer refusal to a cause-specific action", (code, producerMessage, cause, recovery) => {
+    const result = storeUpgradeFailure("store.upgrade", new Error(producerMessage));
     expect(result.code).toBe(code);
     expect(result.message).toContain(cause);
+    expect(result.message).toContain(recovery);
     expect(result.message).not.toContain("store.upgrade-blocked");
   });
 
+  test("unreadable corrupt store explicitly does not claim preview can recover it", () => {
+    const result = storeUpgradeFailure("store.upgrade", new SyntaxError("invalid JSON"));
+    expect(result.code).toBe("store.corrupt");
+    expect(result.message).toContain("store execution restore-preview");
+    expect(result.message).toContain("cannot recover an unreadable live store");
+    expect(result.message).toContain("store init");
+    expect(result.message).toContain("SQLite-only catalog/execution data");
+  });
+
+  test("unclassified payloads redact paths and internal identifiers", () => {
+    const result = storeUpgradeFailure("store.upgrade", {
+      code: "store.future-cause",
+      message: "failed at /Users/alice/private/store.db with workflowId operationId lossDigest",
+    });
+    expect(result.message).not.toContain("/Users/alice");
+    expect(result.message).not.toContain("workflowId");
+    expect(result.message).not.toContain("operationId");
+    expect(result.message).not.toContain("lossDigest");
+    expect(result.message).toContain("[path omitted]");
+    expect(result.message).toContain("[internal field omitted]");
+  });
   test("genuinely unclassified errors include their diagnostic and an actionable next step", () => {
     const result = storeUpgradeFailure("store.upgrade", new Error("probe failed: underlying detail"));
     expect(result.code).toBe("store.upgrade.unexpected-failure");
