@@ -52,7 +52,7 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT）+ **`mstar-ite
 
 ## Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（按当前 Phase 查 route map，只加载一行 detail）+ `command-shared-invariants.md` → `mstar-dispatch-gates` → `mstar-phase-gates` → `mstar-conventions` / `mstar-artifacts` → `mstar-host` → `mstar-compound`（Phase 3 前）→ **`mstar-sdd`**（first implement 前）→ `mstar-review-qc`（first QC 前）→ `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
+按 **`mstar-iteration`** 的 **Load order** 与 **Phase route map** 引导加载：按当前 Phase 只加载 route map 对应一行 detail（Phase 1 → `references/phase-1-prepare.md`）；`mstar-compound` / `mstar-sdd` / `mstar-review-qc` 等 topic skill 按 Load order 的命名触发时点到达时加载，**不在 Boot 预载全矩阵**。加载选择权威（bootstrap / PM role / 完整 load list）→ **`mstar-roles`** § Load Order。
 
 **Session todos（loop 专属；Phase 2–5 共享 rows → `command-shared-invariants.md`）**：
 

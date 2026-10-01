@@ -7,9 +7,9 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. Phase 2 implement 波次（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**；Phase 2 QC 前 → **`mstar-review-qc`**。Git/worktree 载体（有 git 写或 lease 时）→ **`mstar-branch-worktree`**。**Phase 1 角色派发 preflight**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. Harness 产物写入（compass / plans / `status.json` / plan 文件落盘或修订）→ **`mstar-artifacts`**. 宿主动作（specialist invoke 派发、宿主 plan-mode bridge、`Host hooks` anchor 执行）→ **`mstar-host`** → active host reference. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. Phase 2 implement 波次（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**；Phase 2 QC 前 → **`mstar-review-qc`**。Git/worktree 载体（有 git 写或 lease 时）→ **`mstar-branch-worktree`**。**Phase 1 角色派发 preflight**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。On conflict, **`mstar-harness-core` wins**.
 
-**Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。
+**Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。宿主 command 的 Boot 遵守本节：只保留 intent、route choice 与指向本节 / Phase route map 的指针，topic skill 一律按上述命名触发时点到达时加载，**不在 Boot 预载全矩阵**；加载选择权威是 **`mstar-roles`** § Load Order。
 
 **Scoped primary route**（`/iteration-drive --assignment|--workflow/--plan|--resume`）→ **`references/plan-scoped-pm.md`**，且**先于**本 skill 的全局 todo / backlog / last-plan 逻辑判定。
 
