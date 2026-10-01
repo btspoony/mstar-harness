@@ -940,25 +940,26 @@ describe("execution-restore", () => {
     // a valid SQLite file is still incomplete when its committed-operation
     // inventory cannot be read.
     rawRun(world.dbPath, "drop table execution_operations");
+    // SQLite housekeeping (WAL checkpoint on open/close) can change the main
+    // file's bytes without semantic modification. Fold that housekeeping in
+    // once, so the byte-for-byte survival assertion below is stable and still
+    // proves the refusal wrote nothing.
+    const settle = (): void => {
+      const db = new DatabaseSync(world.dbPath);
+      try {
+        db.exec("pragma wal_checkpoint(truncate)");
+      } finally {
+        db.close();
+      }
+    };
+    settle();
     const damaged = readFileSync(world.dbPath);
     const pointBytes = sha256OfFile(point.backupPath);
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toMatch(/inventory|integrity/);
-    // §8: both files survive the refusal. The live store keeps its damage (the
-    // required authority table is still absent — nothing was restored) and the
-    // backup keeps its exact bytes. The live file's raw bytes may differ through
-    // SQLite housekeeping (WAL checkpoint on open/close), so the damage is
-    // asserted semantically.
-    let live: DatabaseSync;
-    try {
-      live = new DatabaseSync(world.dbPath, { readOnly: true });
-      expect(
-        (live.prepare("select count(*) as n from sqlite_master where name = 'execution_operations'").get() as { n: number }).n,
-      ).toBe(0);
-    } finally {
-      live.close();
-    }
+    // §8: both files survive the refusal, byte for byte.
+    expect(sha256OfFile(world.dbPath)).toBe(sha256OfBytes(damaged));
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
     const copy = new DatabaseSync(point.backupPath, { readOnly: true });
     try {
