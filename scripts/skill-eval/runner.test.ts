@@ -1698,6 +1698,15 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
     expect(scan.invocationCalls.map((c) => c.identity)).toEqual(["item_1", "item_2", null]);
   });
 
+  test("invocation identity prefers the item id when outer event ids differ across phases", () => {
+    const started = JSON.stringify({ type: "item.started", id: "evt_a", item: { id: "item_1", type: "command_execution", command: ["cat", "AGENTS.md"] } });
+    const completed = JSON.stringify({ type: "item.completed", id: "evt_b", item: { id: "item_1", type: "command_execution", command: ["cat", "AGENTS.md"] } });
+    const scan = scanEventStream(`${started}\n${completed}\n`);
+    expect(scan.countedInvocations).toBe(1);
+    expect(scan.invocationCalls).toHaveLength(1);
+    expect(scan.invocationCalls[0]!.identity).toBe("item_1");
+  });
+
   test("a failed attempt still counts and a failed phase marks the paired identity once", () => {
     const paired = scanEventStream(`${[
       invocationLine("item_1", { phase: "started", failed: true }),

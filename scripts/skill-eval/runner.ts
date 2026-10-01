@@ -407,6 +407,19 @@ function eventIdOfRecord(record: ParsedEventRecord): string | null {
   return eventIdOf(record.json);
 }
 
+/**
+ * Invocation identity for bounded-resolution dedupe: prefers the item's own
+ * id (the invocation's identity) over the outer event id — the envelope ids
+ * of an invocation's started and completed phases may differ.
+ */
+function invocationIdOfRecord(record: ParsedEventRecord): string | null {
+  if (!record.json) return null;
+  const item = (record.json.item ?? null) as Record<string, unknown> | null;
+  const raw = item !== null && typeof item === "object" ? item.id : null;
+  if (typeof raw === "string" && raw !== "") return raw;
+  return eventIdOfRecord(record);
+}
+
 export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan {
   const scan: EventStreamScan = {
     threadId: null,
@@ -472,7 +485,7 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
       scan.toolActivityObserved = true;
  // Bounded-resolution accounting: dedupe start/completed pairs by
  // invocation identity; identity-less records stay individual unknowns.
-      const identity = eventIdOfRecord(record);
+      const identity = invocationIdOfRecord(record);
       const itemTypeForCall = itemType || type;
       const phase: InvocationCallObservation["phase"] = /item[._-]?started$/i.test(type)
         ? "started"
