@@ -945,8 +945,20 @@ describe("execution-restore", () => {
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toMatch(/inventory|integrity/);
-    // §8: both files survive the refusal, byte for byte.
-    expect(sha256OfFile(world.dbPath)).toBe(sha256OfBytes(damaged));
+    // §8: both files survive the refusal. The live store keeps its damage (the
+    // required authority table is still absent — nothing was restored) and the
+    // backup keeps its exact bytes. The live file's raw bytes may differ through
+    // SQLite housekeeping (WAL checkpoint on open/close), so the damage is
+    // asserted semantically.
+    let live: DatabaseSync;
+    try {
+      live = new DatabaseSync(world.dbPath, { readOnly: true });
+      expect(
+        (live.prepare("select count(*) as n from sqlite_master where name = 'execution_operations'").get() as { n: number }).n,
+      ).toBe(0);
+    } finally {
+      live.close();
+    }
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
     const copy = new DatabaseSync(point.backupPath, { readOnly: true });
     try {
