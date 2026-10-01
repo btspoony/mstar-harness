@@ -20,22 +20,22 @@ describe("store upgrade refusal diagnostics", () => {
   });
 
   test.each([
-    ["execution.migration-conflict", "execution source", "restore the reviewed source inputs"],
-    ["execution.coverage-incomplete", "completeness evidence", "stop-session evidence"],
-    ["execution.scope-mismatch", "control root", "Supply the correct control root"],
-    ["execution.not-active", "execution schema", "Complete the store schema upgrade"],
-    ["store.attestation-invalid", "activation attestation", "Correct the operator-supplied attestation"],
-    ["store.activation-blocked", "consumer-readiness", "Reload or update"],
-    ["store.migration-source-changed", "reviewed legacy source", "migration archive"],
+    ["execution.migration-conflict", "legacy source", "store upgrade --operator <name> --attestation <file>"],
+    ["execution.coverage-incomplete", "complete migration evidence", "--inventory <inventory-file>"],
+    ["execution.scope-mismatch", "does not match the migration scope", "--harness <control-root>"],
+    ["execution.not-active", "store schema does not yet include the execution tables", "store upgrade"],
+    ["store.attestation-invalid", "activation attestation", "store upgrade --operator <name> --attestation <file>"],
+    ["store.activation-blocked", "consumer is not ready", "stop the active sessions"],
+    ["store.migration-source-changed", "reviewed legacy source", "store upgrade --operator <name> --attestation <file>"],
     ["store.legacy-write-detected", "legacy consumer", "Stop or reload"],
-    ["store.activation-stale", "recovery point", "fresh staged upgrade"],
-    ["store.stale-epoch", "superseded store generation", "fresh activation attempt"],
-    ["store.not-active", "not active", "Complete or resume"],
+    ["store.activation-stale", "recovery point", "execution restore-preview --backup <backup-file>"],
+    ["store.stale-epoch", "older store generation", "store upgrade --operator <name> --attestation <file>"],
+    ["store.not-active", "not active", "store upgrade --operator <name> --attestation <file>"],
     ["store.busy", "Another store writer", "Wait for that writer"],
     ["store.corrupt", "unreadable or structurally invalid", "execution restore-preview --backup <backup-file>"],
-    ["store.schema-drift", "schema history is inconsistent", "harness build that owns this store schema"],
-    ["store.schema-unsupported", "does not support the store schema", "Upgrade the harness"],
-    ["store.runtime-unsupported", "runtime lacks the SQLite support", "supported Bun or Node runtime"],
+    ["store.schema-drift", "schema history is inconsistent", "execution restore-preview --backup <backup-file>"],
+    ["store.schema-unsupported", "does not support the store schema", "npm i -g @mstar-harness/cli@latest"],
+    ["store.runtime-unsupported", "runtime lacks native SQLite support", "Bun >=1.4.0"],
   ])("%s emits a cause-specific refusal and operator action", (code, cause, recovery) => {
     const result = storeUpgradeFailure("store.upgrade", { code, message: "sensitive detail must not leak" });
     expect(result.code).toBe(code);
