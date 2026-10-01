@@ -441,6 +441,7 @@ async function runStoreUpgrade(
       operator,
       operationId: randomUUID(),
       catalogDeltaDisposition,
+      attestation,
       ...(inventoryPath === undefined ? {} : { inventoryPath }),
     });
   } catch (error) {
