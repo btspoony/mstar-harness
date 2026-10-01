@@ -280,6 +280,14 @@ describe("store.upgrade unified entry", () => {
     expect(messages).toHaveLength(1);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
+      if (
+        result.data === null ||
+        typeof result.data !== "object" ||
+        !("exclusions" in result.data) ||
+        !("normalizations" in result.data)
+      ) {
+        throw new Error("expected a successful upgrade carrying exclusions and normalizations");
+      }
       expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
       expect(Array.isArray(result.data.exclusions)).toBe(true);
       expect(Array.isArray(result.data.normalizations)).toBe(true);
