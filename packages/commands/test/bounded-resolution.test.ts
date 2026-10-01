@@ -12,8 +12,11 @@
  * Accounting rule (one instruction = one budget): every causally attributable
  * model-visible call counts — reads, help, schema queries, failed attempts.
  * Batch envelope count alone is never the metric. Safety refusals are valid
- * results, not failures to bypass; a refused step must leave no partial state
- * and a partial receipt must never be reported as completion.
+ * results and must not be bypassed; a bypassed safety refusal fails the
+ * interaction. A partial-application failure is a different shape: its
+ * envelope is a refusal, the partially changed state must be accounted
+ * truthfully (receipt matches disk), and it must never be reported as
+ * completion until a replay finishes the instruction.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
