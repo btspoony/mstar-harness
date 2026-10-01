@@ -39,15 +39,19 @@ describe("worktree tracks payload", () => {
     const definition = worktreeCheckDefinition();
     const descriptor = tracksDescriptor();
     expect(descriptor.schema.safeParse([{ worktreePath: "/tmp/wt", workingBranch: "feature/x" }]).success).toBe(true);
+    // The published input schema IS the runtime contract: a typed array with
+    // both required members, not an opaque placeholder that also admits strings.
     const inputSchema = definition.input.toJSONSchema() as {
       properties: Record<string, Record<string, unknown>>;
     };
-    expect(inputSchema.properties.tracks).not.toMatchObject({ type: "array" });
-    expect(inputSchema.properties.tracks).not.toMatchObject({ type: "string" });
+    expect(inputSchema.properties.tracks).toMatchObject({ type: "array" });
+    const items = inputSchema.properties.tracks.items as { required?: readonly string[] };
+    expect(items.required).toEqual(expect.arrayContaining(["worktreePath", "workingBranch"]));
   });
 
-  test("family validates opaque tracks through the descriptor before the gate", async () => {
-    expect(worktreeCheckDefinition().input.safeParse({ l2: true, tracks: "[{bad" }).success).toBe(true);
+  test("family validates tracks at the input boundary with indexed paths", async () => {
+    // The string transport form is no longer advertised: the boundary refuses it.
+    expect(worktreeCheckDefinition().input.safeParse({ l2: true, tracks: "[{bad" }).success).toBe(false);
 
     const missing = await executeCommand("worktree.check", { l2: true, tracks: [{ worktreePath: "/tmp/wt" }] }, context());
     expect(missing).toMatchObject({ status: "usage", exitCode: 2 });

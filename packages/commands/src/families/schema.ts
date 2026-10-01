@@ -163,13 +163,18 @@ type SchemaCommandInput = { type?: string; command?: string; family?: string };
 
 export function getSchemaCommandDefinitions(): readonly CommandDefinition<SchemaCommandInput, unknown>[] {
   const id = "schema";
-  const input = z.object({
-    type: z.string().min(1).optional(),
-    command: z.string().min(1).optional(),
-    family: z.string().min(1).optional(),
-  }).refine(
-    (value) => SELECTOR_KEYS.filter((key) => value[key] !== undefined).length === 1,
-    { message: SELECTOR_USAGE },
+  // One branch per selector, each strict: the published JSON schema is an
+  // anyOf with additionalProperties:false, so exactly-one is expressed in the
+  // discoverable contract itself — `{}` or two selectors match no branch and
+  // are refused at the input boundary with the same grouped guidance the
+  // selection error carries.
+  const input = z.union(
+    [
+      z.strictObject({ command: z.string().min(1) }),
+      z.strictObject({ family: z.string().min(1) }),
+      z.strictObject({ type: z.string().min(1) }),
+    ],
+    { error: () => SELECTOR_USAGE },
   );
   const definition: CommandDefinition<SchemaCommandInput, unknown> = {
     id,
