@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "2def4735abe4a3ecc1dd8febde2d3324872e8c37f0b52353b7eb7206fe797bd3",
+  "casesHash": "0ca8e5621e0bf4be951f7f5eb42e52ce929b49555edc037042b66182bf01494f",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -616,7 +616,7 @@
           "id": "a-next-action",
           "kind": "final_contains",
           "value": "next: apply the sources phase, then retire",
-          "note": "a concrete executable next-action contract: resolution, not a claimed completed mutation"
+          "note": "a truthful next-state contract derived from the read receipt (the trace observes the receipt at store/fixture.json): resolution, not a claimed completed mutation"
         },
         {
           "id": "a-not-outcome",
@@ -643,7 +643,7 @@
         "context": "warm",
         "evidence": "partial receipt present before the instruction"
       },
-      "integrityHash": "a1204d55c0d1c96a4d9bb14d35e370b14f31aff53719fd5a9a891b8fd0485f54"
+      "integrityHash": "c0f26169a3155d94d01693e71e5d4ba282ea45d9ecd67a89bbb934d65a37411e"
     },
     {
       "id": "bounded-res-lease-boundary",

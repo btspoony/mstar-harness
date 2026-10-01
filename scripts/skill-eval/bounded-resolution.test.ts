@@ -90,11 +90,12 @@ const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization;
  */
 const SCHEMA_WRONG_RESULTS_FINAL = "outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json\nschema CaptureInput requires: projectId, title, kind, severity, impact, acceptance, sourceIdentity, rootCauseKey, acceptanceKey, occurrenceKey, sourceKind, location, observedBehavior, evidence, wrongFieldOne\nissue document store/fixture.json: issueId I-999999 revision 7\n";
 /**
- * The old false completion claim: a `phase retired` receipt in a trace that
- * writes nothing. The next-action oracle must reject it as an incompatible
- * receipt for a withheld replay.
+ * The corrected resume/next-action sentences are KEPT, and an incompatible
+ * receipt claim (`phase retired` — a completed-mutation statement a
+ * no-write trace cannot truthfully produce) is ADDED: the negative guard
+ * must be what rejects this final, not a missing positive oracle.
  */
-const REPLAY_RETIRED_CLAIM_FINAL = "outcome: replay completed partial upgrade (phase retired)\n";
+const REPLAY_RETIRED_CLAIM_FINAL = "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)\nnext: apply the sources phase, then retire\nreceipt: phase retired\n";
 
 const manifestText = readFileSync(MANIFEST_PATH, "utf8");
 const manifest = JSON.parse(manifestText) as EvalManifest;
@@ -581,9 +582,11 @@ describe("bounded-resolution scenario set: authored artifact", () => {
       const declared = (inputsByScenario[c.id]?.inputs ?? []).join(" ").toLowerCase();
       if (declared === "") continue; // nothing already available to re-request
       const grouped = c.assertions.find((a) => a.kind === "grouped_facts_final")!;
-      const groupedSpec = grouped.value as { requestCues?: unknown };
-      const cues = groupedSpec.requestCues;
-      const cueList: string[] = Array.isArray(cues) ? cues.filter((x): x is string => typeof x === "string") : [];
+      const groupedValue: unknown = grouped.value;
+      expect(groupedValue !== null && typeof groupedValue === "object" && "requestCues" in groupedValue).toBe(true);
+      if (groupedValue === null || typeof groupedValue !== "object" || !("requestCues" in groupedValue)) continue;
+      const cueRaw: unknown = groupedValue.requestCues;
+      const cueList: string[] = Array.isArray(cueRaw) ? cueRaw.filter((x): x is string => typeof x === "string") : [];
       expect(cueList.length).toBeGreaterThan(0);
       const needles = c.assertions
         .filter((a) => a.kind === "final_not_contains")
@@ -834,12 +837,14 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(result.errors).toEqual([]);
     const units = Object.values(result.state.units);
     const replay = units.find((u) => u.caseId === "bounded-res-replay-partial")!;
-    // Valid budget, no writes — yet the final claims a completed retired
-    // phase the withheld trace cannot have produced.
+    // Valid budget, no writes, AND the corrected resume/next-action
+    // sentences present — the incompatible `phase retired` receipt claim is
+    // what the negative guard rejects.
     expect(replay.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
     expect(replay.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-next-action")!.grade).toBe("pass");
     expect(replay.grade).toBe("fail");
-    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("fail");
     expect(replay.grading!.assertions.find((a) => a.assertionId === "a-not-retired-claim")!.grade).toBe("fail");
   });
 
