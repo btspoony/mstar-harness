@@ -2254,6 +2254,46 @@ function sessionRefusalDetails(input: {
 }
 
 /**
+ * §2.3 the coordinator recovery entry the session-unavailable refusal offers,
+ * truthful about what `recoverExecutionCoordinator` does with THIS row. While
+ * the workflow holds a current-epoch ACTIVE holder, the transition replaces
+ * only the holder it names, so naming this non-active row is refused
+ * (`coordination.duplicate-holder`) — the reachable paths are the live
+ * holder's own reference, or a recovery that names THAT holder with stop
+ * evidence for it. With no live holder the recovery naming this row is the
+ * real way back, so the entry spells out its complete inputs.
+ */
+function coordinatorRecoveryWork(input: {
+  rows: SessionRow[];
+  workflowId: string;
+  epoch: number;
+  sessionId: string;
+  rowState: string;
+  rowEpoch: number;
+}): string[] {
+  // Same holder test recoverExecutionCoordinator fences its duplicate-holder
+  // refusal with: an ACTIVE row at the CURRENT epoch.
+  const live = input.rows.find((row) => row.state === "active" && row.ref.epoch === input.epoch);
+  if (live !== undefined) {
+    return [
+      `no recovery reaches this row while workflow ${JSON.stringify(input.workflowId)} holds the ACTIVE coordinator ` +
+        `session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: recoverExecutionCoordinator replaces ` +
+        `only the holder it names, so naming this ${input.rowState} row (epoch ${input.rowEpoch}) as the prior holder ` +
+        `is refused while that holder is live, and a normal bind never revives this row \u2014 run the addressed effect ` +
+        `through ${JSON.stringify(live.ref.sessionId)}'s own live reference, or, when that holder is actually gone, ` +
+        `recover by naming ${JSON.stringify(live.ref.sessionId)} as the prior holder with valid stop evidence for it`,
+    ];
+  }
+  return [
+    `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token ` +
+      `of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(input.sessionId)} ` +
+      `as the prior holder it replaces and carries a valid operator attestation \u2014 exactly one installed ` +
+      `current-coordinator consumer plus an entry naming that holder stopped/reloaded \u2014 and it reactivates ` +
+      `this ${input.rowState} row (epoch ${input.rowEpoch}) at the current epoch; a normal bind never revives it`,
+  ];
+}
+
+/**
  * §2.3/§2.2 the binding this store ACTUALLY holds for the addressed scope at
  * the CURRENT epoch, or the refusal. A reference is a typed lookup identity,
  * not a bearer credential: an unknown, suspended, revoked, foreign or
@@ -2292,13 +2332,14 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
                 "(a coordinator binds none), the full execution token and an operation id",
             ]
           : address.role === "coordinator"
-            ? [
-                `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token ` +
-                  `of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(address.sessionId)} ` +
-                  `as the prior holder it replaces and carries a valid operator attestation \u2014 exactly one installed ` +
-                  `current-coordinator consumer plus an entry naming that holder stopped/reloaded \u2014 and it reactivates ` +
-                  `this ${mine.state} row (epoch ${mine.ref.epoch}) at the current epoch; a normal bind never revives it`,
-              ]
+            ? coordinatorRecoveryWork({
+                rows,
+                workflowId: address.workflowId,
+                epoch: tx.epoch,
+                sessionId: address.sessionId,
+                rowState: mine.state,
+                rowEpoch: mine.ref.epoch,
+              })
             : [
                 `no recovery transition exists for a ${address.role} session row in this engine \u2014 the row stays ` +
                   `${mine.state} at epoch ${mine.ref.epoch} and no bind revives it`,
@@ -3158,12 +3199,29 @@ export async function bindExecutionSession(
     const now = new Date().toISOString();
     const { mine, holder } = readOwnership(tx.db, store, bind);
     if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
+      // The same live-holder fence recoverExecutionCoordinator refuses the
+      // named-prior recovery with: while a current-epoch ACTIVE coordinator
+      // holder exists, recovery naming this non-active row is refused, so the
+      // guidance names the reachable paths instead of a dead end.
+      const liveHolder =
+        bind.role === "coordinator"
+          ? readSessionRows(tx.db, store, bind.workflowId, "coordinator").find(
+              (row) => row.state === "active" && row.ref.epoch === tx.epoch,
+            )
+          : undefined;
       throw new ExecutionError(
         "execution.session-unavailable",
         `workflow ${bind.workflowId} records session ${bind.sessionId} as a ${bind.role} session in state ` +
           `${mine.state} at epoch ${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or ` +
-          `epoch-invalidated binding is never revived by a normal bind \u2014 the named recovery transition, with stop ` +
-          `evidence and the prior holder, is the only way back. Nothing was bound.`,
+          `epoch-invalidated binding is never revived by a normal bind` +
+          (liveHolder === undefined
+            ? ` \u2014 the named recovery transition, with stop evidence and the prior holder, is the only way back`
+            : `, and no recovery reaches this row while workflow ${JSON.stringify(bind.workflowId)} holds the ACTIVE ` +
+                `coordinator session ${JSON.stringify(liveHolder.ref.sessionId)} at epoch ${tx.epoch} \u2014 the ` +
+                `recovery replaces only the holder it names, so run the addressed effect through ` +
+                `${JSON.stringify(liveHolder.ref.sessionId)}'s own live reference, or, when that holder is actually ` +
+                `gone, recover by naming it as the prior holder with stop evidence for it`) +
+          `. Nothing was bound.`,
       );
     }
     const existing = mine ?? holder;

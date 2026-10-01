@@ -607,6 +607,123 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     expect(live.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
   });
 
+  test("offers only a reachable route when a replaced coordinator row reads while a live holder exists", async () => {
+    const fixture = await seededWorkflow("boundary-replaced-holder-guidance");
+    const { context, epoch, coordinatorCaller } = fixture;
+    const workflowToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const RECOVERY_ID = "host-recovery";
+
+    // The real replacement: the recovery caller names host-coord as the prior
+    // holder with valid stop evidence, so host-coord's row turns revoked and
+    // host-recovery becomes the workflow's ACTIVE coordinator at this epoch.
+    const attestation = (stoppedSessionId: string): ActivationAttestation => ({
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: TS,
+      operator: { actor: "ops-engineer", authorizationRef: "fixture-only-recovery" },
+      consumers: [
+        {
+          entryId: "fixture-coordinator",
+          kind: "coordinator",
+          entrypoint: "/fixture/engine",
+          runtime: "bun",
+          runtimeVersion: "1.4.0",
+          version: "fixture",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId: stoppedSessionId, host: "fixture", state: "stopped" }],
+    });
+    await recoverExecutionCoordinator(domainContext(context, trustedCaller(RECOVERY_ID, "coordinator", null)), {
+      expected: workflowToken,
+      operationId: "recover-live-holder-in",
+      priorSessionId: COORDINATOR_ID,
+      reason: "fixture: replace the coordinator with a live holder",
+      attestation: attestation(COORDINATOR_ID),
+    });
+
+    type RefusalDetails = { available_work?: string[]; row_state?: string };
+    const refusalOf = (caller: ExecutionCaller): Promise<{ code?: string; details?: RefusalDetails }> =>
+      readOwnExecutionSession(domainContext(context, caller)).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: RefusalDetails }) => error,
+      );
+
+    // The replaced row reads: the refusal must not offer the recovery that
+    // names THIS row — a live holder exists, so recoverExecutionCoordinator
+    // refuses that naming (coordination.duplicate-holder) and the guidance
+    // would point at a dead end.
+    const replaced = await refusalOf(coordinatorCaller);
+    expect(replaced.code).toBe("execution.session-unavailable");
+    expect(replaced.details?.row_state).toBe("revoked");
+    const facts = JSON.stringify(replaced.details?.available_work);
+    expect(facts).not.toContain(`names \\"${COORDINATOR_ID}\\" as the prior holder`);
+    expect(facts).not.toContain("it reactivates this");
+    expect(facts).toContain(RECOVERY_ID);
+    expect(facts).toContain("replaces only the holder it names");
+    expect(facts).toContain("own live reference");
+    // The named duplicate-holder route is REAL: walking exactly the route the
+    // old guidance offered refuses while the live holder exists. The first
+    // recovery advanced the workflow revision, so the caller re-reads the
+    // current token first — the same re-read the refusal's own retry entry
+    // demands.
+    const currentToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const before = footprint(context);
+    await expect(
+      recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+        expected: currentToken,
+        operationId: "recover-live-holder-duplicate",
+        priorSessionId: COORDINATOR_ID,
+        reason: "fixture: the old guidance offered this dead end",
+        attestation: attestation(COORDINATOR_ID),
+      }),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    expect(footprint(context)).toEqual(before);
+
+    // The bind gate states the same truth: reviving the replaced row through a
+    // bind refuses, and its message no longer claims the recovery transition is
+    // "the only way back" while the live holder exists.
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: currentToken,
+        operationId: "bind-replaced-row-live-holder",
+      }),
+    ).rejects.toThrow(/holds the ACTIVE coordinator session "host-recovery".*replaces only the holder it names/s);
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: currentToken,
+        operationId: "bind-replaced-row-live-holder-2",
+      }),
+    ).rejects.not.toThrow(/only way back/);
+
+    // The route the new guidance names is REAL too: when the live holder is
+    // actually gone, a recovery naming THAT holder succeeds and revives the
+    // replaced row through its own identity.
+    withRaw(context, (db) => {
+      db.prepare("update execution_sessions set state = 'suspended' where role = 'coordinator' and session_id = ?").run(
+        RECOVERY_ID,
+      );
+    });
+    const back = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+      expected: currentToken,
+      operationId: "recover-live-holder-out",
+      priorSessionId: RECOVERY_ID,
+      reason: "fixture: the live holder stopped, the named recovery reaches back",
+      attestation: attestation(RECOVERY_ID),
+    });
+    expect(back.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    const revived = await readOwnExecutionSession(domainContext(context, coordinatorCaller));
+    expect(revived.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
+  });
+
   test("refuses a nested plan operation on the same store and commits only the outer one", async () => {
     const fixture = await seededWorkflow("boundary-reentrant");
     const { context, planTokens, coordinator, planPm, coordinatorCaller, planPmCaller } = fixture;
