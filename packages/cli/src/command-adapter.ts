@@ -3,6 +3,7 @@ import { Command, CommanderError } from "commander";
 import {
   executeCommand,
   getCommandDefinitions,
+  getCommandSchemas,
   spawnProcess,
   startDashboard,
   type CommandDefinition,
@@ -67,6 +68,40 @@ function hasType(schema: Record<string, unknown>, type: string): boolean {
 function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition["cli"]["options"][number]): string {
   if (!hasType(optionJsonSchema(definition, option.key), "boolean")) return option.flags;
   return option.flags.replace(/\s+(?:<[^>]+>|\[[^\]]+\])/g, "");
+}
+
+/**
+ * One rendered contract per command for both publication routes, built from
+ * the same descriptor table the `schema` family serves: no adapter-owned field
+ * lists. Ownership groups only name verified metadata; fields without it stay
+ * implicit in the route's own surface (CLI arguments/options, MCP inputSchema).
+ */
+export function renderCommandContract(definition: CommandDefinition, route: "cli" | "mcp"): string {
+  const descriptor = getCommandSchemas([definition])[0]!;
+  const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
+  if (route === "mcp") {
+    // The CLI route prints this same syntax as commander's Usage line, built
+    // from the same `cli` table; MCP descriptions carry it explicitly.
+    const argumentTokens = descriptor.cli.arguments
+      .map((argument) => argument.required
+        ? ` <${argument.key}${argument.variadic ? "..." : ""}>`
+        : ` [${argument.key}${argument.variadic ? "..." : ""}]`)
+      .join("");
+    const optionTokens = descriptor.cli.options.map((option) => ` ${option.flags}`).join("");
+    lines.push(`CLI: mstar ${descriptor.cli.path.join(" ")}${argumentTokens}${optionTokens}`);
+  }
+  for (const [ownership, label] of [["caller", "Caller-supplied"], ["derivable", "Derived"]] as const) {
+    const entries = descriptor.requirements.filter((entry) => entry.ownership === ownership && entry.route === route);
+    if (entries.length === 0) continue;
+    const parts = entries.map((entry) => (entry.help === undefined ? entry.name : `${entry.name} (${entry.help})`));
+    lines.push(`${label}: ${parts.join(", ")}`);
+  }
+  const payloads = Object.keys(descriptor.payloadSchemas);
+  if (payloads.length > 0) {
+    lines.push(`Payload fields: ${payloads.join(", ")}`);
+    if (route === "cli") lines.push("Payload values arrive as JSON strings and are decoded against the declared schema.");
+  }
+  return lines.join("\n");
 }
 
 function decodeCliOptions(definition: CommandDefinition, input: Record<string, unknown>): Record<string, unknown> {
@@ -169,7 +204,7 @@ function ensureCommand(program: Command, pathParts: readonly string[]): Command 
 }
 
 function configureLeaf(command: Command, definition: CommandDefinition): void {
-  if (command.description() === "") command.description(definition.description);
+  if (command.description() === "") command.description(renderCommandContract(definition, "cli"));
   for (const alias of definition.cli.aliases) {
     if (!alias.includes(" ")) command.alias(alias);
   }
