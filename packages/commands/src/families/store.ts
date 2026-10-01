@@ -1,6 +1,6 @@
-import { closeSync, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
+import path, { basename } from "node:path";
 import {
   SddScriptError,
   StoreError,
@@ -265,6 +265,7 @@ async function recoverUnreadableStore(
   const operationId = randomUUID();
   const archive = await archiveStoreUpgradeFiles(context, operationId, attestation);
   const displaced: Array<{ moved: string; original: string }> = [];
+  const displacedDir = path.join(archive.archivePath, "displaced");
   let initialized = false;
   const rollback = (): void => {
     if (initialized) {
@@ -280,8 +281,12 @@ async function recoverUnreadableStore(
     }
   };
   try {
+    // The displaced originals belong with the archive, not beside the live store:
+    // leaving them in the control root would put stray files in the way of the
+    // discovery the migration performs next.
+    mkdirSync(displacedDir, { recursive: true });
     for (const file of archive.files) {
-      const moved = `${file.sourcePath}.replaced-${operationId}`;
+      const moved = path.join(displacedDir, basename(file.sourcePath));
       renameSync(file.sourcePath, moved);
       displaced.push({ moved, original: file.sourcePath });
     }

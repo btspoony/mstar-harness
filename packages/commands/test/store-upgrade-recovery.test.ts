@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
+import { probeStoreUpgradeState } from "@mstar-harness/engine";
 import { getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -34,7 +35,7 @@ const fixtureAttestation = {
       disposition: "reloaded",
     },
   ],
-  stoppedSessions: [{ sessionId: "old-session", host: "omp", state: "stopped" }],
+  stoppedSessions: [],
 };
 
 /**
@@ -43,7 +44,7 @@ const fixtureAttestation = {
  * execution files completes without an interactive answer, so the fixture
  * needs no confirmation input.
  */
-function invocationContext(cwd: string): InvocationContext {
+function invocationContext(cwd: string, answer: string): InvocationContext {
   return {
     cwd,
     controlRoot: root,
@@ -51,7 +52,7 @@ function invocationContext(cwd: string): InvocationContext {
     signal: new AbortController().signal,
     effects: {
       async readInput() {
-        return "no";
+        return answer;
       },
       async spawn() {
         return { exitCode: 1, signal: null, stdout: "", stderr: "" };
@@ -67,13 +68,18 @@ function invocationContext(cwd: string): InvocationContext {
   };
 }
 
-async function runUpgrade(harness: string, cwd: string): Promise<CommandEnvelope> {
+async function runUpgrade(harness: string, cwd: string, answer = "no", inventory?: string): Promise<CommandEnvelope> {
   const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
   if (definition === undefined) throw new Error("missing store.upgrade definition");
   const attestation = join(cwd, "attestation.json");
   writeFileSync(attestation, `${JSON.stringify(fixtureAttestation)}\n`);
-  const parsed = definition.input.parse({ harness, operator: "fixture-operator", attestation });
-  return definition.execute(parsed, invocationContext(cwd));
+  const parsed = definition.input.parse({
+    harness,
+    operator: "fixture-operator",
+    attestation,
+    ...(inventory === undefined ? {} : { inventory }),
+  });
+  return definition.execute(parsed, invocationContext(cwd, answer));
 }
 
 test("store upgrade archives a damaged store, completes, and reports the archive", async () => {
@@ -95,8 +101,79 @@ test("store upgrade archives a damaged store, completes, and reports the archive
     throw new Error(`expected a successful upgrade carrying an archive path, received ${JSON.stringify(result)}`);
   }
   const archivedStore = result.data.archivedStore;
-  // The reported archive must actually hold the damaged bytes, unchanged.
+  // The reported path must be the published archive for this root, and it must
+  // actually hold the damaged bytes, unchanged.
+  expect(archivedStore.startsWith(join(harnessDir, "archived", "store-upgrade"))).toBe(true);
   expect(readFileSync(join(archivedStore, "store.db"))).toEqual(damaged);
+  // The control root must be left with a store the next command can use.
+  const state = await probeStoreUpgradeState({ harnessDir });
+  expect(state.verdict).not.toBe("blocked");
+});
+
+test("store upgrade restores the original store when the operator declines confirmation", async () => {
+  const harnessDir = join(root, "declined", ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const damaged = Buffer.from("a damaged store that is not sqlite", "utf8");
+  writeFileSync(join(harnessDir, "store.db"), damaged);
+  // Legacy execution files route the flow through the confirmation prompt.
+  writeFileSync(join(harnessDir, "status.json"), "{}\n");
+
+  const result = await runUpgrade(harnessDir, root);
+
+  expect(result.status).not.toBe("ok");
+  // The rollback must put the original bytes back at their own path.
+  expect(readFileSync(join(harnessDir, "store.db"))).toEqual(damaged);
+});
+
+test("store upgrade archives a damaged store and still migrates valid legacy sources", async () => {
+  const harnessDir = join(root, "legacy", ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const damaged = Buffer.from("legacy root with a destroyed database", "utf8");
+  writeFileSync(join(harnessDir, "store.db"), damaged);
+  // A legacy execution corpus the migration can actually carry forward.
+  const workflowId = "recovery-fixture-workflow";
+  const workflowDir = join(harnessDir, "workflows", workflowId);
+  mkdirSync(workflowDir, { recursive: true });
+  writeFileSync(
+    join(harnessDir, "status.json"),
+    JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-30",
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-30", dir: `workflows/${workflowId}` }],
+    }),
+  );
+  writeFileSync(
+    join(workflowDir, "snapshot.json"),
+    JSON.stringify({
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-30",
+      updated_at: "2026-09-30",
+      delivery_kind: "development",
+      project: "_default",
+      branch: { source: "feature/recovery-fixture", target: "main" },
+      plans: [{ id: `${workflowId}-plan`, title: "Recovery fixture", file: "plan.md", status: "Todo", metadata: {} }],
+    }),
+  );
+
+  const result = await runUpgrade(harnessDir, root, "preserve for later review");
+
+  if (
+    result.status !== "ok" ||
+    result.data === null ||
+    typeof result.data !== "object" ||
+    !("archivedStore" in result.data) ||
+    typeof result.data.archivedStore !== "string"
+  ) {
+    throw new Error(`expected a successful upgrade carrying an archive path, received ${JSON.stringify(result)}`);
+  }
+  expect(readFileSync(join(result.data.archivedStore, "store.db"))).toEqual(damaged);
+  // The migration must have carried the legacy sources into an active authority,
+  // not merely replaced the database.
+  const state = await probeStoreUpgradeState({ harnessDir });
+  expect(state.executionAuthorityState).toBe("active");
 });
 
 test("store upgrade leaves the original in place when the archive cannot be published", async () => {
