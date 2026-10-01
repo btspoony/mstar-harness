@@ -239,6 +239,19 @@ function planRowJson(context: StoreContext, planId: string): { state: string; co
   }
 }
 
+/** The committed receipt row of one operation id, byte-for-byte; null when none exists. */
+function operationReceiptJson(context: StoreContext, operationId: string): string | null {
+  const db = new DatabaseSync(storeDbPath(context));
+  try {
+    const row = db
+      .prepare("select request_hash, result_json, committed_at from execution_operations where operation_id = ?")
+      .get(operationId) as { request_hash: string; result_json: string; committed_at: string } | undefined;
+    return row === undefined ? null : JSON.stringify(row);
+  } finally {
+    db.close();
+  }
+}
+
 describe("sparse plan intent admission", () => {
   test("a sparse active operation with only sessionRef, operation id and payload is admitted by the engine", async () => {
     const { repoRoot, planRef } = await buildFixture("sparse-accepted");
@@ -289,10 +302,17 @@ describe("sparse plan intent admission", () => {
     // WAS genuinely valid and is now stale.
     const accepted = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-stale-mover", progress: PROGRESS }, PLAN_PM_ID);
     expect(accepted.status).toBe("ok");
-    const before = executionFootprint(context);
+    const afterMover = executionFootprint(context);
+    const planAfterMover = planRowJson(context, PLAN_ID);
+    const moverReceipt = operationReceiptJson(context, "op-stale-mover");
+    expect(moverReceipt).not.toBeNull();
     const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-sparse-stale", expect: staleToken, progress: PROGRESS }, PLAN_PM_ID);
     expect(envelope).toMatchObject({ status: "refused", exitCode: 1, code: "execution.stale-token" });
-    expect(executionFootprint(context)).toEqual(before);
+    // The stale refusal neither mutates in place nor records a receipt.
+    expect(executionFootprint(context)).toEqual(afterMover);
+    expect(planRowJson(context, PLAN_ID)).toEqual(planAfterMover);
+    expect(operationReceiptJson(context, "op-stale-mover")).toEqual(moverReceipt);
+    expect(operationReceiptJson(context, "op-sparse-stale")).toBeNull();
   });
 
   test("a caller without an independent runtime identity cannot adopt the ref's identity", async () => {
@@ -318,6 +338,7 @@ describe("sparse plan intent admission", () => {
     expect(envelope.status).not.toBe("usage");
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN2_ID)).toEqual(plan2RowsBefore);
+    expect(operationReceiptJson(context, "op-sparse-foreign")).toBeNull();
   });
 
   test("a self-consistent but unbound session reference is refused at the authority boundary", async () => {
@@ -331,6 +352,7 @@ describe("sparse plan intent admission", () => {
     expect(envelope.code).not.toBe("command.invalid-input");
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN_ID)).toEqual(planRowsBefore);
+    expect(operationReceiptJson(context, "op-sparse-ghost")).toBeNull();
   });
 
   test("a target no authority can name returns one grouped genuine-facts refusal", async () => {
