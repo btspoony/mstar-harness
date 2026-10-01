@@ -834,19 +834,93 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(planFootprint(context, OWN_PLAN)).toEqual(committed);
   });
 
+  test("an unchanged ordinary reissue is already-satisfied with no second write, and its receipt replays", async () => {
+    const fixture = await liveWorkflow("prepare-satisfied");
+    const { context, coordinatorCaller, planTokens } = fixture;
+    const first = await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    expect(first.replayed).toBe(false);
+    const committed = planFootprint(context, OWN_PLAN);
+
+    // A NEW operation id, the CURRENT token and byte-identical input: a fresh
+    // ordinary identical action is answered from the seal. The plan row, its
+    // revision, pin and lease do not move; the only write is this answer's own
+    // operation receipt (so an exact retry of THIS action replays).
+    const again = await prepareCall(fixture, OWN_PLAN, "prepare-again", await planTokenOf(fixture, OWN_PLAN));
+    expect(again.replayed).toBe(false);
+    expect(again.recovery?.outcome).toBe("already-satisfied");
+    expect(again.recovery?.commitState).toBe("none");
+    expect(again.recovery?.applied).toEqual([]);
+    expect(again.data).toEqual(first.data);
+    expect(again.token).toBe(first.token);
+    expect(planFootprint(context, OWN_PLAN)).toEqual({
+      ...committed,
+      operations: (committed.operations as number) + 1,
+    });
+
+    // The satisfied action's own receipt replays like any accepted one's.
+    const replay = await prepareCall(fixture, OWN_PLAN, "prepare-again", await planTokenOf(fixture, OWN_PLAN));
+    expect(replay.replayed).toBe(true);
+    expect(replay.recovery?.outcome).toBe("already-satisfied");
+    expect(replay.recovery?.commitState).toBe("committed");
+    expect(planFootprint(context, OWN_PLAN)).toEqual({
+      ...committed,
+      operations: (committed.operations as number) + 1,
+    });
+  });
+
+  test("an eligible coordinator's changed Assignment reseals once, then the identical repeat is already-satisfied", async () => {
+    const fixture = await liveWorkflow("prepare-reseal");
+    const { context, coordinatorCaller, documents, planTokens } = fixture;
+    await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
+    const afterFirst = planFootprint(context, OWN_PLAN);
+
+    // The coordinator reviews a changed Assignment: the reviewed-amendment seat
+    // reseals through the ordinary path — one revision advance, full
+    // validation — and the receipt reports the applied commit.
+    writeFileSync(
+      documents[OWN_PLAN]!.assignmentPath,
+      readFileSync(documents[OWN_PLAN]!.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+    );
+    const reseal = await prepareCall(fixture, OWN_PLAN, "prepare-reseal", await planTokenOf(fixture, OWN_PLAN));
+    expect(reseal.replayed).toBe(false);
+    expect(reseal.recovery?.outcome).toBe("applied");
+    expect(reseal.recovery?.commitState).toBe("committed");
+    expect(reseal.data.coordination?.prepared?.qa_gate).toBe("pm-acceptance");
+    const afterReseal = planFootprint(context, OWN_PLAN);
+    expect(afterReseal.plan_revision).toBe((afterFirst.plan_revision as number) + 1);
+    expect(afterReseal.plan_coordination).not.toBe(afterFirst.plan_coordination);
+
+    // The identical repeat of the resealed input is already-satisfied: the row
+    // keeps the reseal's revision and seal, and only the receipt lands.
+    const repeat = await prepareCall(fixture, OWN_PLAN, "prepare-repeat", await planTokenOf(fixture, OWN_PLAN));
+    expect(repeat.replayed).toBe(false);
+    expect(repeat.recovery?.outcome).toBe("already-satisfied");
+    expect(repeat.recovery?.commitState).toBe("none");
+    expect(planFootprint(context, OWN_PLAN)).toEqual({
+      ...afterReseal,
+      operations: (afterReseal.operations as number) + 1,
+    });
+  });
+
   test("refuses a second prepare, a foreign Assignment, a held lease and a non-running workflow", async () => {
     const fixture = await liveWorkflow("prepare-refusals");
     const { context, coordinator, coordinatorCaller, documents, planTokens } = fixture;
     await prepareCall(fixture, OWN_PLAN, "prepare-first", planTokens[OWN_PLAN]!);
-    const prepared = planFootprint(context, OWN_PLAN);
 
-    // §6/§7 no reprepare permission exists: the rule the file route enforces
-    // refuses a second seal even with the current token.
-    const again = await refusalOf(async () =>
-      prepareCall(fixture, OWN_PLAN, "prepare-again", await planTokenOf(fixture, OWN_PLAN)),
-    );
-    expect(again.code).toBe("coordination.prepare-already-prepared");
-    expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
+    // §6/§7 a byte-identical reissue with the current token is answered from
+    // the seal it already holds: no second seal, the only write is the
+    // answer's own operation receipt.
+    const beforeAgain = planFootprint(context, OWN_PLAN);
+    const again = await prepareCall(fixture, OWN_PLAN, "prepare-again", await planTokenOf(fixture, OWN_PLAN));
+    expect(again.replayed).toBe(false);
+    expect(again.recovery?.outcome).toBe("already-satisfied");
+    expect(again.recovery?.commitState).toBe("none");
+    expect(again.recovery?.applied).toEqual([]);
+    const afterAgain = planFootprint(context, OWN_PLAN);
+    expect(afterAgain).toEqual({
+      ...beforeAgain,
+      operations: (beforeAgain.operations as number) + 1,
+    });
 
     // A frozen Assignment that describes another plan is never sealed onto this
     // row, and is refused before the token is even compared.
@@ -854,7 +928,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
       prepareCall(fixture, OWN_PLAN, "prepare-foreign", planTokens[OWN_PLAN]!, documents[PEER_PLAN]!.assignmentPath),
     );
     expect(foreign).toMatchObject({ code: "coordination.scope-mismatch", details: { actual: OWN_PLAN } });
-    expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(afterAgain);
 
     // §D the plan's own worktree/branch anchors are recorded once and never
     // silently rebound: an Assignment pinning another scope refuses, and the
@@ -951,7 +1025,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const paused = await refusalOf(async () => prepareCall(fixture, PEER_PLAN, "prepare-paused", pausedToken));
     expect(paused).toMatchObject({ code: "coordination.workflow-not-running" });
     expect(planFootprint(context, PEER_PLAN)).toEqual(peerBefore);
-    expect(planFootprint(context, OWN_PLAN)).toEqual(prepared);
+    expect(planFootprint(context, OWN_PLAN)).toEqual(afterAgain);
   });
 
   test("refuses a prepare whose catalog registration is still pending, and seals nothing", async () => {
@@ -1289,13 +1363,16 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(sealedAfter.plan_revision).toBe((sealedBefore.plan_revision as number) + 1);
     expect(parsedJson(sealedAfter.plan_state).title).toBe(`${OWN_PLAN} title`);
 
-    // §6 no reprepare: the already-prepared row refuses a second seal, so no
-    // later authorized-looking call can rebind the frozen input either.
-    const reprepare = await refusalOf(async () =>
-      prepareCall(fixture, OWN_PLAN, "prepare-2", await planTokenOf(fixture, OWN_PLAN)),
-    );
-    expect(reprepare.code).toBe("coordination.prepare-already-prepared");
-    expect(planFootprint(context, OWN_PLAN)).toEqual(sealedAfter);
+    // An identical reissue answers from the existing seal without reselecting
+    // the frozen input; only this action's receipt is recorded.
+    const reprepare = await prepareCall(fixture, OWN_PLAN, "prepare-2", await planTokenOf(fixture, OWN_PLAN));
+    expect(reprepare.replayed).toBe(false);
+    expect(reprepare.recovery?.outcome).toBe("already-satisfied");
+    expect(reprepare.recovery?.commitState).toBe("none");
+    expect(planFootprint(context, OWN_PLAN)).toEqual({
+      ...sealedAfter,
+      operations: (sealedAfter.operations as number) + 1,
+    });
 
     // The ELIGIBLE authorized prepare is the selection point: the peer plan's
     // own catalog identity moved, so its first prepare pins the revision it

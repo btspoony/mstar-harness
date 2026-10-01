@@ -816,6 +816,15 @@ function withExecutionPlanOperation<T>(
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
   run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
+  /**
+   * §4.2 (R6/A09/A12) the operation's own read-only admission of "the row
+   * already holds the effect this intent asks for". When it answers a read on a
+   * fresh token, the call answers from current state — the plan row, its
+   * revision, seal, pin and lease do not move — while the operation receipt is
+   * still recorded, so an exact retry of THIS accepted action replays instead
+   * of being re-evaluated.
+   */
+  admitSatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | null,
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
@@ -873,6 +882,34 @@ function withExecutionPlanOperation<T>(
     // of overwritten.
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
     const at = new Date().toISOString();
+    // §4.2 (R6/A09/A12) the admitted already-held effect: the answer comes from
+    // current state with no plan write — no revision, seal, pin or lease
+    // movement — while the operation receipt is still recorded, so an exact
+    // retry of THIS accepted action replays (`replayed: true`) instead of being
+    // re-evaluated as fresh.
+    const satisfied = admitSatisfied?.(witness, tx) ?? null;
+    if (satisfied !== null) {
+      writePlanOperationReceipt(tx, {
+        operationId: request.operationId,
+        requestHash,
+        workflowId: witness.workflowId,
+        planId: witness.planId,
+        receipt: satisfied,
+        now: at,
+      });
+      return {
+        ...satisfied,
+        operationId: request.operationId,
+        replayed: false,
+        recovery: planRecovery({
+          witness,
+          kind: request.operation.kind,
+          outcome: "already-satisfied",
+          commitState: "none",
+          resolvedFrom: [{ path: "coordination.prepared", source: "stored plan row" }],
+        }),
+      };
+    }
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
     // joins the shared advance instead of bumping the counter again, so the body
@@ -1014,9 +1051,43 @@ export async function prepareExecutionPlan(
   const seal = readPrepareSeal(context, resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
+  // §4.2 (R6/A09/A12) an unchanged ordinary reissue: a byte-identical
+  // Assignment is the effect the row's seal already holds, answered for the
+  // workflow coordinator or the row's own bound claimant — identity first,
+  // never as a bypass of the seat refusals. The sealed documents are
+  // re-verified against their current bytes inside the transaction (the same
+  // witness check the mutation path runs before committing), so a file edited
+  // between the pre-transaction read and here is never served as satisfied.
+  const admitSatisfied = (witness: ExecutionPlanWitness, tx: ExecutionTransaction): ExecutionRead<ExecutionPlanView> | null => {
+    const prepared = witness.view.coordination?.prepared;
+    if (prepared === undefined) return null;
+    const claimant = witness.view.session !== null && witness.view.session.sessionId === context.caller.sessionId;
+    if (context.caller.role !== "coordinator" && !claimant) return null;
+    if (prepared.assignment_sha256 !== seal.assignmentSha256) return null;
+    assertSealedInputsUnchanged({
+      assignmentPath: seal.assignment.assignmentPath,
+      assignmentSha256: seal.assignmentSha256,
+      planPath: seal.assignment.planPath,
+      planSha256: seal.planSha256,
+      planId,
+    });
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+  };
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const state = witness.view.plan as Record<string, unknown>;
     const plan = state as PlanRow;
+    // §D the reviewed-amendment seat, computed from the SAME facts the file
+    // route's precheck uses: the workflow coordinator, on a Todo row that is
+    // not bound to a plan session, not leased and not handed off, may replace
+    // a changed seal through the ordinary mutate path (full validation below).
+    // Every protected row leaves it false and keeps the already-prepared
+    // refusal it has always answered.
+    const coordinatorReseal =
+      context.caller.role === "coordinator" &&
+      witness.view.session === null &&
+      witness.view.executionLease === null &&
+      witness.view.coordination?.handoff === undefined &&
+      state.status === "Todo";
     assertPrepareAdmission({
       planId: witness.planId,
       // A transport whose lease lives outside the row hands the rule the lease
@@ -1025,6 +1096,7 @@ export async function prepareExecutionPlan(
       coordination: witness.view.coordination ?? undefined,
       sessionBound: witness.view.session !== null,
       leaseHeld: witness.view.executionLease !== null,
+      coordinatorReseal,
     });
 
     // §3 step 3 the registration admission the file route runs after its own
@@ -1117,7 +1189,7 @@ export async function prepareExecutionPlan(
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
+  }, admitSatisfied);
 }
 
 /* ------------------------------------------------------------------------ *
