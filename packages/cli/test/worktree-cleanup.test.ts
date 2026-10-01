@@ -1792,4 +1792,48 @@ describe("mstar worktree cleanup — candidate scope", () => {
     }
   });
 
+  test("repeated --worktree flags accumulate distinct eligible paths; explicit JSON arrays still decode", () => {
+    const fx = scopeFixture("mstar-cleanup-scope-repeat2-");
+    try {
+      // Second eligible worktree with a comma in its literal path; the
+      // documented contract lets --worktree repeat to assert BOTH paths.
+      const commaRaw = join(fx.root, "wt-a1,x");
+      git(["worktree", "add", "-q", commaRaw, "-b", "feature/comma-work"], fx.root);
+      writeFileSync(join(commaRaw, "comma.txt"), "comma work\n");
+      git(["add", "-A"], commaRaw);
+      git(["commit", "-q", "-m", "comma work"], commaRaw);
+      git(["merge", "-q", "--no-ff", "-m", "merge comma-work", "feature/comma-work"], fx.root);
+      const commaWt = wt(worktreeList(fx.root), "wt-a1,x").path;
+      updateWorkflow(fx.root, "wf-a", (snapshot) => {
+        snapshot.plans.push(
+          row("plan-comma", "Done", { metadata: { working_branch: "feature/comma-work", worktree_path: commaWt } }),
+        );
+      });
+
+      // The explicit JSON-array occurrence still decodes to multiple entries.
+      const dryJson = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--worktree", JSON.stringify([commaWt, fx.wtA1])],
+        fx.root,
+      );
+      expect(dryJson.exitCode).toBe(0);
+      const jsonRows = decisionRows(dryJson);
+      expect(jsonRows.filter((rowText) => rowText.startsWith("remove | worktree"))).toHaveLength(2);
+      expect(jsonRows).toContain(`remove | worktree | ${commaWt} | cleanup.remove.merged`);
+      expect(jsonRows).toContain(`remove | worktree | ${fx.wtA1} | cleanup.remove.merged`);
+
+      // Repeated DISTINCT flags accumulate: --apply asserts BOTH paths.
+      const applied = runCli(
+        ["worktree", "cleanup", "--workflow", "wf-a", "--harness", fx.root, "--apply", "--worktree", commaWt, "--worktree", fx.wtA1],
+        fx.root,
+      );
+      expect(applied.exitCode).toBe(0);
+      const listed = git(["worktree", "list", "--porcelain"], fx.root);
+      expect(listed).not.toContain(commaWt);
+      expect(listed.split("\n")).not.toContain(`worktree ${fx.wtA1}`);
+      expect(git(["for-each-ref", "refs/heads/feature/comma-work"], fx.root)).toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
 });

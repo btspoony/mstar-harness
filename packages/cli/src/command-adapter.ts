@@ -126,6 +126,28 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
   for (const option of definition.cli.options) {
     const value = decoded[option.key];
     const schema = optionJsonSchema(definition, option.key);
+    if (Array.isArray(value) && option.key in (definition.payloads ?? {})) {
+      // A repeated (variadic) payload option collects scalar occurrences, and
+      // an occurrence that is itself an explicit JSON array still decodes to
+      // its members. Elements are otherwise literal documents — never split.
+      const flattened: unknown[] = [];
+      for (const entry of value) {
+        if (typeof entry === "string" && entry.trimStart().startsWith("[")) {
+          try {
+            const parsed: unknown = JSON.parse(entry);
+            if (Array.isArray(parsed)) {
+              flattened.push(...parsed);
+              continue;
+            }
+          } catch {
+            // Keep malformed JSON-looking occurrences literal for the command decoder.
+          }
+        }
+        flattened.push(entry);
+      }
+      decoded[option.key] = flattened;
+      continue;
+    }
     if (typeof value === "string" && hasType(schema, "array")) {
       if (value.trimStart().startsWith("[") || value.trimStart().startsWith("{")) {
         try {
