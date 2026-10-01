@@ -963,12 +963,14 @@ function readInventoryFile(path: string): { inventory: ExecutionMigrationInvento
 }
 
 /**
- * The canonical snapshot of one registered workflow: its bytes (witness), its
- * validated document, and the ONE in-memory normalization the canonical reader
- * also performs (the pre-#264 `control_worktree_path` alias), because the DB
- * header is canonical-only and `readWorkflowView` refuses the alias.
+ * The canonical snapshot of one registered workflow. Migration alone may
+ * release terminal leases in memory before importing; the raw bytes remain
+ * the source witness and are never rewritten.
  */
-function readSnapshotSource(dir: string, workflowId: string): { path: string; sha256: string; snapshot: WorkflowSnapshot } {
+function readSnapshotSource(
+  dir: string,
+  workflowId: string,
+): { path: string; sha256: string; snapshot: WorkflowSnapshot; diagnostics: string[] } {
   const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
   const bytes = readSourceBytes(path, `the snapshot of workflow ${workflowId}`, `the snapshot of workflow ${workflowId} is missing at ${path}`);
   let doc: unknown;
@@ -977,20 +979,70 @@ function readSnapshotSource(dir: string, workflowId: string): { path: string; sh
   } catch (error) {
     throw conflict(`the snapshot of workflow ${workflowId} is not valid JSON (${(error as Error).message}).`);
   }
-  const gate = validateWorkflowSnapshot(doc);
-  if (gate.ok) return { path, sha256: sha256Of(bytes), snapshot: doc as WorkflowSnapshot };
-  const onlyAlias = gate.violations.every((violation) => violation.code === LEGACY_WORKTREE_PATH_CODE);
-  if (onlyAlias && isPlainObject(doc) && isNonEmptyString(doc.control_worktree_path) && doc.integration_worktree_path === undefined) {
-    const { control_worktree_path: _legacy, ...rest } = doc;
-    const normalized = { ...rest, integration_worktree_path: doc.control_worktree_path } as unknown as WorkflowSnapshot;
-    if (validateWorkflowSnapshot(normalized).ok) {
-      return { path, sha256: sha256Of(bytes), snapshot: normalized };
+  if (!isPlainObject(doc)) {
+    throw conflict(`the snapshot of workflow ${workflowId} does not validate (workflow.snapshot.invalid).`);
+  }
+
+  // Never repair an incomplete live lease: only a terminal snapshot proves
+  // leases inert under the "release every lease before lifecycle ends" rule.
+  const original = doc as unknown as WorkflowSnapshot;
+  const terminal = isTerminalSnapshot(original);
+  let normalized: Record<string, unknown> = { ...doc };
+  const diagnostics: string[] = [];
+  const initial = validateWorkflowSnapshot(doc);
+  if (
+    initial.violations.some((v) => v.code === LEGACY_WORKTREE_PATH_CODE) &&
+    isNonEmptyString(doc.control_worktree_path) &&
+    doc.integration_worktree_path === undefined
+  ) {
+    const { control_worktree_path: _legacy, ...rest } = normalized;
+    normalized = { ...rest, integration_worktree_path: doc.control_worktree_path };
+    diagnostics.push(`${LEGACY_WORKTREE_PATH_CODE}: renamed control_worktree_path to integration_worktree_path in memory.`);
+  }
+  if (terminal && Array.isArray(normalized.plans)) {
+    normalized.plans = normalized.plans.map((row, index) => {
+      if (!isPlainObject(row)) return row;
+      const rowViolations = validateWorkflowSnapshot({ ...normalized, plans: [row] }).violations;
+      const doneLease = row.status === "Done" && row.execution_lease !== undefined;
+      const dangling = row.execution_lease !== undefined &&
+        (initial.violations.some((v) => v.code === "workflow.snapshot.terminal-dangling-execution-lease") ||
+          rowViolations.some((v) => v.code.startsWith("lease.execution-lease.missing-")));
+      if (!doneLease && !dangling) return row;
+      const { execution_lease: _lease, ...rest } = row;
+      const codes = rowViolations.map((v) => v.code);
+      const code = doneLease ? "status.plan-row.done-with-lease" : "workflow.snapshot.terminal-dangling-execution-lease";
+      const additionalCode = doneLease ? " + workflow.snapshot.terminal-dangling-execution-lease" : "";
+      const missing = codes.filter((entry) => entry.startsWith("lease.execution-lease.missing-"));
+      diagnostics.push(
+        `${code}${additionalCode}: dropped plans[${index}].execution_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because a terminal lifecycle must release every lease.`,
+      );
+      return rest;
+    });
+  }
+  if (terminal && normalized.integration_merge_lease !== undefined) {
+    const mergeViolations = initial.violations;
+    const missing = mergeViolations
+      .map((entry) => entry.code)
+      .filter((entry) => entry.startsWith("lease.merge-lease.missing-"));
+    const dangling = mergeViolations.some((entry) => entry.code === "workflow.snapshot.terminal-dangling-merge-lease");
+    if (dangling || missing.length > 0) {
+      delete normalized.integration_merge_lease;
+      const code = dangling
+        ? "workflow.snapshot.terminal-dangling-merge-lease"
+        : missing[0]!;
+      diagnostics.push(
+        `${code}: dropped integration_merge_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because a terminal lifecycle must release every lease.`,
+      );
     }
   }
-  throw conflict(
-    `the snapshot of workflow ${workflowId} does not validate ` +
-      `(${gate.violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")}).`,
-  );
+  const gate = validateWorkflowSnapshot(normalized);
+  if (!gate.ok) {
+    throw conflict(
+      `the snapshot of workflow ${workflowId} does not validate ` +
+        `(${gate.violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")}).`,
+    );
+  }
+  return { path, sha256: sha256Of(bytes), snapshot: normalized as unknown as WorkflowSnapshot, diagnostics };
 }
 
 /**
