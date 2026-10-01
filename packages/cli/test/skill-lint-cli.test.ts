@@ -1,5 +1,7 @@
 /**
  * CLI `mstar skill lint` — canonical fixture parity (spec A4).
+ * A sibling group covers frontmatter, five-question sections, and citation
+ * discrimination through the shared CLI subprocess harness.
  *
  * Each case runs the real CLI as a subprocess over a materialized fixture
  * skill (`<skillId>/SKILL.md`) from the canonical corpus
@@ -28,6 +30,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { runCli as runOwnerCli, withTempDir } from "./harness";
+import { cliEnvelope, violationCodes } from "./support/cli-assertions";
+import { SKILL_GOOD, SKILL_EPHEMERAL, SKILL_PLACEHOLDERS } from "./support/cli-content-fixtures";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -190,5 +195,93 @@ describe("mstar skill lint — canonical fixture decisions (spec A4)", () => {
 
   afterAll(() => {
     for (const dir of tmpRoots) rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar skill lint
+// ---------------------------------------------------------------------------
+
+describe("mstar skill lint — frontmatter + five-question body + ephemeral citations", () => {
+  test("well-formed skill → all checks OK, exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_GOOD);
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
+    });
+  });
+
+  test("body missing five-question sections → skill-authoring.five-question.*, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(
+        join(dir, "skill", "SKILL.md"),
+        "---\nname: sample-skill\ndescription: Validates harness fixtures during CLI smoke tests.\n---\n\n## Intro\n\nNo sections here.\n",
+      );
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toEqual(expect.arrayContaining(["skill-authoring.five-question.load-order", "skill-authoring.five-question.evidence"]));
+    });
+  });
+
+  test("bad frontmatter → lint.frontmatter.name.format, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), "---\nname: Bad-Name\n---\n\n## Load Order\n## Workflow\n## Decision Rules\n## Evidence\n## References\n");
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("lint.frontmatter.name.format");
+    });
+  });
+
+  test("missing SKILL.md → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      expect(cliEnvelope(result, "refused").message).toContain("SKILL.md");
+    });
+  });
+
+  test("missing <skill-dir> arg → usage, exit 2", () => {
+    const result = runOwnerCli(["skill", "lint"]);
+    expect(result.exitCode).toBe(2);
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("skillDir");
+  });
+
+  test("concrete task-artifact citation → skill.ephemeral.task-artifact, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      const envelope = cliEnvelope(result, "refused");
+      expect(violationCodes(result)).toContain("skill.ephemeral.task-artifact");
+      expect(JSON.stringify(envelope)).toContain("task-3-report");
+    });
+  });
+
+  test("concrete sdd deeplink → skill.ephemeral.sdd-deeplink, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      const envelope = cliEnvelope(result, "refused");
+      expect(violationCodes(result)).toContain("skill.ephemeral.sdd-deeplink");
+      expect(JSON.stringify(envelope)).toContain(".mstar/sdd/20260815-x");
+    });
+  });
+
+  test("placeholder citation forms → ephemeral checklist OK, exit 0 (discrimination contract)", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_PLACEHOLDERS);
+      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(0);
+      expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
+    });
   });
 });
