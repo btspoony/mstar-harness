@@ -46,7 +46,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   canonicalJson,
   canonicalRunId,
@@ -442,43 +442,79 @@ function invocationIdOfRecord(record: ParsedEventRecord): string | null {
 const SUCCESS_STATUS_ENCODINGS = new Set(["completed", "succeeded", "success", "ok"]);
 
 /**
- * Observed outcome from the VERIFIED shapes only: an explicit `failed`
- * status, a verified success status, or a numeric exit code. Anything else —
- * including a status spelling this adapter does not recognize — stays
- * `unknown`; it is never coerced into a known success or a known zero-failure.
+ * Observed outcome from status AND numeric exit evidence together. A
+ * completed command with a nonzero exit is an observed failure; a failed
+ * status with a zero exit is contradictory evidence and stays unknown;
+ * unrecognized shapes stay unknown rather than becoming a known success.
  */
 function invocationOutcomeOf(json: Record<string, unknown>, item: Record<string, unknown> | null): InvocationOutcome {
   const status = item !== null && typeof item.status === "string" ? item.status : typeof json.status === "string" ? json.status : null;
-  if (status === "failed") return "failed";
-  if (status !== null && SUCCESS_STATUS_ENCODINGS.has(status)) return "succeeded";
   const exit = item !== null ? item.exit_code ?? item.exitCode : json.exit_code ?? json.exitCode;
-  if (typeof exit === "number") return exit === 0 ? "succeeded" : "failed";
+  const exitIsNumber = typeof exit === "number";
+  const statusFailed = status === "failed";
+  const statusSucceeded = status !== null && SUCCESS_STATUS_ENCODINGS.has(status);
+  if (statusFailed) return exitIsNumber && exit === 0 ? "unknown" : "failed";
+  if (statusSucceeded) return exitIsNumber && exit !== 0 ? "failed" : "succeeded";
+  if (exitIsNumber) return exit === 0 ? "succeeded" : "failed";
   return "unknown";
 }
 
-const SHELL_COMMAND_ITEM_TYPES = new Set(["command_execution", "local_shell_call", "shell_command", "exec_command"]);
 /** Generic tool envelopes whose internal call bundle cannot be decomposed here. */
 const OPAQUE_TOOL_ITEM_TYPES = new Set(["tool_call", "function_call", "mcp_tool_call"]);
+/** Shells whose `-c <string>` payload can be decomposed by separator. */
+const SHELL_EXECUTABLES = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash"]);
+
+/** Decomposes one unquoted shell command string into its constituent commands. */
+function shellConstituents(script: string): { bundled: number; unknown: boolean } {
+  if (/["'`]/.test(script)) return { bundled: 0, unknown: true };
+  const parts = script.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
+  return { bundled: Math.max(0, parts.length - 1), unknown: false };
+}
+
+/**
+ * Recognizes argv forms that invoke a shell/interpreter carrying nested
+ * commands. A shell wrapper with an analyzable `-c` payload is decomposed; a
+ * wrapper whose nested program cannot be decomposed (quoted payload, a
+ * non-shell interpreter, a shell without `-c`) stays unknown — the internal
+ * causal depth is not established, so it must not count as one lookup.
+ * Returns null when the argv is an ordinary single command.
+ */
+function argvShellLookup(argv: string[]): { bundled: number; unknown: boolean } | null {
+  let args = argv;
+  if (args.length > 0 && basename(args[0]!) === "env") {
+    args = args.slice(1).filter((arg) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
+  }
+  if (args.length === 0) return null;
+  const head = basename(args[0]!);
+  const cIndex = args.indexOf("-c");
+  const hasCommandFlag = cIndex >= 0 && cIndex + 1 < args.length;
+  if (SHELL_EXECUTABLES.has(head)) {
+    if (!hasCommandFlag) return null;
+    return shellConstituents(args[cIndex + 1]!);
+  }
+  // A non-shell interpreter (python/node/ruby/...) with `-c`/`-e` carries a
+  // nested program this adapter cannot analyze.
+  if (hasCommandFlag) return { bundled: 0, unknown: true };
+  return null;
+}
 
 /**
  * Observable constituent lookups inside one counted envelope. A shell line
  * (`cmd && cmd2`) bundles several causal commands; argv arrays are one
- * command. An opaque tool envelope has an unknown internal bundle, and
- * is reported as such rather than assumed to be a single lookup.
+ * command unless they wrap a shell carrying nested commands. An opaque tool
+ * envelope has an unknown internal bundle, and is reported as such rather
+ * than assumed to be a single lookup.
  */
 function constituentLookups(itemType: string, item: Record<string, unknown> | null): { bundled: number; unknown: boolean } {
   if (OPAQUE_TOOL_ITEM_TYPES.has(itemType)) return { bundled: 0, unknown: true };
   if (item === null) return { bundled: 0, unknown: true };
   const command = item.command;
-  if (Array.isArray(command)) return { bundled: 0, unknown: false };
-  if (typeof command === "string" && command.trim() !== "") {
-    // Quoted shell syntax makes the separator split ambiguous (`;`, `|`, `&&`
-    // can live inside a quoted argument). This adapter has no shell parser, so
-    // ambiguous syntax stays unknown instead of a guessed constituent count.
-    if (/["'`]/.test(command)) return { bundled: 0, unknown: true };
-    const parts = command.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
-    return { bundled: Math.max(0, parts.length - 1), unknown: false };
+  if (Array.isArray(command)) {
+    const argv = command.filter((part): part is string => typeof part === "string");
+    const shell = argv.length > 0 ? argvShellLookup(argv) : null;
+    return shell ?? { bundled: 0, unknown: false };
   }
+  if (typeof command === "string" && command.trim() !== "") return shellConstituents(command);
   // file_read / read_file are single-lookup types; other read-shaped item
   // types carry payloads this adapter cannot decompose.
   if (itemType === "file_read" || itemType === "read_file") return { bundled: 0, unknown: false };
@@ -1392,27 +1428,23 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       },
     };
   }
-  // Marker-only guard: after removing the required facts AND the declared
-  // marker token, real request content must remain — echoing the marker is
-  // not a request. An absent/empty cue list is impossible: validation
-  // requires at least one request cue.
-  let remainder = content;
-  for (const token of [...spec.required, ...(spec.marker === undefined ? [] : [spec.marker])]) remainder = remainder.split(token).join(" ");
-  const residual = remainder.replace(/[^A-Za-z0-9]+/g, "");
-  if (residual.length < 8) {
+  // A bare echo of the required facts and/or the declared marker is not a
+  // request; the evidence is the CONFIGURED request cue, never a text-length
+  // heuristic (a genuine short request like "need target issue id and
+  // authorization" satisfies the oracle).
+  const cues = spec.requestCues;
+  if (cues.length === 0) {
     return {
       assertionId,
       kind: "grouped_facts_final",
-      grade: "fail",
-      evidence: {
-        turn: turn.turn,
-        file: turn.artifacts.final,
-        detail: "final is a marker echo: the required facts appear with no other request content",
-      },
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "no request cues are configured; the request-shape oracle cannot be evaluated" },
     };
   }
-  const cues = spec.requestCues;
-  if (cues.length === 0 || !cues.some((cue) => content.includes(cue))) {
+  if (!cues.some((cue) => content.includes(cue))) {
+    let remainder = content;
+    for (const token of [...spec.required, ...(spec.marker === undefined ? [] : [spec.marker])]) remainder = remainder.split(token).join(" ");
+    const hasOtherContent = remainder.replace(/[^A-Za-z0-9]+/g, "").length > 0;
     return {
       assertionId,
       kind: "grouped_facts_final",
@@ -1420,7 +1452,9 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
       evidence: {
         turn: turn.turn,
         file: turn.artifacts.final,
-        detail: `final carries none of the required request cues [${cues.join(", ")}]`,
+        detail: hasOtherContent
+          ? `final carries none of the required request cues [${cues.join(", ")}]`
+          : "final is a marker echo: the required facts appear with no request content",
       },
     };
   }

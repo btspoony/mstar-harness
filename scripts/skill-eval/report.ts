@@ -344,7 +344,6 @@ export function buildReport(args: ReportArgs): ReportResult {
         totalBundledLookups: 0,
         totalBundleUnknownCalls: 0,
         totalUnknownOutcomeCalls: 0,
-    totalConflictingOutcomeCalls: 0,
         totalConflictingOutcomeCalls: 0,
         totalUnknownIdentityCalls: 0,
         totalUnrecognizedRecords: 0,

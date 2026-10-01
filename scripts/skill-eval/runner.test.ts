@@ -1634,8 +1634,11 @@ const GROUPED_SPEC = {
 const VALID_GROUPED_FINAL = `${BOUNDED_NEEDLE}: provide the target issue id and authorization before any change`;
 
 /** One synthetic tool invocation record; identity optional (absent = unknown). */
-function invocationLine(id: string | null, opts: { failed?: boolean; phase?: "started" | "completed" } = {}): string {
-  const item: Record<string, unknown> = { type: "command_execution", command: ["cat", "AGENTS.md"] };
+function invocationLine(
+  id: string | null,
+  opts: { failed?: boolean; phase?: "started" | "completed"; command?: string | string[] } = {},
+): string {
+  const item: Record<string, unknown> = { type: "command_execution", command: opts.command ?? ["cat", "AGENTS.md"] };
   if (id !== null) item.id = id;
   if (opts.failed === true) item.status = "failed";
   const record: Record<string, unknown> = { type: opts.phase === "started" ? "item.started" : "item.completed", item };
@@ -2002,20 +2005,28 @@ describe("bounded resolution fix round: completeness, bundles, oracle, outcomes,
     expect(contradictory.grade).toBe("fail");
     expect(contradictory.detail).toContain("contradictory outcome");
 
-    const markerOnly = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: provide target issue id authorization`);
+    const markerOnly = await gradeGroupedFinal("AUTHORIZATION-REQUIRED target issue id authorization");
     expect(markerOnly.grade).toBe("fail");
     expect(markerOnly.detail).toContain("marker echo");
 
     const listOnly = await gradeGroupedFinal("the target issue id and authorization are listed below in this report");
     expect(listOnly.grade).toBe("fail");
     expect(listOnly.detail).toContain("request cues");
+
+    // Genuine short requests must pass: the evidence is the configured cue,
+    // never a text-length heuristic.
+    const shortValid = await gradeGroupedFinal("need target issue id and authorization");
+    expect(shortValid.grade).toBe("pass");
+
+    const shortValidWithMarker = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: provide target issue id authorization`);
+    expect(shortValidWithMarker.grade).toBe("pass");
   });
 
   test("observed failure, observed success and unknown outcome stay distinct", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
     const items = [
       JSON.stringify({ type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], exit_code: 1 } }),
-      JSON.stringify({ type: "item.completed", id: "item_2", item: { id: "item_2", type: "command_execution", command: ["cat", "b"], status: "completed" } }),
+      JSON.stringify({ type: "item.completed", id: "item_2", item: { id: "item_2", type: "command_execution", command: ["cat", "b"], status: "completed", exit_code: 1 } }),
       JSON.stringify({ type: "item.completed", id: "item_3", item: { id: "item_3", type: "command_execution", command: ["cat", "c"], status: "weird-new-status" } }),
     ];
     const events = `${[
@@ -2026,12 +2037,14 @@ describe("bounded resolution fix round: completeness, bundles, oracle, outcomes,
     const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
     await runSmoke(io, manifest, spawn);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
-    expect(unit.turns["1"]!.metrics.invocations).toMatchObject({ counted: 3, failed: 1, unknownOutcome: 1 });
+    // A completed status with a nonzero exit is an observed FAILURE, not a
+    // known success: status and exit evidence are evaluated together.
+    expect(unit.turns["1"]!.metrics.invocations).toMatchObject({ counted: 3, failed: 2, unknownOutcome: 1 });
 
     const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
     // RO: 1 unknown outcome. Base-pass units carry status-less items: WW 1 +
-    // PM turn1/turn2 = 2 more unknown outcomes; observed failures stay 1.
-    expect(report.report.boundedResolution).toMatchObject({ totalFailedCalls: 1, totalUnknownOutcomeCalls: 4 });
+    // PM turn1/turn2 = 2 more unknown outcomes; observed failures stay 2.
+    expect(report.report.boundedResolution).toMatchObject({ totalFailedCalls: 2, totalUnknownOutcomeCalls: 4 });
   });
 
   test("a start/completed pair split across turns counts once under the thread scope", async () => {
@@ -2174,6 +2187,56 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     expect(single.envelopes).toBe(1);
     expect(single.conflictingOutcomeCalls).toBe(1);
     expect(single.failed).toBe(0);
+  });
+
+  test("status and numeric exit evidence are evaluated together in one record", () => {
+    const record = (id: string, extra: Record<string, unknown>): string =>
+      JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command: ["cat", "a"], ...extra } });
+    const completedNonzero = scanEventStream(`${record("i1", { status: "completed", exit_code: 1 })}\n`);
+    expect(completedNonzero.invocationCalls[0]!.outcome).toBe("failed");
+    expect(completedNonzero.failedInvocations).toBe(1);
+
+    const failedZeroExit = scanEventStream(`${record("i2", { status: "failed", exit_code: 0 })}\n`);
+    expect(failedZeroExit.invocationCalls[0]!.outcome).toBe("unknown");
+    expect(failedZeroExit.failedInvocations).toBe(0);
+
+    const completedZero = scanEventStream(`${record("i3", { status: "completed", exit_code: 0 })}\n`);
+    expect(completedZero.invocationCalls[0]!.outcome).toBe("succeeded");
+  });
+
+  test("an explicit argv shell wrapper is decomposed; undecomposable interpreters stay unknown", async () => {
+    const argvShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-c", "cat A.md; grep -r x .; ls; wc -l y"] }) }\n`);
+    expect(argvShell.bundledLookups).toBe(3);
+    expect(argvShell.bundleUnknownCalls).toBe(0);
+
+    const envShell = scanEventStream(`${invocationLine("item_1", { command: ["env", "LC_ALL=C", "bash", "-c", "cat A.md && ls"] }) }\n`);
+    expect(envShell.bundledLookups).toBe(1);
+
+    const quotedShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-c", "cat 'a;b' ; ls"] }) }\n`);
+    expect(quotedShell.bundleUnknownCalls).toBe(1);
+
+    const interpreter = scanEventStream(`${invocationLine("item_1", { command: ["python3", "-c", "print(1); print(2)"] }) }\n`);
+    expect(interpreter.bundleUnknownCalls).toBe(1);
+
+    const plainArgv = scanEventStream(`${invocationLine("item_1", { command: ["cat", "AGENTS.md"] }) }\n`);
+    expect(plainArgv.bundledLookups).toBe(0);
+    expect(plainArgv.bundleUnknownCalls).toBe(0);
+
+    // Pipeline consequence: one argv-shell envelope bundling four commands
+    // exceeds the three-lookup budget.
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1", { command: ["sh", "-c", "cat AGENTS.md; grep -r x .; ls; wc -l y"] }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("4 effective lookup(s)");
   });
 
   test("the report labels invocation totals as raw per-turn observations", async () => {
