@@ -40,4 +40,4 @@ The task explicitly prohibits weakening guards. In particular, `packages/engine/
 - Command: `bun test packages/commands/src/families/store.test.ts`
 - Actual result: `12 pass, 0 fail, 98 expect() calls` (Bun 1.4.0).
 - Archive-completion and archive-failure tests: not run; not implemented.
-- Commit SHA: pending.
+- Commit SHA: `fccec86c` (command regression fixes; archive-and-complete requirement remains incomplete).
