@@ -45,9 +45,9 @@ import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
 import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash16 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync20 } from "node:fs";
-import { join as join33 } from "node:path";
+import { createHash as createHash17 } from "node:crypto";
+import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
+import { join as join34 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -12538,7 +12538,7 @@ function churnAfterRead(spec) {
 function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync20(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -12552,7 +12552,7 @@ function readSource(spec) {
     };
   }
   churnAfterRead(spec);
-  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash17("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -12853,7 +12853,7 @@ async function captureProjectionSources(context) {
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join33(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join34(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -12877,7 +12877,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join33(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join34(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -12891,7 +12891,7 @@ async function captureProjectionSources(context) {
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join33(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join34(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -12917,7 +12917,7 @@ async function captureProjectionSources(context) {
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join34(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -12951,7 +12951,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash16("sha256").update(payload, "utf8").digest("hex");
+  return createHash17("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
