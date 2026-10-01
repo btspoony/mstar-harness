@@ -762,18 +762,19 @@ describe("admission self-claim and orphan adoption", () => {
     });
     expect(prepared.outcome).toBe("prepared");
     expect((planCoordinationOf(fixture, PLAN_ID).prepared as Record<string, unknown>).prepared_by).toBe("claimant");
+    const sealedBefore = planCoordinationOf(fixture, PLAN_ID);
 
-    // §D3: the same claimant cannot seal the row a second time.
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: claim.session_file,
-          planId: PLAN_ID,
-          expectedRevision: prepared.view?.revision ?? claimView.revision,
-          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
-        }),
-      ),
-    ).toBe("coordination.prepare-already-prepared");
+    // §D3: the same claimant cannot seal the row a second time. Re-issuing the
+    // identical Assignment answers from the seal it already holds —
+    // already-satisfied, no second write — while changed bytes would refuse.
+    const again = await mutatePlanCoordination({
+      sessionPath: claim.session_file,
+      planId: PLAN_ID,
+      expectedRevision: prepared.view?.revision ?? claimView.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    expect(again.outcome).toBe("already-satisfied");
+    expect(planCoordinationOf(fixture, PLAN_ID)).toEqual(sealedBefore);
 
     // §D/§D4 the prepared-but-unleased window advertises NO lease-gated
     // operation: identity is not ownership, and the mutation guards require the
@@ -1588,24 +1589,25 @@ describe("admission self-claim and orphan adoption", () => {
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
   });
 
-  test("a hash-fresh prepared row refuses a second prepare (the coordinator keeps it)", async () => {
+  test("a hash-fresh prepared row answers an identical reissue already-satisfied (the seal stands)", async () => {
     const fixture = makeFixture();
     const coordinator = await ensureCoordinator(fixture);
     const view = await preparePlan(fixture, PLAN_ID);
     const fresh = await readPlanCoordination(coordinator, PLAN_ID, fixture.root);
 
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath: coordinator,
-          planId: PLAN_ID,
-          expectedRevision: fresh.revision,
-          operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
-        }),
-      ),
-    ).toBe("coordination.prepare-already-prepared");
+    const again = await mutatePlanCoordination({
+      sessionPath: coordinator,
+      planId: PLAN_ID,
+      expectedRevision: fresh.revision,
+      operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    });
+    // The reissue is answered from the seal: no second write, no revision
+    // movement, and no reseal receipt (that is the changed-Assignment route).
+    expect(again.outcome).toBe("already-satisfied");
+    expect(again.recovery?.details).toBeUndefined();
     expect(view.outcome).toBe("prepared");
     expect(selfAmendmentAudit(fixture)).toHaveLength(0);
+    expect((await readPlanCoordination(coordinator, PLAN_ID, fixture.root)).revision).toBe(fresh.revision);
   });
 });
 
@@ -7326,10 +7328,10 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(second.entity_revision).not.toBe(first.entity_revision);
 
     // The already-prepared row keeps its own pin: a re-prepare of that row is
-    // refused (the frozen input is immutable), so the move cannot be applied
-    // retroactively.
-    const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
-    expect(refused).toBe("coordination.prepare-already-prepared");
+    // answered from the seal it already holds (already-satisfied, no write),
+    // so the move cannot be applied retroactively.
+    const again = await preparePlan(fixture, PLAN_ID);
+    expect(again.outcome).toBe("already-satisfied");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);

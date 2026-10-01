@@ -297,10 +297,10 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(second.entity_revision).not.toBe(first.entity_revision);
 
     // The already-prepared row keeps its own pin: a re-prepare of that row is
-    // refused (the frozen input is immutable), so the move cannot be applied
-    // retroactively.
-    const refused = await errorCodeOf(() => preparePlan(fixture, PLAN_ID));
-    expect(refused).toBe("coordination.prepare-already-prepared");
+    // answered from the seal it already holds (already-satisfied, no write),
+    // so the move cannot be applied retroactively.
+    const again = await preparePlan(fixture, PLAN_ID);
+    expect(again.outcome).toBe("already-satisfied");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
