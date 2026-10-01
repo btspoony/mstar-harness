@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { storeDbPath, type StoreContext } from "./store-db.js";
 import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
@@ -32,8 +32,11 @@ export async function archiveStoreUpgradeFiles(
     const candidates = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
     const files: StoreUpgradeArchive["files"] = [];
     const initial = candidates.filter(existsSync).map((sourcePath) => {
-      const stat = statSync(sourcePath);
-      if (!stat.isFile()) throw new Error(`source is not a regular file: ${sourcePath}`);
+      // lstat, not stat: a sidecar that is a link to another file would
+      // otherwise have its target's bytes captured as SQLite sidecar data,
+      // publishing an archive that misrepresents the store image.
+      const stat = lstatSync(sourcePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`source is not a regular file: ${sourcePath}`);
       const bytes = readFileSync(sourcePath);
       return { sourcePath, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
     });

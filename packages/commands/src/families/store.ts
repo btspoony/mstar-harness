@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path, { basename } from "node:path";
 import {
   SddScriptError,
+  StoreActivationError,
   StoreError,
   abortExecutionMigration,
   activateStore,
@@ -262,6 +263,17 @@ async function recoverUnreadableStore(
   })();
   if (header === undefined || header.toString("latin1", 0, 16) === SQLITE_FORMAT_MAGIC) return false;
   const attestation = jsonFile<ActivationAttestation>(path.resolve(invocation.cwd, attestationInput), "--attestation");
+  // The accountable operator and the attesting operator are one identity at the
+  // barrier; activation refuses a mismatch, so archiving and replacing a store
+  // must not accept one either.
+  if (attestation.operator.actor !== input.operator) {
+    throw new StoreActivationError(
+      "store.attestation-invalid",
+      `the attestation is signed by ${JSON.stringify(attestation.operator.actor)} while the upgrade is recorded under ` +
+        `${JSON.stringify(input.operator)}; the accountable operator and the attesting operator are one identity. ` +
+        "Nothing was archived or replaced.",
+    );
+  }
   const operationId = randomUUID();
   const archive = await archiveStoreUpgradeFiles(context, operationId, attestation);
   const displaced: Array<{ moved: string; original: string }> = [];
@@ -417,6 +429,13 @@ async function runStoreUpgrade(
       message: "The authority switch was not confirmed. The workflow files remain authoritative; rerun `store upgrade` and enter `preserve for later review` to continue.",
     };
   }
+
+  // Past this point the authority switch is under way: retirement may already
+  // have moved legacy files into its own archive, so restoring the unreadable
+  // original and deleting the replacement would leave the workspace with
+  // neither a usable database nor the file authority. The published archive,
+  // not a rollback, is the recovery basis from here on.
+  recovery.rollback = undefined;
 
   let staged: StagedStoreUpgrade;
   try {

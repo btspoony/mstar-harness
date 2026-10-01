@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -68,11 +68,20 @@ function invocationContext(cwd: string, answer: string): InvocationContext {
   };
 }
 
-async function runUpgrade(harness: string, cwd: string, answer = "no", inventory?: string): Promise<CommandEnvelope> {
+async function runUpgrade(
+  harness: string,
+  cwd: string,
+  answer = "no",
+  inventory?: string,
+  actor = "fixture-operator",
+): Promise<CommandEnvelope> {
   const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
   if (definition === undefined) throw new Error("missing store.upgrade definition");
-  const attestation = join(cwd, "attestation.json");
-  writeFileSync(attestation, `${JSON.stringify(fixtureAttestation)}\n`);
+  const attestation = join(cwd, `attestation-${actor}.json`);
+  writeFileSync(
+    attestation,
+    `${JSON.stringify({ ...fixtureAttestation, operator: { ...fixtureAttestation.operator, actor } })}\n`,
+  );
   const parsed = definition.input.parse({
     harness,
     operator: "fixture-operator",
@@ -174,6 +183,20 @@ test("store upgrade archives a damaged store and still migrates valid legacy sou
   // not merely replaced the database.
   const state = await probeStoreUpgradeState({ harnessDir });
   expect(state.executionAuthorityState).toBe("active");
+});
+
+test("store upgrade refuses to archive a damaged store under another operator's attestation", async () => {
+  const harnessDir = join(root, "mismatch", ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const damaged = Buffer.from("a damaged store behind a mismatched attestation", "utf8");
+  writeFileSync(join(harnessDir, "store.db"), damaged);
+
+  const result = await runUpgrade(harnessDir, root, "preserve for later review", undefined, "someone-else");
+
+  expect(result.code).toBe("store.attestation-invalid");
+  // Nothing may be archived or displaced for an identity the operator cannot claim.
+  expect(readFileSync(join(harnessDir, "store.db"))).toEqual(damaged);
+  expect(existsSync(join(harnessDir, "archived"))).toBe(false);
 });
 
 test("store upgrade leaves the original in place when the archive cannot be published", async () => {
