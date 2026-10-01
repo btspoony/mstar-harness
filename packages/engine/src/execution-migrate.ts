@@ -3689,7 +3689,9 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
   // §2.2/§4.2 `execution_registry` holds the ACTIVE lifecycles only, so terminal
   // (unregistered) history is compared against the workflow/plan rows it landed
   // in and never against root membership it must not gain.
-  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered && workflow.exclusion === undefined).map((workflow) => workflow.workflowId);
+  const importableWorkflows = discovered.workflows.filter((workflow) => workflow.exclusion === undefined);
+  const importableWorkflowIds = new Set(importableWorkflows.map((workflow) => workflow.workflowId));
+  const expectedWorkflows = importableWorkflows.filter((workflow) => workflow.registered).map((workflow) => workflow.workflowId);
   if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
     throw conflict(
       `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +
@@ -3697,7 +3699,7 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
     );
   }
   const key = (entry: { workflowId: string; planId: string | null }): string => `${entry.workflowId}\u0000${entry.planId}`;
-  const expectedPlans = discovered.workflows
+  const expectedPlans = importableWorkflows
     .flatMap((workflow) =>
       workflow.plans.map((plan) => ({
         workflowId: workflow.workflowId,
@@ -3717,6 +3719,7 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
     );
   }
   const expectedSessions = discovered.owners
+    .filter((owner) => importableWorkflowIds.has(owner.workflowId))
     .map((owner) => ({ ...owner, state: "suspended", epoch }))
     .sort((a, b) => (key(a) < key(b) ? -1 : 1));
   const stagedSessions = [...graph.sessions].sort((a, b) => (key(a) < key(b) ? -1 : 1));

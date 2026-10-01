@@ -1892,12 +1892,29 @@ describe("execution-snapshot-resolutions", () => {
     expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
   });
 
-  test("execution-snapshot-resolutions-excluded-snapshot-is-archived-at-apply", async () => {
-    const fixture = await coreWorkspace("snapshot-excluded-archived-at-apply");
-    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
-    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
-    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
-    writeJson(fixture.snapshotPaths[0]!, snapshot);
+  test("execution-snapshot-resolutions-excluded-workflow-does-not-block-activating-the-remaining-graph", async () => {
+    const fixture = await coreWorkspace("snapshot-excluded-archived-at-apply", { workflows: 2 });
+    const excludedSnapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (excludedSnapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+    (excludedSnapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+    writeJson(fixture.snapshotPaths[0]!, excludedSnapshot);
+    const retainedSnapshotPath = fixture.snapshotPaths[1]!;
+    const retainedSnapshot = JSON.parse(readFileSync(retainedSnapshotPath, "utf8")) as Record<string, unknown>;
+    const retainedPlan = (retainedSnapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const sessionId = "retained-plan-owner";
+    const envelopePath = join(dirname(retainedSnapshotPath), "sessions", `${sessionId}.json`);
+    mkdirSync(dirname(envelopePath), { recursive: true });
+    writeJson(envelopePath, {
+      schema_version: 1,
+      role: "plan-pm",
+      session_id: sessionId,
+      workflow_id: fixture.workflowIds[1]!,
+      harness_root: fixture.harness,
+      plan_id: `${fixture.workflowIds[1]}-plan`,
+    });
+    retainedPlan.status = "InProgress";
+    retainedPlan.coordination = { revision: 1, session: { session_id: sessionId, session_file: envelopePath, bound_at: TS } };
+    writeJson(retainedSnapshotPath, retainedSnapshot);
     const before = readFileSync(fixture.snapshotPaths[0]!);
     const manifest = await stageCore(fixture, "snapshot-excluded-archived-at-apply");
     expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
@@ -1905,11 +1922,19 @@ describe("execution-snapshot-resolutions", () => {
     const archived = join(fixture.harness, "archived", "execution-snapshot-exclusions", `${CORE_A}-${digest}.snapshot.json`);
     expect(existsSync(archived)).toBe(true);
     expect(readFileSync(archived)).toEqual(before);
-    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
-    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "snapshot-excluded"));
+    const excludedId = fixture.workflowIds[0]!;
+    const retainedId = fixture.workflowIds[1]!;
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_registry where workflow_id = '${excludedId}'`)!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_registry where workflow_id = '${retainedId}'`)!.count).toBe(1);
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_plans where workflow_id = '${excludedId}'`)!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_plans where workflow_id = '${retainedId}'`)!.count).toBe(1);
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_sessions where workflow_id = '${excludedId}'`)!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, `select count(*) as count from execution_sessions where workflow_id = '${retainedId}'`)!.count).toBe(1);
+    const attestation = migrationAttestation([{ sessionId, host: "omp", state: "stopped" }]);
+    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "snapshot-excluded", attestation));
     expect(receipt.phase).toBe("active");
     expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
-    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(1);
   });
 
   test("execution-snapshot-resolutions-exact-owner-lease-imports", async () => {
