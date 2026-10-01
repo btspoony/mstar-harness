@@ -461,6 +461,8 @@ async function runStoreUpgrade(
       schemaVersion: staged.manifest.schemaVersion,
       authorityState: "active",
       sourcesRetired: receipt.phase === "retired",
+      exclusions: staged.manifest.exclusions,
+      normalizations: staged.manifest.normalizations,
     });
   } catch (error) {
     if (error !== null && typeof error === "object" && "code" in error && error.code === "execution.migration-conflict") {
