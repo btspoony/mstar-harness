@@ -48,6 +48,7 @@ describe("store upgrade refusal diagnostics", () => {
 
   test.each([
     ["store.upgrade-staged-record-missing", "persisted staged migration record is missing or incomplete", "missing saved record", "No operator-executable in-place recovery is available"],
+    ["store.upgrade-staged-record-malformed", "malformed JSON in the persisted staged manifest or coverage record", "staged migration manifest or coverage JSON is malformed", "archive-first recovery path"],
     ["store.upgrade-staged-record-inconsistent", "persisted manifest or coverage identity is inconsistent", "identity does not verify", "cannot repair an inconsistent saved identity"],
     ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory", "rerun `store upgrade`"],
     ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest", "cannot repair a missing manifest"],
@@ -134,8 +135,11 @@ describe("store upgrade refusal diagnostics", () => {
       writeFileSync(join(legacy, "status.json"), JSON.stringify({ version: 2, workflows: [] }));
       const blocked = await definition.execute(definition.input.parse({ harness: legacy }), invocation);
       expect(blocked.code).toBe("store.upgrade-legacy-source-only");
-      expect(blocked.message).toContain("store migrate --out <manifest-file>");
-      expect(blocked.message).toContain("store migrate --apply --manifest <manifest-file>");
+      expect(blocked.message).toContain("store init");
+      expect(blocked.message).toContain("status.json");
+      expect(blocked.message).toContain("store upgrade --operator <name> --attestation <file>");
+      expect(blocked.message).toContain("activate, and retire those execution files");
+      expect(blocked.message).not.toContain("store migrate --out");
       expect(blocked.message).not.toContain("store.upgrade-blocked");
     } finally {
       rmSync(root, { recursive: true, force: true });

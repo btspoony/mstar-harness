@@ -136,17 +136,19 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
   const unclassifiedCode = rawCode === undefined
     ? errorMessage.includes("persisted staged migration record is missing or incomplete")
       ? "store.upgrade-staged-record-missing"
-      : errorMessage.includes("persisted manifest or coverage identity is inconsistent")
-        ? "store.upgrade-staged-record-inconsistent"
-        : errorMessage.includes("retry inventory") && errorMessage.includes("does not match the staged manifest scope")
-          ? "store.upgrade-staged-inventory-mismatch"
-          : errorMessage.includes("staged execution authority without its matching recorded manifest")
-            ? "store.upgrade-staged-manifest-missing"
-            : errorMessage.startsWith("store upgrade is blocked:") || errorMessage === "unreachable store upgrade state"
-              ? "store.upgrade-state-changed"
-              : isJsonParseError
-                ? "store.corrupt"
-                : undefined
+      : errorMessage.includes("malformed JSON in the persisted staged manifest or coverage record")
+        ? "store.upgrade-staged-record-malformed"
+        : errorMessage.includes("persisted manifest or coverage identity is inconsistent")
+          ? "store.upgrade-staged-record-inconsistent"
+          : errorMessage.includes("retry inventory") && errorMessage.includes("does not match the staged manifest scope")
+            ? "store.upgrade-staged-inventory-mismatch"
+            : errorMessage.includes("staged execution authority without its matching recorded manifest")
+              ? "store.upgrade-staged-manifest-missing"
+              : errorMessage.startsWith("store upgrade is blocked:") || errorMessage === "unreachable store upgrade state"
+                ? "store.upgrade-state-changed"
+                : isJsonParseError
+                  ? "store.corrupt"
+                  : undefined
     : undefined;
   const errorCode = isPendingRegistration ? "store.upgrade-pending-registration" : rawCode ?? unclassifiedCode;
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
@@ -168,6 +170,7 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
     "store.corrupt": { blocker: "The store database is unreadable or structurally invalid.", recovery: "A restore preview requires inventory of the live database, so `store execution restore-preview` cannot recover an unreadable live store. No online operator restore is available in this state. If no verified backup can be restored through a supported recovery process, rebuild the store with `store init` only after preserving the corrupt database and legacy sources; rebuilding loses SQLite-only catalog/execution data." },
     "store.schema-drift": { blocker: "Applied schema history is inconsistent with this build.", recovery: "Install the harness build that owns this store schema with `npm i -g @mstar-harness/cli@latest` and retry. If the live store remains readable and the schema owner confirms restore is appropriate, run `store execution restore-preview --backup <backup-file> --out <preview-file>`, review its loss inventory, then `store execution restore --preview <preview-file> --accept-loss-digest <loss-digest> --operator <name> --authorization <ref>`." },
     "store.upgrade-staged-record-missing": { blocker: "A staged execution migration is missing its complete saved record.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and is not reachable for a missing saved record. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
+    "store.upgrade-staged-record-malformed": { blocker: "The saved staged migration manifest or coverage JSON is malformed.", recovery: "Do not edit or delete the live store or workflow files. Preserve the entire harness store before rebuilding; the archive-first recovery path is required to retain the malformed record and all SQLite-only data." },
     "store.upgrade-staged-record-inconsistent": { blocker: "The saved staged migration identity does not verify.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and cannot repair an inconsistent saved identity. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
     "store.upgrade-staged-manifest-missing": { blocker: "The staged authority has no matching recorded migration manifest.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and cannot repair a missing manifest. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
     "store.schema-unsupported": { blocker: "This build does not support the store schema version.", recovery: "Install the current harness CLI with `npm i -g @mstar-harness/cli@latest`, then rerun `store upgrade` on that build." },
@@ -208,7 +211,7 @@ async function unifiedStoreUpgrade(
   invocation: InvocationContext,
 ): Promise<CommandEnvelope> {
   let state = await probeStoreUpgradeState(context);
-  if (state.verdict === "blocked") { const hasLegacy = hasLegacyExecutionFiles(context.harnessDir); return { version: 1, command: id, status: "refused", code: hasLegacy ? "store.upgrade-legacy-source-only" : "store.upgrade-empty-store", exitCode: 1, message: hasLegacy ? "Legacy execution files exist without an issue store. Run `store migrate --out <manifest-file>` to create a reviewable migration manifest, then apply it with `store migrate --apply --manifest <manifest-file>`; do not initialize over these sources." : "No store or legacy execution sources exist. Run `store init` to create the empty store, then run `store upgrade`." }; }
+  if (state.verdict === "blocked") { const hasLegacy = hasLegacyExecutionFiles(context.harnessDir); return { version: 1, command: id, status: "refused", code: hasLegacy ? "store.upgrade-legacy-source-only" : "store.upgrade-empty-store", exitCode: 1, message: hasLegacy ? "Legacy execution files exist without an issue store. Run `store init` to create the issue store without modifying `status.json` or workflow files, then run `store upgrade --operator <name> --attestation <file>` to review, migrate, activate, and retire those execution files; do not run `store migrate`, which does not import the execution workflow authority." : "No store or legacy execution sources exist. Run `store init` to create the empty store, then run `store upgrade`." }; }
   const noLegacyExecutionFiles = !hasLegacyExecutionFiles(context.harnessDir);
   if (
     state.reasons.includes("schema-upgrade-pending")
