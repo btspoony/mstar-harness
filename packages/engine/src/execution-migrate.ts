@@ -173,11 +173,14 @@ import {
   fsyncSync,
   lstatSync,
   mkdirSync,
+  readlinkSync,
   openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
   type Dirent,
@@ -245,8 +248,8 @@ import {
   type ExecutionSurface,
 } from "./execution-coverage.js";
 
-/** Transport version of the execution migration manifest (§6/§4.1): v2 adds the coverage discovery. */
-export const EXECUTION_MIGRATION_MANIFEST_VERSION = 2;
+/** Transport version of the execution migration manifest (§6/§4.1): v3 records snapshot exclusions and normalizations. */
+export const EXECUTION_MIGRATION_MANIFEST_VERSION = 3;
 
 /**
  * The historical §6 manifest generation. A v1 document stays READABLE for
@@ -372,35 +375,39 @@ export type ExecutionDeferredSurface = {
  * hash therefore covers DISCOVERY, not receipts, which avoids a circular
  * digest: a receipt binds this frozen document afterwards.
  */
+export type ExecutionSnapshotExclusion = Readonly<{
+  workflowId: string;
+  codes: readonly string[];
+  snapshotPath: string;
+  sha256: string;
+}>;
+
+export type ExecutionSnapshotNormalization = Readonly<{
+  workflowId: string;
+  diagnostics: readonly string[];
+}>;
+
+/**
+ * Version 3 adds explicit snapshot exclusions and in-memory normalizations to
+ * the canonical, content-addressed discovery manifest.
+ */
 export type ExecutionManifest = {
-  version: 2;
+  version: 3;
   id: string;
   storeId: string;
   epoch: number;
   schemaVersion: number;
-  /** The canonical control harness root this manifest was reviewed against. */
   root: string;
-  /** The canonical configured roots every surface witness path is relative to. */
   roots: ExecutionMigrationRoots;
-  /**
-   * §4.2 the discovery scope this manifest was reviewed under: the explicit
-   * inventory path, or `null` for a control-root-only scope. It is part of the
-   * content hash, so an absence is a declared fact rather than a guess.
-   */
   inventoryPath: string | null;
   sources: ExecutionSourceWitness[];
-  /** Digest of the core content the import writes: root bytes, snapshot bytes, sealed inputs. */
   coreHash: string;
   deferred: ExecutionDeferredSurface[];
   catalogRevision: number;
-  /**
-   * Always empty in a produced manifest: a non-committed catalog operation
-   * refuses preview and apply alike (§7), so the field is the reviewer's
-   * explicit "no pending catalog operation was outstanding" witness.
-   */
   pendingCatalogOperations: string[];
-  /** The exact discovered surface identities, in canonical surface/workflow order. */
   surfaces: ExecutionManifestSurface[];
+  exclusions: ExecutionSnapshotExclusion[];
+  normalizations: ExecutionSnapshotNormalization[];
 };
 
 /**
@@ -647,29 +654,22 @@ type DiscoveredPlan = {
 };
 
 type DiscoveredWorkflow = {
-  /** The root-register entry of a REGISTERED lifecycle; `null` for terminal history. */
   entry: WorkflowEntry | null;
-  /**
-   * §2.2 registry membership is what selects an ACTIVE lifecycle. A terminal
-   * (unregistered) workflow dir is imported into the workflow/plan tables as
-   * history and never becomes root-registry membership.
-   */
   registered: boolean;
   workflowId: string;
   dir: string;
   snapshotPath: string;
   snapshotSha: string;
-  snapshot: WorkflowSnapshot;
+  snapshot: WorkflowSnapshot | null;
   coordinator: LegacyBinding | null;
   plans: DiscoveredPlan[];
-  /** Every session envelope file the workflow's own `sessions/` dir holds. */
   envelopes: string[];
-  /** The subset of `envelopes` a recorded binding references. */
   referencedEnvelopes: ReadonlySet<string>;
-  /** The retained files of every §4.1 workflow surface, by surface slug. */
   surfaceFiles: ReadonlyMap<ExecutionSurface, readonly string[]>;
-  /** Legacy write-lock dirs the workflow dir holds. */
   lockDirs: readonly string[];
+  exclusion?: ExecutionSnapshotExclusion;
+  skippedEntries: readonly { path: string; sha256: string | null; symlinkTarget?: string }[];
+  diagnostics: readonly string[];
 };
 
 type DiscoveredSources = {
@@ -682,24 +682,13 @@ type DiscoveredSources = {
   workflows: DiscoveredWorkflow[];
   witnesses: ExecutionSourceWitness[];
   deferred: ExecutionDeferredSurface[];
-  /**
-   * §2.3 the frozen OWNER inventory: every session identity the discovered
-   * bindings and their envelopes resolve to. This is what the activation
-   * attestation has to cover with stop evidence, because these are exactly the
-   * references the barrier revokes.
-   */
   owners: DiscoveredOwner[];
   coreHash: string;
-  /** §4.1 the exact discovered surface identities, in canonical surface/workflow order. */
   surfaces: ExecutionManifestSurface[];
-  /** Every pinned witness key (`${root}:${path}`) → the file its bytes were read from. */
   witnessPaths: ReadonlyMap<string, string>;
-  /**
-   * §4.2 discovery evidence that proves an ABSENT row (an explicitly empty
-   * deployment inventory) and is therefore pinned without being assigned to any
-   * row's sources.
-   */
   pinnedExtras: readonly CoverageWitness[];
+  exclusions: ExecutionSnapshotExclusion[];
+  normalizations: ExecutionSnapshotNormalization[];
 };
 
 /** One discovered session identity, in canonical (workflow, coordinator-then-plans) order. */
@@ -961,36 +950,124 @@ function readInventoryFile(path: string): { inventory: ExecutionMigrationInvento
     },
   };
 }
+type SnapshotSource =
+  | { path: string; sha256: string; snapshot: WorkflowSnapshot; diagnostics: string[]; exclusion?: undefined }
+  | { path: string; sha256: string; diagnostics: string[]; exclusion: ExecutionSnapshotExclusion };
+function archiveInvalidSnapshot(archiveRoot: string, workflowDir: string, workflowId: string, bytes: Buffer, sha256: string): string {
+  const archiveDir = join(archiveRoot, "archived", "execution-snapshot-exclusions");
+  const archivePath = join(archiveDir, `${workflowId}-${sha256}.snapshot.json`);
+  mkdirSync(archiveDir, { recursive: true });
+  if (existsSync(archivePath)) {
+    const existing = readFileSync(archivePath);
+    if (sha256Of(existing) !== sha256 || !existing.equals(bytes)) {
+      throw conflict(`the preserved snapshot archive ${archivePath} does not match workflow ${workflowId}'s source bytes.`);
+    }
+    return archivePath;
+  }
+  const temporaryPath = `${archivePath}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporaryPath, bytes, { flag: "wx" });
+    const archived = readFileSync(temporaryPath);
+    const sourceNow = readFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE));
+    if (!archived.equals(bytes) || sha256Of(archived) !== sha256 || !sourceNow.equals(bytes)) {
+      throw conflict(`workflow ${workflowId}'s snapshot changed while its exclusion archive was verified.`);
+    }
+    renameSync(temporaryPath, archivePath);
+    return archivePath;
+  } finally {
+    if (existsSync(temporaryPath)) {
+      try {
+        rmSync(temporaryPath);
+      } catch {
+        // The temporary entry is best-effort cleanup after a failed archive.
+      }
+    }
+  }
+}
+
 
 /**
- * The canonical snapshot of one registered workflow: its bytes (witness), its
- * validated document, and the ONE in-memory normalization the canonical reader
- * also performs (the pre-#264 `control_worktree_path` alias), because the DB
- * header is canonical-only and `readWorkflowView` refuses the alias.
+ * The canonical snapshot of one registered workflow. Migration alone may
+ * release terminal leases in memory before importing; the raw bytes remain
+ * the source witness and are never rewritten.
  */
-function readSnapshotSource(dir: string, workflowId: string): { path: string; sha256: string; snapshot: WorkflowSnapshot } {
+function readSnapshotSource(
+  dir: string,
+  workflowId: string,
+  archiveRoot: string,
+): SnapshotSource {
   const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
   const bytes = readSourceBytes(path, `the snapshot of workflow ${workflowId}`, `the snapshot of workflow ${workflowId} is missing at ${path}`);
   let doc: unknown;
   try {
     doc = JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    throw conflict(`the snapshot of workflow ${workflowId} is not valid JSON (${(error as Error).message}).`);
+  } catch {
+    const sha256 = sha256Of(bytes);
+    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid-json"], snapshotPath: relative(archiveRoot, path), sha256 } };
   }
-  const gate = validateWorkflowSnapshot(doc);
-  if (gate.ok) return { path, sha256: sha256Of(bytes), snapshot: doc as WorkflowSnapshot };
-  const onlyAlias = gate.violations.every((violation) => violation.code === LEGACY_WORKTREE_PATH_CODE);
-  if (onlyAlias && isPlainObject(doc) && isNonEmptyString(doc.control_worktree_path) && doc.integration_worktree_path === undefined) {
-    const { control_worktree_path: _legacy, ...rest } = doc;
-    const normalized = { ...rest, integration_worktree_path: doc.control_worktree_path } as unknown as WorkflowSnapshot;
-    if (validateWorkflowSnapshot(normalized).ok) {
-      return { path, sha256: sha256Of(bytes), snapshot: normalized };
+  if (!isPlainObject(doc)) {
+    const sha256 = sha256Of(bytes);
+    return { path, sha256, diagnostics: [], exclusion: { workflowId, codes: ["workflow.snapshot.invalid"], snapshotPath: relative(archiveRoot, path), sha256 } };
+  }
+
+  // Never repair an incomplete live lease: only a terminal snapshot proves
+  // leases inert under the "release every lease before lifecycle ends" rule.
+  const original = doc as unknown as WorkflowSnapshot;
+  const terminal = isTerminalSnapshot(original);
+  let normalized: Record<string, unknown> = { ...doc };
+  const diagnostics: string[] = [];
+  const initial = validateWorkflowSnapshot(doc);
+  if (
+    initial.violations.some((v) => v.code === LEGACY_WORKTREE_PATH_CODE) &&
+    isNonEmptyString(doc.control_worktree_path) &&
+    doc.integration_worktree_path === undefined
+  ) {
+    const { control_worktree_path: _legacy, ...rest } = normalized;
+    normalized = { ...rest, integration_worktree_path: doc.control_worktree_path };
+    diagnostics.push(`${LEGACY_WORKTREE_PATH_CODE}: renamed control_worktree_path to integration_worktree_path in memory.`);
+  }
+  if (Array.isArray(normalized.plans)) {
+    normalized.plans = normalized.plans.map((row, index) => {
+      if (!isPlainObject(row)) return row;
+      const rowViolations = validateWorkflowSnapshot({ ...normalized, plans: [row] }).violations;
+      const doneLease = row.status === "Done" && row.execution_lease !== undefined;
+      const dangling = terminal && row.execution_lease !== undefined &&
+        (initial.violations.some((v) => v.code === "workflow.snapshot.terminal-dangling-execution-lease") ||
+          rowViolations.some((v) => v.code.startsWith("lease.execution-lease.missing-")));
+      if (!doneLease && !dangling) return row;
+      const { execution_lease: _lease, ...rest } = row;
+      const codes = rowViolations.map((v) => v.code);
+      const code = doneLease ? "status.plan-row.done-with-lease" : "workflow.snapshot.terminal-dangling-execution-lease";
+      const additionalCode = doneLease && terminal ? " + workflow.snapshot.terminal-dangling-execution-lease" : "";
+      const missing = codes.filter((entry) => entry.startsWith("lease.execution-lease.missing-"));
+      diagnostics.push(
+        `${code}${additionalCode}: dropped plans[${index}].execution_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because ${doneLease ? "a Done row releases its lease in the same update" : "a terminal lifecycle must release every lease"}.`,
+      );
+      return rest;
+    });
+  }
+  if (terminal && normalized.integration_merge_lease !== undefined) {
+    const mergeViolations = initial.violations;
+    const missing = mergeViolations
+      .map((entry) => entry.code)
+      .filter((entry) => entry.startsWith("lease.merge-lease.missing-"));
+    const dangling = mergeViolations.some((entry) => entry.code === "workflow.snapshot.terminal-dangling-merge-lease");
+    if (dangling || missing.length > 0) {
+      delete normalized.integration_merge_lease;
+      const code = dangling
+        ? "workflow.snapshot.terminal-dangling-merge-lease"
+        : missing[0]!;
+      diagnostics.push(
+        `${code}: dropped integration_merge_lease${missing.length ? ` (missing ${missing.join(", ")})` : ""} because a terminal lifecycle must release every lease.`,
+      );
     }
   }
-  throw conflict(
-    `the snapshot of workflow ${workflowId} does not validate ` +
-      `(${gate.violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")}).`,
-  );
+  const gate = validateWorkflowSnapshot(normalized);
+  if (!gate.ok) {
+    const codes = [...new Set(gate.violations.map((entry) => entry.code))].sort();
+    return { path, sha256: sha256Of(bytes), diagnostics, exclusion: { workflowId, codes, snapshotPath: relative(archiveRoot, path), sha256: sha256Of(bytes) } };
+  }
+  return { path, sha256: sha256Of(bytes), snapshot: normalized as unknown as WorkflowSnapshot, diagnostics };
 }
 
 /**
@@ -1054,12 +1131,14 @@ function readSessionSource(
  * `execution.coverage-incomplete` — the inventory never skips what it cannot
  * name — and a present compaction journal refuses outright (§5).
  */
-function scanWorkflowDir(dir: string, workflowId: string): {
+function scanWorkflowDir(dir: string, workflowId: string, relativeDir: string): {
   envelopes: string[];
   surfaceFiles: Map<ExecutionSurface, string[]>;
   lockDirs: string[];
   deferred: ExecutionDeferredSurface[];
+  skipped: Array<{ path: string; sha256: string | null; symlinkTarget?: string }>;
 } {
+  const skipped: Array<{ path: string; sha256: string | null; symlinkTarget?: string }> = [];
   const sessions: string[] = [];
   const lockPaths: string[] = [];
   const files = new Map<ExecutionSurface, string[]>();
@@ -1072,13 +1151,12 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     if (entry.name === WORKFLOW_SNAPSHOT_FILE) continue;
     if (entry.name === SESSION_DIR) {
       if (!entry.isDirectory()) {
-        throw incomplete(`workflows/${workflowId}/${SESSION_DIR} is not a directory, so the session surface cannot be classified.`);
+        throw incomplete(`${relativeDir}/${SESSION_DIR} is not a directory, so the session surface cannot be classified.`);
       }
       for (const nested of directoryEntries(join(dir, SESSION_DIR), `the sessions dir of ${workflowId}`)) {
         if (!nested.isFile()) {
           throw incomplete(
-            `workflows/${workflowId}/${SESSION_DIR}/${nested.name} is neither a regular file nor a directory entry this ` +
-              `inventory classifies (a symlink or a nested directory), so coverage cannot be claimed.`,
+            `${relativeDir}/${SESSION_DIR}/${nested.name} is neither a regular file nor a directory entry this inventory classifies (a symlink or a nested directory), so coverage cannot be claimed.`,
           );
         }
         sessions.push(join(dir, SESSION_DIR, nested.name));
@@ -1099,12 +1177,12 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     }
     if (entry.name === AGENT_FLOW_HISTORY_DIR) {
       if (!entry.isDirectory()) {
-        throw incomplete(`workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR} is not a directory, so the sealed history chunks cannot be classified.`);
+        throw incomplete(`${relativeDir}/${AGENT_FLOW_HISTORY_DIR} is not a directory, so the sealed history chunks cannot be classified.`);
       }
       for (const nested of directoryEntries(join(dir, AGENT_FLOW_HISTORY_DIR), `the agent-flow history dir of ${workflowId}`)) {
         if (!nested.isFile() || !AGENT_FLOW_CHUNK.test(nested.name)) {
           throw incomplete(
-            `workflows/${workflowId}/${AGENT_FLOW_HISTORY_DIR}/${nested.name} is not a sealed history chunk ` +
+            `${relativeDir}/${AGENT_FLOW_HISTORY_DIR}/${nested.name} is not a sealed history chunk ` +
               `(chunk-NNNNNN.jsonl); an unknown companion of the retained ledger blocks coverage.`,
           );
         }
@@ -1118,20 +1196,41 @@ function scanWorkflowDir(dir: string, workflowId: string): {
     }
     const known = WORKFLOW_SURFACE_FILES.find((candidate) => candidate.file === entry.name);
     if (known === undefined) {
-      throw incomplete(
-        `workflows/${workflowId}/${entry.name} is not a source this inventory classifies. Every entry of a registered ` +
-          `workflow dir must be the core snapshot or a named \u00a74.1 surface; an unclassified entry blocks coverage ` +
-          `rather than being skipped.`,
-      );
+      // An entry no surface claims is left exactly where it is and recorded:
+      // blocking the whole migration on it would lose nothing by skipping it.
+      // Entries unclaimed by a surface are kept with their source-relative path.
+      const path = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        skipped.push({ path, sha256: null });
+        const collect = (absolute: string, prefix: string): void => {
+          for (const nested of directoryEntries(absolute, `unclassified dir ${prefix}`)) {
+            const nestedPath = `${prefix}/${nested.name}`;
+            const nestedAbs = join(absolute, nested.name);
+            if (nested.isSymbolicLink()) skipped.push({ path: nestedPath, sha256: null, symlinkTarget: readlinkSync(nestedAbs) });
+            else if (nested.isDirectory()) {
+              skipped.push({ path: nestedPath, sha256: null });
+              collect(nestedAbs, nestedPath);
+            } else if (nested.isFile()) skipped.push({ path: nestedPath, sha256: sha256Of(readFileSync(nestedAbs)) });
+          }
+        };
+        collect(join(dir, entry.name), path);
+      } else if (entry.isSymbolicLink()) {
+        skipped.push({ path, sha256: null, symlinkTarget: readlinkSync(join(dir, entry.name)) });
+      } else if (entry.isFile()) skipped.push({ path, sha256: sha256Of(readFileSync(join(dir, entry.name))) });
+      continue;
     }
     push(known.surface, join(dir, known.file));
   }
   const deferred: ExecutionDeferredSurface[] = [deferredSurface(SESSION_SURFACE, sessions)];
   for (const known of WORKFLOW_SURFACE_FILES) deferred.push(deferredSurface(known.surface, files.get(known.surface) ?? []));
   deferred.push(deferredSurface(LEGACY_LOCK_SURFACE, lockPaths));
-  return { envelopes: sessions, surfaceFiles: files, lockDirs: lockPaths, deferred };
+  return { envelopes: sessions, surfaceFiles: files, lockDirs: lockPaths, deferred, skipped };
 }
 
+
+function skippedEntryDiagnostic(entry: { path: string; sha256: string | null; symlinkTarget?: string }): string {
+  return `unclassified entry skipped: ${entry.path} (sha256=${entry.sha256 ?? "directory"}${entry.symlinkTarget === undefined ? "" : `; symlink-target=${JSON.stringify(entry.symlinkTarget)}`}; left in place, not a migration source).`;
+}
 /** One workflow dir read as a lifecycle: the core snapshot, its ownership, its envelopes and its retained surfaces. */
 function readDiscoveredWorkflow(input: {
   ledger: DiscoveryLedger;
@@ -1144,7 +1243,7 @@ function readDiscoveredWorkflow(input: {
   owners: DiscoveredOwner[];
   deferred: ExecutionDeferredSurface[];
   seenDirs: Map<string, string>;
-}): DiscoveredWorkflow {
+}): DiscoveredWorkflow | null {
   const { ledger, roots, root, entry, registered, workflowId, dir, owners, deferred, seenDirs } = input;
   const priorHolder = seenDirs.get(dir);
   if (priorHolder !== undefined) {
@@ -1154,6 +1253,10 @@ function readDiscoveredWorkflow(input: {
     );
   }
   seenDirs.set(dir, workflowId);
+  // An unregistered dir without a snapshot has nothing to import: skip it
+  // whole, leaving the directory and everything in it exactly as it is. A
+  // REGISTERED workflow without its snapshot is real damage and still refuses.
+  if (!registered && !existsSync(join(dir, WORKFLOW_SNAPSHOT_FILE))) return null;
   let dirInfo: Stats;
   try {
     dirInfo = lstatSync(dir);
@@ -1164,17 +1267,73 @@ function readDiscoveredWorkflow(input: {
     throw conflict(`workflow ${workflowId}'s dir ${dir} is not a real directory under the control root.`);
   }
 
-  const snapshotSource = readSnapshotSource(dir, workflowId);
+  const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
   const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
   if (snapshotWitness.sha256 !== snapshotSource.sha256) {
     throw conflict(`the snapshot of workflow ${workflowId} changed while it was read; nothing was staged.`);
   }
 
+  if (snapshotSource.exclusion !== undefined) {
+    const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
+    for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
+    deferred.push(...scan.deferred);
+    const diagnostics: string[] = scan.skipped.map(skippedEntryDiagnostic);
+    return {
+      entry, registered, workflowId, dir, snapshotPath: snapshotSource.path, snapshotSha: snapshotSource.sha256,
+      snapshot: null, coordinator: null, plans: [], envelopes: scan.envelopes,
+      referencedEnvelopes: new Set(), surfaceFiles: scan.surfaceFiles, lockDirs: scan.lockDirs,
+      exclusion: { ...snapshotSource.exclusion, snapshotPath: relative(roots.control, snapshotSource.path) }, skippedEntries: scan.skipped, diagnostics,
+    };
+  }
   const coordinator = legacyBinding(snapshotSource.snapshot.coordination?.coordinator);
+  // A plan holding an execution lease whose holder resolves to neither this
+  // workflow's coordinator nor its own plan session has no owner to import.
+  // Detected BEFORE any ownership record is discovered, so the exclusion never
+  // leaves the staged graph expecting this workflow's plans or sessions: the
+  // excluded workflow is archived at apply and named in the manifest.
+  const coordinatorSessionId = coordinator?.session_id ?? null;
+  const rawPlans = Array.isArray(snapshotSource.snapshot.plans)
+    ? (snapshotSource.snapshot.plans as Array<Record<string, unknown>>)
+    : [];
+  const orphanLease = rawPlans.some((row) => {
+    if (row.execution_lease === undefined) return false;
+    const holder = typeof row.execution_lease === "object" && row.execution_lease !== null && "holder" in row.execution_lease
+      ? String((row.execution_lease as Record<string, unknown>).holder)
+      : "";
+    const planSession = legacyBinding(isPlainObject(row.coordination) ? row.coordination.session : undefined);
+    return holder !== coordinatorSessionId && holder !== (planSession?.session_id ?? null);
+  });
+  if (orphanLease) {
+    const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
+    for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
+    deferred.push(...scan.deferred);
+    const bytes = readFileSync(snapshotSource.path);
+    return {
+      entry, registered, workflowId, dir, snapshotPath: snapshotSource.path, snapshotSha: snapshotSource.sha256,
+      snapshot: null, coordinator: null, plans: [], envelopes: scan.envelopes,
+      referencedEnvelopes: new Set<string>(), surfaceFiles: scan.surfaceFiles, lockDirs: scan.lockDirs,
+      exclusion: { workflowId, codes: ["workflow.snapshot.orphan-held-lease"], snapshotPath: relative(roots.control, snapshotSource.path), sha256: sha256Of(bytes) },
+      skippedEntries: scan.skipped,
+      diagnostics: [
+        ...snapshotSource.diagnostics,
+        ...scan.skipped.map(skippedEntryDiagnostic),
+        "a plan holds an execution lease whose holder resolves to neither the recorded coordinator nor the plan session; the workflow is excluded and its bytes archived.",
+      ],
+    };
+  }
   if (snapshotSource.snapshot.coordination !== undefined && coordinator === null) {
     throw conflict(`workflow ${workflowId} carries a coordinator block that is not a complete session binding.`);
   }
   const referenced: string[] = [];
+  const seenOwnerKeys = new Set<string>();
+  const addOwner = (owner: DiscoveredOwner): void => {
+    const key = `${owner.role}\u0000${owner.sessionId}`;
+    if (seenOwnerKeys.has(key)) {
+      throw conflict(`workflow ${workflowId} records session ${owner.sessionId} more than once for role ${owner.role}.`);
+    }
+    seenOwnerKeys.add(key);
+    owners.push(owner);
+  };
   if (coordinator !== null) {
     const envelope = readSessionSource(
       coordinator,
@@ -1182,7 +1341,7 @@ function readDiscoveredWorkflow(input: {
       `workflow ${workflowId}'s coordinator binding`,
     );
     referenced.push(envelope.path);
-    owners.push({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
+    addOwner({ workflowId, role: "coordinator", sessionId: coordinator.session_id, planId: null });
   }
 
   const plans: DiscoveredPlan[] = [];
@@ -1202,7 +1361,7 @@ function readDiscoveredWorkflow(input: {
     if (session !== null) {
       const envelope = readSessionSource(session, { ...scope, role: "plan-pm", planId }, `plan ${planId}`);
       referenced.push(envelope.path);
-      owners.push({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
+      addOwner({ workflowId, role: "plan-pm", sessionId: session.session_id, planId });
     }
     const leaseValue = planRow.execution_lease;
     if (leaseValue !== undefined) {
@@ -1223,12 +1382,13 @@ function readDiscoveredWorkflow(input: {
     });
   }
 
-  const scan = scanWorkflowDir(dir, workflowId);
+  const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
   // Every envelope file is a source of the workflow's session surface, whether a
   // recorded binding references it or not: an unreferenced envelope is
   // historical evidence this surface owns, never an unclassified stranger.
   for (const path of scan.envelopes) recordWitness(ledger, "control", roots.control, path, "session-envelope");
   deferred.push(...scan.deferred);
+
 
   return {
     entry,
@@ -1244,6 +1404,11 @@ function readDiscoveredWorkflow(input: {
     referencedEnvelopes: new Set(referenced),
     surfaceFiles: scan.surfaceFiles,
     lockDirs: scan.lockDirs,
+    diagnostics: [
+      ...snapshotSource.diagnostics,
+      ...scan.skipped.map(skippedEntryDiagnostic),
+    ],
+    skippedEntries: scan.skipped,
   };
 }
 
@@ -1759,10 +1924,11 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     if (!isPathWithin(root, dir) || dir === root) {
       throw conflict(`workflow ${workflowId} records dir ${JSON.stringify(entry.dir)}, which does not stay inside the control root ${root}.`);
     }
-    workflows.push(
-      readDiscoveredWorkflow({ ledger, roots, root, entry, registered: true, workflowId, dir, owners, deferred, seenDirs }),
-    );
-    seenIds.add(workflowId);
+    const workflow = readDiscoveredWorkflow({ ledger, roots, root, entry, registered: true, workflowId, dir, owners, deferred, seenDirs });
+    if (workflow !== null) {
+      workflows.push(workflow);
+      seenIds.add(workflowId);
+    }
   }
 
   // §4.2 terminal/unregistered history: the configured workflow layouts are
@@ -1805,6 +1971,13 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
         deferred,
         seenDirs,
       });
+      if (workflow === null) continue;
+      if (workflow.exclusion !== undefined) {
+        workflows.push(workflow);
+        seenIds.add(workflowId);
+        continue;
+      }
+      if (workflow.snapshot === null) continue;
       if (workflow.snapshot.id !== workflowId) {
         throw conflict(`the unregistered workflow dir ${dir} carries a snapshot of workflow ${workflow.snapshot.id}; a terminal history dir names its own lifecycle.`);
       }
@@ -2021,7 +2194,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     root,
     roots,
     rootPath,
-    rootDoc: doc,
+    rootDoc: rootDoc as StatusV2Doc,
     inventoryPath,
     inventory,
     workflows,
@@ -2038,6 +2211,10 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
       })),
     }),
     surfaces,
+    exclusions: workflows.flatMap((workflow) => workflow.exclusion === undefined ? [] : [workflow.exclusion]),
+    normalizations: workflows.flatMap((workflow) =>
+      workflow.diagnostics.length === 0 ? [] : [{ workflowId: workflow.workflowId, diagnostics: workflow.diagnostics }],
+    ),
     pinnedExtras,
     witnessPaths: ledger.witnessPaths,
   };
@@ -2075,6 +2252,7 @@ function coverageManifestView(
     manifestHash,
     storeId: manifest.storeId,
     epoch: manifest.epoch,
+    exclusions: manifest.exclusions,
     surfaces: manifest.surfaces.map((row) => ({
       surface: row.surface,
       workflowId: row.workflowId,
@@ -2284,7 +2462,9 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
     // §7 the pin half of the inventory: the frozen selections and any committed
     // catalog binding must agree, checked here so a disagreement is a preview
     // verdict rather than a surprise at apply time.
-    for (const workflow of discovered.workflows) assertCatalogCoherence(handle.db, workflow, handle.storeId);
+    for (const workflow of discovered.workflows) {
+      if (workflow.exclusion === undefined) assertCatalogCoherence(handle.db, workflow, handle.storeId);
+    }
     const body: Omit<ExecutionManifest, "id"> = {
       version: EXECUTION_MIGRATION_MANIFEST_VERSION,
       storeId: handle.storeId,
@@ -2299,6 +2479,8 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
       catalogRevision,
       pendingCatalogOperations: pending,
       surfaces: discovered.surfaces,
+      exclusions: discovered.exclusions,
+      normalizations: discovered.normalizations,
     };
     return { ...body, id: `exec-${digestOf(body).slice(0, 32)}` };
   } finally {
@@ -2399,6 +2581,12 @@ function assertReviewedManifestHolds(input: {
   }
   if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
     throw conflict("the core authority content changed since the preview; nothing was written.");
+  }
+  if (
+    serializeExecutionValue(discovered.exclusions) !== serializeExecutionValue(manifest.exclusions) ||
+    serializeExecutionValue(discovered.normalizations) !== serializeExecutionValue(manifest.normalizations)
+  ) {
+    throw conflict("snapshot exclusions or normalization evidence changed since preview; re-preview before applying.");
   }
   const foundDeferred = discovered.deferred.map((surface) =>
     surface.surface === LEGACY_LOCK_SURFACE
@@ -2508,9 +2696,11 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
 }
 
 /**
- * §7 the catalog half of the import check: a plan's recorded pin, the frozen
- * input it is sealed with and the committed `catalog_execution_bindings` row
- * must agree, and neither side wins silently.
+ * §7 the catalog half of the import check: a plan's recorded pin is checked
+ * against this store and the frozen input it is sealed with. The committed
+ * `catalog_execution_bindings` row carries its own association identity
+ * (`input_hash` / `pin_json` from `writeBinding`) and is never compared
+ * against the plan's pin or the frozen input.
  *
  * - a pin freezes the very row it is sealed with, so `document_hash` must be
  *   that row's frozen-input hash. Both live routes enforce it (create:
@@ -2533,14 +2723,7 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
  *   selection.
  */
 function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, storeId: string): void {
-  const rows = db
-    .prepare("select catalog_kind, catalog_id, input_hash, pin_json from catalog_execution_bindings where workflow_id = ?")
-    .all(workflow.workflowId) as Array<{
-    catalog_kind?: unknown;
-    catalog_id?: unknown;
-    input_hash?: unknown;
-    pin_json?: unknown;
-  }>;
+  void db;
   for (const plan of workflow.plans) {
     if (plan.pin === null) continue;
     if (plan.pin.store_id !== storeId) {
@@ -2555,30 +2738,6 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
         `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog pin document hash ` +
           `${plan.pin.document_hash.slice(0, 12)}\u2026, but the frozen execution input it is sealed with hashes to ` +
           `${inputHash.slice(0, 12)}\u2026; the pin and its row disagree, and neither side is rewritten.`,
-      );
-    }
-    const binding = rows.find((row) => row.catalog_kind === "plan" && row.catalog_id === plan.planId);
-    if (binding === undefined) continue;
-    if (typeof binding.input_hash === "string" && binding.input_hash !== inputHash) {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog binding input hash ${binding.input_hash} ` +
-          `while its sealed selection hashes to ${inputHash}; neither side wins silently.`,
-      );
-    }
-    if (typeof binding.pin_json !== "string") continue;
-    let recorded: unknown;
-    try {
-      recorded = JSON.parse(binding.pin_json);
-    } catch {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog binding whose pin payload is not JSON, ` +
-          `so the frozen selection cannot be reconciled with it.`,
-      );
-    }
-    if (!isPlainObject(recorded) || serializeExecutionValue(recorded) !== serializeExecutionValue(plan.pin)) {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records a catalog pin that disagrees with its catalog ` +
-          `binding; neither side wins silently.`,
       );
     }
   }
@@ -2597,6 +2756,9 @@ function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, store
  * justify, so it is refused rather than staged as a `held` claim.
  */
 function assertMergeLeaseCoherence(workflow: DiscoveredWorkflow, lease: IntegrationMergeLease, coordinator: LegacyBinding): void {
+  if (workflow.snapshot === null) {
+    throw conflict(`workflow ${workflow.workflowId} is excluded from the migration (its snapshot is archived), so it must never be staged.`);
+  }
   const what = `workflow ${workflow.workflowId}'s integration merge lease`;
   if (lease.holder !== coordinator.session_id) {
     throw conflict(
@@ -2640,6 +2802,9 @@ function assertMergeLeaseCoherence(workflow: DiscoveredWorkflow, lease: Integrat
 
 /** Import one discovered workflow and its ownership records (§2.2). */
 function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow): void {
+  if (workflow.snapshot === null) {
+    throw conflict(`workflow ${workflow.workflowId} is excluded from the migration (its snapshot is archived), so it must never be imported.`);
+  }
   const { workflowId, entry, snapshot } = workflow;
   const header: Record<string, unknown> = { ...(snapshot as unknown as Record<string, unknown>) };
   delete header.plans;
@@ -2924,9 +3089,80 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
 
             const now = new Date().toISOString();
             for (const [index, workflow] of discovered.workflows.entries()) {
-              assertCatalogCoherence(tx.db, workflow, tx.storeId);
-              importWorkflow(tx, workflow);
-              importFailureHook(index + 1);
+              // An excluded workflow is never imported. At apply time its exact
+              // snapshot bytes are copied into the migration archive first; the
+              // snapshot file itself is never moved or deleted, so a failed copy
+              // loses nothing and the upgrade refuses.
+              if (workflow.exclusion !== undefined) {
+                const bytes = readFileSync(workflow.snapshotPath);
+                if (sha256Of(bytes) !== workflow.exclusion.sha256) {
+                  throw conflict(
+                    `workflow ${workflow.workflowId}'s snapshot changed since discovery; its recorded digest no longer matches, so it cannot be archived and excluded.`,
+                  );
+                }
+                archiveInvalidSnapshot(discovered.roots.control, dirname(workflow.snapshotPath), workflow.workflowId, bytes, workflow.exclusion.sha256);
+              } else {
+                assertCatalogCoherence(tx.db, workflow, tx.storeId);
+                importWorkflow(tx, workflow);
+                importFailureHook(index + 1);
+              }
+              // Entries no surface claims are preserved byte-for-byte into the
+              // migration archive as well, and stay in place in the workspace.
+              // Verify their entire no-follow inventory immediately before copying.
+              const current = scanWorkflowDir(workflow.dir, workflow.workflowId, relative(discovered.roots.control, workflow.dir));
+              if (serializeExecutionValue(current.skipped) !== serializeExecutionValue(workflow.skippedEntries)) {
+                throw conflict(`unclassified entries of workflow ${workflow.workflowId} changed since review; nothing unreviewed was archived.`);
+              }
+              const skippedDirectories = new Set(
+                workflow.skippedEntries.filter((entry) => entry.sha256 === null && entry.symlinkTarget === undefined).map((entry) => entry.path),
+              );
+              for (const entry of workflow.skippedEntries) {
+                const components = entry.path.split("/");
+                if (components.slice(1, -1).some((_, index) => skippedDirectories.has(components.slice(0, index + 2).join("/")))) continue;
+                const sourcePath = join(discovered.roots.control, entry.path);
+                const name = entry.path.replaceAll("/", "--");
+                const archiveFile = (absolute: string, relative: string): void => {
+                  const archivedPath = join(discovered.roots.control, "archived", "unclassified-entries", workflow.workflowId, name, relative);
+                  mkdirSync(dirname(archivedPath), { recursive: true });
+                  const bytes = readFileSync(absolute);
+                  writeFileSync(archivedPath, bytes);
+                  if (!readFileSync(archivedPath).equals(bytes)) {
+                    throw conflict(`the archived copy of ${relative} under ${entry.path} does not match its original bytes.`);
+                  }
+                };
+                const walk = (absolute: string, relative: string): void => {
+                  // lstat, never stat: a symlink under a workflow must not pull
+                  // an outside file into the archive. Links are left in place
+                  // and recorded, not followed.
+                  const stats = lstatSync(absolute);
+                  if (stats.isSymbolicLink()) {
+                    // Preserve the link itself, never its target.
+                    const archivedPath = join(discovered.roots.control, "archived", "unclassified-entries", workflow.workflowId, name, relative);
+                    mkdirSync(dirname(archivedPath), { recursive: true });
+                    let archiveTarget: Stats | undefined;
+                    try {
+                      archiveTarget = lstatSync(archivedPath);
+                    } catch (error) {
+                      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+                    }
+                    if (archiveTarget !== undefined) {
+                      if (!archiveTarget.isSymbolicLink()) {
+                        throw conflict(`unclassified archive target ${archivedPath} exists and is not a symbolic link.`);
+                      }
+                      rmSync(archivedPath);
+                    }
+                    symlinkSync(readlinkSync(absolute), archivedPath);
+                    return;
+                  }
+                  if (stats.isDirectory()) {
+                    for (const nested of readdirSync(absolute)) walk(join(absolute, nested), join(relative, nested));
+                    return;
+                  }
+                  if (!stats.isFile()) return;
+                  archiveFile(absolute, relative);
+                };
+                walk(sourcePath, "");
+              }
             }
             tx.db
               .prepare(
@@ -3300,7 +3536,7 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
   // §2.2/§4.2 `execution_registry` holds the ACTIVE lifecycles only, so terminal
   // (unregistered) history is compared against the workflow/plan rows it landed
   // in and never against root membership it must not gain.
-  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered).map((workflow) => workflow.workflowId);
+  const expectedWorkflows = discovered.workflows.filter((workflow) => workflow.registered && workflow.exclusion === undefined).map((workflow) => workflow.workflowId);
   if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
     throw conflict(
       `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +
@@ -3565,11 +3801,16 @@ export async function activateExecutionMigration(
             const storeRevision = Number(
               (tx.db.prepare("select revision from store_meta where id = 1").get() as { revision?: unknown } | undefined)?.revision,
             );
-            const suspendedLeases = discovered.workflows.flatMap((workflow) =>
-              workflow.plans.filter((plan) => plan.lease !== null).map((plan) => ({ workflowId: workflow.workflowId, planId: plan.planId })),
-            );
+            const suspendedLeases = discovered.workflows
+              .filter((workflow) => workflow.exclusion === undefined)
+              .flatMap((workflow) =>
+                workflow.plans.filter((plan) => plan.lease !== null).map((plan) => ({ workflowId: workflow.workflowId, planId: plan.planId })),
+              );
             const suspendedIntegrationLeases = discovered.workflows
-              .filter((workflow) => workflow.snapshot.integration_merge_lease !== undefined)
+              .filter(
+                (workflow) =>
+                  workflow.exclusion === undefined && workflow.snapshot !== null && workflow.snapshot.integration_merge_lease !== undefined,
+              )
               .map((workflow) => workflow.workflowId);
             const stored: ExecutionActivationRecord = {
               activationVersion: 1,

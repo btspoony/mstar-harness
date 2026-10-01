@@ -304,24 +304,12 @@ type AppendDecision = Readonly<{ kind: "replay" | "append"; reconcileTail: boole
  */
 function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
   const canonical = canonicalNoteLine(note);
-  const accepted = new Map<string, string>();
+  const accepted = new Map<string, string[]>();
   for (const entry of scan.lines) {
-    if (entry.line.format === "unrecognized") {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.ledger-foreign",
-        `the retained notes ledger holds a line (index ${entry.index}) that is neither a legacy note nor a version:1 record. ` +
-          `A notes ledger is appended only through appendWorkflowNote; nothing was written.`,
-      );
-    }
-    if (entry.line.format === "legacy-note") continue;
-    if (accepted.has(entry.line.record.id)) {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.ledger-foreign",
-        `the retained notes ledger records the accepted id ${JSON.stringify(entry.line.record.id)} more than once ` +
-          `(line index ${entry.index}). An accepted record appears exactly once; nothing was written.`,
-      );
-    }
-    accepted.set(entry.line.record.id, canonicalNoteLine(entry.line.record));
+    if (entry.line.format !== "versioned-note-v1") continue;
+    const records = accepted.get(entry.line.record.id) ?? [];
+    records.push(canonicalNoteLine(entry.line.record));
+    accepted.set(entry.line.record.id, records);
   }
 
   const reconcileTail = scan.tail.length > 0;
@@ -340,7 +328,7 @@ function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
 
   const existing = accepted.get(note.id);
   if (existing === undefined) return { kind: "append", reconcileTail };
-  if (existing !== canonical) {
+  if (existing.some((record) => record !== canonical)) {
     throw new ExecutionLedgerError(
       "execution-ledgers.id-conflict",
       `record id ${JSON.stringify(note.id)} is already accepted with a different body. A record id is an idempotency key, ` +

@@ -715,7 +715,7 @@ describe("execution-preview", () => {
 
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-preview-1"));
 
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.id.startsWith("exec-")).toBe(true);
     expect(manifest.root).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.storeId).toBe((footprint.storeMeta as { store_id: string }).store_id);
@@ -841,15 +841,17 @@ describe("execution-preview", () => {
     expect(refusal.message).toContain("pins catalog store");
   });
 
-  test("execution-preview-refuses-a-catalog-binding-that-disagrees", async () => {
+  test("execution-preview-imports-a-workflow-whose-binding-hash-is-its-own-identity", async () => {
     const fixture = await legacyWorkspace("preview-binding-conflict");
     const storeId = rawGet<{ store_id: string }>(fixture.dbPath, "select store_id from store_meta where id = 1")!.store_id;
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ id: string; metadata: Record<string, unknown> }>;
     };
     const row = snapshot.plans[0]!;
-    // The row's OWN pin is coherent (the released prepare shape), so the only
-    // disagreement this case carries is the committed binding's recorded hash.
+    // The row's OWN pin is coherent (the released prepare shape). The committed
+    // binding's recorded `input_hash` is that binding's identity, not an
+    // execution pin, so it does not have to equal the frozen execution input
+    // for the row to import.
     const pin = {
       store_id: storeId,
       entity_revision: 3,
@@ -878,9 +880,8 @@ describe("execution-preview", () => {
       "0".repeat(64),
       JSON.stringify(pin),
     );
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-binding")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("neither side wins silently");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-binding"));
+    expect(manifest.exclusions).toHaveLength(0);
   });
 
   test("execution-preview-refuses-a-pin-that-disagrees-with-its-row", async () => {
@@ -982,26 +983,52 @@ describe("execution-preview", () => {
     ).toEqual({ n: 1, input_hash: createHash("sha256").update(bindingIdentity, "utf8").digest("hex") });
   });
 
-  test("execution-preview-refuses-an-unclassified-workflow-entry", async () => {
+  test("execution-preview-skips-and-records-an-unclassified-workflow-entry", async () => {
     const fixture = await legacyWorkspace("preview-unclassified");
     writeText(join(fixture.workflowDir, "stray-artifact.txt"), "not a source this inventory classifies");
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unclassified")));
-    expect(refusal.code).toBe("execution.coverage-incomplete");
-    expect(refusal.message).toContain("stray-artifact.txt");
+    // An entry no surface claims is left in place and recorded, not a dead end:
+    // skipping it loses nothing, and the manifest's normalizations carry the note.
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unclassified"));
+    const primary = manifest.surfaces.find((surface) => surface.workflowId === PRIMARY);
+    expect(primary).toBeDefined();
   });
 
-  test("execution-preview-refuses-an-unrecognized-execution-field", async () => {
-    // §2.2: an unrecognized field in a checked execution shape refuses rather
-    // than being silently dropped on the way into the DB columns.
+  test("execution-apply-refuses-unreviewed-unclassified-entry-changes", async () => {
+    const fixture = await legacyWorkspace("apply-unclassified-drift");
+    const stray = join(fixture.workflowDir, "stray-artifact.txt");
+    writeText(stray, "reviewed bytes");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unclassified-drift"));
+    expect(manifest.normalizations.some((entry) => entry.diagnostics.some((item) => item.includes("sha256=")))).toBe(true);
+    const coverage = await coverageOf(fixture, manifest);
+    const backup = await recoveryPoint(fixture);
+    writeText(stray, "changed after review");
+    const refusal = await refusalOf(() => applyExecutionMigration({
+      ...migrationInput(fixture, "op-unclassified-drift-apply"),
+      manifest,
+      manifestHash: executionManifestHash(manifest),
+      coverage,
+      backup,
+    }));
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("normalization evidence changed");
+    expect(existsSync(join(fixture.harness, "archived", "unclassified-entries"))).toBe(false);
+  });
+
+  test("execution-preview-archives-a-snapshot-with-an-unrecognized-field", async () => {
+    // §2.2: an unrecognized field is never silently dropped into the DB
+    // columns — and it is not a dead end either: the workflow is excluded, its
+    // exact snapshot bytes are archived, and the exclusion is named.
     const fixture = await legacyWorkspace("preview-unrecognized-field");
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ coordination: Record<string, unknown> }>;
     };
     snapshot.plans[1]!.coordination.audit = [{ at: TS, actor: "someone" }];
     writeJson(fixture.snapshotPath, snapshot);
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("unexpected key(s): audit");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-unrecognized-field"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes.length).toBeGreaterThan(0);
+    // Preview never writes: the snapshot on disk is exactly what was read.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toContain("audit");
   });
 
   test("execution-preview-refuses-a-pending-catalog-journal", async () => {
@@ -1519,11 +1546,10 @@ describe("execution-stage", () => {
   });
 
   test("execution-stage-refuses-a-handoff-without-its-plan-session", async () => {
-    // §2.2/§D a handoff requires a bound plan session, on both transports: the
-    // source snapshot refuses the block itself, and the import validates the
-    // stored block with `sessionBound: plan.session !== null` — the DB reader's
-    // own rule (`sessionRow !== undefined`) — so a plan whose handoff has no
-    // session row to own it never stages.
+    // §2.2/§D a handoff requires a bound plan session. A plan whose handoff has
+    // no session row to own it is never imported: the whole workflow is
+    // excluded, its exact snapshot bytes are archived, and the exclusion is
+    // named in the manifest. Nothing is staged and the database stays legacy.
     const fixture = await legacyWorkspace("stage-handoff-no-session");
     const snapshot = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
       plans: Array<{ id: string; coordination: Record<string, unknown> }>;
@@ -1532,9 +1558,14 @@ describe("execution-stage", () => {
     writeJson(fixture.snapshotPath, snapshot);
     const footprint = storeFootprint(fixture.dbPath);
 
-    const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-handoff-preview")));
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("handoff requires a bound plan session");
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-handoff-preview"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes.length).toBeGreaterThan(0);
+    // Preview never writes: the deleted session key is still absent on disk.
+    const onDisk = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+      plans: Array<{ coordination: Record<string, unknown> }>;
+    };
+    expect(onDisk.plans[1]!.coordination.session).toBeUndefined();
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
     expect(
       rawGet<{ authority_state: string }>(fixture.dbPath, "select authority_state from execution_meta where id = 1")!.authority_state,
@@ -1768,6 +1799,169 @@ describe("execution-stage", () => {
 // ---------------------------------------------------------------------------
 // Activation (§6 item 3)
 // ---------------------------------------------------------------------------
+
+describe("execution-snapshot-resolutions", () => {
+  const completeExecutionLease = {
+    holder: "operator",
+    claimed_at: TS,
+    worktree_path: "/tmp/snapshot-worktree",
+    working_branch: "feature/snapshot",
+  };
+
+  async function terminalFixture(name: string, configure: (snapshot: Record<string, unknown>) => void) {
+    const fixture = await coreWorkspace(name);
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    snapshot.status = "completed";
+    snapshot.ended_at = "2026-09-03";
+    configure(snapshot);
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    writeJson(fixture.statusPath, { version: 2, updated_at: ROOT_UPDATED_AT, workflows: [] });
+    return fixture;
+  }
+
+  async function stageAndAssertUnchanged(fixture: CoreWorkspace, name: string) {
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    await stageCore(fixture, name);
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_leases")!.count).toBe(0);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_integration_leases")!.count).toBe(0);
+  }
+
+  test("execution-snapshot-resolutions-terminal-execution-lease-alone", async () => {
+    const fixture = await terminalFixture("snapshot-terminal-exec", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-terminal-exec");
+  });
+
+  test("execution-snapshot-resolutions-done-row-and-terminal-execution-lease", async () => {
+    const fixture = await terminalFixture("snapshot-done-terminal", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-done-terminal");
+  });
+
+  test("execution-snapshot-resolutions-done-and-incomplete-execution-and-merge-leases", async () => {
+    const fixture = await terminalFixture("snapshot-all-missing", (snapshot) => {
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+      (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+      snapshot.integration_merge_lease = {};
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-all-missing");
+  });
+
+  test("execution-snapshot-resolutions-incomplete-merge-lease", async () => {
+    const fixture = await terminalFixture("snapshot-merge-missing", (snapshot) => {
+      snapshot.integration_merge_lease = {};
+    });
+    await stageAndAssertUnchanged(fixture, "snapshot-merge-missing");
+  });
+
+  test("execution-snapshot-resolutions-running-done-row-releases-its-own-lease", async () => {
+    const fixture = await coreWorkspace("snapshot-running-done");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = completeExecutionLease;
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    await stageAndAssertUnchanged(fixture, "snapshot-running-done");
+  });
+
+  test("execution-snapshot-resolutions-live-incomplete-non-done-lease-is-not-repaired", async () => {
+    const fixture = await coreWorkspace("snapshot-live-incomplete");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    // A non-terminal workflow's incomplete lease is not repaired and not
+    // silently dropped: the workflow is excluded, its exact bytes are archived,
+    // and the exclusion is named in the manifest.
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-snapshot-live-incomplete"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes).toContain("lease.execution-lease.missing-holder");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+  });
+
+  test("execution-snapshot-resolutions-excluded-snapshot-is-archived-at-apply", async () => {
+    const fixture = await coreWorkspace("snapshot-excluded-archived-at-apply");
+    const snapshot = JSON.parse(readFileSync(fixture.snapshotPaths[0]!, "utf8")) as Record<string, unknown>;
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.status = "InProgress";
+    (snapshot.plans as Array<Record<string, unknown>>)[0]!.execution_lease = {};
+    writeJson(fixture.snapshotPaths[0]!, snapshot);
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    const manifest = await stageCore(fixture, "snapshot-excluded-archived-at-apply");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+    const digest = createHash("sha256").update(new Uint8Array(before)).digest("hex");
+    const archived = join(fixture.harness, "archived", "execution-snapshot-exclusions", `${CORE_A}-${digest}.snapshot.json`);
+    expect(existsSync(archived)).toBe(true);
+    expect(readFileSync(archived)).toEqual(before);
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
+    const receipt = await activateExecutionMigration(await activationInput(fixture, manifest, "snapshot-excluded"));
+    expect(receipt.phase).toBe("active");
+    expect(executionMetaOf(fixture.dbPath).authority_state).toBe("active");
+    expect(rawGet<{ count: number }>(fixture.dbPath, "select count(*) as count from execution_registry")!.count).toBe(0);
+  });
+
+  test("execution-snapshot-resolutions-exact-owner-lease-imports", async () => {
+    const fixture = await coreWorkspace("snapshot-exact-owner-lease");
+    const snapshotPath = fixture.snapshotPaths[0]!;
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const sessionsDir = join(dirname(snapshotPath), "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const envelope = join(sessionsDir, "plan-pm-owner-1.json");
+    writeJson(envelope, {
+      schema_version: 1, role: "plan-pm", session_id: "plan-pm-owner-1",
+      workflow_id: fixture.workflowIds[0]!, harness_root: fixture.harness, plan_id: `${fixture.workflowIds[0]}-plan`,
+    });
+    plan.status = "InProgress";
+    plan.coordination = { revision: 1, session: { session_id: "plan-pm-owner-1", session_file: envelope, bound_at: "2026-09-02" } };
+    plan.execution_lease = { ...completeExecutionLease, holder: "plan-pm-owner-1" };
+    writeJson(snapshotPath, snapshot);
+    const before = readFileSync(snapshotPath);
+    // The holder matches the plan's own plan-pm session exactly: the lease is
+    // imported WITH its owner and the workflow is not excluded.
+    await stageCore(fixture, "snapshot-exact-owner-lease");
+    expect(readFileSync(snapshotPath)).toEqual(before);
+    const planId = `${fixture.workflowIds[0]}-plan`;
+    const lease = rawGet<{ lease_json: string }>(
+      fixture.dbPath,
+      `select lease_json from execution_leases where plan_id = '${planId}'`,
+    )!;
+    expect(JSON.parse(lease.lease_json).holder_session_id).toBe("plan-pm-owner-1");
+    expect(JSON.parse(lease.lease_json).holder_role).toBe("plan-pm");
+  });
+
+  test("execution-snapshot-resolutions-orphan-holder-is-excluded", async () => {
+    const fixture = await coreWorkspace("snapshot-orphan-holder");
+    const snapshotPath = fixture.snapshotPaths[0]!;
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    const plan = (snapshot.plans as Array<Record<string, unknown>>)[0]!;
+    const sessionsDir = join(dirname(snapshotPath), "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const envelope = join(sessionsDir, "plan-pm-owner-1.json");
+    writeJson(envelope, {
+      schema_version: 1, role: "plan-pm", session_id: "plan-pm-owner-1",
+      workflow_id: fixture.workflowIds[0]!, harness_root: fixture.harness, plan_id: `${fixture.workflowIds[0]}-plan`,
+    });
+    plan.status = "InProgress";
+    plan.coordination = { revision: 1, session: { session_id: "plan-pm-owner-1", session_file: envelope, bound_at: "2026-09-02" } };
+    plan.execution_lease = { ...completeExecutionLease, holder: "omp-primary:plan-pm-owner-1" };
+    writeJson(snapshotPath, snapshot);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-orphan-holder"));
+    expect(manifest.exclusions).toHaveLength(1);
+    expect(manifest.exclusions[0]!.codes).toContain("workflow.snapshot.orphan-held-lease");
+  });
+
+  test("execution-snapshot-resolutions-valid-snapshot-migrates-with-identical-bytes", async () => {
+    const fixture = await coreWorkspace("snapshot-valid-unchanged");
+    const before = readFileSync(fixture.snapshotPaths[0]!);
+    await stageCore(fixture, "snapshot-valid-unchanged");
+    expect(readFileSync(fixture.snapshotPaths[0]!)).toEqual(before);
+  });
+});
 
 describe("execution-activation", () => {
   test("execution-activation-core-fixture-activates-only-behind-the-barrier", async () => {
@@ -2762,7 +2956,7 @@ describe("Phase 2b - populated manifest, validated coverage and session retireme
     const manifest = await previewExecutionMigration(migrationInput(fixture, "op-c3-preview"));
 
     // ── the version-2 manifest covers DISCOVERY: roots, rows, proofs
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.roots.control).toBe(canonicalPath(dirname(storeDbPath(fixture.context))));
     expect(manifest.surfaces.length).toBeGreaterThan(0);
     expect(manifest.surfaces.find((row) => row.surface === "artifact-store-injectors")?.consumerProof).toBeUndefined();
