@@ -815,7 +815,7 @@ describe("execution-preview", () => {
 
   test("execution-preview-keeps-a-foreign-workflow-envelope-as-an-integrity-refusal", async () => {
     const fixture = await legacyWorkspace("preview-foreign-envelope");
-    writeJson(fixture.planEnvelopes[PLAN_A], envelopeOf("plan-pm", PLAN_A_SESSION, "another-workflow", fixture.harness, PLAN_A));
+    writeJson(fixture.planEnvelopes[PLAN_A], envelopeOf("coordinator", "foreign-coordinator", "another-workflow", fixture.harness));
     const refusal = await refusalOf(async () => previewExecutionMigration(migrationInput(fixture, "op-foreign-envelope")));
     expect(refusal.code).toBe("execution.migration-conflict");
     expect(refusal.message).toContain("belongs to workflow another-workflow");
@@ -2072,6 +2072,38 @@ describe("execution-snapshot-resolutions", () => {
     const deferred = manifest.deferred.find((surface) => surface.surface === "unclassified-workflow-layout");
     expect(deferred?.paths).toContain(relative(fixture.harness, stray).replaceAll("\\\\", "/"));
     expect(readFileSync(stray)).toEqual(before);
+  });
+  test("execution-snapshot-resolutions-layout-symlink-target-is-pinned-through-apply", async () => {
+    const fixture = await coreWorkspace("snapshot-layout-link-review");
+    const link = join(fixture.harness, "workflows", "operator-link");
+    const reviewedTarget = join(fixture.root, "reviewed-layout-target");
+    const changedTarget = join(fixture.root, "changed-layout-target");
+    writeText(reviewedTarget, "reviewed");
+    writeText(changedTarget, "changed");
+    const backup = await recoveryPoint(fixture);
+    symlinkSync(reviewedTarget, link);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-layout-link-preview"));
+    expect(manifest.deferred.find((surface) => surface.surface === "unclassified-workflow-layout")?.symlinks).toEqual([
+      { path: "workflows/operator-link", target: reviewedTarget },
+    ]);
+    const coverage = await coverageOf(fixture, manifest);
+    const footprint = storeFootprint(fixture.dbPath);
+    rmSync(link);
+    symlinkSync(changedTarget, link);
+
+    const refusal = await refusalOf(async () =>
+      applyExecutionMigration({
+        ...migrationInput(fixture, "op-layout-link-apply"),
+        manifest,
+        manifestHash: executionManifestHash(manifest),
+        coverage,
+        backup,
+      }),
+    );
+    expect(refusal.code).toBe("execution.migration-conflict");
+    expect(refusal.message).toContain("deferred-surface coverage changed");
+    expect(readlinkSync(link)).toBe(changedTarget);
+    expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
   test("execution-snapshot-resolutions-valid-snapshot-migrates-with-identical-bytes", async () => {
     const fixture = await coreWorkspace("snapshot-valid-unchanged");

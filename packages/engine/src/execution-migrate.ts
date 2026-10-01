@@ -363,6 +363,7 @@ export type ExecutionDeferredSurface = {
   surface: string;
   paths: string[];
   disposition: "absent" | "blocked";
+  symlinks?: Array<{ path: string; target: string }>;
 };
 
 /**
@@ -700,9 +701,19 @@ type DiscoveredOwner = {
   planId: string | null;
 };
 
-function deferredSurface(name: string, paths: readonly string[]): ExecutionDeferredSurface {
+function deferredSurface(
+  name: string,
+  paths: readonly string[],
+  symlinks: readonly { path: string; target: string }[] = [],
+): ExecutionDeferredSurface {
   const discovered = [...paths].sort();
-  return { surface: name, paths: discovered, disposition: discovered.length > 0 ? "blocked" : "absent" };
+  const discoveredSymlinks = [...symlinks].sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    surface: name,
+    paths: discovered,
+    disposition: discovered.length > 0 ? "blocked" : "absent",
+    ...(discoveredSymlinks.length === 0 ? {} : { symlinks: discoveredSymlinks }),
+  };
 }
 
 /**
@@ -1134,6 +1145,9 @@ function readSessionSource(
       `${what}'s session envelope at ${path} cannot be read or validated (${(error as Error).message}).`,
     );
   }
+  if (envelope.workflow_id !== expected.workflowId) {
+    throw conflict(`${what}'s envelope at ${path} belongs to workflow ${envelope.workflow_id}, not ${expected.workflowId}.`);
+  }
   if (envelope.role !== expected.role) {
     throw new WorkflowContentExclusion(
       "workflow.snapshot.session-envelope-invalid",
@@ -1145,9 +1159,6 @@ function readSessionSource(
       "workflow.snapshot.session-envelope-invalid",
       `${what} records session ${binding.session_id}, but its envelope at ${path} declares ${envelope.session_id}.`,
     );
-  }
-  if (envelope.workflow_id !== expected.workflowId) {
-    throw conflict(`${what}'s envelope at ${path} belongs to workflow ${envelope.workflow_id}, not ${expected.workflowId}.`);
   }
   if (expected.role === "plan-pm" && envelope.plan_id !== expected.planId) {
     throw new WorkflowContentExclusion(
@@ -2090,6 +2101,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     if (isPathWithin(root, dir) && dir !== root) layouts.add(dirname(dir));
   }
   const unclassifiedLayoutPaths: string[] = [];
+  const unclassifiedLayoutSymlinks: Array<{ path: string; target: string }> = [];
   for (const layout of [...layouts].sort()) {
     if (layout === root || !existsSync(layout)) continue;
     for (const entry of directoryEntries(layout, `the configured workflow layout ${layout}`)) {
@@ -2098,6 +2110,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
         const path = relative(root, absolute).split(/[\\/]+/).join("/");
         unclassifiedLayoutPaths.push(path);
         if (entry.isFile()) pinnedExtras.push(recordWitness(ledger, "control", root, absolute, "deferred"));
+        if (entry.isSymbolicLink()) unclassifiedLayoutSymlinks.push({ path, target: readlinkSync(absolute) });
         continue;
       }
       const dir = join(layout, entry.name);
@@ -2143,7 +2156,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     }
   }
   if (unclassifiedLayoutPaths.length > 0) {
-    deferred.push(deferredSurface("unclassified-workflow-layout", unclassifiedLayoutPaths));
+    deferred.push(deferredSurface("unclassified-workflow-layout", unclassifiedLayoutPaths, unclassifiedLayoutSymlinks));
   }
 
   const engineStatusPath = join(root, ENGINE_STATUS_FILE);
