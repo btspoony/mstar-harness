@@ -1309,8 +1309,8 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind the session envelope for milestone assignment. Unscoped issue writes
- * use `requireCaptureSeat` and do not call this function.
+ * Bind the session envelope for milestone assignment or plan-scoped issue coordination.
+ * Unscoped issue writes use `requireCaptureSeat` and do not call this function.
  */
 function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext, "actor" | "sessionFile">): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);
